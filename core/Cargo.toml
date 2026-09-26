@@ -38,3 +38,10 @@ all = { level = "warn", priority = -1 }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# 辞書の構築・Viterbi は重いので、dev / test でも最適化する
+[profile.dev.package.nagi-dict]
+opt-level = 3
+
+[profile.dev.package.yada]
+opt-level = 3
