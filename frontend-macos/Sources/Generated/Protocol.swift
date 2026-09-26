@@ -141,17 +141,17 @@ public struct InitializeResult: Codable {
 /// 修飾キーの状態
 public struct Modifiers: Codable {
 	/// Shift キー
-	public let shift: Bool?
+	public let shift: Bool
 	/// Ctrl / Control キー
-	public let ctrl: Bool?
+	public let ctrl: Bool
 	/// Alt / Option キー
-	public let alt: Bool?
+	public let alt: Bool
 	/// ⌘ (macOS) / Win キー
-	public let meta: Bool?
+	public let meta: Bool
 	/// Caps Lock の状態
-	public let caps_lock: Bool?
+	public let caps_lock: Bool
 
-	public init(shift: Bool?, ctrl: Bool?, alt: Bool?, meta: Bool?, caps_lock: Bool?) {
+	public init(shift: Bool, ctrl: Bool, alt: Bool, meta: Bool, caps_lock: Bool) {
 		self.shift = shift
 		self.ctrl = ctrl
 		self.alt = alt
