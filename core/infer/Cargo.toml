@@ -9,6 +9,17 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2 = "0.10"
+
+[dependencies.llama-cpp-2]
+version = "=0.1.157"
+optional = true
+
+[features]
+llama = ["dep:llama-cpp-2"]
 
 [lints]
 workspace = true
