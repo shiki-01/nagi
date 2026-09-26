@@ -1,0 +1,126 @@
+- name: utf16-emoji-input
+  steps:
+    - key: {text: "😀"}
+      expect: {preedit: "😀", cursor: 2, state: composing, segments: ["😀"], kinds: ["japanese"]}
+
+- name: utf16-emoji-commit
+  steps:
+    - key: {text: "😀"}
+      expect: {state: composing, cursor: 2}
+    - key: "Enter"
+      expect: {commit: "😀", state: direct, cursor: 0, preedit: ""}
+
+- name: utf16-emoji-japanese-mixed
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: {text: "😀"}
+      expect: {state: composing, segments: ["あ😀"], kinds: ["japanese"], cursor: 3}
+
+- name: utf16-surrogate-pair-cursor
+  steps:
+    - key: {text: "🎌"}
+      expect: {preedit: "🎌", cursor: 2}
+
+- name: utf16-backspace-emoji
+  steps:
+    - key: {text: "😀"}
+      expect: {cursor: 2}
+    - key: "BackSpace"
+      expect: {preedit: "", cursor: 0, state: direct}
+
+- name: utf16-left-arrow-emoji
+  steps:
+    - key: {text: "😀"}
+      expect: {cursor: 2}
+    - key: "Left"
+      expect: {cursor: 0}
+
+- name: utf16-right-arrow-emoji
+  steps:
+    - key: {text: "😀"}
+      expect: {cursor: 2}
+    - key: "Home"
+      expect: {cursor: 0}
+    - key: "Right"
+      expect: {cursor: 2}
+
+- name: utf16-multi-emoji
+  steps:
+    - key: {text: "😀"}
+      expect: {cursor: 2}
+    - key: {text: "😁"}
+      expect: {cursor: 4, preedit: "😀😁"}
+
+- name: utf16-backspace-partial
+  steps:
+    - key: "a"
+      expect: {cursor: 1}
+    - key: {text: "😀"}
+      expect: {cursor: 3}
+    - key: "BackSpace"
+      expect: {cursor: 1}
+
+- name: utf16-restore-emoji
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "😀", surface: "😀", kind: literal}
+        cursor: 2
+        focus: null
+        converting: false
+      expect: {state: composing, cursor: 2, segments: ["😀"]}
+
+- name: utf16-delete-emoji
+  steps:
+    - key: {text: "😀"}
+      expect: {cursor: 2}
+    - key: "Home"
+      expect: {cursor: 0}
+    - key: "Delete"
+      expect: {preedit: "", cursor: 0}
+
+- name: utf16-insert-emoji-middle
+  steps:
+    - key: "a"
+      expect: {cursor: 1}
+    - key: "b"
+      expect: {cursor: 2}
+    - key: "Home"
+      expect: {cursor: 0}
+    - key: "Right"
+      expect: {cursor: 1}
+    - key: {text: "😀"}
+      expect: {cursor: 3, preedit: "あ😀b", segments: ["あ😀", "b"]}
+
+- name: utf16-converting-emoji
+  backend: mock
+  mock:
+    sentences:
+      "😀":
+        - {reading: "😀", candidates: ["😀"]}
+  steps:
+    - key: {text: "😀"}
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, segments: ["😀"]}
+
+- name: utf16-emoji-passthrough
+  config:
+    mode: alphanumeric
+  steps:
+    - key: {text: "😀"}
+      expect: {consumed: false, preedit: ""}
+
+- name: utf16-japanese-3byte-char
+  steps:
+    - key: {text: "𝐀"}
+      expect: {preedit: "𝐀", cursor: 2, segments: ["𝐀"], kinds: ["japanese"]}
+
+- name: utf16-mixed-surrogate
+  steps:
+    - key: "a"
+      expect: {cursor: 1}
+    - key: {text: "👨‍👩‍👧‍👦"}
+      expect: {preedit: "あ👨‍👩‍👧‍👦", segments: ["あ👨‍👩‍👧‍👦"]}

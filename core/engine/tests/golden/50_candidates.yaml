@@ -1,0 +1,321 @@
+- name: cand-first-space-shows-window
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜", "あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, candidates_visible: false, focus: 0}
+    - key: "Space"
+      expect: {state: converting, candidates_visible: true, selected: 1, candidates: ["愛", "亜", "あ", "ア"]}
+
+- name: cand-next-space-cycles
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true, selected: 1}
+    - key: "Space"
+      expect: {candidates_visible: true, selected: 2}
+    - key: "Space"
+      expect: {candidates_visible: true, selected: 3}
+    - key: "Space"
+      expect: {candidates_visible: true, selected: 0}
+
+- name: cand-down-arrow
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {selected: 1, candidates_visible: true}
+    - key: "Down"
+      expect: {selected: 2}
+    - key: "Down"
+      expect: {selected: 3}
+    - key: "Down"
+      expect: {selected: 0}
+
+- name: cand-up-arrow
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {selected: 1}
+    - key: "Up"
+      expect: {selected: 0}
+    - key: "Up"
+      expect: {selected: 3}
+    - key: "Up"
+      expect: {selected: 2}
+
+- name: cand-shift-space-prev
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {selected: 1}
+    - key: "Shift+Space"
+      expect: {selected: 0}
+    - key: "Shift+Space"
+      expect: {selected: 3}
+    - key: "Shift+Space"
+      expect: {selected: 2}
+
+- name: cand-ctrl-n-next
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {selected: 1}
+    - key: "Ctrl+n"
+      expect: {selected: 2}
+
+- name: cand-ctrl-p-prev
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {selected: 1}
+    - key: "Ctrl+p"
+      expect: {selected: 0}
+
+- name: cand-digit-select-page-1
+  backend: mock
+  config:
+    page_size: 9
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["c1", "c2", "c3", "c4", "c5", "c6"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true, selected: 1}
+    - key: "3"
+      expect: {candidates_visible: false}
+
+- name: cand-digit-select-multi-page
+  backend: mock
+  config:
+    page_size: 3
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["c1", "c2", "c3", "c4", "c5", "c6"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {selected: 1}
+    - key: "Space"
+      expect: {selected: 2}
+    - key: "Space"
+      expect: {selected: 3}
+    - key: "Space"
+      expect: {selected: 4}
+    - key: "Space"
+      expect: {selected: 5}
+    - key: "Space"
+      expect: {selected: 6}
+    - key: "2"
+      expect: {candidates_visible: false, segments: ["ア"]}
+
+- name: cand-digit-without-window-restarts
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, candidates_visible: false}
+    - key: "3"
+      expect: {state: composing, commit: "愛", preedit: "3", pending: "", segments: ["3"]}
+
+- name: cand-digit-0-inserts-zero
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true}
+    - key: "0"
+      expect: {commit: "あ", preedit: "0", pending: "", state: composing, segments: ["0"]}
+
+- name: cand-literal-segment-no-candidates
+  backend: mock
+  mock:
+    sentences:
+      "a1b":
+        - {reading: "a", candidates: ["A"]}
+        - {reading: "b", candidates: ["B"]}
+  steps:
+    - key: "A"
+      expect: {segments: ["A"], kinds: ["literal"]}
+    - key: "1"
+      expect: {segments: ["A1"], kinds: ["literal"]}
+    - key: "b"
+      expect: {segments: ["A1b"], kinds: ["literal"]}
+    - key: "Space"
+      expect: {state: converting, candidates_visible: false, focus: 0}
+
+- name: cand-left-arrow-hides-window
+  backend: mock
+  mock:
+    sentences:
+      "ああ":
+        - {reading: "あ", candidates: ["愛"]}
+        - {reading: "あ", candidates: ["亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true}
+    - key: "Left"
+      expect: {candidates_visible: false, focus: 0}
+
+- name: cand-right-arrow-hides-window
+  backend: mock
+  mock:
+    sentences:
+      "ああ":
+        - {reading: "あ", candidates: ["愛"]}
+        - {reading: "あ", candidates: ["亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true}
+    - key: "Right"
+      expect: {candidates_visible: false, focus: 1}
+
+- name: cand-current-surface-first
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜", "あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates: ["愛", "亜", "あ", "ア"], selected: 1}
+
+- name: cand-dedup-by-surface
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "愛", "亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true}
+
+- name: cand-window-closed-by-move-focus
+  backend: mock
+  mock:
+    sentences:
+      "ああ":
+        - {reading: "あ", candidates: ["愛"]}
+        - {reading: "あ", candidates: ["亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true, focus: 0}
+    - key: "Left"
+      expect: {candidates_visible: false}
+
+- name: cand-selected-updates-surface
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛", "亜"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, segments: ["愛"]}
+    - key: "Space"
+      expect: {candidates_visible: true, selected: 1, segments: ["亜"]}
+    - key: "Down"
+      expect: {selected: 2, segments: ["あ"]}
+    - key: "Down"
+      expect: {selected: 3, segments: ["ア"]}

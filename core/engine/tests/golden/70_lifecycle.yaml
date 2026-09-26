@@ -1,0 +1,214 @@
+- name: lifecycle-focus-out-commits-composing
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "b"
+      expect: {state: composing}
+    - action: focus_out
+      expect: {commit: "あb", state: direct, consumed: true}
+
+- name: lifecycle-focus-out-commits-converting
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true, segments: ["あ"]}
+    - action: focus_out
+      expect: {commit: "あ", state: direct, consumed: true}
+
+- name: lifecycle-focus-out-direct-noop
+  steps:
+    - action: focus_out
+      expect: {state: direct, commit: null, consumed: true}
+
+- name: lifecycle-reset-clears-composing
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "b"
+      expect: {state: composing}
+    - action: reset
+      expect: {commit: null, preedit: "", state: direct, consumed: true}
+
+- name: lifecycle-reset-clears-converting
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - action: reset
+      expect: {commit: null, preedit: "", state: direct}
+
+- name: lifecycle-reset-direct-noop
+  steps:
+    - action: reset
+      expect: {state: direct, commit: null, consumed: true}
+
+- name: lifecycle-restore-empty
+  steps:
+    - action: restore
+      restore:
+        segments: []
+        cursor: 0
+        focus: null
+        converting: false
+      expect: {state: direct, preedit: ""}
+
+- name: lifecycle-restore-composing
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "あ", surface: "あ", kind: japanese}
+          - {reading: "い", surface: "い", kind: japanese}
+        cursor: 2
+        focus: null
+        converting: false
+      expect: {state: composing, preedit: "あい", readings: ["あい"], cursor: 2}
+
+- name: lifecycle-restore-converting
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "あ", surface: "愛", kind: japanese}
+          - {reading: "い", surface: "い", kind: japanese}
+        cursor: 0
+        focus: 0
+        converting: true
+      expect: {state: converting, focus: 0, segments: ["愛", "い"], readings: ["あ", "い"]}
+
+- name: lifecycle-restore-with-literal
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "A", surface: "A", kind: literal}
+          - {reading: "い", surface: "い", kind: japanese}
+        cursor: 2
+        focus: null
+        converting: false
+      expect: {state: composing, segments: ["A", "い"], kinds: ["literal", "japanese"]}
+
+- name: lifecycle-restore-maintains-focus
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "あ", surface: "あ"}
+          - {reading: "い", surface: "い"}
+          - {reading: "う", surface: "う"}
+        cursor: 0
+        focus: 1
+        converting: true
+      expect: {state: converting, focus: 1}
+
+- name: lifecycle-restore-focus-bounds
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "あ", surface: "あ"}
+          - {reading: "い", surface: "い"}
+        cursor: 0
+        focus: 10
+        converting: true
+      expect: {state: converting, focus: 1}
+
+- name: lifecycle-focus-in-noop
+  steps:
+    - action: focus_in
+      expect: {consumed: false, state: direct}
+
+- name: lifecycle-focus-in-composing-noop
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - action: focus_in
+      expect: {consumed: false, state: composing, preedit: "あ", result_preedit_present: false}
+
+- name: lifecycle-restore-then-edit
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "あ", surface: "あ"}
+        cursor: 1
+        focus: null
+        converting: false
+      expect: {state: composing, preedit: "あ"}
+    - key: "b"
+      expect: {state: composing, preedit: "あb", segments: ["あ"]}
+
+- name: lifecycle-restore-converting-then-convert
+  backend: mock
+  mock:
+    sentences:
+      "あい":
+        - {reading: "あい", candidates: ["愛"]}
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "あい", surface: "あい"}
+        cursor: 0
+        focus: 0
+        converting: true
+      expect: {state: converting}
+    - key: "Space"
+      expect: {state: converting, candidates_visible: true}
+
+- name: lifecycle-reset-resets-session
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - action: reset
+      expect: {state: direct}
+    - action: reset
+      expect: {state: direct}
+
+- name: lifecycle-multiple-focus-outs
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - action: focus_out
+      expect: {commit: "あ", state: direct}
+    - action: focus_out
+      expect: {commit: null, state: direct}
+
+- name: lifecycle-composing-commit-then-composing-again
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - action: focus_out
+      expect: {commit: "あ"}
+    - key: "b"
+      expect: {state: composing, preedit: "b"}
+
+- name: lifecycle-restore-surface-differs-from-reading
+  steps:
+    - action: restore
+      restore:
+        segments:
+          - {reading: "あ", surface: "愛"}
+        cursor: 1
+        focus: null
+        converting: false
+      expect: {state: composing, segments: ["あ"], preedit: "あ"}
+
+- name: lifecycle-focus-out-empty-composing
+  steps:
+    - action: focus_out
+      expect: {state: direct, commit: null}

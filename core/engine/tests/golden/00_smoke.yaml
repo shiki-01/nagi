@@ -1,0 +1,8 @@
+- name: smoke-romaji-and-commit
+  steps:
+    - key: "k"
+      expect: {consumed: true, preedit: "k", pending: "k", state: composing}
+    - key: "a"
+      expect: {preedit: "か", pending: "", segments: ["か"], readings: ["か"], kinds: [japanese], cursor: 1}
+    - key: "Enter"
+      expect: {consumed: true, commit: "か", preedit: "", state: direct}

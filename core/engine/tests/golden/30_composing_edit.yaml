@@ -1,0 +1,270 @@
+- name: composing-backspace-pending
+  steps:
+    - key: "k"
+      expect: {preedit: "k", pending: "k"}
+    - key: "BackSpace"
+      expect: {preedit: "", pending: "", state: direct}
+
+- name: composing-backspace-partial-pending
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "y"
+      expect: {preedit: "ky", pending: "ky"}
+    - key: "BackSpace"
+      expect: {preedit: "k", pending: "k"}
+
+- name: composing-backspace-committed
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "a"
+      expect: {preedit: "か", pending: "", segments: ["か"]}
+    - key: "BackSpace"
+      expect: {preedit: "", state: direct}
+
+- name: composing-backspace-multi-segment
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "a"
+      expect: {preedit: "か", segments: ["か"]}
+    - key: "n"
+      expect: {preedit: "かn", pending: "n"}
+    - key: "a"
+      expect: {preedit: "かな", segments: ["かな"]}
+    - key: "BackSpace"
+      expect: {preedit: "か", pending: "", segments: ["か"]}
+    - key: "BackSpace"
+      expect: {preedit: "", state: direct}
+
+- name: composing-delete-after-pending
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "a"
+      expect: {preedit: "か"}
+    - key: "n"
+      expect: {pending: "n", cursor: 2}
+    - key: "Delete"
+      expect: {preedit: "かん", pending: "", cursor: 2}
+
+- name: composing-delete-in-middle
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "a"
+      expect: {preedit: "か", cursor: 1}
+    - key: "n"
+      expect: {preedit: "かn", cursor: 2, pending: "n"}
+    - key: "a"
+      expect: {preedit: "かな", cursor: 2, pending: ""}
+    - key: "Left"
+      expect: {preedit: "かな", cursor: 1, pending: ""}
+    - key: "Delete"
+      expect: {preedit: "か", cursor: 1, pending: ""}
+
+- name: composing-cursor-left-from-end
+  steps:
+    - key: "k"
+      expect: {cursor: 1, pending: "k"}
+    - key: "a"
+      expect: {preedit: "か", cursor: 1}
+    - key: "n"
+      expect: {cursor: 2, pending: "n"}
+    - key: "a"
+      expect: {preedit: "かな", cursor: 2}
+    - key: "Left"
+      expect: {preedit: "かな", cursor: 1, pending: ""}
+
+- name: composing-cursor-left-preserves-pending
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "y"
+      expect: {pending: "ky", cursor: 2}
+    - key: "Left"
+      expect: {preedit: "ky", cursor: 1, pending: ""}
+
+- name: composing-cursor-right-advance
+  steps:
+    - key: "k"
+      expect: {cursor: 1, pending: "k"}
+    - key: "a"
+      expect: {preedit: "か", cursor: 1}
+    - key: "Left"
+      expect: {cursor: 0}
+    - key: "Right"
+      expect: {cursor: 1}
+
+- name: composing-cursor-home
+  steps:
+    - key: "k"
+      expect: {cursor: 1}
+    - key: "a"
+      expect: {cursor: 1}
+    - key: "n"
+      expect: {cursor: 2, pending: "n"}
+    - key: "a"
+      expect: {cursor: 2}
+    - key: "Home"
+      expect: {cursor: 0, preedit: "かな", pending: ""}
+
+- name: composing-cursor-ctrl-a
+  steps:
+    - key: "k"
+      expect: {cursor: 1}
+    - key: "a"
+      expect: {cursor: 1}
+    - key: "n"
+      expect: {cursor: 2}
+    - key: "a"
+      expect: {cursor: 2}
+    - key: "Ctrl+a"
+      expect: {cursor: 0}
+
+- name: composing-cursor-end
+  steps:
+    - key: "k"
+      expect: {cursor: 1}
+    - key: "a"
+      expect: {cursor: 1}
+    - key: "n"
+      expect: {cursor: 2}
+    - key: "a"
+      expect: {cursor: 2}
+    - key: "Home"
+      expect: {cursor: 0}
+    - key: "End"
+      expect: {cursor: 2, preedit: "かな", pending: ""}
+
+- name: composing-cursor-ctrl-e
+  steps:
+    - key: "k"
+      expect: {cursor: 1}
+    - key: "a"
+      expect: {cursor: 1}
+    - key: "Home"
+      expect: {cursor: 0}
+    - key: "Ctrl+e"
+      expect: {cursor: 1}
+
+- name: composing-insert-in-middle
+  steps:
+    - key: "k"
+      expect: {cursor: 1}
+    - key: "a"
+      expect: {preedit: "か", cursor: 1}
+    - key: "n"
+      expect: {cursor: 2, pending: "n"}
+    - key: "a"
+      expect: {preedit: "かな", cursor: 2}
+    - key: "Left"
+      expect: {cursor: 1, pending: ""}
+    - key: "u"
+      expect: {preedit: "かうな", cursor: 2, segments: ["かうな"]}
+
+- name: composing-delete-empty
+  steps:
+    - key: "Delete"
+      expect: {consumed: false}
+
+- name: composing-backspace-with-literal
+  steps:
+    - key: "A"
+      expect: {preedit: "A", segments: ["A"], kinds: ["literal"]}
+    - key: "BackSpace"
+      expect: {preedit: "", state: direct}
+
+- name: composing-escape-no-commit
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "Escape"
+      expect: {commit: null, preedit: "", state: direct}
+
+- name: composing-f7-to-katakana
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "F7"
+      expect: {state: converting}
+
+- name: composing-f6-to-hiragana
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "F6"
+      expect: {state: converting}
+
+- name: composing-ctrl-k-to-katakana
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "Ctrl+k"
+      expect: {state: converting}
+
+- name: composing-meta-c-commit-passthrough
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Meta+c"
+      expect: {commit: "あ", state: direct, consumed: false}
+
+- name: composing-up-noop
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Up"
+      expect: {consumed: true, state: composing, preedit: "あ", result_preedit_present: false}
+
+- name: composing-down-noop
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Down"
+      expect: {consumed: true, state: composing, result_preedit_present: false}
+
+- name: composing-tab-noop
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Tab"
+      expect: {consumed: true, state: composing, result_preedit_present: false}
+
+- name: composing-pageup-noop
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "PageUp"
+      expect: {consumed: true, state: composing}
+
+- name: composing-ctrl-h-backspace
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "a"
+      expect: {preedit: "か"}
+    - key: "Ctrl+h"
+      expect: {preedit: "", state: direct}
+
+- name: composing-pending-with-cursor-left
+  steps:
+    - key: "k"
+      expect: {cursor: 1, pending: "k"}
+    - key: "y"
+      expect: {pending: "ky", cursor: 2}
+    - key: "o"
+      expect: {preedit: "きょ", cursor: 2, pending: ""}
+    - key: "u"
+      expect: {preedit: "きょう", cursor: 3, pending: ""}
+    - key: "Left"
+      expect: {cursor: 2, preedit: "きょう", pending: ""}

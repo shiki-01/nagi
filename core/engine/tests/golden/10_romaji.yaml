@@ -1,0 +1,185 @@
+- name: romaji-basic-ka
+  steps:
+    - key: "k"
+      expect: {consumed: true, preedit: "k", pending: "k", state: composing}
+    - key: "a"
+      expect: {preedit: "か", pending: "", segments: ["か"], readings: ["か"], kinds: ["japanese"], cursor: 1, state: composing}
+
+- name: romaji-basic-kana
+  steps:
+    - key: "k"
+      expect: {preedit: "k", pending: "k"}
+    - key: "a"
+      expect: {preedit: "か", pending: ""}
+    - key: "n"
+      expect: {preedit: "かn", pending: "n"}
+    - key: "a"
+      expect: {preedit: "かな", pending: "", segments: ["かな"]}
+
+- name: romaji-double-n-dakuten
+  steps:
+    - key: "n"
+      expect: {preedit: "n", pending: "n"}
+    - key: "n"
+      expect: {preedit: "ん", pending: "", segments: ["ん"]}
+
+- name: romaji-single-n-pending
+  steps:
+    - key: "n"
+      expect: {preedit: "n", pending: "n"}
+    - key: "Enter"
+      expect: {commit: "ん", preedit: "", state: direct}
+
+- name: romaji-double-consonant-kka
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "k"
+      expect: {preedit: "っk", pending: "k"}
+    - key: "a"
+      expect: {preedit: "っか", pending: "", segments: ["っか"]}
+
+- name: romaji-palatalized-kyou
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "y"
+      expect: {preedit: "ky", pending: "ky"}
+    - key: "o"
+      expect: {preedit: "きょ", pending: "", cursor: 2}
+    - key: "u"
+      expect: {preedit: "きょう", pending: "", segments: ["きょう"], cursor: 3}
+
+- name: romaji-comma-to-temma
+  config:
+    punctuation: "、。"
+  steps:
+    - key: ","
+      expect: {preedit: "、", pending: "", segments: ["、"], kinds: ["japanese"]}
+
+- name: romaji-period-to-maru
+  config:
+    punctuation: "、。"
+  steps:
+    - key: "."
+      expect: {preedit: "。", pending: "", segments: ["。"], kinds: ["japanese"]}
+
+- name: romaji-hyphen-to-chouon
+  steps:
+    - key: "-"
+      expect: {preedit: "ー", pending: "", segments: ["ー"], kinds: ["japanese"]}
+
+- name: romaji-square-bracket-left
+  steps:
+    - key: "["
+      expect: {preedit: "「", pending: "", segments: ["「"], kinds: ["japanese"]}
+
+- name: romaji-square-bracket-right
+  steps:
+    - key: "]"
+      expect: {preedit: "」", pending: "", segments: ["」"], kinds: ["japanese"]}
+
+- name: romaji-ni-in-plain-context
+  steps:
+    - key: "n"
+      expect: {pending: "n"}
+    - key: "i"
+      expect: {preedit: "に", pending: ""}
+
+- name: romaji-na-after-hyphen
+  steps:
+    - key: "-"
+      expect: {preedit: "ー", segments: ["ー"], kinds: ["japanese"]}
+    - key: "n"
+      expect: {preedit: "ーn", pending: "n", segments: ["ー"]}
+    - key: "a"
+      expect: {preedit: "ーな", pending: "", segments: ["ーな"]}
+
+- name: romaji-tsu-small
+  steps:
+    - key: "t"
+      expect: {pending: "t"}
+    - key: "s"
+      expect: {pending: "ts"}
+    - key: "u"
+      expect: {preedit: "つ", pending: "", segments: ["つ"]}
+
+- name: romaji-sya-palatalize
+  steps:
+    - key: "s"
+      expect: {pending: "s"}
+    - key: "y"
+      expect: {pending: "sy"}
+    - key: "a"
+      expect: {preedit: "しゃ", pending: ""}
+
+- name: romaji-ryou-palatalize-long
+  steps:
+    - key: "r"
+      expect: {pending: "r"}
+    - key: "y"
+      expect: {pending: "ry"}
+    - key: "o"
+      expect: {preedit: "りょ", pending: ""}
+    - key: "u"
+      expect: {preedit: "りょう", pending: "", segments: ["りょう"]}
+
+- name: romaji-ni-from-2char
+  steps:
+    - key: "n"
+      expect: {pending: "n"}
+    - key: "BackSpace"
+      expect: {preedit: "", state: direct}
+    - key: "n"
+      expect: {pending: "n"}
+    - key: "i"
+      expect: {preedit: "に", pending: "", cursor: 1}
+
+- name: romaji-xu-becomes-zu
+  steps:
+    - key: "z"
+      expect: {pending: "z"}
+    - key: "u"
+      expect: {preedit: "ず", pending: "", segments: ["ず"]}
+
+- name: romaji-multiple-segments
+  steps:
+    - key: "k"
+      expect: {pending: "k"}
+    - key: "o"
+      expect: {preedit: "こ", pending: "", segments: ["こ"]}
+    - key: "n"
+      expect: {preedit: "こn", pending: "n"}
+    - key: "n"
+      expect: {preedit: "こん", pending: "", segments: ["こん"]}
+    - key: "i"
+      expect: {preedit: "こんに", pending: "", segments: ["こんに"]}
+    - key: "c"
+      expect: {pending: "c"}
+    - key: "h"
+      expect: {pending: "ch"}
+    - key: "i"
+      expect: {preedit: "こんにち", pending: "", segments: ["こんにち"]}
+    - key: "h"
+      expect: {pending: "h"}
+    - key: "a"
+      expect: {preedit: "こんにちは", pending: "", segments: ["こんにちは"]}
+
+- name: romaji-furigana-pattern
+  steps:
+    - key: "f"
+      expect: {pending: "f"}
+    - key: "u"
+      expect: {preedit: "ふ", pending: ""}
+    - key: "r"
+      expect: {pending: "r"}
+    - key: "i"
+      expect: {preedit: "ふり", pending: "", segments: ["ふり"]}
+    - key: "g"
+      expect: {pending: "g"}
+    - key: "a"
+      expect: {preedit: "ふりが", pending: "", segments: ["ふりが"]}
+    - key: "n"
+      expect: {pending: "n"}
+    - key: "a"
+      expect: {preedit: "ふりがな", pending: "", segments: ["ふりがな"]}

@@ -1,0 +1,200 @@
+- name: direct-space-passthrough
+  steps:
+    - key: "Space"
+      expect: {consumed: false, preedit: "", state: direct, result_preedit_present: false}
+
+- name: direct-enter-passthrough
+  steps:
+    - key: "Enter"
+      expect: {consumed: false, state: direct}
+
+- name: direct-escape-passthrough
+  steps:
+    - key: "Escape"
+      expect: {consumed: false, state: direct}
+
+- name: direct-backspace-passthrough
+  steps:
+    - key: "BackSpace"
+      expect: {consumed: false, state: direct}
+
+- name: direct-left-arrow-passthrough
+  steps:
+    - key: "Left"
+      expect: {consumed: false, state: direct}
+
+- name: direct-right-arrow-passthrough
+  steps:
+    - key: "Right"
+      expect: {consumed: false, state: direct}
+
+- name: direct-ctrl-a-passthrough
+  steps:
+    - key: "Ctrl+a"
+      expect: {consumed: false, state: direct}
+
+- name: direct-meta-c-passthrough
+  steps:
+    - key: "Meta+c"
+      expect: {consumed: false, state: direct}
+
+- name: direct-printable-enters-composing
+  steps:
+    - key: "a"
+      expect: {consumed: true, preedit: "あ", pending: "", state: composing}
+
+- name: direct-shift-letter-literal-continue
+  config:
+    shift_letter: literal_continue
+  steps:
+    - key: "A"
+      expect: {consumed: true, preedit: "A", pending: "", segments: ["A"], kinds: ["literal"], state: composing}
+    - key: "g"
+      expect: {preedit: "Ag", pending: "", segments: ["Ag"], state: composing}
+    - key: "i"
+      expect: {preedit: "Agi", pending: "", segments: ["Agi"], kinds: ["literal"], state: composing}
+
+- name: direct-shift-letter-single-upper
+  config:
+    shift_letter: single_upper
+  steps:
+    - key: "A"
+      expect: {preedit: "A", segments: ["A"], kinds: ["literal"]}
+    - key: "b"
+      expect: {preedit: "Ab", pending: "b", segments: ["A"], kinds: ["literal"]}
+
+- name: direct-digit-not-literal-mode
+  steps:
+    - key: "3"
+      expect: {preedit: "3", segments: ["3"], kinds: ["literal"]}
+    - key: "j"
+      expect: {preedit: "3j", pending: "j", segments: ["3"], state: composing}
+    - key: "i"
+      expect: {preedit: "3じ", pending: "", segments: ["3", "じ"]}
+
+- name: mode-eisu-from-direct
+  config:
+    mode: hiragana
+  steps:
+    - key: "Eisu"
+      expect: {consumed: true, state: direct, mode: alphanumeric, result_mode: alphanumeric}
+
+- name: mode-kana-from-alphanumeric
+  config:
+    mode: alphanumeric
+  steps:
+    - key: "a"
+      expect: {consumed: false, preedit: "", state: direct, mode: alphanumeric}
+    - key: "Kana"
+      expect: {consumed: true, mode: hiragana, result_mode: hiragana}
+
+- name: mode-alphanumeric-passthrough
+  config:
+    mode: alphanumeric
+  steps:
+    - key: "a"
+      expect: {consumed: false, preedit: ""}
+    - key: "Space"
+      expect: {consumed: false, preedit: ""}
+    - key: "Enter"
+      expect: {consumed: false, preedit: ""}
+    - key: "Left"
+      expect: {consumed: false, preedit: ""}
+
+- name: mode-alphanumeric-eisu-again
+  config:
+    mode: alphanumeric
+  steps:
+    - key: "Eisu"
+      expect: {consumed: true}
+
+- name: mode-toggle-zenkaku
+  steps:
+    - key: "Zenkaku"
+      expect: {consumed: true, mode: alphanumeric, result_mode: alphanumeric}
+    - key: "Zenkaku"
+      expect: {consumed: true, mode: hiragana, result_mode: hiragana}
+
+- name: mode-hiragana-key
+  config:
+    mode: alphanumeric
+  steps:
+    - key: "Kana"
+      expect: {mode: hiragana, result_mode: hiragana}
+
+- name: direct-up-passthrough
+  steps:
+    - key: "Up"
+      expect: {consumed: false, state: direct}
+
+- name: direct-down-passthrough
+  steps:
+    - key: "Down"
+      expect: {consumed: false, state: direct}
+
+- name: direct-tab-passthrough
+  steps:
+    - key: "Tab"
+      expect: {consumed: false, state: direct}
+
+- name: direct-multiple-printable
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "a"
+      expect: {preedit: "か"}
+    - key: "n"
+      expect: {preedit: "かn"}
+    - key: "a"
+      expect: {preedit: "かな"}
+    - key: "BackSpace"
+      expect: {preedit: "か"}
+    - key: "BackSpace"
+      expect: {preedit: "", state: direct}
+    - key: "a"
+      expect: {state: composing, pending: ""}
+
+- name: direct-hyphen-literal
+  steps:
+    - key: "-"
+      expect: {preedit: "ー", segments: ["ー"], kinds: ["japanese"]}
+
+- name: composing-escape-to-direct
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Escape"
+      expect: {commit: null, preedit: "", state: direct, consumed: true}
+
+- name: composing-enter-to-direct
+  steps:
+    - key: "a"
+      expect: {state: composing, preedit: "あ"}
+    - key: "Enter"
+      expect: {commit: "あ", preedit: "", state: direct}
+
+- name: mode-change-commits-composing
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Eisu"
+      expect: {commit: "あ", state: direct, mode: alphanumeric, result_mode: alphanumeric}
+
+- name: mode-change-via-kana-key
+  config:
+    mode: alphanumeric
+  steps:
+    - key: "Kana"
+      expect: {state: direct, mode: hiragana, result_mode: hiragana}
+    - key: "a"
+      expect: {state: composing}
+
+- name: direct-f6-passthrough
+  steps:
+    - key: "F6"
+      expect: {consumed: false, state: direct}
+
+- name: direct-f7-passthrough
+  steps:
+    - key: "F7"
+      expect: {consumed: false, state: direct}

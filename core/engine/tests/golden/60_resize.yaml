@@ -1,0 +1,228 @@
+- name: resize-right-extend-segment
+  backend: mock
+  mock:
+    sentences:
+      "きょうはいいてんき":
+        - {reading: "きょう", candidates: ["今日"]}
+        - {reading: "はいい", candidates: ["はいい"]}
+        - {reading: "てんき", candidates: ["天気"]}
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "y"
+      expect: {state: composing}
+    - key: "o"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "h"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "t"
+      expect: {state: composing}
+    - key: "e"
+      expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
+    - key: "k"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0, segments: ["今日", "はいい", "天気"]}
+    - key: "Shift+Right"
+      expect: {state: converting, focus: 0, segments: ["きょうは", "いいてんき"]}
+
+- name: resize-left-shrink-segment
+  backend: mock
+  mock:
+    sentences:
+      "きょうはいいてんき":
+        - {reading: "きょうは", candidates: ["今日は", "きょうは"]}
+        - {reading: "いいてんき", candidates: ["いい天気"]}
+      "きょう":
+        - {reading: "きょう", candidates: ["今日"]}
+      "はいいてんき":
+        - {reading: "はいいてんき", candidates: ["はいい天気"]}
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "y"
+      expect: {state: composing}
+    - key: "o"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "h"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "t"
+      expect: {state: composing}
+    - key: "e"
+      expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
+    - key: "k"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, segments: ["今日は", "いい天気"]}
+    - key: "Shift+Left"
+      expect: {state: converting, segments: ["今日", "はいい天気"]}
+
+- name: resize-left-minimum
+  backend: mock
+  mock:
+    sentences:
+      "あいう":
+        - {reading: "あ", candidates: ["あ"]}
+        - {reading: "いう", candidates: ["いう"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0, segments: ["あ", "いう"]}
+    - key: "Shift+Left"
+      expect: {state: converting, focus: 0, segments: ["あ", "いう"]}
+
+- name: resize-right-boundary
+  backend: mock
+  mock:
+    sentences:
+      "あいう":
+        - {reading: "あいう", candidates: ["あいう"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0, segments: ["あいう"]}
+    - key: "Shift+Right"
+      expect: {state: converting, focus: 0, segments: ["あいう"]}
+
+- name: resize-literal-ignored
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Shift+Right"
+      expect: {state: converting}
+
+- name: resize-focus-move
+  backend: mock
+  mock:
+    sentences:
+      "あいう":
+        - {reading: "あ", candidates: ["あ"]}
+        - {reading: "い", candidates: ["い"]}
+        - {reading: "う", candidates: ["う"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0}
+    - key: "Right"
+      expect: {focus: 1}
+    - key: "Shift+Left"
+      expect: {state: converting, focus: 1}
+
+- name: resize-complex-flow
+  backend: mock
+  mock:
+    sentences:
+      "あいうえお":
+        - {reading: "あい", candidates: ["あい"]}
+        - {reading: "うえ", candidates: ["うえ"]}
+        - {reading: "お", candidates: ["お"]}
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+      "いうえお":
+        - {reading: "いうえお", candidates: ["いうえお"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "e"
+      expect: {state: composing}
+    - key: "o"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0, segments: ["あい", "うえ", "お"]}
+    - key: "Shift+Left"
+      expect: {state: converting, segments: ["あ", "いうえお"]}
+
+- name: resize-multiple-times
+  backend: mock
+  mock:
+    sentences:
+      "あいう":
+        - {reading: "あいう", candidates: ["あいう"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, segments: ["あいう"]}
+    - key: "Shift+Right"
+      expect: {state: converting, segments: ["あいう"]}
+    - key: "Shift+Right"
+      expect: {state: converting, segments: ["あいう"]}
+
+- name: resize-hides-candidates
+  backend: mock
+  mock:
+    sentences:
+      "あいう":
+        - {reading: "あい", candidates: ["あい"]}
+        - {reading: "う", candidates: ["う"]}
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+      "いう":
+        - {reading: "いう", candidates: ["いう"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Space"
+      expect: {candidates_visible: true}
+    - key: "Shift+Left"
+      expect: {candidates_visible: false, state: converting}

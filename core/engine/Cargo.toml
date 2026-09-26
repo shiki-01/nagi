@@ -9,6 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+nagi-protocol.workspace = true
+nagi-romaji.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+serde_yaml_ng = "0.10.0"
 
 [lints]
 workspace = true

@@ -1,0 +1,300 @@
+- name: convert-space-from-composing
+  backend: mock
+  mock:
+    sentences:
+      "きょうはいいてんき":
+        - {reading: "きょうは", candidates: ["今日は", "京は", "きょうは"]}
+        - {reading: "いいてんき", candidates: ["いい天気"]}
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "y"
+      expect: {state: composing}
+    - key: "o"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "h"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "t"
+      expect: {state: composing}
+    - key: "e"
+      expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
+    - key: "k"
+      expect: {state: composing}
+    - key: "i"
+      expect: {preedit: "きょうはいいてんき", state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0, candidates_visible: false, result_candidates_present: false}
+
+- name: convert-f7-katakana
+  backend: mock
+  mock:
+    sentences:
+      "こんにちは":
+        - {reading: "こんにちは", candidates: ["こんにちは"]}
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "o"
+      expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "t"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "h"
+      expect: {state: composing}
+    - key: "a"
+      expect: {preedit: "こんにちは", state: composing}
+    - key: "F7"
+      expect: {state: converting, segments: ["コンニチハ"], kinds: ["japanese"]}
+
+- name: convert-f6-hiragana
+  backend: mock
+  mock:
+    sentences:
+      "こんにちは":
+        - {reading: "こんにちは", candidates: ["こんにちは"]}
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "o"
+      expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "t"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "h"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "F6"
+      expect: {state: converting, segments: ["こんにちは"]}
+
+- name: convert-literal-segments-pass-through
+  backend: mock
+  mock:
+    sentences:
+      "あ123う":
+        - {reading: "あ", candidates: ["あ"]}
+        - {reading: "う", candidates: ["う"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "1"
+      expect: {state: composing, segments: ["あ", "1"], kinds: ["japanese", "literal"]}
+    - key: "2"
+      expect: {state: composing}
+    - key: "3"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, segments: ["あ", "123", "う"], kinds: ["japanese", "literal", "japanese"]}
+
+- name: convert-escape-back-to-composing
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Escape"
+      expect: {state: composing, preedit: "あ", readings: ["あ"], pending: ""}
+
+- name: convert-backspace-back-to-composing
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "BackSpace"
+      expect: {state: composing, preedit: "あ"}
+
+- name: convert-enter-commit
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Enter"
+      expect: {commit: "あ", state: direct, preedit: ""}
+
+- name: convert-char-key-commit-restart
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "k"
+      expect: {state: composing, commit: "あ", preedit: "k", pending: "k"}
+
+- name: convert-multi-segment
+  backend: mock
+  mock:
+    sentences:
+      "あいう":
+        - {reading: "あ", candidates: ["あ"]}
+        - {reading: "いう", candidates: ["いう"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0, segments: ["あ", "いう"]}
+
+- name: convert-empty-input-no-convert
+  steps:
+    - key: "Space"
+      expect: {state: direct, preedit: ""}
+
+- name: convert-single-literal
+  steps:
+    - key: "3"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, commit: null, preedit: "3"}
+
+- name: convert-control-k-to-katakana
+  backend: mock
+  mock:
+    sentences:
+      "あいう":
+        - {reading: "あいう", candidates: ["愛卿"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0}
+    - key: "Ctrl+k"
+      expect: {state: converting, segments: ["アイウ"]}
+
+- name: convert-kana-key-commit
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Kana"
+      expect: {commit: "あ", state: direct}
+
+- name: convert-eisu-key-commit
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Eisu"
+      expect: {commit: "あ", state: direct, mode: alphanumeric, result_mode: alphanumeric}
+
+- name: convert-meta-c-commit-passthrough
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Meta+c"
+      expect: {commit: "あ", state: direct, consumed: false}
+
+- name: convert-tab-noop
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Tab"
+      expect: {consumed: true, state: converting, result_preedit_present: false}
+
+- name: convert-pageup-noop
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "PageUp"
+      expect: {consumed: true, state: converting}
+
+- name: convert-home-noop
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["あ"]}
+  steps:
+    - key: "a"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting}
+    - key: "Home"
+      expect: {consumed: true, state: converting}
