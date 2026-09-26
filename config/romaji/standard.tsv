@@ -1,0 +1,341 @@
+# Nagi standard romaji table (Mozc-compatible)
+# Format: input<TAB>output<TAB>pending (pending is optional)
+# Lines starting with # and empty lines are ignored
+
+# Vowels
+a	あ
+i	い
+u	う
+e	え
+o	お
+
+# Consonant + vowel (k row)
+ka	か
+ki	き
+ku	く
+ke	け
+ko	こ
+
+# Consonant + vowel (s row)
+sa	さ
+si	し
+su	す
+se	せ
+so	そ
+
+# Consonant + vowel (t row)
+ta	た
+ti	ち
+tu	つ
+te	て
+to	と
+
+# Consonant + vowel (n row)
+na	な
+ni	に
+nu	ぬ
+ne	ね
+no	の
+
+# Consonant + vowel (h row)
+ha	は
+hi	ひ
+hu	ふ
+he	へ
+ho	ほ
+
+# Consonant + vowel (m row)
+ma	ま
+mi	み
+mu	む
+me	め
+mo	も
+
+# Consonant + vowel (y row)
+ya	や
+yu	ゆ
+yo	よ
+
+# Consonant + vowel (r row)
+ra	ら
+ri	り
+ru	る
+re	れ
+ro	ろ
+
+# Consonant + vowel (w row)
+wa	わ
+wi	うぃ
+we	うぇ
+wo	を
+
+# Consonant + vowel (g row - voiced)
+ga	が
+gi	ぎ
+gu	ぐ
+ge	げ
+go	ご
+
+# Consonant + vowel (z row - voiced)
+za	ざ
+zi	じ
+zu	ず
+ze	ぜ
+zo	ぞ
+
+# Consonant + vowel (d row - voiced)
+da	だ
+di	ぢ
+du	づ
+de	で
+do	ど
+
+# Consonant + vowel (b row - voiced)
+ba	ば
+bi	び
+bu	ぶ
+be	べ
+bo	ぼ
+
+# Consonant + vowel (p row - semi-voiced)
+pa	ぱ
+pi	ぴ
+pu	ぷ
+pe	ぺ
+po	ぽ
+
+# Palatalized (kya, kyu, kyo)
+kya	きゃ
+kyu	きゅ
+kyo	きょ
+
+# Palatalized (sya, syu, syo) and direct forms (sha, shu, sho)
+sya	しゃ
+syu	しゅ
+syo	しょ
+sha	しゃ
+shu	しゅ
+sho	しょ
+
+# Palatalized (tya, tyu, tyo) and direct forms (cha, chu, cho)
+tya	ちゃ
+tyu	ちゅ
+tyo	ちょ
+cha	ちゃ
+chu	ちゅ
+cho	ちょ
+
+# Palatalized (nya, nyu, nyo)
+nya	にゃ
+nyu	にゅ
+nyo	にょ
+
+# Palatalized (hya, hyu, hyo)
+hya	ひゃ
+hyu	ひゅ
+hyo	ひょ
+
+# Palatalized (mya, myu, myo)
+mya	みゃ
+myu	みゅ
+myo	みょ
+
+# Palatalized (rya, ryu, ryo)
+rya	りゃ
+ryu	りゅ
+ryo	りょ
+
+# Palatalized (gya, gyu, gyo)
+gya	ぎゃ
+gyu	ぎゅ
+gyo	ぎょ
+
+# Palatalized (jya, jyu, jyo) and direct forms (ja, ju, jo)
+jya	じゃ
+jyu	じゅ
+jyo	じょ
+ja	じゃ
+ju	じゅ
+jo	じょ
+
+# Palatalized (zya, zyu, zyo)
+zya	じゃ
+zyu	じゅ
+zyo	じょ
+
+# Palatalized (dya, dyu, dyo)
+dya	ぢゃ
+dyu	ぢゅ
+dyo	ぢょ
+
+# Palatalized (bya, byu, byo)
+bya	びゃ
+byu	びゅ
+byo	びょ
+
+# Palatalized (pya, pyu, pyo)
+pya	ぴゃ
+pyu	ぴゅ
+pyo	ぴょ
+
+# Alternative spellings (shi, chi, tsu, fu, ji)
+shi	し
+chi	ち
+tsu	つ
+fu	ふ
+ji	じ
+
+# Ritsuryou-compatible spellings (alternative kana representations)
+syi	しぃ
+tyi	ちぃ
+zyi	じぃ
+dyi	ぢぃ
+cyi	ちぃ
+cyu	ちゅ
+cyo	ちょ
+jyi	じぃ
+
+# ca, ci, cu, ce, co (alternative k-sounds)
+ca	か
+ci	し
+cu	く
+ce	せ
+co	こ
+
+# Foreign sounds (fa, fi, fe, fo)
+fa	ふぁ
+fi	ふぃ
+fe	ふぇ
+fo	ふぉ
+
+# Foreign sounds (va, vi, ve, vo)
+va	ゔぁ
+vi	ゔぃ
+vu	ゔ
+ve	ゔぇ
+vo	ゔぉ
+
+# Foreign sounds (thi, dhi)
+thi	てぃ
+dhi	でぃ
+
+# Foreign sounds (tha, thu, tho)
+tha	てゃ
+thu	てゅ
+tho	てょ
+
+# Foreign sounds (dha, dhu, dho)
+dha	でゃ
+dhu	でゅ
+dho	でょ
+
+# Foreign sounds (twu, dwu)
+twu	とぅ
+dwu	どぅ
+
+# Foreign sounds (je, sye, she, che)
+je	じぇ
+sye	しぇ
+she	しぇ
+che	ちぇ
+
+# Small kana (xa, xi, xu, xe, xo / la, li, lu, le, lo)
+xa	ぁ
+xi	ぃ
+xu	ぅ
+xe	ぇ
+xo	ぉ
+la	ぁ
+li	ぃ
+lu	ぅ
+le	ぇ
+lo	ぉ
+
+# Small kana (xya, xyu, xyo / lya, lyu, lyo)
+xya	ゃ
+xyu	ゅ
+xyo	ょ
+lya	ゃ
+lyu	ゅ
+lyo	ょ
+
+# Small tsu (xtu, xtsu / ltu, ltsu)
+xtu	っ
+xtsu	っ
+ltu	っ
+ltsu	っ
+
+# Small wa (xwa, lwa)
+xwa	ゎ
+lwa	ゎ
+
+# Double consonants (geminate consonants - promote)
+kk	っ	k
+ss	っ	s
+tt	っ	t
+cc	っ	c
+hh	っ	h
+mm	っ	m
+rr	っ	r
+gg	っ	g
+zz	っ	z
+dd	っ	d
+bb	っ	b
+ff	っ	f
+jj	っ	j
+pp	っ	p
+ww	っ	w
+vv	っ	v
+
+# n + consonant (mora n) - except y and vowel
+nn	ん	n
+nk	ん	k
+ng	ん	g
+ns	ん	s
+nz	ん	z
+nt	ん	t
+nd	ん	d
+nh	ん	h
+nb	ん	b
+np	ん	p
+nm	ん	m
+nr	ん	r
+nw	ん	w
+nv	ん	v
+nf	ん	f
+nj	ん	j
+nc	ん	c
+
+# n' (explicit n)
+n'	ん
+
+# Long vowel markers
+-	ー
+
+# Punctuation (Japanese style)
+,	、
+.	。
+
+# Punctuation (brackets)
+[	「
+]	」
+
+# Punctuation (symbol)
+/	・
+~	〜
+?	？
+!	！
+(	（
+)	）
+
+# z-series (Mozc convention)
+z,	‥
+z.	…
+z-	〜
+zh	←
+zj	↓
+zk	↑
+zl	→
+z[	『
+z]	』
+z/	・
