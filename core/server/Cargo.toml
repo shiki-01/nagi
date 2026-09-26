@@ -1,6 +1,6 @@
 [package]
 name = "nagi-server"
-description = "Nagi サーバー: stdin/stdout の改行区切り JSON-RPC ループ。"
+description = "Nagi サーバー: stdin/stdout の改行区切り JSON-RPC ループ（imserver バイナリ）。"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,16 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[[bin]]
+name = "imserver"
+path = "src/main.rs"
+
 [dependencies]
+nagi-engine.workspace = true
+nagi-protocol.workspace = true
+nagi-dict.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
