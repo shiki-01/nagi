@@ -9,6 +9,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+fst = "0.4.7"
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
