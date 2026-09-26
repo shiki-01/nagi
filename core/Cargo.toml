@@ -19,10 +19,7 @@ repository = "https://github.com/shiki-01/nagi"
 authors = ["shiki"]
 
 [workspace.dependencies]
-nagi-engine = { path = "engine" }
 nagi-romaji = { path = "romaji" }
-nagi-dict = { path = "dict" }
-nagi-infer = { path = "infer" }
 nagi-protocol = { path = "protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -41,7 +38,4 @@ codegen-units = 1
 
 # 辞書の構築・Viterbi は重いので、dev / test でも最適化する
 [profile.dev.package.nagi-dict]
-opt-level = 3
-
-[profile.dev.package.yada]
 opt-level = 3

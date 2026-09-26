@@ -10,6 +10,9 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+nagi-dict = { path = "../dict" }
+sha2 = "0.10"
+ureq = "2.11"
 
 [lints]
 workspace = true
