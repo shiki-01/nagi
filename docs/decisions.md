@@ -315,5 +315,5 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 ### G-10. その他
 
 - `cargo xtask` のダウンロードは `ureq`（HTTP）と `sha2` を使用。取得は一時ファイル → SHA-256 検証 → rename
-- CI の `types` ジョブは `typeshare-cli`（ローカルで確認したのは 1.13.4）を毎回 `cargo install` する。実行時間が長いので、必要ならキャッシュ化する。CI 全体は GitHub Actions 上では未検証（ローカルでは同じコマンドを実行済み）
+- CI の `types` ジョブは `typeshare-cli`（ローカルで確認したのは 1.13.4）を毎回 `cargo install` する。実行時間が長いので、必要ならキャッシュ化する。GitHub Actions 上で全ジョブ成功を確認済み（コミット a3629e4）
 - 途中のコミットには、依存 crate の変更が後続コミットに分かれてビルドが通らないものが含まれる（最終状態では fmt / clippy / test が通る）

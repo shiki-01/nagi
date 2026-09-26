@@ -10,7 +10,7 @@
 
 ## 現状
 
-- Phase 0（技術検証）は未着手。Phase 1 のコア部分を先行して実装中（進捗は `docs/progress.md`）
+- Phase 0（技術検証）は未着手。Phase 1 のコア部分（romaji / protocol / engine / server / dict / infer）は実装済み（進捗・未完了は `docs/progress.md`、要レビューの暫定判断は `docs/decisions.md` G 節）
 - Rust ワークスペースは `core/` 以下（edition 2024、`core/rust-toolchain.toml` で 1.89.0 固定）。コマンドはすべて `core/` で実行する
 - 未決定: 変換モデル・システム辞書（Phase 0 の比較で確定。基準は「無料・再配布制約が小さい → 品質 → 速度/サイズ」）。暫定は Mozc OSS 辞書 + zenz-v3.1-small（`docs/decisions.md` G 節）
 
@@ -25,7 +25,9 @@
 | 補助タスク | `cargo xtask <task>`（OS 非依存。bash/ps1 は書かない） |
 
 - CI（`.github/workflows/ci.yml`）は ubuntu / windows / macos で fmt・clippy・build・test を実行する
-- 取得データ（モデル・辞書）は `data/`（.gitignore 済み）に置く。取得は `cargo xtask` のタスクで行う
+- 取得データ（モデル・辞書）は `data/`（.gitignore 済み）に置く。取得は `cargo xtask` のタスクで行う: `fetch-dict` → `build-dict`（`data/dict/nagi-dict.bin`）、`fetch-model`（`data/models/`）、`gen-types` / `check-types`（Swift 型の生成・差分検査。`typeshare-cli` が必要）
+- サーバー: `cargo run -p nagi-server --bin imserver -- --data-dir ../data`（JSON-RPC は stdin/stdout。辞書が無ければ読みそのまま返す）
+- LLM 推論（zenz）は feature `llama`（既定 OFF）: `LIBCLANG_PATH` と cmake が必要。`cargo test -p nagi-infer --features llama -- --nocapture`（モデル未取得なら skip）
 
 ## 基本方針
 
