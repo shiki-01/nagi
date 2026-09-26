@@ -1,0 +1,13 @@
+# Rust
+/core/target/
+**/*.rs.bk
+
+# 取得データ（モデル・辞書）。リポジトリには入れない（`cargo xtask fetch-*` で取得する）
+/data/
+
+# OS / エディタ
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

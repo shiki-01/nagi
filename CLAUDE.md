@@ -10,9 +10,22 @@
 
 ## 現状
 
-- リポジトリは設計書のみ（ソースコード・ビルド設定・テスト未作成）。Phase 0（技術検証）着手前
-- ビルド・テスト・lintコマンド: **未確認**（実装が存在しないため未定義）。確定したら本ファイルに追記する
-- 未決定: 変換モデル・システム辞書（Phase 0 の比較で確定。基準は「無料・再配布制約が小さい → 品質 → 速度/サイズ」）
+- Phase 0（技術検証）は未着手。Phase 1 のコア部分を先行して実装中（進捗は `docs/progress.md`）
+- Rust ワークスペースは `core/` 以下（edition 2024、`core/rust-toolchain.toml` で 1.89.0 固定）。コマンドはすべて `core/` で実行する
+- 未決定: 変換モデル・システム辞書（Phase 0 の比較で確定。基準は「無料・再配布制約が小さい → 品質 → 速度/サイズ」）。暫定は Mozc OSS 辞書 + zenz-v3.1-small（`docs/decisions.md` G 節）
+
+### ビルド・テスト・lint コマンド（`core/` で実行）
+
+| 用途 | コマンド |
+| --- | --- |
+| ビルド | `cargo build --workspace --all-targets` |
+| テスト | `cargo test --workspace` |
+| lint | `cargo clippy --workspace --all-targets -- -D warnings` |
+| フォーマット検査 | `cargo fmt --all --check` |
+| 補助タスク | `cargo xtask <task>`（OS 非依存。bash/ps1 は書かない） |
+
+- CI（`.github/workflows/ci.yml`）は ubuntu / windows / macos で fmt・clippy・build・test を実行する
+- 取得データ（モデル・辞書）は `data/`（.gitignore 済み）に置く。取得は `cargo xtask` のタスクで行う
 
 ## 基本方針
 

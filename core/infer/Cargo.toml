@@ -1,0 +1,14 @@
+[package]
+name = "nagi-infer"
+description = "Nagi 推論層: 変換モデルを trait で隠蔽し、llama.cpp（GGUF）を feature で提供する。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "nagi-dict"
+description = "Nagi 辞書: Mozc OSS 辞書の読み込み・double-array trie・連接コスト・Viterbi。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

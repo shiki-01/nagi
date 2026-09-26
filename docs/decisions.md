@@ -219,3 +219,20 @@
 ## 設計書への反映
 
 上記の A〜F は、設計書 v0.2（2026-09-27）に反映済み。
+
+---
+
+## G. Sonnet 暫定判断（要レビュー）
+
+2026-09-27、ユーザー不在の自律作業中に行った暫定判断。各項目に判断・理由・代替案を記す。Opus によるレビュー対象。
+
+### G-1. Rust ツールチェーンは 1.89.0 に固定
+
+- 判断: `core/rust-toolchain.toml` を `channel = "1.89.0"`、`profile = "minimal"`（rustfmt / clippy のみ追加）とした
+- 理由: 作業機に導入済みの stable が 1.89.0 だったため。「stable の版を固定する」（E 節）に沿う
+- 代替案: 最新 stable に更新して固定する。上げる場合は `rust-toolchain.toml` と `workspace.package.rust-version` / `clippy.toml` の `msrv` を同時に更新する
+
+### G-2. ワークスペースの lint 方針
+
+- 判断: `unsafe_code = "forbid"` をワークスペース全体に課す（`infer` の FFI 境界のみ、必要になった時点で個別に緩和する）。`missing_docs = "warn"`（公開 API は rustdoc 必須の品質基準に対応）。clippy は `-D warnings`
+- 理由: 「unsafe は infer の FFI 境界に限定する」に対応
