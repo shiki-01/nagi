@@ -8,7 +8,9 @@
 //! - [`runtime`] — 環境プロファイル・学習・ユーザー辞書・ランキング設定・通知の共有状態
 //! - [`learning`] — 確定を学習に記録する observer
 //! - [`server`] — JSON-RPC ループ
+//! - [`calibration`] — キャリブレーション推論の実測結果のファイルへの永続化
 
+pub mod calibration;
 pub mod learning;
 pub mod pipeline;
 pub mod runtime;

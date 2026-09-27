@@ -55,6 +55,8 @@ pub struct Tunables {
     pub disabled_apps: Vec<String>,
     /// 候補の出所の優先順（`ranking.source_order`）
     pub ranking: Vec<CandidateSource>,
+    /// `conversion.n_threads`（0 = 自動）
+    pub n_threads: usize,
 }
 
 /// 出所名（`ranking.source_order` の要素）を出所に直す
@@ -104,6 +106,7 @@ impl Tunables {
                 .iter()
                 .filter_map(|n| parse_source(n))
                 .collect(),
+            n_threads: config.conversion.n_threads,
         }
     }
 }
@@ -123,6 +126,8 @@ pub struct Effective {
     pub sync_budget: Duration,
     /// 候補の出所の優先順
     pub ranking: Vec<CandidateSource>,
+    /// 推論のスレッド数（`light` プロファイルでは半分に絞る）
+    pub n_threads: usize,
 }
 
 /// 実行時の共有状態
@@ -141,6 +146,7 @@ pub struct Runtime {
     config_path: Mutex<Option<PathBuf>>,
     config_error: AtomicBool,
     backend_name: Mutex<String>,
+    calibration_path: Mutex<Option<PathBuf>>,
 }
 
 impl Runtime {
@@ -170,6 +176,7 @@ impl Runtime {
             config_path: Mutex::new(None),
             config_error: AtomicBool::new(false),
             backend_name: Mutex::new(String::new()),
+            calibration_path: Mutex::new(None),
         })
     }
 
@@ -271,12 +278,49 @@ impl Runtime {
         self.announce(change);
     }
 
+    /// キャリブレーション結果の保存先を設定する（`None` なら保存しない）
+    pub fn set_calibration_path(&self, path: Option<PathBuf>) {
+        if let Ok(mut p) = self.calibration_path.lock() {
+            *p = path;
+        }
+    }
+
     /// キャリブレーション推論の実測（中央値、ミリ秒）で、初回判定をやり直す
     pub fn finish_calibration(&self, median_ms: f64) {
         if let Ok(mut c) = self.calibration_ms.lock() {
             *c = Some(median_ms);
         }
         self.recompute_profile(true);
+        self.save_calibration(median_ms);
+    }
+
+    fn save_calibration(&self, median_ms: f64) {
+        let Ok(path_guard) = self.calibration_path.lock() else {
+            return;
+        };
+        let Some(path) = path_guard.as_ref() else {
+            return;
+        };
+        let path = path.clone();
+        drop(path_guard);
+        let backend = self
+            .backend_name
+            .lock()
+            .map(|n| n.clone())
+            .unwrap_or_default();
+        let record = crate::calibration::CalibrationRecord {
+            median_ms,
+            cpu_cores: self.system.cpu_cores,
+            total_memory_mb: self.system.total_memory_mb,
+            backend,
+        };
+        if let Err(e) = crate::calibration::save(&path, &record) {
+            self.push_event(Event {
+                level: NotifyLevel::Warning,
+                code: "calibration_save_failed",
+                message: format!("キャリブレーション結果を保存できませんでした: {e}"),
+            });
+        }
     }
 
     fn recompute_profile(&self, force: bool) {
@@ -365,15 +409,28 @@ impl Runtime {
 
     /// 現在の有効なパラメータ
     pub fn effective(&self) -> Effective {
-        let params = self
+        let (params, profile) = self
             .controller
             .lock()
-            .map_or(Profile::Minimal.params(), |c| c.params());
+            .map_or((Profile::Minimal.params(), Profile::Minimal), |c| {
+                (c.params(), c.current())
+            });
         let t = self.tunables.read().map(|t| t.clone()).unwrap_or_default();
         let max_ctx = if t.use_context {
             t.max_context_override.unwrap_or(params.max_context_chars)
         } else {
             0
+        };
+        let cpu_cores = self.system.cpu_cores.max(1);
+        let base_threads = if t.n_threads > 0 {
+            t.n_threads
+        } else {
+            cpu_cores
+        };
+        let n_threads = if profile == Profile::Light {
+            (base_threads / 2).max(1)
+        } else {
+            base_threads
         };
         Effective {
             use_llm: params.use_llm && self.llm_loaded.load(Ordering::Relaxed),
@@ -382,6 +439,7 @@ impl Runtime {
             persona: (!t.persona.is_empty()).then_some(t.persona),
             sync_budget: t.sync_budget,
             ranking: t.ranking,
+            n_threads,
         }
     }
 
@@ -517,5 +575,26 @@ impl Runtime {
                 .and_then(|p| p.as_ref().map(|p| p.display().to_string())),
             config_error: self.config_error.load(Ordering::Relaxed),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finish_calibration_saves_to_configured_path() {
+        let runtime = Runtime::detached(true);
+        let path = std::env::temp_dir().join(format!(
+            "nagi-runtime-calibration-test-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        runtime.set_calibration_path(Some(path.clone()));
+        runtime.finish_calibration(42.0);
+        assert!(path.exists(), "キャリブレーション結果が保存されているはず");
+        let record = crate::calibration::load(&path).expect("読み込める");
+        assert_eq!(record.median_ms, 42.0);
+        let _ = std::fs::remove_file(&path);
     }
 }

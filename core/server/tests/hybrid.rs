@@ -16,6 +16,7 @@ fn backend(model: FakeModel, budget_ms: u64) -> Pipeline {
         SystemInfo {
             total_memory_mb: 16384,
             cpu_cores: 8,
+            has_gpu: false,
         },
         true,
         Tunables {

@@ -43,6 +43,8 @@ type Cache = Arc<Mutex<HashMap<(String, String), String>>>;
 struct Llm {
     model: SharedModel,
     cache: Cache,
+    /// 直前に `reconcile_active` を呼んだときのプロファイル（変化を検出するため）
+    last_profile: Mutex<nagi_profile::Profile>,
 }
 
 /// 変換パイプライン
@@ -50,6 +52,15 @@ pub struct Pipeline {
     dict: Option<Arc<Dictionary>>,
     llm: Option<Llm>,
     runtime: Arc<Runtime>,
+}
+
+/// dict・LLM の有無からバックエンド名を決める（`Pipeline::new` と `name()` の重複を1箇所にまとめる）
+pub fn backend_name(has_dict: bool, has_llm: bool) -> &'static str {
+    match (has_dict, has_llm) {
+        (true, true) => "dict+llm",
+        (true, false) => "dict",
+        (false, _) => "kana",
+    }
 }
 
 /// LLM の出力として受け入れられるか（空・極端な長さ・私用領域文字・置換文字を弾く）
@@ -83,17 +94,39 @@ impl Pipeline {
         model: Option<Box<dyn ConversionModel>>,
         runtime: Arc<Runtime>,
     ) -> Self {
+        let profile = runtime.profile();
         let llm = model.map(|m| Llm {
             model: Arc::new(Mutex::new(m)),
             cache: Arc::new(Mutex::new(HashMap::new())),
+            last_profile: Mutex::new(profile),
         });
-        let name = match (&dict, &llm) {
-            (Some(_), Some(_)) => "dict+llm",
-            (Some(_), None) => "dict",
-            _ => "kana",
-        };
+        let name = backend_name(dict.is_some(), llm.is_some());
         runtime.set_backend_name(name);
         Pipeline { dict, llm, runtime }
+    }
+
+    /// プロファイルの変化を見て、LLM をアクティブ / 非アクティブに切り替える
+    /// （`Minimal` になったら解放、そこから戻ったら再読み込み）。別スレッドで行うので待たせない
+    fn reconcile_active(&self) {
+        let Some(llm) = &self.llm else { return };
+        let current = self.runtime.profile();
+        let Ok(mut last) = llm.last_profile.lock() else {
+            return;
+        };
+        if *last == current {
+            return;
+        }
+        *last = current;
+        drop(last);
+        let should_be_active = current != nagi_profile::Profile::Minimal;
+        let model = llm.model.clone();
+        let _ = std::thread::Builder::new()
+            .name("nagi-llm-active".into())
+            .spawn(move || {
+                if let Ok(mut m) = model.lock() {
+                    let _ = m.set_active(should_be_active);
+                }
+            });
     }
 
     /// 起動直後の最初の推論が遅くならないよう、別スレッドでモデルを温め、続けてキャリブレーション
@@ -110,6 +143,7 @@ impl Pipeline {
                 let req = Self::request(CALIBRATION_READING, "", None);
                 let mut samples = Vec::new();
                 if let Ok(mut m) = model.lock() {
+                    m.set_n_threads(runtime.effective().n_threads);
                     let _ = m.convert(&req); // ページイン
                     for _ in 0..3 {
                         let started = Instant::now();
@@ -151,10 +185,12 @@ impl Pipeline {
         let (tx, rx) = mpsc::sync_channel::<Option<String>>(1);
         let (model, cache, runtime) = (llm.model.clone(), llm.cache.clone(), self.runtime.clone());
         let req = Self::request(reading, left, eff.persona.as_deref());
+        let n_threads = eff.n_threads;
         std::thread::Builder::new()
             .name("nagi-llm-convert".into())
             .spawn(move || {
                 let result = model.lock().ok().and_then(|mut m| {
+                    m.set_n_threads(n_threads);
                     let started = Instant::now();
                     let out = m.convert(&req).ok();
                     runtime.note_latency(started.elapsed().as_secs_f64() * 1000.0);
@@ -188,13 +224,14 @@ impl Pipeline {
         let (tx, rx) = mpsc::sync_channel::<Option<Vec<f32>>>(1);
         let model = llm.model.clone();
         let req = Self::request(reading, left, eff.persona.as_deref());
+        let n_threads = eff.n_threads;
         std::thread::Builder::new()
             .name("nagi-llm-score".into())
             .spawn(move || {
-                let scores = model
-                    .lock()
-                    .ok()
-                    .and_then(|mut m| m.score(&req, &candidates).ok());
+                let scores = model.lock().ok().and_then(|mut m| {
+                    m.set_n_threads(n_threads);
+                    m.score(&req, &candidates).ok()
+                });
                 let _ = tx.send(scores);
             })
             .ok()?;
@@ -356,15 +393,12 @@ fn merge_by_order(
 
 impl ConversionBackend for Pipeline {
     fn name(&self) -> &str {
-        match (&self.dict, &self.llm) {
-            (Some(_), Some(_)) => "dict+llm",
-            (Some(_), None) => "dict",
-            _ => "kana",
-        }
+        backend_name(self.dict.is_some(), self.llm.is_some())
     }
 
     fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {
         self.runtime.tick();
+        self.reconcile_active();
         let eff = self.runtime.effective();
         let overlay = self.runtime.overlay();
         let left_llm = tail(left_context, eff.max_context_chars);
@@ -390,6 +424,7 @@ impl ConversionBackend for Pipeline {
         limit: usize,
     ) -> Vec<BackendCandidate> {
         self.runtime.tick();
+        self.reconcile_active();
         let eff = self.runtime.effective();
         let overlay = self.runtime.overlay();
         let left_llm = tail(left_context, eff.max_context_chars);

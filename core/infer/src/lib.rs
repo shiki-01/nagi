@@ -100,6 +100,15 @@ pub trait ConversionModel: Send {
         let _ = (req, candidates);
         Err(InferError::Unsupported("score".to_string()))
     }
+
+    /// 推論のスレッド数のヒントを変更する。対応しないモデルは無視してよい（既定は無視）
+    fn set_n_threads(&mut self, _n_threads: usize) {}
+
+    /// モデルをアクティブにするかどうかを切り替える。`false` ならメモリ上の重みを解放してよい
+    /// （対応しないモデルは無視して常に成功を返す）。`true` で再度使う前に、内部で必要なら再読み込みする
+    fn set_active(&mut self, _active: bool) -> Result<(), InferError> {
+        Ok(())
+    }
 }
 
 /// プロンプト形式をモデルごとに吸収するトレイト
@@ -275,7 +284,7 @@ pub mod llama {
     use llama_cpp_2::token::LlamaToken;
     use std::ffi::CString;
     use std::num::NonZeroU32;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::pin::Pin;
     use std::sync::{Arc, OnceLock};
     use std::time::Instant;
@@ -332,7 +341,9 @@ pub mod llama {
 
     /// llama.cpp バックエンドによる変換モデル
     pub struct LlamaModel {
-        model: LlamaModelCore,
+        /// 読み込んだモデル本体。`None` なら解放済み（`minimal` プロファイル・メモリ逼迫時）
+        model: Option<LlamaModelCore>,
+        model_path: PathBuf,
         backend: Arc<LlamaBackend>,
         adapter: Box<dyn PromptAdapter>,
         options: LlamaOptions,
@@ -363,7 +374,25 @@ pub mod llama {
             );
 
             let backend = shared_backend()?;
+            let model = Self::load_core(&backend, path, &options)?;
+            Ok(Self {
+                model: Some(model),
+                model_path: path.to_path_buf(),
+                backend,
+                adapter: Box::new(ZenzV3Adapter),
+                options,
+                tokenizer,
+                stop_ids,
+                stats: None,
+            })
+        }
 
+        /// モデル本体だけを読み込む（`load` と `set_active(true)` の再読み込みの両方から使う）
+        fn load_core(
+            backend: &Arc<LlamaBackend>,
+            path: &Path,
+            options: &LlamaOptions,
+        ) -> Result<LlamaModelCore, InferError> {
             let mut params = LlamaModelParams::default().with_n_gpu_layers(options.gpu_layers);
             let key = CString::new("tokenizer.ggml.pre").expect("NUL を含まない");
             let mut value = [0 as std::os::raw::c_char; 128];
@@ -373,17 +402,8 @@ pub mod llama {
             Pin::new(&mut params)
                 .append_kv_override(key.as_c_str(), ParamOverrideValue::Str(value));
 
-            let model = LlamaModelCore::load_from_file(&backend, path, &params)
-                .map_err(|e| InferError::ModelLoad(format!("モデルロード失敗: {e}")))?;
-            Ok(Self {
-                model,
-                backend,
-                adapter: Box::new(ZenzV3Adapter),
-                options,
-                tokenizer,
-                stop_ids,
-                stats: None,
-            })
+            LlamaModelCore::load_from_file(backend, path, &params)
+                .map_err(|e| InferError::ModelLoad(format!("モデルロード失敗: {e}")))
         }
 
         /// 直近の [`ConversionModel::convert`] の計測値
@@ -398,6 +418,7 @@ pub mod llama {
         }
 
         fn convert(&mut self, req: &ConvertRequest) -> Result<Vec<Hypothesis>, InferError> {
+            self.set_active(true)?;
             let started = Instant::now();
             let (prompt, _warnings) = self.adapter.build_prompt_checked(req);
             let prompt_ids = self.tokenizer.encode(&prompt);
@@ -419,8 +440,12 @@ pub mod llama {
                 ctx_params = ctx_params.with_n_threads(self.options.n_threads as i32);
                 ctx_params = ctx_params.with_n_threads_batch(self.options.n_threads as i32);
             }
-            let mut ctx = self
+            // `set_active(true)` 直後なので必ず Some
+            let model = self
                 .model
+                .as_ref()
+                .expect("set_active(true) 直後なので必ず Some");
+            let mut ctx = model
                 .new_context(&self.backend, ctx_params)
                 .map_err(|e| InferError::ModelLoad(format!("コンテキスト作成失敗: {e}")))?;
 
@@ -458,7 +483,7 @@ pub mod llama {
                     .ln()
                     + best_logit;
                 let id = best as u32;
-                if self.stop_ids.contains(&id) || self.model.is_eog_token(LlamaToken(best as i32)) {
+                if self.stop_ids.contains(&id) || model.is_eog_token(LlamaToken(best as i32)) {
                     break;
                 }
                 score += best_logit - log_sum;
@@ -492,6 +517,7 @@ pub mod llama {
             req: &ConvertRequest,
             candidates: &[String],
         ) -> Result<Vec<f32>, InferError> {
+            self.set_active(true)?;
             let (prompt, _warnings) = self.adapter.build_prompt_checked(req);
             let prompt_ids = self.tokenizer.encode(&prompt);
             let n_ctx = self.options.n_ctx as usize;
@@ -506,8 +532,12 @@ pub mod llama {
                 ctx_params = ctx_params.with_n_threads(self.options.n_threads as i32);
                 ctx_params = ctx_params.with_n_threads_batch(self.options.n_threads as i32);
             }
-            let mut ctx = self
+            // `set_active(true)` 直後なので必ず Some
+            let model = self
                 .model
+                .as_ref()
+                .expect("set_active(true) 直後なので必ず Some");
+            let mut ctx = model
                 .new_context(&self.backend, ctx_params)
                 .map_err(|e| InferError::ModelLoad(format!("コンテキスト作成失敗: {e}")))?;
 
@@ -560,6 +590,25 @@ pub mod llama {
                 scores.push(total);
             }
             Ok(scores)
+        }
+
+        fn set_n_threads(&mut self, n_threads: usize) {
+            self.options.n_threads = n_threads;
+        }
+
+        fn set_active(&mut self, active: bool) -> Result<(), InferError> {
+            if active {
+                if self.model.is_none() {
+                    self.model = Some(Self::load_core(
+                        &self.backend,
+                        &self.model_path,
+                        &self.options,
+                    )?);
+                }
+            } else {
+                self.model = None;
+            }
+            Ok(())
         }
     }
 
@@ -705,6 +754,15 @@ mod tests {
     }
 
     #[test]
+    fn default_set_active_is_a_no_op_success() {
+        // トレイトの既定実装（no-op）が Ok(()) を返すことを確認する
+        let mut model = MockModel::new();
+        assert!(model.set_active(false).is_ok());
+        assert!(model.set_active(true).is_ok());
+        model.set_n_threads(4); // no-op。パニックしないことだけ確認
+    }
+
+    #[test]
     fn test_zenz_adapter_id() {
         let adapter = ZenzV3Adapter;
         assert_eq!(adapter.id(), "zenz-v3.1");
@@ -798,6 +856,34 @@ mod tests {
             let second = model.convert(&req).expect("変換");
             assert_eq!(first[0].surface, second[0].surface, "決定的であること");
         }
+    }
+
+    /// `set_active(false)` でモデルを解放し、`set_active(true)` で再読み込みできること
+    /// （モデル未取得なら skip）
+    #[cfg(feature = "llama")]
+    #[test]
+    fn test_llama_model_set_active_reloads() {
+        use crate::llama::{LlamaModel, LlamaOptions};
+        use std::path::Path;
+
+        let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/models/zenz-v3.1-small-Q5_K_M.gguf");
+        if !model_path.exists() {
+            eprintln!("skip: モデル未取得（cargo xtask fetch-model）");
+            return;
+        }
+        let mut model =
+            LlamaModel::load(&model_path, LlamaOptions::default()).expect("モデルロード");
+        model.set_active(false).expect("解放");
+        model.set_active(true).expect("再読み込み");
+        let req = ConvertRequest {
+            reading: "きょうはいいてんきです".to_string(),
+            left_context: String::new(),
+            profile: None,
+            max_new_tokens: 64,
+        };
+        let result = model.convert(&req).expect("再読み込み後の変換");
+        assert!(!result[0].surface.is_empty());
     }
 
     /// 文脈込みの再採点（モデル未取得なら skip）

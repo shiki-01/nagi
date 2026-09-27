@@ -231,6 +231,7 @@ pub fn load_dictionary(data_dir: &Path) -> Result<Arc<Dictionary>, String> {
 fn load_model(
     data_dir: &Path,
     model_setting: Option<&str>,
+    n_threads: usize,
 ) -> Result<Box<dyn ConversionModel>, String> {
     use nagi_infer::llama::{LlamaModel, LlamaOptions};
     let path = match model_setting {
@@ -240,13 +241,23 @@ fn load_model(
     if !path.exists() {
         return Err(format!("変換モデルが見つかりません: {}", path.display()));
     }
-    LlamaModel::load(&path, LlamaOptions::default())
-        .map(|m| Box::new(m) as Box<dyn ConversionModel>)
-        .map_err(|e| format!("変換モデルの読み込みに失敗しました: {e}"))
+    LlamaModel::load(
+        &path,
+        LlamaOptions {
+            n_threads,
+            ..LlamaOptions::default()
+        },
+    )
+    .map(|m| Box::new(m) as Box<dyn ConversionModel>)
+    .map_err(|e| format!("変換モデルの読み込みに失敗しました: {e}"))
 }
 
 #[cfg(not(feature = "llama"))]
-fn load_model(_data_dir: &Path, _model: Option<&str>) -> Result<Box<dyn ConversionModel>, String> {
+fn load_model(
+    _data_dir: &Path,
+    _model: Option<&str>,
+    _n_threads: usize,
+) -> Result<Box<dyn ConversionModel>, String> {
     Err("このビルドは LLM 推論（feature `llama`）を含みません".to_string())
 }
 
@@ -288,7 +299,11 @@ pub fn build(options: &ServerOptions) -> Built {
             Ok(d) => {
                 dict = Some(d);
                 if options.use_llm {
-                    match load_model(dir, config.conversion.model.as_deref()) {
+                    match load_model(
+                        dir,
+                        config.conversion.model.as_deref(),
+                        config.conversion.n_threads,
+                    ) {
                         Ok(m) => model = Some(m),
                         Err(e) => notes.push(format!("{e}（辞書のみで起動します）")),
                     }
@@ -335,13 +350,26 @@ pub fn build(options: &ServerOptions) -> Built {
     };
 
     let has_llm = model.is_some();
+    let system = nagi_profile::detect();
+    let backend = crate::pipeline::backend_name(dict.is_some(), has_llm);
+    let calibration_path = user_dir.as_ref().map(|d| d.join("calibration.json"));
+    let cached_calibration_ms = calibration_path
+        .as_deref()
+        .and_then(crate::calibration::load)
+        .filter(|record| record.matches(&system, backend))
+        .map(|record| record.median_ms);
     let runtime = Runtime::new(
-        nagi_profile::detect(),
+        system,
         has_llm,
         Tunables::from_config(&config),
         learner,
         learn_path,
     );
+    runtime.set_calibration_path(calibration_path);
+    if let Some(ms) = cached_calibration_ms {
+        // 前回の実測値を即座に反映させる。直後の pipeline.warm_up() が新しい実測値で上書きする
+        runtime.finish_calibration(ms);
+    }
     runtime.set_config_state(config_path.clone(), config_error);
 
     // ユーザー辞書

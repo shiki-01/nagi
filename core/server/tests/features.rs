@@ -86,6 +86,7 @@ fn status(server: &mut Server) -> Value {
 const SYSTEM: SystemInfo = SystemInfo {
     total_memory_mb: 16384,
     cpu_cores: 8,
+    has_gpu: false,
 };
 
 /// 偽モデル + インライン辞書 + 一時ディレクトリの学習・ユーザー辞書・設定で Server を作る
