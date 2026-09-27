@@ -479,3 +479,13 @@ G-17 で選択機構のみとしていた範囲操作に、Mozkey（`koyasi777/m
 - **供給元**: `Learner::lookup_prefix`（既存）と `Overlay::lookup_prefix`（新規追加）。学習キャッシュを優先し、ユーザー辞書は重複しないものだけ追加する
 - **設定**: `[predict] enabled`（既定 true）・`min_chars`（既定 1、設計書の既定値と一致）
 - **既存テストの意図的な変更**: `core/engine/src/keymap.rs` の `composing_table`/`converting_table`、`core/engine/tests/golden/40_convert.yaml` の `convert-tab-noop`（→ `convert-tab-next-candidate` に改名）を、Tab の新しい挙動に合わせて更新した
+
+### G-24. 非同期通知の配信基盤（2026-09-27）
+
+`update_preedit`/`update_candidates` 等（ライブ変換・スタイル変換）の非同期通知を、キー入力を待たずに配信できる基盤を実装した。実装方針・通知タイミングはユーザーから「任せる」との回答。
+
+- **設計**: `Server::run` を「標準入力を読む専用スレッド + `mpsc` チャンネルを受信するメインループ」に分離した。`Runtime` に `event_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>` を追加し、`push_event` が呼ばれた瞬間にフック（チャンネルへの `Wake` 送信）を呼ぶ。メインループは `Msg::Line`（リクエスト処理）と `Msg::Wake`（溜まっている `notify` をすぐ出力）の両方を1つのチャンネルで受け取る
+- **既存挙動への影響**: `handle_line`（リクエストへの応答に続けて notify を出す既存の同期経路）は変更していない。今回の変更は「キー入力が無い間でも notify が届くようになる」という追加のみ
+- **副作用として直した問題**: `Server::run` は標準入力を別スレッドへ move するため `R: BufRead + Send + 'static` が必要になった。`StdinLock`（`MutexGuard` を内包）は `Send` ではないため、`main.rs` はロックせず `Stdin` をそのまま渡す形に変えた（`Stdin::read` は呼び出しごとに内部で lock/unlock するので、単一スレッドから使う限り挙動は変わらない）
+- **今回のスコープ外**: ライブ変換・スタイル変換など、実際にこの基盤を使って非同期通知を送出する機能自体はまだ実装していない（配信基盤のみ）。既存のキャリブレーション完了・アップデート確認・プロファイル変化の通知が、この基盤によって即時配信されるようになった（動作の変化として観測可能）
+- **テスト**: `core/server/tests/rpc.rs` に、`push_event` が次のリクエストを送らずに配信されることを検証する統合テストを追加した（`cargo test --workspace` を複数回連続実行して安定性を確認済み）
