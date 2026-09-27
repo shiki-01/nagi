@@ -456,3 +456,63 @@ fn predict_respects_min_chars() {
     // "あ" は1文字なので min_chars=2 では予測されない
     assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
 }
+
+// ---- ライブ変換（live_convert） ----
+
+#[test]
+fn live_convert_updates_composing_preedit_with_converted_surface() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    // まだ Composing のまま（Space を押していない）
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    let r = e.live_convert("s", "きょうはいい");
+    let r = r.expect("変換結果が読みと異なるので通知されるはず");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "今日はいい");
+    // 状態は Composing のまま（Converting へは遷移しない）
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    // reading は保持される（ルビ表示用）
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(
+        snap.preedit
+            .segments
+            .iter()
+            .map(|s| s.reading.as_str())
+            .collect::<Vec<_>>()
+            .join(""),
+        "きょうはいい"
+    );
+}
+
+#[test]
+fn live_convert_ignores_stale_reading() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    // 実際の入力（"きょうはいい"）と異なる reading を渡すと無視される
+    let r = e.live_convert("s", "ちがうよみ");
+    assert!(r.is_none());
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはいい");
+}
+
+#[test]
+fn live_convert_does_nothing_outside_composing() {
+    let mut e = engine();
+    let r = e.live_convert("s", "");
+    assert!(r.is_none());
+}
+
+#[test]
+fn live_convert_keeps_cursor_position_consistent() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Left");
+    press(&mut e, "s", "Left");
+    // Left 2 回で、カーソルは読み上の "きょうは" と "いい" の境界（読み4文字目）に来る
+    let r = e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "今日はいい");
+    // カーソルは変換後も対応する文節境界（"今日は" の直後）に来る（surface 上の長さが
+    // reading と異なるため、変換前と同じ UTF-16 数値になるとは限らない）
+    assert_eq!(preedit.cursor, preedit.segments[0].range.end);
+    assert_eq!(preedit.segments[0].range.end, 3); // "今日は" の UTF-16 長
+}

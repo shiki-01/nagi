@@ -126,6 +126,18 @@ struct Session {
     secure_input: bool,
     revision: u64,
     sent: Sent,
+    /// ライブ変換の結果（Composing 中のみ使う）。`source_reading` が現在の入力全体の reading と
+    /// 一致する間だけ表示に使う。一致しなくなったら（次の入力があった等）自然に無視される
+    live_conversion: Option<LiveConversion>,
+}
+
+/// ライブ変換のキャッシュ
+#[derive(Clone)]
+struct LiveConversion {
+    /// 計算時点の入力全体（Composing の全 piece を連結した）reading
+    source_reading: String,
+    /// 変換結果のセグメント列（reading を連結すると `source_reading` に一致する）
+    segments: Vec<Segment>,
 }
 
 /// 変換の始め方
@@ -226,6 +238,7 @@ impl Engine {
                 },
                 mode: self.config.initial_mode,
             },
+            live_conversion: None,
         }
     }
 
@@ -300,6 +313,86 @@ impl Engine {
         let result = self.finish(&mut sess, true, String::new());
         self.sessions.insert(session_id.to_string(), sess);
         result
+    }
+
+    /// ライブ変換の再変換を試みる（サーバーがデバウンス後に呼ぶ）。Composing 状態で、かつ
+    /// 現在の入力全体の reading が `expected_reading` と一致する場合だけ変換を行い、Session に
+    /// 反映する。一致しない（すでに別の入力になっている）場合や、変換しても表示が変わらない
+    /// 場合は `None` を返す（フロントへ何も送らなくてよいという意味）
+    pub fn live_convert(
+        &mut self,
+        session_id: &str,
+        expected_reading: &str,
+    ) -> Option<ProcessKeyResult> {
+        let mut sess = self.take_session(session_id);
+        let applied = self.try_apply_live_conversion(&mut sess, expected_reading);
+        let result = if applied {
+            let r = self.finish(&mut sess, false, String::new());
+            r.preedit.is_some().then_some(r)
+        } else {
+            None
+        };
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// `live_convert` の内部処理。反映できたら `true`
+    fn try_apply_live_conversion(&self, sess: &mut Session, expected_reading: &str) -> bool {
+        let State::Composing = sess.state else {
+            return false;
+        };
+        let pieces = sess.composer.pieces();
+        if pieces.is_empty() {
+            return false;
+        }
+        let full_reading: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        if full_reading != expected_reading {
+            return false;
+        }
+        let mut segments: Vec<Segment> = Vec::new();
+        let mut context = sess.left_context.clone();
+        for piece in &pieces {
+            match piece.kind {
+                PieceKind::Japanese => {
+                    let converted = self
+                        .backend
+                        .convert_sentence(&piece.text, &tail_chars(&context, LEFT_CONTEXT_CHARS));
+                    let valid = !converted.is_empty()
+                        && converted
+                            .iter()
+                            .map(|s| s.reading.as_str())
+                            .collect::<String>()
+                            == piece.text;
+                    if valid {
+                        for bs in converted {
+                            context.push_str(&bs.surface);
+                            let id = segments.len() as u32;
+                            segments.push(Segment {
+                                reading: bs.reading,
+                                surface: bs.surface,
+                                kind: SegmentKind::Japanese,
+                                candidates: None,
+                                chunk_id: id,
+                            });
+                        }
+                    } else {
+                        context.push_str(&piece.text);
+                        let id = segments.len() as u32;
+                        segments.push(Segment::plain(&piece.text, SegmentKind::Japanese, id));
+                    }
+                }
+                PieceKind::Literal => {
+                    context.push_str(&piece.text);
+                    let id = segments.len() as u32;
+                    segments.push(Segment::plain(&piece.text, SegmentKind::Literal, id));
+                }
+            }
+        }
+        sess.live_conversion = Some(LiveConversion {
+            source_reading: full_reading,
+            segments,
+        });
+        true
     }
 
     /// エンジン再起動後に、フロントが保持していた preedit を復元する
@@ -1135,19 +1228,26 @@ impl Engine {
         match &sess.state {
             State::Direct => Preedit::default(),
             State::Composing => {
-                let segments: Vec<Segment> = sess
-                    .composer
-                    .pieces()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| {
-                        let kind = match p.kind {
-                            PieceKind::Japanese => SegmentKind::Japanese,
-                            PieceKind::Literal => SegmentKind::Literal,
-                        };
-                        Segment::plain(&p.text, kind, i as u32)
-                    })
-                    .collect();
+                let pieces = sess.composer.pieces();
+                let full_reading: String = pieces.iter().map(|p| p.text.as_str()).collect();
+                let live = sess
+                    .live_conversion
+                    .as_ref()
+                    .filter(|lc| lc.source_reading == full_reading);
+                let segments: Vec<Segment> = match live {
+                    Some(lc) => lc.segments.clone(),
+                    None => pieces
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            let kind = match p.kind {
+                                PieceKind::Japanese => SegmentKind::Japanese,
+                                PieceKind::Literal => SegmentKind::Literal,
+                            };
+                            Segment::plain(&p.text, kind, i as u32)
+                        })
+                        .collect(),
+                };
                 let mut remaining = sess.composer.cursor();
                 let mut cursor = CursorPos::default();
                 for (i, s) in segments.iter().enumerate() {
