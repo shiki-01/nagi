@@ -25,10 +25,12 @@
 1. **LLM 接続の残り**: 非同期通知（`update_preedit` / `update_candidates`）での結果差し替え、ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
 2. **予測変換**（Phase 2）: 学習・ユーザー辞書の前方一致（`Learner::lookup_prefix` は用意済み）、候補ウィンドウの Tab / ↓ 選択
 3. ~~**環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化~~ → 実装済み（G-13）。残るは `quality` で使う大きいモデル・reranker（Laya 評価。Phase 0 の比較が必要）
-4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。**設定の残り**: 設定 GUI（Phase 4）、`update.auto_check` の実装（配布用のアップデート確認エンドポイントが未整備のため未着手）
+4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。~~`update.auto_check` の実装~~ → 実装済み（G-19。起動時の自動確認・notify のみ。実サーバー（`nagi.shiki-01.com/updates/latest.json`）は未整備なので機能するにはサーバー側の用意が必要）。**設定の残り**: 設定 GUI（Phase 4）
 5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測
 6. macOS フロントエンド（IMKit。`set_environment` の送信、`set_context.app_id` の報告を含む）、インストールスクリプト、アップデート確認、`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）
-7. Phase 3 以降: ~~範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）~~ → 選択機構のみ実装済み（G-17。選択範囲への再変換・Ctrl+U/I/O直接書き換えは未着手）、確定取消、スタイル変換。~~Rewriter~~ → 基盤を実装済み（G-15・G-16。全角/半角英数記号・半角カナ・漢数字。日付・簡易計算は未着手）
+7. Phase 3 以降: ~~範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）~~ → 選択機構のみ実装済み（G-17。選択範囲への再変換・Ctrl+U/I/O直接書き換えは未着手。決定事項は本ファイル末尾「Phase 3以降の要決定事項」参照）、確定取消、スタイル変換。~~Rewriter~~ → 全角/半角英数記号・半角カナ・漢数字・日付・簡易計算まで実装済み（G-15・G-16・G-20）
+8. `select_candidate`（JSON-RPC）実装済み（G-18）。`reconvert` は辞書の逆引きが必要なため未着手
+9. KV キャッシュ再利用は見送り（G-21。既存計測でレイテンシ目標を満たしており、正誤リスクに対して優先度が低いと判断）
 
 ## G 節（`docs/decisions.md`）に記録した要レビュー事項
 
@@ -49,8 +51,21 @@
 - G-16 Rewriter: 漢数字変換（digit-for-digit・位取り）
 - G-17 範囲操作: 複数文節選択（選択の開始・伸縮・解除のみ。再変換・Rewriter直接書き換えは未着手）
 - G-18 select_candidate メソッドの実装（絶対indexでの候補選択。reconvertは未着手）
+- G-19 update.auto_check の実装（アップデート確認クライアント。実サーバーは未整備）
+- G-20 Rewriter: 日付・簡易計算の追加
+- G-21 KV キャッシュ再利用の見送り（理由・再検討条件を記載）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
+
+## Phase 3 以降の要決定事項（UX の詳細が設計書だけでは一意に決まらない項目）
+
+着手前にユーザーの決定が必要な事項。2026-09-27 時点で未回答。
+
+- **予測変換**: 候補ウィンドウ表示 or インライン薄字サジェスト、Tab/↓選択後に即確定するか継続するか、前方一致の対象（読みのみ or 確定済み表記も）
+- **ライブ変換**: `conversion.live_conversion` が既定 true なのに実装が常に OFF 相当という食い違いの解消方針、再変換トリガー（キー入力毎/デバウンス/チャンク境界）、Enter・Backspace の挙動、Composing 中の下線スタイル
+- **非同期通知**（`update_preedit`/`update_candidates`）: サーバーのメインループ（同期・1行読んで1行返す）を非同期化する実装方針、通知タイミング。macOS フロントエンドが無く実機検証できない点への対応
+- **ビームサーチ（文全体 N-best）**: 候補ウィンドウでの表示方法（現状は注目文節のみのUI）、sync_budget 内に収まるかの検証
+- **範囲選択への再変換・Ctrl+U/I/O 直接書き換え**（G-17 で選択機構のみ実装済み）: Space 再変換後の再分割・選択状態の扱い、`CandidateSource::Rewriter` だけでは種類を区別できない問題への対応（プロトコル変更の要否）、既定キーバインドの妥当性
 
 ## 既知の問題
 
