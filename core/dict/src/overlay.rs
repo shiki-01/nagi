@@ -37,6 +37,27 @@ impl Overlay {
         self.by_reading.get(reading).map_or(&[], Vec::as_slice)
     }
 
+    /// 読みが前方一致するユーザー語（表記とエントリの組。読みの昇順ではなく登録順の走査。
+    /// 件数が少ない前提の線形探索）
+    pub fn lookup_prefix(&self, prefix: &str, limit: usize) -> Vec<(&str, &OverlayEntry)> {
+        if prefix.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (reading, entries) in &self.by_reading {
+            if reading == prefix || !reading.starts_with(prefix) {
+                continue;
+            }
+            for entry in entries {
+                out.push((reading.as_str(), entry));
+                if out.len() >= limit {
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
     /// 読みが一致するスニペットの定型文（登録順）
     pub fn snippets(&self, reading: &str) -> &[String] {
         self.snippets.get(reading).map_or(&[], Vec::as_slice)

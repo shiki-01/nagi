@@ -507,6 +507,35 @@ impl ConversionBackend for Pipeline {
         out.truncate(limit);
         out
     }
+
+    fn predict(&self, prefix: &str, left_context: &str, limit: usize) -> Vec<BackendCandidate> {
+        if prefix.is_empty() {
+            return Vec::new();
+        }
+        let overlay = self.runtime.overlay();
+        let hash = context_hash(&tail(left_context, HASH_CONTEXT_CHARS));
+        let mut out: Vec<BackendCandidate> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for (surface, _score) in self.runtime.learn_predict(prefix, hash, limit) {
+            if seen.insert(surface.clone()) {
+                out.push(BackendCandidate {
+                    surface,
+                    sources: vec![CandidateSource::Learned],
+                });
+            }
+        }
+        for (_, entry) in overlay.lookup_prefix(prefix, limit) {
+            if seen.insert(entry.surface.clone()) {
+                out.push(BackendCandidate {
+                    surface: entry.surface.clone(),
+                    sources: vec![CandidateSource::UserDict],
+                });
+            }
+        }
+        out.truncate(limit);
+        out
+    }
 }
 
 /// 使い方の確認用に、設定なしの既定の待ち時間を返す

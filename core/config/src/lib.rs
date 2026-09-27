@@ -353,6 +353,25 @@ impl Default for LearningSection {
     }
 }
 
+/// 予測変換セクション。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PredictSection {
+    /// 予測変換を行うかどうか。既定: true。
+    pub enabled: bool,
+    /// 予測変換を表示する最小の読みの文字数。既定: 1。
+    pub min_chars: usize,
+}
+
+impl Default for PredictSection {
+    fn default() -> Self {
+        PredictSection {
+            enabled: true,
+            min_chars: 1,
+        }
+    }
+}
+
 /// キーマップセクション。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -411,6 +430,8 @@ pub struct Config {
     pub ranking: RankingSection,
     /// 学習セクション。
     pub learning: LearningSection,
+    /// 予測変換セクション。
+    pub predict: PredictSection,
     /// キーマップセクション。
     pub keymap: KeymapSection,
     /// アップデートセクション。
@@ -480,6 +501,14 @@ impl Config {
             errors.push(format!(
                 "learning.max_entries は 100 から 1000000 の間である必要があります: {}",
                 self.learning.max_entries
+            ));
+        }
+
+        // predict.min_chars: 1 <= min_chars <= 20
+        if !(1..=20).contains(&self.predict.min_chars) {
+            errors.push(format!(
+                "predict.min_chars は 1 から 20 の間である必要があります: {}",
+                self.predict.min_chars
             ));
         }
 
@@ -567,6 +596,7 @@ const KNOWN_KEYS: &[&str] = &[
     "input",
     "ranking",
     "learning",
+    "predict",
     "keymap",
     "update",
 ];
@@ -591,6 +621,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         "input" => &["shift_letter", "punctuation"],
         "ranking" => &["source_order"],
         "learning" => &["enabled", "max_entries", "disabled_apps"],
+        "predict" => &["enabled", "min_chars"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
         _ => &[],
@@ -1229,6 +1260,37 @@ check_url = "https://example.com/latest.json"
         assert_eq!(
             config.update.check_url.as_deref(),
             Some("https://example.com/latest.json")
+        );
+    }
+
+    #[test]
+    fn test_predict_section_parse() {
+        let source = r#"
+[predict]
+enabled = false
+min_chars = 3
+"#;
+        let (config, _) = parse(source).expect("should parse predict section");
+        assert!(!config.predict.enabled);
+        assert_eq!(config.predict.min_chars, 3);
+    }
+
+    #[test]
+    fn test_validate_predict_min_chars() {
+        let mut config = Config::default();
+        config.predict.min_chars = 0;
+        assert!(
+            config
+                .validate()
+                .iter()
+                .any(|e| e.contains("predict.min_chars") && e.contains("1"))
+        );
+        config.predict.min_chars = 21;
+        assert!(
+            config
+                .validate()
+                .iter()
+                .any(|e| e.contains("predict.min_chars") && e.contains("20"))
         );
     }
 

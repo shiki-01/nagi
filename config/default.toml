@@ -122,6 +122,17 @@ disabled_apps = [
     "com.lastpass.LastPass",
 ]
 
+[predict]
+# 予測変換（未確定の読みから、学習キャッシュ・ユーザー辞書の前方一致で予測する）
+# true = 有効、false = 無効
+# 既定: true
+enabled = true
+
+# 予測変換を表示する最小の読みの文字数
+# 1-20 の範囲で指定
+# 既定: 1
+min_chars = 1
+
 [keymap]
 # キーマップのプリセット
 # "default" = 標準的な日本語入力キー配置（既定）

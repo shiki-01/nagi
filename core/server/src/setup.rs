@@ -120,6 +120,8 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
             page_size: config.conversion.num_candidates,
             initial_mode: InputMode::Hiragana,
             keymap,
+            predict_enabled: config.predict.enabled,
+            predict_min_chars: config.predict.min_chars,
         },
         events,
     )

@@ -44,6 +44,13 @@ pub trait ConversionBackend: Send + Sync {
         left_context: &str,
         limit: usize,
     ) -> Vec<BackendCandidate>;
+
+    /// 予測変換の候補（学習キャッシュ・ユーザー辞書の前方一致。良い順、最大 `limit` 件）。
+    /// `prefix` は入力中の読み（ひらがな）。既定実装は非対応（空を返す）
+    fn predict(&self, prefix: &str, left_context: &str, limit: usize) -> Vec<BackendCandidate> {
+        let _ = (prefix, left_context, limit);
+        Vec::new()
+    }
 }
 
 /// 辞書もモデルも使わないバックエンド（読みをそのまま返す）
@@ -73,6 +80,7 @@ impl ConversionBackend for KanaBackend {
 pub struct MockBackend {
     sentences: HashMap<String, Vec<(String, Vec<String>)>>,
     segments: HashMap<String, Vec<String>>,
+    predictions: HashMap<String, Vec<String>>,
 }
 
 impl MockBackend {
@@ -98,6 +106,15 @@ impl MockBackend {
     pub fn with_segments(mut self, reading: &str, candidates: Vec<&str>) -> Self {
         self.segments.insert(
             reading.to_string(),
+            candidates.into_iter().map(str::to_string).collect(),
+        );
+        self
+    }
+
+    /// 予測変換の候補を登録する（読みの前方一致で使われる。テスト用）
+    pub fn with_predictions(mut self, prefix: &str, candidates: Vec<&str>) -> Self {
+        self.predictions.insert(
+            prefix.to_string(),
             candidates.into_iter().map(str::to_string).collect(),
         );
         self
@@ -143,6 +160,20 @@ impl ConversionBackend for MockBackend {
             .map(|surface| BackendCandidate {
                 surface,
                 sources: vec![CandidateSource::SystemDict],
+            })
+            .collect()
+    }
+
+    fn predict(&self, prefix: &str, _left_context: &str, limit: usize) -> Vec<BackendCandidate> {
+        self.predictions
+            .get(prefix)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .take(limit)
+            .map(|surface| BackendCandidate {
+                surface,
+                sources: vec![CandidateSource::Learned],
             })
             .collect()
     }

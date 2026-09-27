@@ -199,6 +199,7 @@ impl KeyMap {
             keysym::F7 => Some(Action::ToKatakana),
             keysym::F6 => Some(Action::ToHiragana),
             _ if is_command_chord(key) => Some(Action::CommitAndPassThrough),
+            keysym::TAB if !m.ctrl && !m.alt && !m.meta => Some(Action::Predict),
             keysym::UP | keysym::DOWN | keysym::TAB | keysym::PAGE_UP | keysym::PAGE_DOWN => {
                 Some(Action::NoOp)
             }
@@ -248,6 +249,7 @@ impl KeyMap {
             keysym::F7 => Some(Action::ToKatakana),
             keysym::F6 => Some(Action::ToHiragana),
             _ if is_command_chord(key) => Some(Action::CommitAndPassThrough),
+            keysym::TAB if !m.ctrl && !m.alt && !m.meta => Some(Action::NextCand),
             keysym::TAB | keysym::PAGE_UP | keysym::PAGE_DOWN | keysym::HOME | keysym::END => {
                 Some(Action::NoOp)
             }
@@ -275,6 +277,7 @@ pub fn parse_action(spec: &str) -> Result<Action, String> {
     };
     match (name, arg) {
         ("StartConvert", None) => Ok(Action::StartConvert),
+        ("Predict", None) => Ok(Action::Predict),
         ("NextCand", None) => Ok(Action::NextCand),
         ("PrevCand", None) => Ok(Action::PrevCand),
         ("Commit", None) => Ok(Action::Commit),
@@ -385,7 +388,7 @@ mod tests {
             ("Alt+x", Action::CommitAndPassThrough),
             ("Up", Action::NoOp),
             ("Down", Action::NoOp),
-            ("Tab", Action::NoOp),
+            ("Tab", Action::Predict),
             ("PageUp", Action::NoOp),
         ];
         for (key, expected) in cases {
@@ -424,7 +427,7 @@ mod tests {
             ("0", Action::Insert('0')),
             ("a", Action::Insert('a')),
             ("Meta+c", Action::CommitAndPassThrough),
-            ("Tab", Action::NoOp),
+            ("Tab", Action::NextCand),
         ];
         for (key, expected) in cases {
             assert_eq!(resolve(Converting, Hiragana, key), Some(expected), "{key}");
@@ -515,6 +518,11 @@ mod tests {
     #[test]
     fn parse_action_no_arg() {
         assert_eq!(parse_action("NextCand"), Ok(Action::NextCand));
+    }
+
+    #[test]
+    fn parse_action_predict() {
+        assert_eq!(parse_action("Predict"), Ok(Action::Predict));
     }
 
     #[test]

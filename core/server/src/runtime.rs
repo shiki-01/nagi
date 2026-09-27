@@ -503,6 +503,28 @@ impl Runtime {
             .unwrap_or_default()
     }
 
+    /// 予測変換用: 学習済みの候補（スコア降順の (表記, スコア)）を前方一致で返す。学習が無効なら空
+    pub fn learn_predict(
+        &self,
+        prefix: &str,
+        context_hash: u64,
+        limit: usize,
+    ) -> Vec<(String, f64)> {
+        let enabled = self.tunables.read().is_ok_and(|t| t.learning_enabled);
+        if !enabled {
+            return Vec::new();
+        }
+        self.learner
+            .lock()
+            .map(|l| {
+                l.lookup_prefix(prefix, context_hash, Self::unix_now(), limit)
+                    .into_iter()
+                    .map(|s| (s.surface, s.score))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// (読み, 表記) の学習を忘れさせる
     pub fn learn_forget(&self, reading: &str, surface: &str) -> bool {
         let forgot = self

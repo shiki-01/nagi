@@ -407,3 +407,52 @@ fn to_hankaku_is_a_no_op_when_not_convertible() {
     assert!(r.consumed);
     assert_eq!(e.snapshot("s").unwrap().preedit.segments[0].surface, before);
 }
+
+// ---- 予測変換（Tab） ----
+
+#[test]
+fn predict_enters_converting_when_backend_has_predictions() {
+    let backend = MockBackend::new().with_predictions("きょ", vec!["今日", "教"]);
+    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
+    type_str(&mut e, "s", "kyo");
+    let r = press(&mut e, "s", "Tab");
+    assert!(r.consumed);
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Converting);
+    assert_eq!(snap.preedit.segments[0].surface, "今日");
+    assert!(snap.candidates.visible);
+    assert_eq!(
+        snap.candidates
+            .items
+            .iter()
+            .map(|c| c.surface.as_str())
+            .collect::<Vec<_>>(),
+        ["今日", "教"]
+    );
+}
+
+#[test]
+fn predict_does_nothing_when_backend_has_no_predictions() {
+    let mut e = engine(); // KanaBackend（predict は既定実装で常に空）
+    type_str(&mut e, "s", "a");
+    let r = press(&mut e, "s", "Tab");
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+}
+
+#[test]
+fn predict_respects_min_chars() {
+    let backend = MockBackend::new().with_predictions("あ", vec!["亜"]);
+    let mut e = Engine::new(
+        Arc::new(backend),
+        EngineConfig {
+            predict_min_chars: 2,
+            ..EngineConfig::default()
+        },
+    );
+    type_str(&mut e, "s", "a");
+    let r = press(&mut e, "s", "Tab");
+    assert!(r.consumed);
+    // "あ" は1文字なので min_chars=2 では予測されない
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+}

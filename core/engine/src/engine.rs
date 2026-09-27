@@ -42,6 +42,10 @@ pub struct EngineConfig {
     pub initial_mode: InputMode,
     /// キーマップ（`[keymap]`。既定は内蔵の既定テーブルのみで上書きなし）
     pub keymap: KeyMap,
+    /// 予測変換を行うか（`predict.enabled`）
+    pub predict_enabled: bool,
+    /// 予測変換を表示する最小の読みの文字数（`predict.min_chars`）
+    pub predict_min_chars: usize,
 }
 
 impl Default for EngineConfig {
@@ -52,6 +56,8 @@ impl Default for EngineConfig {
             page_size: 9,
             initial_mode: InputMode::Hiragana,
             keymap: KeyMap::default_preset(),
+            predict_enabled: true,
+            predict_min_chars: 1,
         }
     }
 }
@@ -490,6 +496,7 @@ impl Engine {
             }
             Action::Commit => self.commit_all(sess, commit),
             Action::StartConvert | Action::NextCand => self.start_converting(sess, Start::Convert),
+            Action::Predict => self.predict(sess),
             Action::ToKatakana => self.start_converting(sess, Start::Katakana),
             Action::ToHiragana => self.start_converting(sess, Start::Hiragana),
             _ => {}
@@ -690,6 +697,50 @@ impl Engine {
             conv.segments[f].candidates = None;
             self.ensure_candidates(left_context, conv, f);
         }
+    }
+
+    /// `Tab`: Composing 中に学習キャッシュ・ユーザー辞書の前方一致（`ConversionBackend::predict`）
+    /// から予測変換を行う。見つかれば Converting へ入り候補ウィンドウを開く
+    /// （Mozc の `PredictAndConvert` と同じ考え方）。見つからなければ何もしない（Composing のまま）
+    fn predict(&self, sess: &mut Session) {
+        if !self.config.predict_enabled {
+            return;
+        }
+        if !matches!(sess.state, State::Composing) {
+            return;
+        }
+        sess.composer.flush_pending();
+        let pieces = sess.composer.pieces();
+        if pieces.is_empty() || pieces.iter().any(|p| p.kind != PieceKind::Japanese) {
+            return;
+        }
+        let prefix: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        if prefix.chars().count() < self.config.predict_min_chars {
+            return;
+        }
+        let left = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
+        let backend_candidates = self.backend.predict(&prefix, &left, CANDIDATE_LIMIT);
+        if backend_candidates.is_empty() {
+            return;
+        }
+        let mut items: Vec<Candidate> = Vec::new();
+        for c in &backend_candidates {
+            push_candidate(&mut items, &c.surface, &c.sources);
+        }
+        let surface = items[0].surface.clone();
+        sess.composer.clear();
+        sess.state = State::Converting(Conv {
+            segments: vec![Segment {
+                reading: prefix,
+                surface,
+                kind: SegmentKind::Japanese,
+                candidates: Some(CandidateSet { items, selected: 0 }),
+                chunk_id: 0,
+            }],
+            focus: 0,
+            visible: true,
+            range_anchor: None,
+        });
     }
 
     fn start_converting(&self, sess: &mut Session, how: Start) {

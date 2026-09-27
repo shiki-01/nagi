@@ -21,6 +21,8 @@ pub enum Action {
     InsertText(String),
     /// 変換開始（Space）
     StartConvert,
+    /// 予測変換（Tab。Composing 中のみ有効。学習キャッシュ・ユーザー辞書の前方一致）
+    Predict,
     /// 次の候補へ（Space / Down / Ctrl+n）
     NextCand,
     /// 前の候補へ（Shift+Space / Up / Ctrl+p）
@@ -72,6 +74,7 @@ impl fmt::Display for Action {
             Action::Insert(ch) => write!(f, "Insert({:?})", ch),
             Action::InsertText(t) => write!(f, "InsertText({:?})", t),
             Action::StartConvert => write!(f, "StartConvert"),
+            Action::Predict => write!(f, "Predict"),
             Action::NextCand => write!(f, "NextCand"),
             Action::PrevCand => write!(f, "PrevCand"),
             Action::SelectCand(n) => write!(f, "SelectCand({})", n),
