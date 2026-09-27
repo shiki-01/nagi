@@ -25,10 +25,12 @@ fn main() -> ExitCode {
         built.runtime.profile_reason()
     );
     let mut server = Server::from_built(built);
-    let stdin = std::io::stdin();
+    // `Server::run` は標準入力を読む専用スレッドに `input` を move するため、`Send + 'static` が要る。
+    // `StdinLock` は（`MutexGuard` を内包するため）`Send` ではないので、ロックせずに `Stdin` を渡す
+    // （`Stdin::read` は呼び出しごとに内部で lock/unlock するので、単一スレッドから使う限り挙動は変わらない）。
     let stdout = std::io::stdout();
     let mut output = BufWriter::new(stdout.lock());
-    match server.run(BufReader::new(stdin.lock()), &mut output) {
+    match server.run(BufReader::new(std::io::stdin()), &mut output) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("imserver: 入出力エラー: {e}");

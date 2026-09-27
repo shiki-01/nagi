@@ -3,10 +3,12 @@
 use nagi_engine::{EngineConfig, KanaBackend};
 use nagi_server::Server;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Arc;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 // ---- プロセス内 ----
 
@@ -272,6 +274,112 @@ fn shutdown_stops_the_loop() {
     let text = String::from_utf8(out).unwrap();
     assert_eq!(text.lines().count(), 2, "shutdown 後は処理しない: {text}");
     assert!(s.should_shutdown());
+}
+
+/// テスト用の `Read`: チャンネルから受け取ったバイト列を順に返す。
+/// 送信側がチャンネルを閉じると EOF（`read` が `Ok(0)`）を返す
+struct ChannelReader {
+    rx: mpsc::Receiver<Vec<u8>>,
+    buf: Vec<u8>,
+    pos: usize,
+}
+
+impl Read for ChannelReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.buf.len() {
+            match self.rx.recv() {
+                Ok(chunk) => {
+                    self.buf = chunk;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = out.len().min(self.buf.len() - self.pos);
+        out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+/// テスト用の `Write`: `Arc<Mutex<Vec<u8>>>` に書き込むだけ。テスト側で同じ Arc を持って中身を検査する
+#[derive(Clone)]
+struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedBuf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `buf` の中身（UTF-8）に `needle` が含まれるまで、`timeout` の範囲でポーリングする
+fn wait_for(buf: &Arc<Mutex<Vec<u8>>>, needle: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default();
+        if text.contains(needle) {
+            return text;
+        }
+        if Instant::now() >= deadline {
+            panic!("タイムアウト: {needle:?} が出力されませんでした。実際の出力: {text:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn push_event_is_delivered_without_waiting_for_the_next_request() {
+    use nagi_protocol::methods::NotifyLevel;
+    use nagi_server::runtime::Event;
+
+    let mut s = server();
+    let runtime = s.runtime().clone();
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let reader = ChannelReader {
+        rx,
+        buf: Vec::new(),
+        pos: 0,
+    };
+    let output_store = Arc::new(Mutex::new(Vec::new()));
+    let mut output_for_thread = SharedBuf(output_store.clone());
+
+    let handle = std::thread::spawn(move || {
+        s.run(BufReader::new(reader), &mut output_for_thread)
+            .unwrap();
+    });
+
+    // initialize を送って応答が来るまで待つ
+    tx.send(
+        format!(
+            "{}\n",
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocol_version":1,"client_name":"t","client_version":"0","os":"test"}})
+        )
+        .into_bytes(),
+    )
+    .unwrap();
+    wait_for(&output_store, "\"id\":1", Duration::from_secs(5));
+
+    // ここではまだ次の行を送っていない（読み取りスレッドは rx.recv() でブロック中のはず）。
+    // この状態で push_event を呼び、次のリクエストを送らずに notify が出ることを確認する
+    runtime.push_event(Event {
+        level: NotifyLevel::Info,
+        code: "test_async_event",
+        message: "非同期通知のテスト".to_string(),
+    });
+    wait_for(&output_store, "test_async_event", Duration::from_secs(5));
+
+    // 後始末: shutdown を送ってループを終える
+    tx.send(format!("{}\n", json!({"jsonrpc":"2.0","id":2,"method":"shutdown"})).into_bytes())
+        .unwrap();
+    wait_for(&output_store, "\"id\":2", Duration::from_secs(5));
+    drop(tx); // reader スレッドに EOF を伝える（無くても shutdown で run は終わるはず）
+    handle.join().unwrap();
 }
 
 // ---- 実プロセス ----

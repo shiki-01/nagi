@@ -338,27 +338,93 @@ impl Server {
     }
 
     /// 入力を EOF または `shutdown` まで処理する。終了時に学習を保存する
-    pub fn run<R: BufRead, W: Write>(
-        &mut self,
-        mut input: R,
-        output: &mut W,
-    ) -> std::io::Result<()> {
-        let mut line = String::new();
+    ///
+    /// 標準入力を読む専用スレッドとメインループをチャンネルで結び、`Runtime::push_event` が
+    /// 積まれた瞬間（次のリクエストを待たずに）`notify` 通知を配信できるようにする。
+    pub fn run<R, W>(&mut self, input: R, output: &mut W) -> std::io::Result<()>
+    where
+        R: BufRead + Send + 'static,
+        W: Write,
+    {
+        enum Msg {
+            Line(String),
+            Eof,
+            IoErr(std::io::Error),
+            Wake,
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel::<Msg>();
+
+        // Runtime にイベントが積まれたら Wake を送る
+        let tx_wake = tx.clone();
+        self.runtime.set_event_hook(Box::new(move || {
+            let _ = tx_wake.send(Msg::Wake);
+        }));
+
+        // 標準入力（等）を読む専用スレッド
+        let tx_reader = tx.clone();
+        let reader_handle = std::thread::Builder::new()
+            .name("nagi-stdin-reader".into())
+            .spawn(move || {
+                let mut input = input;
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match input.read_line(&mut line) {
+                        Ok(0) => {
+                            let _ = tx_reader.send(Msg::Eof);
+                            break;
+                        }
+                        Ok(_) => {
+                            if tx_reader
+                                .send(Msg::Line(std::mem::take(&mut line)))
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx_reader.send(Msg::IoErr(e));
+                            break;
+                        }
+                    }
+                }
+            });
+
         let result = loop {
-            line.clear();
-            if input.read_line(&mut line)? == 0 {
-                break Ok(());
-            }
-            for out in self.handle_line(&line) {
-                output.write_all(out.as_bytes())?;
-                output.write_all(b"\n")?;
-            }
-            output.flush()?;
-            if self.shutdown {
-                break Ok(());
+            match rx.recv() {
+                Ok(Msg::Line(line)) => {
+                    for out in self.handle_line(&line) {
+                        output.write_all(out.as_bytes())?;
+                        output.write_all(b"\n")?;
+                    }
+                    output.flush()?;
+                    if self.shutdown {
+                        break Ok(());
+                    }
+                }
+                Ok(Msg::Wake) => {
+                    // 初期化前は通知を出さない（handle_line と同じ方針）。溜めたままにする
+                    if self.initialized {
+                        for out in self.notifications() {
+                            output.write_all(out.as_bytes())?;
+                            output.write_all(b"\n")?;
+                        }
+                        output.flush()?;
+                    }
+                }
+                Ok(Msg::Eof) => break Ok(()),
+                Ok(Msg::IoErr(e)) => break Err(e),
+                Err(_) => break Ok(()),
             }
         };
+
         self.runtime.flush_learning(true);
+        // reader スレッドは detach してよい（プロセス終了時に回収される。shutdown 後に読み残しを
+        // 処理する必要は無い）。ハンドルを明示的に drop して警告を避ける
+        if let Ok(handle) = reader_handle {
+            drop(handle);
+        }
         result
     }
 }

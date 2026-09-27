@@ -143,6 +143,9 @@ pub struct Runtime {
     last_flush: Mutex<Instant>,
     overlay: RwLock<Arc<Overlay>>,
     events: Mutex<Vec<Event>>,
+    /// イベントが積まれたときに呼ぶフック（`Server::run` が非同期通知の配信に使う）。
+    /// `Box<dyn Fn() + Send + Sync>` なので中身は任意（チャンネルへの送信等）
+    event_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     config_path: Mutex<Option<PathBuf>>,
     config_error: AtomicBool,
     backend_name: Mutex<String>,
@@ -173,6 +176,7 @@ impl Runtime {
             last_flush: Mutex::new(Instant::now()),
             overlay: RwLock::new(Arc::new(Overlay::default())),
             events: Mutex::new(Vec::new()),
+            event_hook: Mutex::new(None),
             config_path: Mutex::new(None),
             config_error: AtomicBool::new(false),
             backend_name: Mutex::new(String::new()),
@@ -236,10 +240,22 @@ impl Runtime {
         }
     }
 
-    /// 通知を積む
+    /// イベントが積まれたときに呼ぶフックを設定する（`Server::run` 用。既存のフックは置き換える）
+    pub fn set_event_hook(&self, hook: Box<dyn Fn() + Send + Sync>) {
+        if let Ok(mut h) = self.event_hook.lock() {
+            *h = Some(hook);
+        }
+    }
+
+    /// 通知を積む。フックが設定されていれば呼ぶ（`Server::run` を起こして即座に配信させる）
     pub fn push_event(&self, event: Event) {
         if let Ok(mut events) = self.events.lock() {
             events.push(event);
+        }
+        if let Ok(hook) = self.event_hook.lock()
+            && let Some(f) = hook.as_ref()
+        {
+            f();
         }
     }
 
