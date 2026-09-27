@@ -515,3 +515,12 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **「数字の直後で分割しない」制約は自動的に満たされる**: `nagi-romaji` の `Composer::insert_char` は ASCII 数字・大文字・記号を常に `PieceKind::Literal`、それ以外（ひらがな等の非ASCII）を常に `PieceKind::Japanese` として扱い、`Composer::pieces()` は同種の連続文字だけを1つの `Piece` にまとめる。そのため `PieceKind::Japanese` の `Piece.text` に数字が混ざることは構造上あり得ず、単純な固定長チャンク分割（`composing_chunk_len` 文字ごと）で設計書の意図（数字と直後のかなを分断しない）を自動的に満たす。「記号の連続」「Fixed境界」も同じ理由でJapanese Piece内部には出現しない（Fixed はComposing状態にはまだ無い。Phase 3の部分確定機能）
 - **スコープ**: 今回実装したのはチャンク分割による変換の「正しさ」のみ。設計書が言う「編集されたチャンクのみ再変換」（前回のチャンク境界を記憶し、編集位置を含むチャンクだけを再変換してレイテンシを下げる）という**キャッシュ最適化は今回のスコープ外**。現時点では毎回のキー入力でチャンク全体を再変換する（既存のデバウンス設計（G-25・G-26）により、キー入力ごとにLLM/辞書を叩くわけではないため実害は限定的と判断したが、実機での長文入力時のレイテンシ計測は未実施）。実機確認後、必要であれば追加する
 - `composing_chunk_len` は元々 `config.toml`/`nagi-profile` には存在したが `EngineConfig` に橋渡しされていなかった（未使用のまま放置されていた設定値）。今回 `EngineConfig::composing_chunk_len`（既定30）を追加し `engine_config_from` で接続した。プロファイル別の値（`quality`=40 / `balanced`=30 / `light`=20 / `minimal`=20）への動的追従は他の類似パラメータ（`predict_min_chars` 等）と同様、現時点では未対応（設定ファイルの値を静的に使う。プロファイル自動切替時に反映されない）
+
+### G-28. 確定取消（Ctrl+Backspace）の実装（2026-09-27）
+
+設計書 §4 状態遷移表「確定直後 | Ctrl+Backspace（既定） | 確定取消: 直前の確定を未確定状態へ戻す（アプリが対応する場合）」を実装した。
+
+- **記憶と破棄の単一の choke point**: 確定は必ず `commit_all` を経由する（`focus_out`・Enter・モード切替時の確定・Ctrl/Alt/Meta付きキーでの確定等、すべての確定経路がここに集約されている）ため、ここで確定前の入力（Composer の Piece 列）を `Session.last_commit` に記憶させた。「確定直後のみ有効」という制約は `apply()` の中では実現できない（キーが未割当で `keymap.resolve` が `None` を返す場合、`handle_key` は `apply()` を呼ばずに直接素通しを返すため）。そのため破棄ロジックは `handle_key` に置いた: `Action::UndoCommit` 以外に解決された、または未割当（素通し）だった場合は必ず `last_commit` を捨てる
+- **Converting からの確定取消は reading に戻る**: 変換結果（surface）は失われ、ひらがな（reading）の Composing に戻る。既存の Escape での変換取消（`back_to_composing`）と同じ扱いで、一貫性がある
+- **プロトコル拡張**: `ProcessKeyResult.delete_before: Option<u32>`（UTF-16長）を追加した。ホストアプリのテキストから確定済み文字列を実際に削除するのはフロントエンド（未実装）の仕事であり、今回実装したのはエンジン側の記憶・復元機構とこの通知のみ。フロント側の対応（Surrounding Text APIでの削除）は別途必要
+- **`typeshare-cli` をこの実行環境にインストールして検証した**（`cargo install typeshare-cli --locked`。crates.io は到達可能）。これにより `cargo xtask check-types`/`gen-types` をこのサンドボックス内で実行・検証できることを確認した（以前はモデル・辞書取得（huggingface.co）が到達不可という制約はあったが、typeshare-cli の取得先である crates.io は無関係で問題なく到達できた）。生成された Swift 型（`frontend-macos/Sources/Generated/Protocol.swift`）も本コミットに含めてコミット済み

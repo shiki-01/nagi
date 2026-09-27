@@ -28,7 +28,7 @@
 4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。~~`update.auto_check` の実装~~ → 実装済み（G-19。起動時の自動確認・notify のみ。実サーバー（`nagi.shiki-01.com/updates/latest.json`）は未整備なので機能するにはサーバー側の用意が必要）。**設定の残り**: 設定 GUI（Phase 4）
 5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測
 6. macOS フロントエンド（IMKit。`set_environment` の送信、`set_context.app_id` の報告を含む）、インストールスクリプト、アップデート確認、`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）
-7. Phase 3 以降: ~~範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）~~ → 選択・再変換・ToHankaku まで実装済み（G-17・G-22）、確定取消、スタイル変換。~~Rewriter~~ → 全角/半角英数記号・半角カナ・漢数字・日付・簡易計算まで実装済み（G-15・G-16・G-20）
+7. Phase 3 以降: ~~範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）~~ → 選択・再変換・ToHankaku まで実装済み（G-17・G-22）。~~確定取消~~ → エンジン側は実装済み（G-28。`ProcessKeyResult.delete_before` を追加。ホストアプリのテキストを実際に削除するフロント側の対応は別途必要）。スタイル変換は未着手。~~Rewriter~~ → 全角/半角英数記号・半角カナ・漢数字・日付・簡易計算まで実装済み（G-15・G-16・G-20）
 8. `select_candidate`（JSON-RPC）実装済み（G-18）。`reconvert` は辞書の逆引きが必要なため未着手
 9. KV キャッシュ再利用は見送り（G-21。既存計測でレイテンシ目標を満たしており、正誤リスクに対して優先度が低いと判断）
 
@@ -60,6 +60,7 @@
 - G-25 ライブ変換: engine側（`Session.live_conversion` / `Engine::live_convert`。タイマーキャンセル不要のデバウンス設計）
 - G-26 ライブ変換: server側（デバウンススレッド・`Arc<Mutex<Engine>>` 化・`update_preedit` 配信。Mozkey の実測既定値を採用）
 - G-27 ライブ変換: `composing_chunk_len` によるチャンク処理（数字直後の分割を避ける制約が Composer の Piece 構造上自動的に満たされる理由を記載。「編集されたチャンクのみ再変換」の最適化は対象外）
+- G-28 確定取消（Ctrl+Backspace）。`ProcessKeyResult.delete_before` の追加。`typeshare-cli` をこの実行環境にインストールして型生成・差分検査まで検証済み（crates.io は到達可能）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 
