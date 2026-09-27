@@ -469,3 +469,13 @@ G-17 で選択機構のみとしていた範囲操作に、Mozkey（`koyasi777/m
 - **`CandidateSource::Rewriter` の種類識別問題の解決**: プロトコルは変更していない。`nagi-rewriter` が stdlib のみ依存の純粋関数クレートであることを踏まえ、**`core/engine` が `nagi-rewriter` に直接依存する**ことにした（`nagi-romaji` に依存しているのと同じ位置づけ。辞書・LLM のような「バックエンド」ではなく、決定的な変換ユーティリティとして扱う）。新しい `Action::ToHankaku` を追加し、候補一覧を経由せず `HankakuKatakana`/`HankakuAlnum` を直接呼ぶ
 - **既定キーバインドは割り当てない**（`Ctrl+U/I/O` はハードコードしない）。`parse_action` に `ToHankaku` を追加し、`[keymap.converting]` から利用可能にするだけ（G-17 の「デフォルトキーバインドを決めない」方針を継続）
 - `ToKatakana`/`ToHiragana` も選択範囲全体に対応させた（選択中は範囲全体を1文節にまとめてかな化）。**選択していない場合の既存ロジックは一切変更していない**（既存テストへの影響ゼロ）
+
+### G-23. 予測変換（Tab）の実装（2026-09-27）
+
+設計書 §4.11「予測変換」を実装した。ユーザーの回答（表示は候補ウィンドウ、設定可能にする、詳細は任せる）と Mozc/Mozkey の実際の実装を参考にした。
+
+- **設計書からの逸脱**: 設計書は「Tab/↓で選択」としていたが、Mozc の実際のキーマップ（`ms-ime.tsv`/`kotoeri.tsv`）では `Composition Tab → PredictAndConvert`、`Composition Down → MoveCursorToEnd` であり、**Down は予測変換に使われていない**（カーソル移動）。実績のある挙動を優先し、**Tab のみ**を予測変換のトリガーとした。Down は既存の挙動（Composing では何もしない）を変えていない
+- **状態遷移**: Mozc の `PredictAndConvert`（`session.cc`）を参考に、Composing 中に Tab を押すと `ConversionBackend::predict`（学習キャッシュ・ユーザー辞書の前方一致）を呼び、見つかれば **Converting 状態へ遷移して候補ウィンドウを開く**（Composing に留まってインライン候補を出す方式ではない）。見つからなければ何もしない。**Converting 中の Tab は `NextCand`（次候補）として働く**（Mozc と同じ。既存の Space と同じ効果になる）
+- **供給元**: `Learner::lookup_prefix`（既存）と `Overlay::lookup_prefix`（新規追加）。学習キャッシュを優先し、ユーザー辞書は重複しないものだけ追加する
+- **設定**: `[predict] enabled`（既定 true）・`min_chars`（既定 1、設計書の既定値と一致）
+- **既存テストの意図的な変更**: `core/engine/src/keymap.rs` の `composing_table`/`converting_table`、`core/engine/tests/golden/40_convert.yaml` の `convert-tab-noop`（→ `convert-tab-next-candidate` に改名）を、Tab の新しい挙動に合わせて更新した

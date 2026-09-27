@@ -23,7 +23,7 @@
 優先順:
 
 1. **LLM 接続の残り**: 非同期通知（`update_preedit` / `update_candidates`）での結果差し替え、ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
-2. **予測変換**（Phase 2）: 学習・ユーザー辞書の前方一致（`Learner::lookup_prefix` は用意済み）、候補ウィンドウの Tab / ↓ 選択
+2. ~~**予測変換**（Phase 2）~~ → 実装済み（G-23）
 3. ~~**環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化~~ → 実装済み（G-13）。残るは `quality` で使う大きいモデル・reranker（Laya 評価。Phase 0 の比較が必要）
 4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。~~`update.auto_check` の実装~~ → 実装済み（G-19。起動時の自動確認・notify のみ。実サーバー（`nagi.shiki-01.com/updates/latest.json`）は未整備なので機能するにはサーバー側の用意が必要）。**設定の残り**: 設定 GUI（Phase 4）
 5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測
@@ -55,6 +55,7 @@
 - G-20 Rewriter: 日付・簡易計算の追加
 - G-21 KV キャッシュ再利用の見送り（理由・再検討条件を記載）
 - G-22 範囲選択への再変換・ToHankaku（Mozkey を参照。engine が nagi-rewriter に直接依存する方針転換を含む）
+- G-23 予測変換（Tab）。設計書の「Tab/↓」を Mozc の実際のキーマップに合わせて Tab のみに変更した経緯を記載
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 
@@ -62,7 +63,7 @@
 
 2026-09-27、ユーザーが回答した内容に基づき着手中・着手予定。**Mozkey**（`koyasi777/mozkey`。Mozc + ローカル Zenz 補正の fork。ユーザーが実際に使用しており「使いやすい」と評価）の実装を UX の参考にする方針（ユーザー指示）。
 
-- **予測変換**: 候補ウィンドウで表示。Tab/↓ の挙動・前方一致の対象は Mozkey を参照しつつ実装側の判断（`use_history_suggest`/`use_dictionary_suggest`/`suggestions_size`（既定3）が Mozc/Mozkey の対応する既定値）。`predict.min_chars` 等は設定可能にする。**未着手**
+- ~~**予測変換**~~ → 実装済み（G-23。Tab のみ（Down は Mozc でも予測選択に使われないため対象外）。`[predict]` で設定可能）
 - **ライブ変換**: 既定 ON。トリガー・Enter/Backspaceの挙動・下線スタイルは Mozkey を参照する。Mozkey の実測既定値: `live_conversion_delay_msec`＝228ms（デバウンス）、`live_conversion_min_key_length`＝2文字、変換結果を主表示・読みをルビ風オーバーレイ表示。**非同期通知の実装に依存するため後着手**
 - **非同期通知**（`update_preedit`/`update_candidates`）: 実装方針・通知タイミングは任せられている。サーバーのメインループ（同期・1行読んで1行返す）の非同期化が必要。実機検証はユーザー側で行うため、実装がある程度まとまった時点でテストしてほしい観点をまとめて提示する。**未着手**
 - **ビームサーチ（文全体 N-best）**: 実装方針・表示方法とも任せられている。**未着手**
