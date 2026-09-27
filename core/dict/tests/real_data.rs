@@ -109,3 +109,57 @@ fn every_kana_string_is_convertible_and_fast() {
         "{elapsed:?}"
     );
 }
+
+/// 強制アライメント: 辞書自身の変換結果を表記として与えたとき、文節区切りまで一致する
+#[test]
+fn align_reproduces_dictionary_conversion() {
+    let Some(d) = load() else { return };
+    for reading in [
+        "きょうはいいてんきです",
+        "わたしのなまえはなかのです",
+        "とうきょうにいく",
+        "すしをたべたい",
+        "しんかんせんでおおさかへいきます",
+        "たのしいじかんをすごした",
+        "にほんごをにゅうりょくする",
+    ] {
+        let converted = d.convert(reading);
+        let surface: String = converted.iter().map(|s| s.surface.as_str()).collect();
+        let aligned = d.align(reading, &surface).expect("アライメント");
+        assert_eq!(aligned, converted, "{reading} / {surface}");
+    }
+}
+
+/// LLM が返しそうな、辞書の最良経路とは違う表記のアライメント（出力を確認できるようにする）
+#[test]
+fn align_other_surfaces() {
+    let Some(d) = load() else { return };
+    for (reading, surface) in [
+        ("かんじへんかんのてすと", "漢字変換のテスト"),
+        ("かれはきのうびょういんにいった", "彼は昨日病院に行った"),
+        ("ぼくはがっこうにいく", "僕は学校に行く"),
+        ("しゅうかつのめんせつ", "就活の面接"),
+        ("なかのです", "中野です"),
+        ("すずきさんがきた", "鈴木さんが来た"),
+        ("らーめんをたべる", "ラーメンを食べる"),
+    ] {
+        let v = d
+            .align(reading, surface)
+            .unwrap_or_else(|| panic!("{reading} / {surface}"));
+        assert_eq!(
+            v.iter().map(|s| s.reading.as_str()).collect::<String>(),
+            reading
+        );
+        assert_eq!(
+            v.iter().map(|s| s.surface.as_str()).collect::<String>(),
+            surface
+        );
+        eprintln!(
+            "{reading} / {surface} -> {}",
+            v.iter()
+                .map(|s| format!("{}({})", s.surface, s.reading))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+    }
+}

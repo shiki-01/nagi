@@ -19,15 +19,33 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// 起動オプション
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ServerOptions {
-    /// 取得済みデータ（`dict/nagi-dict.bin` など）のディレクトリ。`--data-dir` または `NAGI_DATA_DIR`
+    /// 取得済みデータ（`dict/nagi-dict.bin`、`models/*.gguf`）のディレクトリ。`--data-dir` または `NAGI_DATA_DIR`
     pub data_dir: Option<PathBuf>,
+    /// LLM を使うか（`--no-llm` で無効化）。feature `llama` が無い、またはモデルが無ければ使えない
+    pub use_llm: bool,
+    /// LLM の推論を待つ最長時間（ミリ秒、`--sync-budget-ms`。設計書の `conversion.sync_budget_ms`）
+    pub sync_budget_ms: u64,
 }
 
-/// 変換バックエンドを用意する。辞書があれば辞書 + Viterbi、無い・壊れている場合は読みをそのまま
-/// 返すバックエンドで起動する（入力は常に続けられる）。戻り値の 2 つ目はプロファイル名、
-/// 3 つ目は診断メッセージ（入力内容を含まない）。
+impl Default for ServerOptions {
+    fn default() -> Self {
+        ServerOptions {
+            data_dir: None,
+            use_llm: true,
+            sync_budget_ms: 150,
+        }
+    }
+}
+
+/// 既定の変換モデルのファイル名（`<data_dir>/models/` 下。`cargo xtask fetch-model` の出力）
+pub const DEFAULT_MODEL_FILE: &str = "zenz-v3.1-small-Q5_K_M.gguf";
+
+/// 変換バックエンドを用意する。戻り値は (バックエンド, プロファイル名, 診断メッセージ)。
+///
+/// 縮退の順: 辞書 + LLM（`balanced`）→ 辞書のみ（`minimal`）→ 読みをそのまま返す（`minimal`）。
+/// どの段階でも入力は続けられる。診断メッセージに入力内容は含まない。
 pub fn load_backend(options: &ServerOptions) -> (Arc<dyn ConversionBackend>, &'static str, String) {
     let Some(dir) = &options.data_dir else {
         return (
@@ -44,18 +62,65 @@ pub fn load_backend(options: &ServerOptions) -> (Arc<dyn ConversionBackend>, &'s
             format!("辞書が見つかりません: {}", path.display()),
         );
     }
-    match Dictionary::load(&path) {
-        Ok(dict) => (
-            Arc::new(DictBackend::new(Arc::new(dict))),
-            "minimal",
-            format!("辞書を読み込みました: {}", path.display()),
-        ),
-        Err(e) => (
-            Arc::new(KanaBackend),
-            "minimal",
-            format!("辞書の読み込みに失敗したため辞書なしで起動します: {e}"),
-        ),
+    let dict = match Dictionary::load(&path) {
+        Ok(dict) => Arc::new(dict),
+        Err(e) => {
+            return (
+                Arc::new(KanaBackend),
+                "minimal",
+                format!("辞書の読み込みに失敗したため辞書なしで起動します: {e}"),
+            );
+        }
+    };
+    let dict_only = |note: String| -> (Arc<dyn ConversionBackend>, &'static str, String) {
+        (Arc::new(DictBackend::new(dict.clone())), "minimal", note)
+    };
+    if !options.use_llm {
+        return dict_only("LLM は無効です（辞書のみで起動します）".to_string());
     }
+    load_llm(options, dir, &dict).unwrap_or_else(dict_only)
+}
+
+#[cfg(feature = "llama")]
+fn load_llm(
+    options: &ServerOptions,
+    dir: &Path,
+    dict: &Arc<Dictionary>,
+) -> Result<(Arc<dyn ConversionBackend>, &'static str, String), String> {
+    use crate::llm_backend::{HybridBackend, LlmOptions};
+    use nagi_infer::llama::{LlamaModel, LlamaOptions};
+    let model_path = dir.join("models").join(DEFAULT_MODEL_FILE);
+    if !model_path.exists() {
+        return Err(format!(
+            "変換モデルが見つかりません（辞書のみで起動します）: {}",
+            model_path.display()
+        ));
+    }
+    let model = LlamaModel::load(&model_path, LlamaOptions::default())
+        .map_err(|e| format!("変換モデルの読み込みに失敗したため辞書のみで起動します: {e}"))?;
+    let backend = HybridBackend::new(
+        dict.clone(),
+        Box::new(model),
+        LlmOptions {
+            sync_budget: std::time::Duration::from_millis(options.sync_budget_ms),
+            ..LlmOptions::default()
+        },
+    );
+    backend.warm_up();
+    Ok((
+        Arc::new(backend),
+        "balanced",
+        format!("辞書 + LLM で起動します: {}", model_path.display()),
+    ))
+}
+
+#[cfg(not(feature = "llama"))]
+fn load_llm(
+    _options: &ServerOptions,
+    _dir: &Path,
+    _dict: &Arc<Dictionary>,
+) -> Result<(Arc<dyn ConversionBackend>, &'static str, String), String> {
+    Err("このビルドは LLM 推論（feature `llama`）を含みません（辞書のみで起動します）".to_string())
 }
 
 /// JSON-RPC サーバー
@@ -260,12 +325,20 @@ impl Server {
 pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<ServerOptions, String> {
     let mut options = ServerOptions {
         data_dir: std::env::var_os("NAGI_DATA_DIR").map(PathBuf::from),
+        ..ServerOptions::default()
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--data-dir" => {
                 let value = args.next().ok_or("--data-dir に値がありません")?;
                 options.data_dir = Some(Path::new(&value).to_path_buf());
+            }
+            "--no-llm" => options.use_llm = false,
+            "--sync-budget-ms" => {
+                let value = args.next().ok_or("--sync-budget-ms に値がありません")?;
+                options.sync_budget_ms = value
+                    .parse()
+                    .map_err(|_| format!("--sync-budget-ms が数値ではありません: {value}"))?;
             }
             other => return Err(format!("不明な引数: {other}")),
         }

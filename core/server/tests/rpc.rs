@@ -381,8 +381,8 @@ fn dictionary_backed_conversion_end_to_end() {
         eprintln!("skip: data/dict/nagi-dict.bin が無い（cargo xtask build-dict）");
         return;
     };
-    let mut p = Proc::spawn(&["--data-dir", dir.to_str().unwrap()]);
-    p.initialize();
+    let mut p = Proc::spawn(&["--data-dir", dir.to_str().unwrap(), "--no-llm"]);
+    assert_eq!(p.initialize()["result"]["profile"], "minimal");
     for c in "kyouhaiitenkidesu".chars() {
         p.press("s", c);
     }
@@ -431,4 +431,58 @@ fn missing_data_dir_falls_back_to_kana() {
     assert_eq!(r["result"]["profile"], "minimal");
     p.press("s", 'k');
     assert_eq!(p.press("s", 'a')["result"]["preedit"]["text"], "か");
+}
+
+/// 辞書 + LLM の E2E（feature `llama` でビルドし、辞書とモデルがある場合のみ。無ければ skip）
+#[cfg(feature = "llama")]
+#[test]
+fn llm_backed_conversion_end_to_end() {
+    let Some(dir) = data_dir() else {
+        eprintln!("skip: 辞書が無い");
+        return;
+    };
+    if !dir.join("models/zenz-v3.1-small-Q5_K_M.gguf").exists() {
+        eprintln!("skip: モデルが無い（cargo xtask fetch-model）");
+        return;
+    }
+    let mut p = Proc::spawn(&["--data-dir", dir.to_str().unwrap()]);
+    let init = p.initialize();
+    assert_eq!(init["result"]["profile"], "balanced");
+    for c in "watashinonamaehanakanodesu".chars() {
+        p.press("s", c);
+    }
+    let started = std::time::Instant::now();
+    let r = p.rpc(
+        "process_key",
+        json!({"session_id":"s","keysym":0x20,"keycode":0,"text":" ","modifiers":{},"kind":"down"}),
+    );
+    eprintln!("Space -> convert: {:?}", started.elapsed());
+    assert_eq!(r["result"]["preedit"]["text"], "私の名前は中野です");
+    let segs: Vec<&str> = r["result"]["preedit"]["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["surface"].as_str().unwrap())
+        .collect();
+    assert!(segs.len() >= 2, "文節に区切られる: {segs:?}");
+    // 2 回目の Space で候補窓。LLM の出所が付く
+    let r = p.rpc(
+        "process_key",
+        json!({"session_id":"s","keysym":0x20,"keycode":0,"text":" ","modifiers":{},"kind":"down"}),
+    );
+    assert_eq!(r["result"]["candidates"]["visible"], true);
+    let r = p.rpc(
+        "process_key",
+        json!({"session_id":"s","keysym":0xff0d,"keycode":0,"text":"","modifiers":{},"kind":"down"}),
+    );
+    assert!(r["result"]["commit"].as_str().unwrap().len() > 3);
+}
+
+#[test]
+fn no_llm_flag_uses_minimal_profile() {
+    let Some(dir) = data_dir() else {
+        return;
+    };
+    let mut p = Proc::spawn(&["--data-dir", dir.to_str().unwrap(), "--no-llm"]);
+    assert_eq!(p.initialize()["result"]["profile"], "minimal");
 }

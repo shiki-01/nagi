@@ -58,6 +58,10 @@ const FILES: &[(&str, Option<&str>)] = &[
         Some("07a05a268c3783b7e02b36e4aa591555a2dd19a1f3c93891576740761c154f2d"),
     ),
     (
+        "src/data/dictionary_oss/evaluation.tsv",
+        Some("445ed21e6c83d55774f15a83a5f6ea72c945ef0f30ec7ed5fe4bc6bc7bee9836"),
+    ),
+    (
         "src/data/dictionary_oss/README.txt",
         Some("6b1de66bc6fa30e0b45dc45b8c8f6c57bd78aff923c261a3efffac8eb86f7bac"),
     ),

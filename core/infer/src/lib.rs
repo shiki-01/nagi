@@ -88,6 +88,18 @@ pub trait ConversionModel: Send {
 
     /// 読み → 表記を変換する。結果は複数の仮説を返す場合もある（将来のビームサーチ対応）
     fn convert(&mut self, req: &ConvertRequest) -> Result<Vec<Hypothesis>, InferError>;
+
+    /// 与えた各候補（表記）の対数確率スコアを返す（大きいほど尤もらしい。文脈込みの再採点用）。
+    ///
+    /// 既定実装は非対応。
+    fn score(
+        &mut self,
+        req: &ConvertRequest,
+        candidates: &[String],
+    ) -> Result<Vec<f32>, InferError> {
+        let _ = (req, candidates);
+        Err(InferError::Unsupported("score".to_string()))
+    }
 }
 
 /// プロンプト形式をモデルごとに吸収するトレイト
@@ -226,6 +238,25 @@ impl ConversionModel for MockModel {
             })
             .ok_or_else(|| InferError::Other(format!("読み {} が未登録", req.reading)))
     }
+
+    fn score(
+        &mut self,
+        req: &ConvertRequest,
+        candidates: &[String],
+    ) -> Result<Vec<f32>, InferError> {
+        // テスト用: 登録済みの表記と一致する候補を最良（0）、他は文字数に比例して低くする
+        let best = self.table.get(&req.reading);
+        Ok(candidates
+            .iter()
+            .map(|c| {
+                if Some(c) == best {
+                    0.0
+                } else {
+                    -(c.chars().count() as f32) - 1.0
+                }
+            })
+            .collect())
+    }
 }
 /// llama.cpp による変換モデル（feature `llama` で有効）
 ///
@@ -246,7 +277,22 @@ pub mod llama {
     use std::num::NonZeroU32;
     use std::path::Path;
     use std::pin::Pin;
+    use std::sync::{Arc, OnceLock};
     use std::time::Instant;
+
+    /// プロセスで 1 回だけ初期化する llama.cpp のバックエンド（複数のモデルを読み込んでも共有する）
+    fn shared_backend() -> Result<Arc<LlamaBackend>, InferError> {
+        static BACKEND: OnceLock<Result<Arc<LlamaBackend>, String>> = OnceLock::new();
+        BACKEND
+            .get_or_init(|| {
+                let mut backend =
+                    LlamaBackend::init().map_err(|e| format!("llama backend 初期化失敗: {e}"))?;
+                backend.void_logs();
+                Ok(Arc::new(backend))
+            })
+            .clone()
+            .map_err(InferError::ModelLoad)
+    }
 
     /// llama.cpp の初期化オプション
     #[derive(Debug, Clone)]
@@ -287,7 +333,7 @@ pub mod llama {
     /// llama.cpp バックエンドによる変換モデル
     pub struct LlamaModel {
         model: LlamaModelCore,
-        backend: LlamaBackend,
+        backend: Arc<LlamaBackend>,
         adapter: Box<dyn PromptAdapter>,
         options: LlamaOptions,
         tokenizer: CharBpeTokenizer,
@@ -316,9 +362,7 @@ pub mod llama {
                     .map(|i| i as u32),
             );
 
-            let mut backend = LlamaBackend::init()
-                .map_err(|e| InferError::ModelLoad(format!("llama backend 初期化失敗: {e}")))?;
-            backend.void_logs();
+            let backend = shared_backend()?;
 
             let mut params = LlamaModelParams::default().with_n_gpu_layers(options.gpu_layers);
             let key = CString::new("tokenizer.ggml.pre").expect("NUL を含まない");
@@ -441,6 +485,97 @@ pub mod llama {
                 surface: self.tokenizer.decode(&generated),
                 score,
             }])
+        }
+
+        fn score(
+            &mut self,
+            req: &ConvertRequest,
+            candidates: &[String],
+        ) -> Result<Vec<f32>, InferError> {
+            let (prompt, _warnings) = self.adapter.build_prompt_checked(req);
+            let prompt_ids = self.tokenizer.encode(&prompt);
+            let n_ctx = self.options.n_ctx as usize;
+            if prompt_ids.is_empty() || prompt_ids.len() >= n_ctx {
+                return Err(InferError::Tokenize(
+                    "プロンプトの長さが不正です".to_string(),
+                ));
+            }
+            let mut ctx_params =
+                LlamaContextParams::default().with_n_ctx(NonZeroU32::new(self.options.n_ctx));
+            if self.options.n_threads > 0 {
+                ctx_params = ctx_params.with_n_threads(self.options.n_threads as i32);
+                ctx_params = ctx_params.with_n_threads_batch(self.options.n_threads as i32);
+            }
+            let mut ctx = self
+                .model
+                .new_context(&self.backend, ctx_params)
+                .map_err(|e| InferError::ModelLoad(format!("コンテキスト作成失敗: {e}")))?;
+
+            // プロンプトは 1 回だけ処理し、候補ごとにその続きだけをデコードして KV キャッシュから外す
+            let mut batch = LlamaBatch::new(n_ctx, 1);
+            let last = prompt_ids.len() - 1;
+            for (pos, &id) in prompt_ids.iter().enumerate() {
+                batch
+                    .add(LlamaToken(id as i32), pos as i32, &[0], pos == last)
+                    .map_err(|e| InferError::Decode(format!("batch 追加失敗: {e}")))?;
+            }
+            ctx.decode(&mut batch)
+                .map_err(|e| InferError::Decode(format!("prefill 失敗: {e}")))?;
+            let first_logits: Vec<f32> = ctx.get_logits_ith(batch.n_tokens() - 1).to_vec();
+
+            let mut scores = Vec::with_capacity(candidates.len());
+            for cand in candidates {
+                let ids = self.tokenizer.encode(cand);
+                if prompt_ids.len() + ids.len() >= n_ctx {
+                    scores.push(f32::NEG_INFINITY);
+                    continue;
+                }
+                if ids.is_empty() {
+                    scores.push(log_prob_any(&first_logits, &self.stop_ids));
+                    continue;
+                }
+                let mut total = log_prob_any(&first_logits, &ids[..1]);
+                batch.clear();
+                for (k, &id) in ids.iter().enumerate() {
+                    batch
+                        .add(
+                            LlamaToken(id as i32),
+                            (prompt_ids.len() + k) as i32,
+                            &[0],
+                            true,
+                        )
+                        .map_err(|e| InferError::Decode(format!("batch 追加失敗: {e}")))?;
+                }
+                ctx.decode(&mut batch)
+                    .map_err(|e| InferError::Decode(format!("候補のデコード失敗: {e}")))?;
+                for k in 0..ids.len() {
+                    let logits = ctx.get_logits_ith(k as i32);
+                    total += match ids.get(k + 1) {
+                        Some(next) => log_prob_any(logits, std::slice::from_ref(next)),
+                        None => log_prob_any(logits, &self.stop_ids),
+                    };
+                }
+                ctx.kv_cache_seq_rm(0, Some(prompt_ids.len() as u32), None)
+                    .map_err(|e| InferError::Decode(format!("KV キャッシュの巻き戻し失敗: {e}")))?;
+                scores.push(total);
+            }
+            Ok(scores)
+        }
+    }
+
+    /// `logits` のソフトマックスで、`ids` のいずれかが選ばれる確率の対数
+    fn log_prob_any(logits: &[f32], ids: &[u32]) -> f32 {
+        let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let total: f32 = logits.iter().map(|&l| (l - max).exp()).sum();
+        let hit: f32 = ids
+            .iter()
+            .filter_map(|&i| logits.get(i as usize))
+            .map(|&l| (l - max).exp())
+            .sum();
+        if hit <= 0.0 {
+            f32::NEG_INFINITY
+        } else {
+            hit.ln() - total.ln()
         }
     }
 }
@@ -662,6 +797,47 @@ mod tests {
             assert_ne!(first[0].surface, hiragana_to_katakana(reading));
             let second = model.convert(&req).expect("変換");
             assert_eq!(first[0].surface, second[0].surface, "決定的であること");
+        }
+    }
+
+    /// 文脈込みの再採点（モデル未取得なら skip）
+    #[cfg(feature = "llama")]
+    #[test]
+    fn test_llama_score_prefers_contextual_candidate() {
+        use crate::llama::{LlamaModel, LlamaOptions};
+        use std::path::Path;
+
+        let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/models/zenz-v3.1-small-Q5_K_M.gguf");
+        if !model_path.exists() {
+            eprintln!("skip: モデル未取得（cargo xtask fetch-model）");
+            return;
+        }
+        let mut model =
+            LlamaModel::load(&model_path, LlamaOptions::default()).expect("モデルロード");
+        let candidates: Vec<String> = ["公園", "講演", "後援", "こうえん"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        for (context, expected) in [("近所の", "公園"), ("大学の先生が", "講演")] {
+            let req = ConvertRequest {
+                reading: "こうえん".to_string(),
+                left_context: context.to_string(),
+                profile: None,
+                max_new_tokens: 16,
+            };
+            let started = std::time::Instant::now();
+            let scores = model.score(&req, &candidates).expect("score");
+            let elapsed = started.elapsed();
+            let best = scores
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| candidates[i].as_str())
+                .unwrap();
+            eprintln!("ctx={context:?} scores={scores:?} best={best} ({elapsed:?})");
+            assert_eq!(best, expected, "文脈 {context:?}");
+            assert!(scores.iter().all(|s| s.is_finite() && *s <= 0.0));
         }
     }
 }

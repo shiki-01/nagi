@@ -9,6 +9,7 @@
 //!
 //! テストでは [`DictionaryBuilder`] で小さな辞書をメモリ上に組み立てられる。
 
+mod align;
 pub mod builder;
 pub mod bunsetsu;
 pub mod convert;

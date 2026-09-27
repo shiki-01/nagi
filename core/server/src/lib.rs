@@ -4,7 +4,9 @@
 //! （キーの文字・preedit・確定文字列）はログに一切出さない。
 
 pub mod backend;
+pub mod llm_backend;
 pub mod server;
 
 pub use backend::DictBackend;
-pub use server::{Server, ServerOptions, load_backend};
+pub use llm_backend::{HybridBackend, LlmOptions};
+pub use server::{DEFAULT_MODEL_FILE, Server, ServerOptions, load_backend};

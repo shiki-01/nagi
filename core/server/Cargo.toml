@@ -12,12 +12,21 @@ authors.workspace = true
 name = "imserver"
 path = "src/main.rs"
 
+[[bin]]
+name = "nagi-eval"
+path = "src/bin/nagi_eval.rs"
+
 [dependencies]
 nagi-engine.workspace = true
 nagi-protocol.workspace = true
 nagi-dict.workspace = true
+nagi-infer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[features]
+# llama.cpp による zenz 推論（C++ ビルドが必要。リリースビルドでは有効にする）
+llama = ["nagi-infer/llama"]
 
 [lints]
 workspace = true

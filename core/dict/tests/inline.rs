@@ -300,3 +300,89 @@ fn build_requires_connection_and_pos() {
     let b = DictionaryBuilder::new();
     assert!(b.build().is_err());
 }
+
+fn aligned(d: &Dictionary, reading: &str, surface: &str) -> Option<Vec<(String, String)>> {
+    d.align(reading, surface)
+        .map(|v| v.into_iter().map(|s| (s.reading, s.surface)).collect())
+}
+
+fn pairs(v: &[(&str, &str)]) -> Option<Vec<(String, String)>> {
+    Some(
+        v.iter()
+            .map(|(r, s)| (r.to_string(), s.to_string()))
+            .collect(),
+    )
+}
+
+#[test]
+fn align_uses_dictionary_words_and_splits_bunsetsu() {
+    let d = build(ConnectionLayout::RidMajor);
+    assert_eq!(
+        aligned(&d, "きょうはいいてんきです", "今日はいい天気です"),
+        pairs(&[
+            ("きょうは", "今日は"),
+            ("いい", "いい"),
+            ("てんきです", "天気です")
+        ])
+    );
+    // 別の表記（辞書にある別候補）でも辿れる
+    assert_eq!(
+        aligned(&d, "きょうはいい", "京は良い"),
+        pairs(&[("きょうは", "京は"), ("いい", "良い")])
+    );
+}
+
+#[test]
+fn align_handles_kana_passthrough_and_katakana() {
+    let d = build(ConnectionLayout::RidMajor);
+    // 辞書語でなくても、読みと同じ仮名・カタカナ化した仮名は素通しで一致する
+    let v = aligned(&d, "ぬぬ", "ぬヌ").unwrap();
+    assert_eq!(v.iter().map(|x| x.0.as_str()).collect::<String>(), "ぬぬ");
+    assert_eq!(v.iter().map(|x| x.1.as_str()).collect::<String>(), "ぬヌ");
+    // 句読点
+    let v = aligned(&d, "いく。", "行く。").unwrap();
+    assert_eq!(v.iter().map(|x| x.1.as_str()).collect::<String>(), "行く。");
+}
+
+#[test]
+fn align_gap_covers_unknown_words() {
+    let d = build(ConnectionLayout::RidMajor);
+    // 「鈴木」は辞書に無い: 表記側のひらがな以外の連続を、読みの適当な長さに対応づける
+    let v = aligned(&d, "すずきはいく", "鈴木は行く").unwrap();
+    assert_eq!(
+        v.iter().map(|x| x.0.as_str()).collect::<String>(),
+        "すずきはいく"
+    );
+    assert_eq!(
+        v.iter().map(|x| x.1.as_str()).collect::<String>(),
+        "鈴木は行く"
+    );
+    assert!(
+        v.iter().any(|x| x.0 == "すずき" || x.0 == "すずきは"),
+        "{v:?}"
+    );
+}
+
+#[test]
+fn align_fails_when_hiragana_cannot_match() {
+    let d = build(ConnectionLayout::RidMajor);
+    assert_eq!(aligned(&d, "あい", "うえ"), None);
+    assert_eq!(aligned(&d, "", "あ"), None);
+    assert_eq!(aligned(&d, "あ", ""), None);
+}
+
+#[test]
+fn align_preserves_readings_and_surfaces_for_many_inputs() {
+    let d = build(ConnectionLayout::RidMajor);
+    for (r, s) in [
+        ("とうきょうにいく", "東京に行く"),
+        ("たなかさん", "田中さん"),
+        ("おちゃ", "お茶"),
+        ("にほんごが", "日本語が"),
+        ("😀き", "😀き"),
+    ] {
+        let v = d.align(r, s).unwrap_or_else(|| panic!("{r} / {s}"));
+        assert_eq!(v.iter().map(|x| x.reading.as_str()).collect::<String>(), r);
+        assert_eq!(v.iter().map(|x| x.surface.as_str()).collect::<String>(), s);
+    }
+}
