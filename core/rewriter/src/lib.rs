@@ -1,7 +1,7 @@
 //! Rewriter: 決定的変換の最終段（設計書 §4.13）。
 //!
 //! LLM を使わない決定的な表記変換（全角/半角、カタカナ/半角カナ 等）を候補として提供する。
-//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）。日付・簡易計算は対象外。
+//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）・日付（YYYYMMDD）・簡易な二項演算。複雑な式や曖昧な日付は対象外。
 
 /// 決定的な表記変換を提供するプラグイン
 pub trait Rewriter: Send + Sync {
@@ -160,6 +160,145 @@ fn to_positional_kanji(digits: &str) -> Option<String> {
     Some(out)
 }
 
+/// 8桁の数字（YYYYMMDD）を日付らしい表記に変換する（例: "20260927" → "2026/09/27", "2026年9月27日"）。
+/// 月・日として妥当でない場合（うるう年考慮）は変換しない
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DigitsToDate;
+
+impl Rewriter for DigitsToDate {
+    fn id(&self) -> &str {
+        "digits_to_date"
+    }
+
+    fn rewrite(&self, reading: &str) -> Vec<String> {
+        if reading.chars().count() != 8 || !reading.chars().all(|c| c.is_ascii_digit()) {
+            return Vec::new();
+        }
+        let digits: Vec<u32> = reading.chars().map(|c| c.to_digit(10).unwrap()).collect();
+        let year = digits[0] * 1000 + digits[1] * 100 + digits[2] * 10 + digits[3];
+        let month = digits[4] * 10 + digits[5];
+        let day = digits[6] * 10 + digits[7];
+        if !is_valid_date(year, month, day) {
+            return Vec::new();
+        }
+        vec![
+            format!("{year}/{month:02}/{day:02}"),
+            format!("{year}年{month}月{day}日"),
+        ]
+    }
+}
+
+/// うるう年か
+fn is_leap_year(year: u32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+/// 年・月・日として妥当か（月は1〜12、日は月の日数の範囲内。うるう年を考慮する）
+fn is_valid_date(year: u32, month: u32, day: u32) -> bool {
+    if !(1..=12).contains(&month) || day == 0 {
+        return false;
+    }
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => unreachable!(),
+    };
+    day <= days_in_month
+}
+
+/// 単純な二項演算（`数値 演算子 数値` の1回だけ。括弧・複数演算は対象外）を計算する。
+/// 演算子は `+` `-` `*` `/`。数値は非負の整数または小数（先頭の符号無し）
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SimpleCalculator;
+
+impl Rewriter for SimpleCalculator {
+    fn id(&self) -> &str {
+        "simple_calculator"
+    }
+
+    fn rewrite(&self, reading: &str) -> Vec<String> {
+        match evaluate_simple_expression(reading) {
+            Some(result) => vec![result],
+            None => Vec::new(),
+        }
+    }
+}
+
+/// 妥当な非負整数・小数の文字列か（桁数の上限あり。オーバーフロー・極端な精度低下を避ける）
+fn is_plausible_number(s: &str) -> bool {
+    if s.is_empty() || s.len() > 18 {
+        return false;
+    }
+    let mut seen_dot = false;
+    let mut has_digit = false;
+    for c in s.chars() {
+        if c == '.' {
+            if seen_dot {
+                return false;
+            }
+            seen_dot = true;
+        } else if c.is_ascii_digit() {
+            has_digit = true;
+        } else {
+            return false;
+        }
+    }
+    has_digit
+}
+
+/// `数値 演算子 数値` の形の文字列を計算する。パース不能・0除算・非有限の結果は `None`
+fn evaluate_simple_expression(reading: &str) -> Option<String> {
+    let op_index = reading.find(['+', '-', '*', '/'])?;
+    if op_index == 0 {
+        return None; // 先頭の符号は対象外
+    }
+    let (left, rest) = reading.split_at(op_index);
+    let op = rest.chars().next()?;
+    let right = &rest[1..];
+    if !is_plausible_number(left) || !is_plausible_number(right) {
+        return None;
+    }
+    let a: f64 = left.parse().ok()?;
+    let b: f64 = right.parse().ok()?;
+    let result = match op {
+        '+' => a + b,
+        '-' => a - b,
+        '*' => a * b,
+        '/' => {
+            if b == 0.0 {
+                return None;
+            }
+            a / b
+        }
+        _ => return None,
+    };
+    if !result.is_finite() {
+        return None;
+    }
+    Some(format_calc_result(result))
+}
+
+/// 計算結果を表示用に整形する（整数ならそのまま、小数は小数点以下4桁に丸めて末尾の0を除去）
+fn format_calc_result(x: f64) -> String {
+    let x = if x == 0.0 { 0.0 } else { x }; // -0.0 を 0.0 に正規化
+    if x == x.trunc() && x.abs() < 1e15 {
+        format!("{}", x as i64)
+    } else {
+        let rounded = (x * 10000.0).round() / 10000.0;
+        let s = format!("{rounded:.4}");
+        let s = s.trim_end_matches('0');
+        let s = s.trim_end_matches('.');
+        s.to_string()
+    }
+}
+
 /// 半角 ASCII の印字可能文字（0x21-0x7E）か
 fn is_halfwidth_ascii(c: char) -> bool {
     ('\u{0021}'..='\u{007e}').contains(&c)
@@ -315,6 +454,8 @@ impl RewriterChain {
                 Box::new(HankakuKatakana),
                 Box::new(KanjiDigits),
                 Box::new(KanjiPositionalNumeral),
+                Box::new(DigitsToDate),
+                Box::new(SimpleCalculator),
             ],
         }
     }
@@ -474,6 +615,95 @@ mod tests {
         assert!(
             candidates.contains(&"二千二十六".to_string()),
             "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn digits_to_date_converts_valid_date() {
+        let r = DigitsToDate;
+        assert_eq!(
+            r.rewrite("20260927"),
+            vec!["2026/09/27".to_string(), "2026年9月27日".to_string()]
+        );
+        assert_eq!(
+            r.rewrite("20000101"),
+            vec!["2000/01/01".to_string(), "2000年1月1日".to_string()]
+        );
+    }
+
+    #[test]
+    fn digits_to_date_rejects_invalid_date() {
+        let r = DigitsToDate;
+        // 2026年は平年（うるう年ではない）なので2月は28日まで
+        assert_eq!(r.rewrite("20260230"), Vec::<String>::new());
+        // 13月は存在しない
+        assert_eq!(r.rewrite("20261301"), Vec::<String>::new());
+        // 0日は存在しない
+        assert_eq!(r.rewrite("20260100"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn digits_to_date_accepts_leap_year_feb_29() {
+        let r = DigitsToDate;
+        // 2024年はうるう年
+        assert_eq!(
+            r.rewrite("20240229"),
+            vec!["2024/02/29".to_string(), "2024年2月29日".to_string()]
+        );
+    }
+
+    #[test]
+    fn digits_to_date_rejects_wrong_length_or_non_digits() {
+        let r = DigitsToDate;
+        assert_eq!(r.rewrite("2026927"), Vec::<String>::new());
+        assert_eq!(r.rewrite("202609271"), Vec::<String>::new());
+        assert_eq!(r.rewrite("2026092a"), Vec::<String>::new());
+        assert_eq!(r.rewrite(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn simple_calculator_basic_arithmetic() {
+        let r = SimpleCalculator;
+        assert_eq!(r.rewrite("3+4"), vec!["7".to_string()]);
+        assert_eq!(r.rewrite("10-3"), vec!["7".to_string()]);
+        assert_eq!(r.rewrite("3*4"), vec!["12".to_string()]);
+        assert_eq!(r.rewrite("7/2"), vec!["3.5".to_string()]);
+        assert_eq!(r.rewrite("10/3"), vec!["3.3333".to_string()]);
+        assert_eq!(r.rewrite("1/3"), vec!["0.3333".to_string()]);
+        assert_eq!(r.rewrite("0/5"), vec!["0".to_string()]);
+        assert_eq!(r.rewrite("2.5+2.5"), vec!["5".to_string()]);
+        assert_eq!(r.rewrite("1.1+2.2"), vec!["3.3".to_string()]);
+    }
+
+    #[test]
+    fn simple_calculator_rejects_invalid_or_unsafe_input() {
+        let r = SimpleCalculator;
+        // 0除算
+        assert_eq!(r.rewrite("5/0"), Vec::<String>::new());
+        // 先頭の符号は対象外
+        assert_eq!(r.rewrite("-3+4"), Vec::<String>::new());
+        // 演算子が無い・数字以外
+        assert_eq!(r.rewrite("abc"), Vec::<String>::new());
+        assert_eq!(r.rewrite(""), Vec::<String>::new());
+        // 演算子の前後が空
+        assert_eq!(r.rewrite("+4"), Vec::<String>::new());
+        assert_eq!(r.rewrite("4+"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn rewriter_chain_default_includes_date_and_calculator() {
+        let chain = RewriterChain::default_chain();
+        assert!(
+            chain
+                .candidates("20260927")
+                .contains(&"2026/09/27".to_string()),
+            "{:?}",
+            chain.candidates("20260927")
+        );
+        assert!(
+            chain.candidates("3+4").contains(&"7".to_string()),
+            "{:?}",
+            chain.candidates("3+4")
         );
     }
 }
