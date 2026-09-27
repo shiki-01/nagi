@@ -694,10 +694,9 @@ where
     match os {
         "windows" => {
             // %APPDATA%\Nagi
+            // Windows の区切り文字は実行 OS に依存させない（他 OS 上での単体テストでも同じ結果にする）
             env("APPDATA").map(|app_data| {
-                let mut p = PathBuf::from(app_data);
-                p.push("Nagi");
-                p
+                PathBuf::from(format!("{}\\Nagi", app_data.trim_end_matches(['\\', '/'])))
             })
         }
         "macos" => {
