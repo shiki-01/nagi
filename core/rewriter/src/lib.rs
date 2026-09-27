@@ -1,7 +1,7 @@
 //! Rewriter: 決定的変換の最終段（設計書 §4.13）。
 //!
 //! LLM を使わない決定的な表記変換（全角/半角、カタカナ/半角カナ 等）を候補として提供する。
-//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナのみ（日付・簡易計算は対象外）。
+//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）。日付・簡易計算は対象外。
 
 /// 決定的な表記変換を提供するプラグイン
 pub trait Rewriter: Send + Sync {
@@ -61,6 +61,103 @@ impl Rewriter for HankakuKatakana {
         }
         vec![to_hankaku_katakana(reading)]
     }
+}
+
+/// アラビア数字を1文字ずつ漢数字に置き換える（桁の重みは考慮しない。例: "2026" → "二〇二六"）
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KanjiDigits;
+
+impl Rewriter for KanjiDigits {
+    fn id(&self) -> &str {
+        "kanji_digits"
+    }
+
+    fn rewrite(&self, reading: &str) -> Vec<String> {
+        if reading.is_empty() || !reading.chars().all(|c| c.is_ascii_digit()) {
+            return Vec::new();
+        }
+        let out: String = reading
+            .chars()
+            .map(|c| KANJI_DIGIT_CHARS[c.to_digit(10).expect("ASCII digit") as usize])
+            .collect();
+        vec![out]
+    }
+}
+
+/// アラビア数字の位取り漢数字表記（例: "2026" → "二千二十六"、"10000" → "一万"）。
+/// 先頭に無意味なゼロがある場合（"0" 単独を除く）や、兆の桁（10^16 = 京 以上）を超える場合は
+/// 位取りが定義できない・対象外として変換しない
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KanjiPositionalNumeral;
+
+impl Rewriter for KanjiPositionalNumeral {
+    fn id(&self) -> &str {
+        "kanji_positional_numeral"
+    }
+
+    fn rewrite(&self, reading: &str) -> Vec<String> {
+        match to_positional_kanji(reading) {
+            Some(s) => vec![s],
+            None => Vec::new(),
+        }
+    }
+}
+
+/// 0〜9 の漢数字（インデックス = 数字）
+const KANJI_DIGIT_CHARS: [char; 10] = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+
+/// アラビア数字の文字列を位取り漢数字に変換する。変換できない場合は `None`
+fn to_positional_kanji(digits: &str) -> Option<String> {
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if digits == "0" {
+        return Some("〇".to_string());
+    }
+    // 先頭ゼロは位取り表記が定義できない（"0" 単独は上で処理済み）
+    if digits.len() > 1 && digits.starts_with('0') {
+        return None;
+    }
+    // 兆の桁（10^16 = 京）を超える場合は対象外
+    if digits.len() > 16 {
+        return None;
+    }
+
+    const SMALL_UNITS: [&str; 4] = ["", "十", "百", "千"];
+    const BIG_UNITS: [&str; 4] = ["", "万", "億", "兆"];
+
+    // 4桁ずつのグループに分割するため、内部処理用に先頭を '0' で埋める（表記には出さない）
+    let pad_len = (4 - digits.len() % 4) % 4;
+    let padded = format!("{}{}", "0".repeat(pad_len), digits);
+    let padded_bytes = padded.as_bytes();
+    let groups: Vec<&[u8]> = padded_bytes.chunks(4).collect();
+    let group_count = groups.len();
+
+    let mut out = String::new();
+    for (gi, group) in groups.iter().enumerate() {
+        let big_unit_index = group_count - 1 - gi;
+        if big_unit_index >= BIG_UNITS.len() {
+            return None;
+        }
+        let group_digits: Vec<u32> = group.iter().map(|&b| (b - b'0') as u32).collect();
+        if group_digits.iter().all(|&d| d == 0) {
+            continue;
+        }
+        let mut group_str = String::new();
+        for (i, &d) in group_digits.iter().enumerate() {
+            let place = 3 - i;
+            if d == 0 {
+                continue;
+            }
+            if !(d == 1 && place > 0) {
+                group_str.push(KANJI_DIGIT_CHARS[d as usize]);
+            }
+            group_str.push_str(SMALL_UNITS[place]);
+        }
+        out.push_str(&group_str);
+        out.push_str(BIG_UNITS[big_unit_index]);
+    }
+    Some(out)
 }
 
 /// 半角 ASCII の印字可能文字（0x21-0x7E）か
@@ -216,6 +313,8 @@ impl RewriterChain {
                 Box::new(ZenkakuAlnum),
                 Box::new(HankakuAlnum),
                 Box::new(HankakuKatakana),
+                Box::new(KanjiDigits),
+                Box::new(KanjiPositionalNumeral),
             ],
         }
     }
@@ -323,5 +422,58 @@ mod tests {
     fn rewriter_chain_empty_never_produces_candidates() {
         let chain = RewriterChain::empty();
         assert_eq!(chain.candidates("abc123"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn kanji_digits_replaces_each_digit() {
+        let r = KanjiDigits;
+        assert_eq!(r.rewrite("2026"), vec!["二〇二六".to_string()]);
+        assert_eq!(r.rewrite("0"), vec!["〇".to_string()]);
+        assert_eq!(r.rewrite(""), Vec::<String>::new());
+        assert_eq!(r.rewrite("12a"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn kanji_positional_numeral_basic_cases() {
+        let r = KanjiPositionalNumeral;
+        assert_eq!(r.rewrite("0"), vec!["〇".to_string()]);
+        assert_eq!(r.rewrite("10"), vec!["十".to_string()]);
+        assert_eq!(r.rewrite("11"), vec!["十一".to_string()]);
+        assert_eq!(r.rewrite("100"), vec!["百".to_string()]);
+        assert_eq!(r.rewrite("1000"), vec!["千".to_string()]);
+        assert_eq!(r.rewrite("2026"), vec!["二千二十六".to_string()]);
+        assert_eq!(r.rewrite("10000"), vec!["一万".to_string()]);
+        assert_eq!(r.rewrite("100000000"), vec!["一億".to_string()]);
+        assert_eq!(
+            r.rewrite("9999999999999999"),
+            vec!["九千九百九十九兆九千九百九十九億九千九百九十九万九千九百九十九".to_string()]
+        );
+    }
+
+    #[test]
+    fn kanji_positional_numeral_rejects_ambiguous_or_out_of_range() {
+        let r = KanjiPositionalNumeral;
+        // 先頭ゼロ（"0" 単独を除く）は位取りが定義できない
+        assert_eq!(r.rewrite("007"), Vec::<String>::new());
+        assert_eq!(r.rewrite("00"), Vec::<String>::new());
+        // 空・数字以外
+        assert_eq!(r.rewrite(""), Vec::<String>::new());
+        assert_eq!(r.rewrite("12a"), Vec::<String>::new());
+        // 兆の桁（10^16 = 京）を超える17桁は対象外
+        assert_eq!(r.rewrite("99999999999999999"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn rewriter_chain_default_includes_kanji_numerals() {
+        let chain = RewriterChain::default_chain();
+        let candidates = chain.candidates("2026");
+        assert!(
+            candidates.contains(&"二〇二六".to_string()),
+            "{candidates:?}"
+        );
+        assert!(
+            candidates.contains(&"二千二十六".to_string()),
+            "{candidates:?}"
+        );
     }
 }
