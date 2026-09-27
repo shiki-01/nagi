@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-09-27（LLM コンテキストの再利用（KV キャッシュ）の実装後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-09-27（LLM ビームサーチの実装後。infer 単体、Stage 1）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -19,12 +19,13 @@
 | 9 | 設定・環境プロファイル・学習・ユーザー辞書 | `nagi-config`（行番号付きエラー・`default.toml`・再読み込み）、`nagi-profile`（初回判定・キャリブレーション・自動切替）、`nagi-learn`（学習の記録・削除・原子的保存）、ユーザー辞書（Mozc TSV・スニペット・オーバーレイ）、`Pipeline` の優先順統合、`set_environment` / `get_status` / `clear_learning`、`Ctrl+Delete`。詳細は G-12 |
 | 10 | 予算超過した LLM 結果の非同期差し替え | Space 変換で LLM が `sync_budget` を超えたとき、辞書の結果で応答したあと、完了時に `update_preedit` / `update_candidates` で表示を差し替える（未操作のときだけ）。`Engine::apply_completions`、`Pipeline` の `Completion` 通知、`Server::run_threaded`（入力読み取りスレッド + waker）。詳細は G-11 |
 | 11 | LLM コンテキストの再利用（KV キャッシュ） | `llama::LlamaModel` が `convert` / `score` のたびにコンテキストを作り直すのをやめ、1 つを使い回して `clear_kv_cache` で空にする。自己参照構造（`model` を `Box` で固定・`ctx` を `'static` と偽って保持）のため `core/infer` の `unsafe_code` を局所解禁（G-2 が想定していた緩和）。`convert` / `score` を交互に呼んでも結果が混ざらないことをテストで確認。詳細は G-13 |
+| 12 | LLM のビームサーチ（infer 単体、Stage 1） | `ConvertRequest::beam_width` を新設し、`llama::LlamaModel::convert` に設計書 B-4 どおりの真のビームサーチ（各ステップで上位 `width` 本に絞りながら進める）を実装。KV キャッシュの分岐・合流は `kv_cache_seq_cp`（要 `kv_unified = true`）。`beam_width <= 1` は既存の貪欲デコードのまま（挙動・レイテンシとも無変更）。実モデルで曖昧性の低い文でも表記ゆれ・別の妥当な変換が上位に出ることを確認。`server`（`Pipeline`）・`engine`（候補ウィンドウの sentence モード）への統合は次段。詳細は G-14 |
 
 ## 未完了の項目と次の一手
 
 優先順:
 
-1. **LLM 接続の残り**: ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
+1. **LLM 接続の残り**: ビームサーチの `server`/`engine` への統合（Stage 2。`Pipeline::sentence_candidates`・候補ウィンドウの sentence モード・`conversion.initial_view = sentence`・キーマップ。infer 単体の実装は完了、G-14）、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
 2. **予測変換**（Phase 2）: 学習・ユーザー辞書の前方一致（`Learner::lookup_prefix` は用意済み）、候補ウィンドウの Tab / ↓ 選択
 3. **環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化、`quality` で使う大きいモデル・reranker（Laya 評価）
 4. **設定の残り**: キーマップ TOML（Phase 3。`[keymap]` は `preset` だけ）、設定 GUI（Phase 4）、`update.auto_check` の実装
@@ -46,6 +47,7 @@
 - G-11 LLM の変換パイプライン接続（構成・計測結果・未実装事項）
 - G-12 設定・環境プロファイル・学習・ユーザー辞書（仕様・優先順位・未実装事項）
 - G-13 LLM コンテキストの再利用（KV キャッシュ。自己参照構造・`unsafe_code` の局所解禁・`unsafe impl Send` の根拠・実測値）
+- G-14 LLM のビームサーチ（infer 単体、Stage 1。アルゴリズム・`kv_unified` の必要性・実測・未実装の統合作業）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 
@@ -58,7 +60,7 @@
 - `nn` の soft pending は Mozc の実挙動と一致するか未確認（`konnichiha` → こんにちは、`kanna` → かんな は通る。`nnn` は「んん」）
 - ゴールデンテストの期待値は、テスト担当のサブエージェントが仕様から書いた後、実装の挙動と食い違う箇所を「仕様に照らして」修正したもの。仕様の根拠は `docs/decisions.md` G-7。追加のレビュー（標準 IME との挙動照合）は未実施
 - macOS / Windows 実機でのフロント接続、標準 IME との挙動照合、レイテンシベンチ（p95）は未実施
-- `infer` の `LlamaModel` はコンテキストを 1 つ使い回す（KV キャッシュ再利用は実装済み。G-13）が、ビームサーチ・GPU オフロードは未対応
+- `infer` の `LlamaModel` はコンテキストを 1 つ使い回す（KV キャッシュ再利用・ビームサーチは実装済み。G-13、G-14）が、GPU オフロードは未対応。ビームサーチは `server`/`engine` から未接続（G-14 の「未実装」参照）
 
 ## CI
 

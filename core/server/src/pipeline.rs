@@ -163,6 +163,9 @@ impl Pipeline {
             left_context: tail(left, 40),
             profile: persona.map(str::to_string),
             max_new_tokens: reading.chars().count() * 3 + 8,
+            // 文全体の N-best（候補ウィンドウの sentence モード）は次段で追加する。
+            // ここではまだ既存の貪欲デコードと同じ動作にする
+            beam_width: 1,
         }
     }
 

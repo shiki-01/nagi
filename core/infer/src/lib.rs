@@ -21,6 +21,7 @@
 //!     left_context: String::new(),
 //!     profile: None,
 //!     max_new_tokens: 128,
+//!     beam_width: 1,
 //! };
 //!
 //! let result = model.convert(&req);
@@ -41,6 +42,9 @@ pub struct ConvertRequest {
     pub profile: Option<String>,
     /// 生成トークンの最大数
     pub max_new_tokens: usize,
+    /// 欲しい仮説の数（ビームサーチの幅。1 なら貪欲デコードと同じ）。
+    /// モデルが対応しない場合は 1 件だけ返してよい（[`MockModel`] は無視する）
+    pub beam_width: usize,
 }
 
 /// 変換仮説（生成結果）
@@ -304,6 +308,11 @@ pub mod llama {
         pub n_ctx: u32,
         /// GPU 層数（既定 0 = CPU のみ）
         pub gpu_layers: u32,
+        /// コンテキストが同時に扱えるビームの上限（`ConvertRequest::beam_width` はこれに
+        /// クランプされる）。コンテキスト作成時に一度だけ効く（`n_seq_max`）ため、
+        /// 実行中に必要な最大幅を見積もって渡すこと。既定 4 は `conversion.beam_width`
+        /// の想定値（既定 3）に余裕を持たせたもの
+        pub max_beam_width: u32,
     }
 
     impl Default for LlamaOptions {
@@ -312,6 +321,7 @@ pub mod llama {
                 n_threads: 0,
                 n_ctx: 512,
                 gpu_layers: 0,
+                max_beam_width: 4,
             }
         }
     }
@@ -434,8 +444,14 @@ pub mod llama {
             options: &LlamaOptions,
         ) -> Result<&'c mut LlamaContext<'static>, InferError> {
             if ctx_slot.is_none() {
-                let mut ctx_params =
-                    LlamaContextParams::default().with_n_ctx(NonZeroU32::new(options.n_ctx));
+                let mut ctx_params = LlamaContextParams::default()
+                    .with_n_ctx(NonZeroU32::new(options.n_ctx))
+                    .with_n_seq_max(options.max_beam_width.max(1))
+                    // ビームサーチは `kv_cache_seq_cp` で他の seq_id へ KV をコピーする。既定の
+                    // 分離バッファ（kv_unified = false）では全域コピーしかできず
+                    // （llama.cpp 内部の `seq_cp` が `is_full` を要求する）、プロンプト分だけの
+                    // 部分コピーができない。`kv_unified = true` にして 1 つの共有バッファにする
+                    .with_kv_unified(true);
                 if options.n_threads > 0 {
                     ctx_params = ctx_params.with_n_threads(options.n_threads as i32);
                     ctx_params = ctx_params.with_n_threads_batch(options.n_threads as i32);
@@ -458,6 +474,162 @@ pub mod llama {
         /// 直近の [`ConversionModel::convert`] の計測値
         pub fn last_stats(&self) -> Option<InferStats> {
             self.stats
+        }
+    }
+
+    /// ビームサーチ（[`LlamaModel::beam_search`]）の生成途中の 1 ビーム
+    struct Beam {
+        /// このビームの続きを保持している KV キャッシュの seq_id
+        seq_id: i32,
+        /// これまでに生成したトークン
+        tokens: Vec<u32>,
+        /// 累積対数確率
+        score: f32,
+    }
+
+    impl LlamaModel {
+        /// 真のビームサーチ（設計書 B-4: 生成途中で上位 `width` 本の途中結果を残しながら進める）。
+        ///
+        /// `first_logits` はプロンプト末尾（prefill 済み、seq_id 0）のロジット。各ステップで
+        /// 全ビームの候補（最大 `width` 本 × 上位 `width` 語）をまとめ、累積対数確率が高い順に
+        /// 全体で `width` 件だけ残す（終了トークンを引いたものは確定候補として抜け、残りが
+        /// 次のビームになる）。返り値は (生成トークン列, 累積対数確率) を確定候補・
+        /// 打ち切りで生き残ったビューム含めてスコア順に並べたもの（最大 `width` 件）
+        ///
+        /// ビームは KV キャッシュ上の別々の seq_id として保持する。分岐（1 つの親から複数の
+        /// 子が生き残る）が起きたときだけ [`LlamaContext::kv_cache_seq_cp`] で複製し、
+        /// 使われなくなった seq_id は次の分岐のために使い回す（`free_seq_ids`）
+        #[allow(clippy::too_many_arguments)]
+        fn beam_search(
+            ctx: &mut LlamaContext<'static>,
+            batch: &mut LlamaBatch,
+            first_logits: &[f32],
+            prompt_len: usize,
+            n_ctx: usize,
+            max_new_tokens: usize,
+            width: usize,
+            stop_ids: &[u32],
+        ) -> Result<Vec<(Vec<u32>, f32)>, InferError> {
+            if max_new_tokens == 0 {
+                return Ok(vec![(Vec::new(), 0.0)]);
+            }
+
+            let mut completed: Vec<(Vec<u32>, f32)> = Vec::new();
+            let mut free_seq_ids: Vec<i32> = (0..width as i32).rev().collect();
+
+            // ラウンド 0: プロンプト末尾のロジット（既に計算済み）から分岐元を作る。
+            // 追加の decode は不要（この時点ではまだ全ビームが同じ内容＝プロンプトのみ）
+            let mut active: Vec<Beam> = Vec::new();
+            for (token, logprob) in top_k_logprobs(first_logits, width) {
+                if stop_ids.contains(&token) {
+                    completed.push((Vec::new(), 0.0));
+                    continue;
+                }
+                let seq_id = free_seq_ids.pop().expect("width 個は必ずある");
+                if seq_id != 0 {
+                    // seq_id 0 は既にプロンプトを保持している。他はそこからコピーする
+                    ctx.kv_cache_seq_cp(0, seq_id, None, Some(prompt_len as u32))
+                        .map_err(|e| InferError::Decode(format!("KV コピー失敗: {e}")))?;
+                }
+                active.push(Beam {
+                    seq_id,
+                    tokens: vec![token],
+                    score: logprob,
+                });
+            }
+            if !active.is_empty() {
+                Self::decode_beams(ctx, batch, &active, prompt_len)?;
+            }
+
+            let mut pos = prompt_len + 1;
+            while !active.is_empty() && pos < n_ctx && pos - prompt_len < max_new_tokens {
+                // 全ビームの次の 1 語候補（最大 width 本 × width 語）を集める
+                let mut pool: Vec<(usize, u32, f32)> = Vec::new(); // (親ビームの index, トークン, 累積スコア)
+                for (bi, beam) in active.iter().enumerate() {
+                    let logits = ctx.get_logits_ith(bi as i32);
+                    for (token, logprob) in top_k_logprobs(logits, width) {
+                        pool.push((bi, token, beam.score + logprob));
+                    }
+                }
+                pool.sort_by(|a, b| b.2.total_cmp(&a.2));
+
+                // 累積スコア上位から、全体で width 件になるまで確定/継続に振り分ける
+                let mut survivors: Vec<(usize, u32, f32)> = Vec::new();
+                for &(bi, token, score) in pool.iter().take(width) {
+                    if stop_ids.contains(&token) {
+                        completed.push((active[bi].tokens.clone(), score));
+                    } else {
+                        survivors.push((bi, token, score));
+                    }
+                }
+                if survivors.is_empty() {
+                    active.clear();
+                    break;
+                }
+
+                // 生き残った子を 1 人も出さなかった親の seq_id を、次の分岐用に回収する
+                let mut parent_has_survivor = vec![false; active.len()];
+                for &(bi, _, _) in &survivors {
+                    parent_has_survivor[bi] = true;
+                }
+                for (bi, beam) in active.iter().enumerate() {
+                    if !parent_has_survivor[bi] {
+                        free_seq_ids.push(beam.seq_id);
+                    }
+                }
+
+                // 各親の 1 人目は親の seq_id をそのまま使い、2 人目以降は新しい seq_id へ
+                // KV をコピーしてから分岐させる
+                let mut claimed = vec![false; active.len()];
+                let mut next_active: Vec<Beam> = Vec::with_capacity(survivors.len());
+                for (bi, token, score) in survivors {
+                    let seq_id = if !claimed[bi] {
+                        claimed[bi] = true;
+                        active[bi].seq_id
+                    } else {
+                        let new_id = free_seq_ids.pop().expect("width 個の seq_id で足りる");
+                        ctx.kv_cache_seq_cp(active[bi].seq_id, new_id, None, Some(pos as u32))
+                            .map_err(|e| InferError::Decode(format!("KV コピー失敗: {e}")))?;
+                        new_id
+                    };
+                    let mut tokens = active[bi].tokens.clone();
+                    tokens.push(token);
+                    next_active.push(Beam {
+                        seq_id,
+                        tokens,
+                        score,
+                    });
+                }
+                active = next_active;
+                Self::decode_beams(ctx, batch, &active, pos)?;
+                pos += 1;
+            }
+
+            let mut results: Vec<(Vec<u32>, f32)> = completed;
+            results.extend(active.into_iter().map(|b| (b.tokens, b.score)));
+            results.sort_by(|a, b| b.1.total_cmp(&a.1));
+            results.truncate(width);
+            Ok(results)
+        }
+
+        /// 各ビームの最後のトークンを、それぞれの seq_id へ 1 回の decode でまとめて進める。
+        /// 各ビームに対応する位置でロジットを要求するので、戻り値は `get_logits_ith(bi)`
+        /// （`bi` は `beams` 内のインデックス）で取り出せる
+        fn decode_beams(
+            ctx: &mut LlamaContext<'static>,
+            batch: &mut LlamaBatch,
+            beams: &[Beam],
+            pos: usize,
+        ) -> Result<(), InferError> {
+            batch.clear();
+            for beam in beams {
+                let token = *beam.tokens.last().expect("空のビームは作らない");
+                batch
+                    .add(LlamaToken(token as i32), pos as i32, &[beam.seq_id], true)
+                    .map_err(|e| InferError::Decode(format!("batch 追加失敗: {e}")))?;
+            }
+            ctx.decode(batch)
+                .map_err(|e| InferError::Decode(format!("デコード失敗: {e}")))
         }
     }
 
@@ -505,55 +677,78 @@ pub mod llama {
                 .map_err(|e| InferError::Decode(format!("prefill 失敗: {e}")))?;
             let prefill_ms = started.elapsed().as_secs_f64() * 1000.0;
 
-            // 貪欲デコード
+            let width = req
+                .beam_width
+                .clamp(1, self.options.max_beam_width as usize);
             let decode_started = Instant::now();
-            let mut generated: Vec<u32> = Vec::new();
-            let mut score = 0.0f32;
-            let mut logits_index = batch.n_tokens() - 1;
-            let mut pos = prompt_ids.len();
-            while generated.len() < req.max_new_tokens && pos < n_ctx {
-                let logits = ctx.get_logits_ith(logits_index);
-                let (best, best_logit) =
-                    logits
-                        .iter()
-                        .enumerate()
-                        .fold((0usize, f32::NEG_INFINITY), |acc, (i, &l)| {
+            let hypotheses: Vec<(Vec<u32>, f32)> = if width <= 1 {
+                // 貪欲デコード（beam_width <= 1。既存の呼び出し元はすべてこちら）
+                let mut generated: Vec<u32> = Vec::new();
+                let mut score = 0.0f32;
+                let mut logits_index = batch.n_tokens() - 1;
+                let mut pos = prompt_ids.len();
+                while generated.len() < req.max_new_tokens && pos < n_ctx {
+                    let logits = ctx.get_logits_ith(logits_index);
+                    let (best, best_logit) = logits.iter().enumerate().fold(
+                        (0usize, f32::NEG_INFINITY),
+                        |acc, (i, &l)| {
                             if l > acc.1 { (i, l) } else { acc }
-                        });
-                let log_sum = logits
-                    .iter()
-                    .map(|&l| (l - best_logit).exp())
-                    .sum::<f32>()
-                    .ln()
-                    + best_logit;
-                let id = best as u32;
-                if self.stop_ids.contains(&id) || ctx.model.is_eog_token(LlamaToken(best as i32)) {
-                    break;
-                }
-                score += best_logit - log_sum;
-                generated.push(id);
+                        },
+                    );
+                    let log_sum = logits
+                        .iter()
+                        .map(|&l| (l - best_logit).exp())
+                        .sum::<f32>()
+                        .ln()
+                        + best_logit;
+                    let id = best as u32;
+                    if self.stop_ids.contains(&id)
+                        || ctx.model.is_eog_token(LlamaToken(best as i32))
+                    {
+                        break;
+                    }
+                    score += best_logit - log_sum;
+                    generated.push(id);
 
-                batch.clear();
-                batch
-                    .add(LlamaToken(best as i32), pos as i32, &[0], true)
-                    .map_err(|e| InferError::Decode(format!("batch 追加失敗: {e}")))?;
-                ctx.decode(&mut batch)
-                    .map_err(|e| InferError::Decode(format!("デコード失敗: {e}")))?;
-                logits_index = 0;
-                pos += 1;
-            }
+                    batch.clear();
+                    batch
+                        .add(LlamaToken(best as i32), pos as i32, &[0], true)
+                        .map_err(|e| InferError::Decode(format!("batch 追加失敗: {e}")))?;
+                    ctx.decode(&mut batch)
+                        .map_err(|e| InferError::Decode(format!("デコード失敗: {e}")))?;
+                    logits_index = 0;
+                    pos += 1;
+                }
+                vec![(generated, score)]
+            } else {
+                // 真のビームサーチ（設計書 B-4）。プロンプト末尾のロジットから分岐する
+                let first_logits = ctx.get_logits_ith(batch.n_tokens() - 1).to_vec();
+                Self::beam_search(
+                    ctx,
+                    &mut batch,
+                    &first_logits,
+                    prompt_ids.len(),
+                    n_ctx,
+                    req.max_new_tokens,
+                    width,
+                    &self.stop_ids,
+                )?
+            };
 
             self.stats = Some(InferStats {
                 prompt_tokens: prompt_ids.len(),
-                generated_tokens: generated.len(),
+                generated_tokens: hypotheses.first().map_or(0, |(t, _)| t.len()),
                 prefill_ms,
                 decode_ms: decode_started.elapsed().as_secs_f64() * 1000.0,
                 total_ms: started.elapsed().as_secs_f64() * 1000.0,
             });
-            Ok(vec![Hypothesis {
-                surface: self.tokenizer.decode(&generated),
-                score,
-            }])
+            Ok(hypotheses
+                .into_iter()
+                .map(|(tokens, score)| Hypothesis {
+                    surface: self.tokenizer.decode(&tokens),
+                    score,
+                })
+                .collect())
         }
 
         fn score(
@@ -638,6 +833,21 @@ pub mod llama {
             hit.ln() - total.ln()
         }
     }
+
+    /// `logits` を対数ソフトマックス（対数確率）にし、上位 `k` 件を (トークン ID, 対数確率) で
+    /// 降順に返す（`k` は 1 以上に丸める）
+    fn top_k_logprobs(logits: &[f32], k: usize) -> Vec<(u32, f32)> {
+        let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let log_sum = logits.iter().map(|&l| (l - max).exp()).sum::<f32>().ln() + max;
+        let mut scored: Vec<(u32, f32)> = logits
+            .iter()
+            .enumerate()
+            .map(|(i, &l)| (i as u32, l - log_sum))
+            .collect();
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.truncate(k.max(1));
+        scored
+    }
 }
 
 #[cfg(test)]
@@ -673,6 +883,7 @@ mod tests {
             left_context: String::new(),
             profile: None,
             max_new_tokens: 128,
+            beam_width: 1,
         };
         let (prompt, warnings) = adapter.build_prompt_checked(&req);
         // \u{EE00}<カタカナ読み>\u{EE01}
@@ -690,6 +901,7 @@ mod tests {
             left_context: "私の名前は".to_string(),
             profile: None,
             max_new_tokens: 128,
+            beam_width: 1,
         };
         let (prompt, _warnings) = adapter.build_prompt_checked(&req);
         assert!(prompt.contains('\u{EE02}'));
@@ -705,6 +917,7 @@ mod tests {
             left_context: String::new(),
             profile: Some("balanced".to_string()),
             max_new_tokens: 128,
+            beam_width: 1,
         };
         let (prompt, _warnings) = adapter.build_prompt_checked(&req);
         assert!(prompt.contains('\u{EE03}'));
@@ -720,6 +933,7 @@ mod tests {
             left_context: String::new(),
             profile: Some(long_profile),
             max_new_tokens: 128,
+            beam_width: 1,
         };
         let (prompt, _warnings) = adapter.build_prompt_checked(&req);
         // 最後の 25 文字だけ入るはず
@@ -741,6 +955,7 @@ mod tests {
             left_context: String::new(),
             profile: None,
             max_new_tokens: 128,
+            beam_width: 1,
         };
 
         let result = model.convert(&req);
@@ -758,6 +973,7 @@ mod tests {
             left_context: String::new(),
             profile: None,
             max_new_tokens: 128,
+            beam_width: 1,
         };
 
         let result = model.convert(&req);
@@ -787,6 +1003,7 @@ mod tests {
             left_context: String::new(),
             profile: None,
             max_new_tokens: 128,
+            beam_width: 1,
         };
 
         let result1 = model.convert(&req1);
@@ -798,6 +1015,7 @@ mod tests {
             left_context: String::new(),
             profile: None,
             max_new_tokens: 128,
+            beam_width: 1,
         };
 
         let result2 = model.convert(&req2);
@@ -841,6 +1059,7 @@ mod tests {
                 left_context: context.to_string(),
                 profile: None,
                 max_new_tokens: 64,
+                beam_width: 1,
             };
             let first = model.convert(&req).expect("変換");
             let stats = model.last_stats().expect("統計");
@@ -885,6 +1104,7 @@ mod tests {
                 left_context: context.to_string(),
                 profile: None,
                 max_new_tokens: 16,
+                beam_width: 1,
             };
             let started = std::time::Instant::now();
             let scores = model.score(&req, &candidates).expect("score");
@@ -922,6 +1142,7 @@ mod tests {
             left_context: left.to_string(),
             profile: None,
             max_new_tokens: 32,
+            beam_width: 1,
         };
 
         // convert → score → convert → score と、同じコンテキストを使い回しながら
@@ -953,5 +1174,106 @@ mod tests {
             .convert(&req("とうきょうにいく", ""))
             .expect("変換1再");
         assert_eq!(r1_again[0].surface, r1[0].surface);
+    }
+
+    /// ビームサーチ（`beam_width` > 1）の確認（モデル未取得なら skip）。
+    /// 曖昧性の低い文でも、代替候補（表記ゆれ・別の妥当な変換）が上位に出ることを確認する
+    #[cfg(feature = "llama")]
+    #[test]
+    fn test_llama_beam_search_returns_distinct_ranked_hypotheses() {
+        use crate::llama::{LlamaModel, LlamaOptions};
+        use std::path::Path;
+
+        let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/models/zenz-v3.1-small-Q5_K_M.gguf");
+        if !model_path.exists() {
+            eprintln!("skip: モデル未取得（cargo xtask fetch-model）");
+            return;
+        }
+        let mut model =
+            LlamaModel::load(&model_path, LlamaOptions::default()).expect("モデルロード");
+        let req = |reading: &str, beam_width: usize| ConvertRequest {
+            reading: reading.to_string(),
+            left_context: String::new(),
+            profile: None,
+            max_new_tokens: 32,
+            beam_width,
+        };
+
+        for reading in [
+            "こうえん",
+            "きょうはいいてんきです",
+            "とうきょうにいく",
+            "かんじへんかんのてすと",
+        ] {
+            let greedy = model.convert(&req(reading, 1)).expect("greedy");
+            let beam = model.convert(&req(reading, 3)).expect("beam");
+            eprintln!(
+                "reading={reading:?} greedy={:?} beam(width=3)={:?}",
+                greedy
+                    .iter()
+                    .map(|h| (&h.surface, h.score))
+                    .collect::<Vec<_>>(),
+                beam.iter()
+                    .map(|h| (&h.surface, h.score))
+                    .collect::<Vec<_>>()
+            );
+
+            assert!(!beam.is_empty() && beam.len() <= 3, "reading={reading:?}");
+            for w in beam.windows(2) {
+                assert!(w[0].score >= w[1].score, "スコア降順であること: {beam:?}");
+            }
+            // 曖昧性が低い文では、貪欲デコードと同じ表記が最上位に来ることを期待する
+            // （ビームサーチが貪欲デコードの経路を必ず残す保証は一般にはないが、これらの文は
+            // 競合が弱く実測でも一致する）。スコアもほぼ一致するはず（バッチ化による
+            // 浮動小数点誤差の範囲内）
+            assert_eq!(beam[0].surface, greedy[0].surface, "reading={reading:?}");
+            assert!(
+                (beam[0].score - greedy[0].score).abs() < 0.01,
+                "reading={reading:?} beam={:?} greedy={:?}",
+                beam[0].score,
+                greedy[0].score
+            );
+            // 上位候補は互いに異なる表記であること（多様性の確認）
+            let distinct = beam
+                .iter()
+                .map(|h| h.surface.as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            assert_eq!(distinct, beam.len(), "reading={reading:?} beam={beam:?}");
+        }
+    }
+
+    /// `beam_width` が `max_beam_width` を超えて要求されても暴走しない（クランプされる）
+    #[cfg(feature = "llama")]
+    #[test]
+    fn test_llama_beam_search_width_is_clamped_to_max_beam_width() {
+        use crate::llama::{LlamaModel, LlamaOptions};
+        use std::path::Path;
+
+        let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/models/zenz-v3.1-small-Q5_K_M.gguf");
+        if !model_path.exists() {
+            eprintln!("skip: モデル未取得（cargo xtask fetch-model）");
+            return;
+        }
+        let mut model = LlamaModel::load(
+            &model_path,
+            LlamaOptions {
+                max_beam_width: 2,
+                ..LlamaOptions::default()
+            },
+        )
+        .expect("モデルロード");
+        let hyps = model
+            .convert(&ConvertRequest {
+                reading: "こうえん".to_string(),
+                left_context: String::new(),
+                profile: None,
+                max_new_tokens: 16,
+                beam_width: 8, // max_beam_width(2) を超える要求
+            })
+            .expect("beam");
+        assert!(hyps.len() <= 2, "{hyps:?}");
     }
 }

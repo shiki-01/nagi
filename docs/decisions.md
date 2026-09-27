@@ -399,3 +399,15 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 - **正しさ**: 同一モデルインスタンスで異なる reading / 左文脈 / `convert` と `score` の呼び出しを交互に行っても結果が混ざらないことをテストで確認した（`test_llama_context_reuse_does_not_leak_between_calls`）。既存の決定的性・文脈込み再採点のテストも変更なしで通る
 - **実測**（同じ 7 文、`test_llama_model_convert` の `prefill_ms`。実装前 → 実装後、CPU のみ・24 スレッド）: 24→28、19→16、19→15、17→13、19→15、17→14、17→14ms。母数が小さく機械のノイズもあるため参考値だが、悪化はしていない。zenz-v3.1-small・n_ctx=512 では確保コスト自体が小さく、改善幅は大きくない（大きいモデル・長い `n_ctx` では差が広がる見込み）
 - **未実装**: 複数セッションを跨いだ会話的な KV キャッシュ差分再利用（プロンプトの共通接頭辞を保持したままの継続）は行っていない。`clear_kv_cache` は毎回全消去する暫定
+
+### G-14. LLM のビームサーチ（文全体の N-best、Stage 1: infer 単体、2026-09-27）
+
+実装: `core/infer/src/lib.rs`（`ConvertRequest::beam_width`、`LlamaOptions::max_beam_width`、`llama::LlamaModel::beam_search` / `decode_beams` / `top_k_logprobs`）。段階分けの方針（ユーザー承認済み）: 今回は infer 単体の実装・検証のみ。`server`（`Pipeline::sentence_candidates`）・`engine`（候補ウィンドウの sentence モード）・キーマップへの統合は次段で行う（進捗は `docs/progress.md`）。
+
+- **アルゴリズム**: 設計書 B-4 の「生成途中で上位 k 本の途中結果を残しながら進める」を文字通り実装した（最初のトークンだけ分岐させる簡易版ではない）。各ステップで、生存中の全ビームの上位 `width` 語ずつをプールし、累積対数確率（ソフトマックス正規化後の対数確率の総和。貪欲デコードの `score` と同じ尺度）が高い順に**全体で** `width` 件だけ残す。終了トークンを引いた候補はその時点で確定仮説として抜け、残りが次のビームになる。合流（1 つの親から複数の子が生き残る）が起きたときだけ [`kv_cache_seq_cp`] で分岐先の KV を複製し、使われなくなった seq_id は `free_seq_ids` で使い回す
+- **`beam_width` <= 1 は既存の貪欲デコードのまま**（コードも変更していない）。既存の呼び出し元（`Pipeline::llm_convert` / `llm_scores`）は `beam_width: 1` を渡すので、この変更単体では挙動もレイテンシも変わらない
+- **`ConvertRequest::beam_width`** を新設。`LlamaOptions::max_beam_width`（既定 4）でコンテキストの `n_seq_max` を決める（コンテキスト作成は 1 回きりなので、実行中に要求され得る最大幅を見積もって渡す。`server` 側の実際の `conversion.beam_width` との連動は次段で行う）。要求された `beam_width` は `max_beam_width` にクランプする
+- **`kv_unified = true` が必要だった**: 既定の `kv_unified = false`（分離バッファ）では `kv_cache_seq_cp` が異なるバッファ間のコピーになり、llama.cpp 側が「全域コピーのみ対応（`is_full` アサート）」で拒否する（プロンプト分だけの部分コピーができずクラッシュする）。`with_kv_unified(true)` で 1 つの共有バッファにして解決した。コンテキストは既存の再利用（G-13）と同じ 1 つを使い回すため、`beam_width` を使わない呼び出し（貪欲デコード・`score`）にも影響するが、動作・既存テストに変化はない
+- **実測**（zenz-v3.1-small、`width=3`、代表 4 文）: 曖昧性の低い文では貪欲デコードと同じ表記が最上位に来て、2 位以降に表記ゆれ・別の妥当な変換が並ぶ。例: 「こうえん」→ 公園 / 講演 / 公演、「きょうはいいてんきです」→ 今日はいい天気です / 今日は良い天気です / 今日はイイ天気です、「とうきょうにいく」→ 東京に行く / 東京にいく / 東京に行、「かんじへんかんのてすと」→ 漢字変換のテスト / 漢字変換のtest / 感じ変換のテスト。最上位のスコアは貪欲デコードとバッチ化による浮動小数点誤差の範囲（< 0.01）で一致した
+- **既知の限界**: 貪欲デコードの経路がビームサーチで必ず生き残る保証は一般には無い（弱い競合を持つ他ビームの累積スコアが上回れば刈られ得る）。実測 4 文では一致したが、理論的な不変条件としては扱わない。early stopping（十分良い確定仮説が出た時点で打ち切る最適化）は未実装で、常に `max_new_tokens` まで回す（`width` が小さく生成長も短いため実害は小さい）
+- **未実装**（次段）: `server::Pipeline` への統合（各仮説を `Dictionary::align_with` で強制アライメントし `BackendSentence` にする。表記が重複する仮説の除去は Pipeline 側で行う）、`engine` の文全体候補ウィンドウ（`conversion.initial_view = sentence`。`←/→` で注目文節を動かすと通常の文節候補に切り替わる）、`Effective`/`Tunables` への `beam_width` の追加、profile ごとの実際の値（`quality`/`balanced`=3, `light`/`minimal`=1）との連動
