@@ -7,7 +7,7 @@ use crate::pos::{Pos, PosClass};
 use std::collections::HashMap;
 
 /// 辞書に無い 1 文字を素通しするときの語コスト
-const UNKNOWN_COST: i32 = 10_000;
+pub(crate) const UNKNOWN_COST: i32 = 10_000;
 /// 句読点・括弧の素通しコスト（変換の邪魔をしないよう低め）
 const PUNCT_COST: i32 = 1_000;
 /// 記号の素通しコスト
@@ -188,7 +188,7 @@ impl Dictionary {
     }
 
     /// 辞書に無い文字を素通しするノードの (品詞 ID, コスト)
-    fn unknown_ids(&self, c: char) -> (u16, i32) {
+    pub(crate) fn unknown_ids(&self, c: char) -> (u16, i32) {
         let f = self.fallback_ids();
         match c {
             '、' | '，' | ',' => (f.comma, PUNCT_COST),

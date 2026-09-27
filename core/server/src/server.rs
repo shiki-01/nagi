@@ -12,15 +12,16 @@ use nagi_protocol::jsonrpc::{
 };
 use nagi_protocol::methods::{
     ConfigError, EmptyResult, InitializeParams, InitializeResult, NotifyParams, ProcessKeyParams,
-    ReloadConfigResult, RestoreSessionParams, ServerCapabilities, SessionParams, SetContextParams,
-    SetEnvironmentParams, method,
+    ReconvertParams, ReloadConfigResult, RestoreSessionParams, SelectCandidateParams,
+    ServerCapabilities, SessionParams, SetContextParams, SetEnvironmentParams, UpdatePreeditParams,
+    method,
 };
 use nagi_protocol::view::InputMode;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::{BufRead, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// 設定ファイル・ユーザー辞書の変更を確認する最短の間隔
@@ -28,7 +29,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// JSON-RPC サーバー
 pub struct Server {
-    engine: Engine,
+    engine: Arc<Mutex<Engine>>,
     runtime: Arc<Runtime>,
     reload: Reloadable,
     initial_mode: InputMode,
@@ -58,7 +59,7 @@ impl Server {
     pub fn new(backend: Arc<dyn ConversionBackend>, _profile: &str, config: EngineConfig) -> Self {
         Server {
             initial_mode: config.initial_mode,
-            engine: Engine::new(backend, config),
+            engine: Arc::new(Mutex::new(Engine::new(backend, config))),
             runtime: Runtime::detached(false),
             reload: Reloadable::detached(),
             initialized: false,
@@ -68,12 +69,15 @@ impl Server {
 
     /// [`crate::setup::build`] の結果から作る（学習・環境プロファイル・設定の再読み込みを含む）
     pub fn from_built(built: Built) -> Self {
-        let config = engine_config_from(&built.config);
+        let (config, keymap_events) = engine_config_from(&built.config);
+        for e in keymap_events {
+            built.runtime.push_event(e);
+        }
         let mut engine = Engine::new(built.pipeline.clone(), config.clone());
         engine.set_commit_observer(Arc::new(LearningObserver::new(built.runtime.clone())));
         Server {
             initial_mode: config.initial_mode,
-            engine,
+            engine: Arc::new(Mutex::new(engine)),
             runtime: built.runtime,
             reload: built.reload,
             initialized: false,
@@ -140,13 +144,13 @@ impl Server {
         if !self.initialized {
             return Vec::new();
         }
-        let done = self.engine.backend_completions();
+        let done = self.engine_lock().backend_completions();
         if done.is_empty() {
             return Vec::new();
         }
         let encode = |n: Notification| serde_json::to_string(&n).ok();
         let mut lines = Vec::new();
-        for (session_id, result) in self.engine.apply_completions(&done) {
+        for (session_id, result) in self.engine_lock().apply_completions(&done) {
             let revision = result.revision;
             if let Some(preedit) = result.preedit {
                 let params = UpdatePreeditParams {
@@ -178,7 +182,8 @@ impl Server {
 
     /// 共有状態に積まれた出来事を `notify` 通知の行にする
     fn notifications(&self) -> Vec<String> {
-        self.runtime
+        let mut lines: Vec<String> = self
+            .runtime
             .drain_events()
             .into_iter()
             .filter_map(|e| {
@@ -191,7 +196,54 @@ impl Server {
                     .ok()
                     .and_then(|n| serde_json::to_string(&n).ok())
             })
-            .collect()
+            .collect();
+        lines.extend(
+            self.runtime
+                .drain_preedit_updates()
+                .into_iter()
+                .filter_map(|p| {
+                    Notification::new(method::UPDATE_PREEDIT, p)
+                        .ok()
+                        .and_then(|n| serde_json::to_string(&n).ok())
+                }),
+        );
+        lines
+    }
+
+    /// ライブ変換の対象なら、デバウンス後に `live_convert` を試みるスレッドを立てる。
+    /// スレッドが増えても無害（`Engine::live_convert` が、実行時点の入力と reading が
+    /// 一致しない限り何もしないため。古いスレッドをキャンセルする仕組みは不要）
+    fn maybe_schedule_live_conversion(&self, session_id: &str) {
+        let tunables = self.runtime.tunables();
+        if !tunables.live_conversion_enabled {
+            return;
+        }
+        let Some(reading) = self.engine_lock().composing_reading(session_id) else {
+            return;
+        };
+        if reading.chars().count() < tunables.live_conversion_min_key_length {
+            return;
+        }
+        let engine = self.engine.clone();
+        let runtime = self.runtime.clone();
+        let session_id = session_id.to_string();
+        let delay = std::time::Duration::from_millis(tunables.live_conversion_delay_ms);
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            let result = engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .live_convert(&session_id, &reading);
+            if let Some(r) = result
+                && let Some(preedit) = r.preedit
+            {
+                runtime.push_preedit_update(UpdatePreeditParams {
+                    session_id,
+                    revision: r.revision,
+                    preedit,
+                });
+            }
+        });
     }
 
     /// 設定ファイル・ユーザー辞書の変更の確認、プロファイルの時間経過による復帰、学習の定期保存
@@ -213,7 +265,11 @@ impl Server {
                     if let Some(ms) = self.reload.cli_sync_budget_ms {
                         config.conversion.sync_budget_ms = ms;
                     }
-                    self.engine.update_config(engine_config_from(&config));
+                    let (new_config, keymap_events) = engine_config_from(&config);
+                    self.engine_lock().update_config(new_config);
+                    for e in keymap_events {
+                        self.runtime.push_event(e);
+                    }
                     self.runtime.apply_config(&config);
                     self.runtime.set_config_state(Some(path.clone()), false);
                     if config.conversion.model != self.reload.applied_model {
@@ -258,6 +314,14 @@ impl Server {
         ReloadConfigResult { ok, errors }
     }
 
+    /// `engine` のロックを取る。ポイズン（他スレッドでのパニック中の取得）でも中身を使って継続する
+    /// （IME サーバーは動き続けることを優先し、パニックで全体を落とさない方針）
+    fn engine_lock(&self) -> std::sync::MutexGuard<'_, Engine> {
+        self.engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn require_initialized(&self) -> Result<(), ErrorObject> {
         if self.initialized {
             Ok(())
@@ -290,7 +354,7 @@ impl Server {
                     profile: self.runtime.profile().as_str().to_string(),
                     mode: self.initial_mode,
                     capabilities: ServerCapabilities {
-                        reconvert: false,
+                        reconvert: true,
                         live_conversion: false,
                         style_conversion: false,
                     },
@@ -305,17 +369,21 @@ impl Server {
             method::PROCESS_KEY => {
                 self.require_initialized()?;
                 let p: ProcessKeyParams = params(req)?;
-                to_value(self.engine.process_key(&p.session_id, &p.key_event()))
+                let result = self
+                    .engine_lock()
+                    .process_key(&p.session_id, &p.key_event());
+                self.maybe_schedule_live_conversion(&p.session_id);
+                to_value(result)
             }
             method::FOCUS_IN => {
                 self.require_initialized()?;
                 let p: SessionParams = params(req)?;
-                to_value(self.engine.focus_in(&p.session_id))
+                to_value(self.engine_lock().focus_in(&p.session_id))
             }
             method::FOCUS_OUT => {
                 self.require_initialized()?;
                 let p: SessionParams = params(req)?;
-                let result = self.engine.focus_out(&p.session_id);
+                let result = self.engine_lock().focus_out(&p.session_id);
                 // フォーカス喪失時に学習を保存する（変更があるときだけ書かれる）
                 self.runtime.flush_learning(true);
                 to_value(result)
@@ -323,17 +391,20 @@ impl Server {
             method::RESET => {
                 self.require_initialized()?;
                 let p: SessionParams = params(req)?;
-                to_value(self.engine.reset(&p.session_id))
+                to_value(self.engine_lock().reset(&p.session_id))
             }
             method::RESTORE_SESSION => {
                 self.require_initialized()?;
                 let p: RestoreSessionParams = params(req)?;
-                to_value(self.engine.restore_session(&p.session_id.clone(), &p))
+                to_value(
+                    self.engine_lock()
+                        .restore_session(&p.session_id.clone(), &p),
+                )
             }
             method::SET_CONTEXT => {
                 self.require_initialized()?;
                 let p: SetContextParams = params(req)?;
-                self.engine.set_context(&p.session_id.clone(), &p);
+                self.engine_lock().set_context(&p.session_id.clone(), &p);
                 to_value(EmptyResult {})
             }
             method::SET_ENVIRONMENT => {
@@ -355,12 +426,15 @@ impl Server {
                 self.require_initialized()?;
                 to_value(self.reload_all())
             }
-            method::SELECT_CANDIDATE | method::RECONVERT => {
+            method::SELECT_CANDIDATE => {
                 self.require_initialized()?;
-                Err(ErrorObject::new(
-                    error_code::NOT_IMPLEMENTED,
-                    format!("{} は未実装です", req.method),
-                ))
+                let p: SelectCandidateParams = params(req)?;
+                to_value(self.engine_lock().select_candidate(&p.session_id, p.index))
+            }
+            method::RECONVERT => {
+                self.require_initialized()?;
+                let p: ReconvertParams = params(req)?;
+                to_value(self.engine_lock().reconvert(&p.session_id, &p.text))
             }
             other => Err(ErrorObject::new(
                 error_code::METHOD_NOT_FOUND,
@@ -370,51 +444,41 @@ impl Server {
     }
 
     /// 入力を EOF または `shutdown` まで処理する。終了時に学習を保存する
-    pub fn run<R: BufRead, W: Write>(
-        &mut self,
-        mut input: R,
-        output: &mut W,
-    ) -> std::io::Result<()> {
-        let mut line = String::new();
-        let result = loop {
-            line.clear();
-            if input.read_line(&mut line)? == 0 {
-                break Ok(());
-            }
-            for out in self.handle_line(&line) {
-                output.write_all(out.as_bytes())?;
-                output.write_all(b"\n")?;
-            }
-            output.flush()?;
-            if self.shutdown {
-                break Ok(());
-            }
-        };
-        self.runtime.flush_learning(true);
-        result
-    }
-
-    /// 入力を別スレッドで読み、非同期の LLM 完了通知に対応する run_threaded
-    pub fn run_threaded<R: BufRead + Send + 'static, W: Write>(
-        &mut self,
-        input: R,
-        output: &mut W,
-    ) -> std::io::Result<()> {
-        use std::sync::mpsc;
-        use std::thread;
-
+    ///
+    /// 標準入力を読む専用スレッドとメインループをチャンネルで結び、`Runtime::push_event`
+    /// （設定再読み込み・キャリブレーション・ライブ変換等）と、バックエンドの非同期 LLM
+    /// 完了通知（`sync_budget` 超過分。[`Self::async_notifications`]）の両方が、次のリクエスト
+    /// を待たずに `notify` / `update_preedit` 等を配信できるようにする。
+    pub fn run<R, W>(&mut self, input: R, output: &mut W) -> std::io::Result<()>
+    where
+        R: BufRead + Send + 'static,
+        W: Write,
+    {
         enum Msg {
             Line(String),
+            Eof,
+            IoErr(std::io::Error),
             Wake,
-            Eof(Option<std::io::Error>),
         }
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel::<Msg>();
 
-        // 入力スレッド
-        let tx_input = tx.clone();
-        thread::Builder::new()
-            .name("nagi-input".into())
+        // Runtime にイベントが積まれたら Wake を送る
+        let tx_wake = tx.clone();
+        self.runtime.set_event_hook(Box::new(move || {
+            let _ = tx_wake.send(Msg::Wake);
+        }));
+
+        // バックエンドの非同期完了（LLM の sync_budget 超過分）が積まれたら Wake を送る
+        let tx_wake_backend = tx.clone();
+        self.engine_lock().set_backend_waker(Arc::new(move || {
+            let _ = tx_wake_backend.send(Msg::Wake);
+        }));
+
+        // 標準入力（等）を読む専用スレッド
+        let tx_reader = tx.clone();
+        let reader_handle = std::thread::Builder::new()
+            .name("nagi-stdin-reader".into())
             .spawn(move || {
                 let mut input = input;
                 let mut line = String::new();
@@ -422,29 +486,26 @@ impl Server {
                     line.clear();
                     match input.read_line(&mut line) {
                         Ok(0) => {
-                            let _ = tx_input.send(Msg::Eof(None));
+                            let _ = tx_reader.send(Msg::Eof);
                             break;
                         }
                         Ok(_) => {
-                            let _ = tx_input.send(Msg::Line(line.clone()));
+                            if tx_reader
+                                .send(Msg::Line(std::mem::take(&mut line)))
+                                .is_err()
+                            {
+                                break;
+                            }
                         }
                         Err(e) => {
-                            let _ = tx_input.send(Msg::Eof(Some(e)));
+                            let _ = tx_reader.send(Msg::IoErr(e));
                             break;
                         }
                     }
                 }
-            })
-            .ok();
+            });
 
-        // waker の登録
-        let tx_wake = tx.clone();
-        self.engine.set_backend_waker(Arc::new(move || {
-            let _ = tx_wake.send(Msg::Wake);
-        }));
-
-        // メインループ
-        loop {
+        let result = loop {
             match rx.recv() {
                 Ok(Msg::Line(line)) => {
                     for out in self.handle_line(&line) {
@@ -452,27 +513,34 @@ impl Server {
                         output.write_all(b"\n")?;
                     }
                     output.flush()?;
+                    if self.shutdown {
+                        break Ok(());
+                    }
                 }
                 Ok(Msg::Wake) => {
-                    for out in self.async_notifications() {
-                        output.write_all(out.as_bytes())?;
-                        output.write_all(b"\n")?;
+                    // 初期化前は通知を出さない（handle_line と同じ方針）。溜めたままにする
+                    if self.initialized {
+                        let mut lines = self.notifications();
+                        lines.extend(self.async_notifications());
+                        for out in lines {
+                            output.write_all(out.as_bytes())?;
+                            output.write_all(b"\n")?;
+                        }
+                        output.flush()?;
                     }
-                    output.flush()?;
                 }
-                Ok(Msg::Eof(err)) => {
-                    if let Some(e) = err {
-                        return Err(e);
-                    }
-                    break;
-                }
-                Err(_) => break,
+                Ok(Msg::Eof) => break Ok(()),
+                Ok(Msg::IoErr(e)) => break Err(e),
+                Err(_) => break Ok(()),
             }
-            if self.shutdown {
-                break;
-            }
-        }
+        };
+
         self.runtime.flush_learning(true);
-        Ok(())
+        // reader スレッドは detach してよい（プロセス終了時に回収される。shutdown 後に読み残しを
+        // 処理する必要は無い）。ハンドルを明示的に drop して警告を避ける
+        if let Ok(handle) = reader_handle {
+            drop(handle);
+        }
+        result
     }
 }

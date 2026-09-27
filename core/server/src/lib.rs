@@ -8,12 +8,16 @@
 //! - [`runtime`] — 環境プロファイル・学習・ユーザー辞書・ランキング設定・通知の共有状態
 //! - [`learning`] — 確定を学習に記録する observer
 //! - [`server`] — JSON-RPC ループ
+//! - [`calibration`] — キャリブレーション推論の実測結果のファイルへの永続化
+//! - [`update_check`] — アップデート確認（`config.toml` の `[update] auto_check`）
 
+pub mod calibration;
 pub mod learning;
 pub mod pipeline;
 pub mod runtime;
 pub mod server;
 pub mod setup;
+pub mod update_check;
 
 pub use pipeline::Pipeline;
 pub use runtime::{Effective, Event, Runtime, Tunables};

@@ -20,6 +20,14 @@ persona = ""
 # 既定: true
 live_conversion = true
 
+# ライブ変換の入力から実際に変換するまでの遅延（ミリ秒）。短いと変換頻度が増え負荷が上がる
+# 既定: 228
+live_conversion_delay_ms = 228
+
+# ライブ変換を試みる最小文字数（読み）。これより短い入力では変換しない
+# 既定: 2
+live_conversion_min_key_length = 2
+
 # 変換の初期表示形式
 # "sentence": 文全体の N-best を表示（既定）
 # "segment": 先頭文節の候補を表示
@@ -122,15 +130,44 @@ disabled_apps = [
     "com.lastpass.LastPass",
 ]
 
+[predict]
+# 予測変換（未確定の読みから、学習キャッシュ・ユーザー辞書の前方一致で予測する）
+# true = 有効、false = 無効
+# 既定: true
+enabled = true
+
+# 予測変換を表示する最小の読みの文字数
+# 1-20 の範囲で指定
+# 既定: 1
+min_chars = 1
+
 [keymap]
 # キーマップのプリセット
 # "default" = 標準的な日本語入力キー配置（既定）
-# カスタムキーマップは Phase 3 以降で対応予定
 preset = "default"
+
+# ローマ字入力中（Composing）のキー上書き。キー仕様文字列 → Action 名
+# キー仕様: "Ctrl+j" のような "修飾+キー名" 形式（修飾: Ctrl/Shift/Alt/Meta、順不同）
+# Action 名: StartConvert / NextCand / PrevCand / Commit / Cancel / Backspace /
+#   DeleteForward / MoveCursor:Left / MoveCursor:Right / MoveCursorHome / MoveCursorEnd /
+#   ToKatakana / ToHiragana / ToggleMode / NoOp
+# 既定: 空（上書きなし）
+# [keymap.composing]
+# "Ctrl+j" = "ToKatakana"
+
+# 変換中（Converting）のキー上書き。上記に加えて MoveFocus:Left/Right、
+# ResizeSegment:Left/Right、ExtendSelection:Left/Right、SelectCand:1〜9、DeleteLearning が使える
+# 既定: 空（上書きなし）
+# [keymap.converting]
+# "Tab" = "NextCand"
 
 [update]
 # アップデートの自動確認
-# true = 起動時と設定から任意のタイミングで新バージョンを確認
-# false = 手動でのみ確認
+# true = 起動時に新バージョンを確認（ダウンロード・インストールは行わず、通知のみ）
+# false = 確認しない
 # 既定: true
 auto_check = true
+
+# アップデート確認マニフェストの URL（省略時は既定の URL を使う）
+# 既定: 未指定
+# check_url = "https://nagi.shiki-01.com/updates/latest.json"

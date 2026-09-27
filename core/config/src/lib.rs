@@ -262,6 +262,10 @@ pub struct ConversionSection {
     pub max_latency_ms: u64,
     /// 同期応答の最大予算（ミリ秒）。既定: 150。
     pub sync_budget_ms: u64,
+    /// ライブ変換の入力から実際に変換するまでの遅延（ミリ秒）。既定: 228（Mozkey の実測値を参考）。
+    pub live_conversion_delay_ms: u64,
+    /// ライブ変換を試みる最小文字数（読み・Unicodeスカラー単位）。既定: 2。
+    pub live_conversion_min_key_length: usize,
 }
 
 impl Default for ConversionSection {
@@ -278,6 +282,8 @@ impl Default for ConversionSection {
             max_context_length: None,
             max_latency_ms: 100,
             sync_budget_ms: 150,
+            live_conversion_delay_ms: 228,
+            live_conversion_min_key_length: 2,
         }
     }
 }
@@ -353,18 +359,44 @@ impl Default for LearningSection {
     }
 }
 
+/// 予測変換セクション。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PredictSection {
+    /// 予測変換を行うかどうか。既定: true。
+    pub enabled: bool,
+    /// 予測変換を表示する最小の読みの文字数。既定: 1。
+    pub min_chars: usize,
+}
+
+impl Default for PredictSection {
+    fn default() -> Self {
+        PredictSection {
+            enabled: true,
+            min_chars: 1,
+        }
+    }
+}
+
 /// キーマップセクション。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KeymapSection {
     /// キーマップのプリセット名。既定: "default"。
     pub preset: String,
+    /// ローマ字入力中（Composing）のキー上書き。キー: キー仕様文字列（"Ctrl+j" 等）、
+    /// 値: Action 仕様文字列。既定: 空。
+    pub composing: std::collections::HashMap<String, String>,
+    /// 変換中（Converting）のキー上書き。既定: 空。
+    pub converting: std::collections::HashMap<String, String>,
 }
 
 impl Default for KeymapSection {
     fn default() -> Self {
         KeymapSection {
             preset: "default".to_string(),
+            composing: Default::default(),
+            converting: Default::default(),
         }
     }
 }
@@ -375,11 +407,18 @@ impl Default for KeymapSection {
 pub struct UpdateSection {
     /// 自動的にアップデートをチェックするかどうか。既定: true。
     pub auto_check: bool,
+    /// アップデート確認マニフェストの URL。未指定なら既定の URL
+    /// （`nagi_server::update_check::DEFAULT_CHECK_URL`）を使う。既定: 未指定。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_url: Option<String>,
 }
 
 impl Default for UpdateSection {
     fn default() -> Self {
-        UpdateSection { auto_check: true }
+        UpdateSection {
+            auto_check: true,
+            check_url: None,
+        }
     }
 }
 
@@ -397,6 +436,8 @@ pub struct Config {
     pub ranking: RankingSection,
     /// 学習セクション。
     pub learning: LearningSection,
+    /// 予測変換セクション。
+    pub predict: PredictSection,
     /// キーマップセクション。
     pub keymap: KeymapSection,
     /// アップデートセクション。
@@ -461,11 +502,35 @@ impl Config {
             ));
         }
 
+        // live_conversion_delay_ms: 0 <= live_conversion_delay_ms <= 5000
+        if !(0..=5000).contains(&self.conversion.live_conversion_delay_ms) {
+            errors.push(format!(
+                "conversion.live_conversion_delay_ms は 0 から 5000 の間である必要があります: {}",
+                self.conversion.live_conversion_delay_ms
+            ));
+        }
+
+        // live_conversion_min_key_length: 1 <= live_conversion_min_key_length <= 20
+        if !(1..=20).contains(&self.conversion.live_conversion_min_key_length) {
+            errors.push(format!(
+                "conversion.live_conversion_min_key_length は 1 から 20 の間である必要があります: {}",
+                self.conversion.live_conversion_min_key_length
+            ));
+        }
+
         // learning.max_entries: 100 <= max_entries <= 1000000
         if !(100..=1_000_000).contains(&self.learning.max_entries) {
             errors.push(format!(
                 "learning.max_entries は 100 から 1000000 の間である必要があります: {}",
                 self.learning.max_entries
+            ));
+        }
+
+        // predict.min_chars: 1 <= min_chars <= 20
+        if !(1..=20).contains(&self.predict.min_chars) {
+            errors.push(format!(
+                "predict.min_chars は 1 から 20 の間である必要があります: {}",
+                self.predict.min_chars
             ));
         }
 
@@ -553,6 +618,7 @@ const KNOWN_KEYS: &[&str] = &[
     "input",
     "ranking",
     "learning",
+    "predict",
     "keymap",
     "update",
 ];
@@ -573,12 +639,15 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "max_context_length",
             "max_latency_ms",
             "sync_budget_ms",
+            "live_conversion_delay_ms",
+            "live_conversion_min_key_length",
         ],
         "input" => &["shift_letter", "punctuation"],
         "ranking" => &["source_order"],
         "learning" => &["enabled", "max_entries", "disabled_apps"],
-        "keymap" => &["preset"],
-        "update" => &["auto_check"],
+        "predict" => &["enabled", "min_chars"],
+        "keymap" => &["preset", "composing", "converting"],
+        "update" => &["auto_check", "check_url"],
         _ => &[],
     }
 }
@@ -745,6 +814,8 @@ mod tests {
         assert_eq!(default.conversion.initial_view, InitialView::Sentence);
         assert_eq!(default.conversion.composing_chunk_len, 30);
         assert_eq!(default.conversion.num_candidates, 9);
+        assert_eq!(default.conversion.live_conversion_delay_ms, 228);
+        assert_eq!(default.conversion.live_conversion_min_key_length, 2);
         assert!(default.input.punctuation.comma == '、');
         assert!(default.input.punctuation.period == '。');
     }
@@ -945,6 +1016,47 @@ foo = 42
         config.conversion.sync_budget_ms = 5001;
         let errors = config.validate();
         assert!(errors.iter().any(|e| e.contains("sync_budget_ms")));
+    }
+
+    #[test]
+    fn test_validate_live_conversion_delay_ms() {
+        let mut config = Config::default();
+        config.conversion.live_conversion_delay_ms = 5001;
+        let errors = config.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("live_conversion_delay_ms"))
+        );
+
+        // 下限は 0（許容される）
+        config.conversion.live_conversion_delay_ms = 0;
+        let errors = config.validate();
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.contains("live_conversion_delay_ms"))
+        );
+    }
+
+    #[test]
+    fn test_validate_live_conversion_min_key_length() {
+        let mut config = Config::default();
+        config.conversion.live_conversion_min_key_length = 0;
+        let errors = config.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("live_conversion_min_key_length"))
+        );
+
+        config.conversion.live_conversion_min_key_length = 21;
+        let errors = config.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("live_conversion_min_key_length"))
+        );
     }
 
     #[test]
@@ -1171,6 +1283,82 @@ punctuation = "invalid"
         if let Some(path) = config_path() {
             assert!(path.ends_with("config.toml"));
         }
+    }
+
+    #[test]
+    fn test_keymap_overrides_parse() {
+        let source = r#"
+[keymap]
+preset = "default"
+
+[keymap.composing]
+"Ctrl+j" = "ToKatakana"
+
+[keymap.converting]
+"Tab" = "NextCand"
+"#;
+        let (config, warnings) = parse(source).expect("should parse keymap overrides");
+        assert_eq!(
+            config.keymap.composing.get("Ctrl+j").map(String::as_str),
+            Some("ToKatakana")
+        );
+        assert_eq!(
+            config.keymap.converting.get("Tab").map(String::as_str),
+            Some("NextCand")
+        );
+        // [keymap.composing] / [keymap.converting] 自体は既知のサブセクションなので警告は出ない
+        assert!(
+            warnings
+                .iter()
+                .all(|i| !i.message.contains("composing") && !i.message.contains("converting")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_update_check_url_parse() {
+        let source = r#"
+[update]
+auto_check = false
+check_url = "https://example.com/latest.json"
+"#;
+        let (config, _) = parse(source).expect("should parse update.check_url");
+        assert!(!config.update.auto_check);
+        assert_eq!(
+            config.update.check_url.as_deref(),
+            Some("https://example.com/latest.json")
+        );
+    }
+
+    #[test]
+    fn test_predict_section_parse() {
+        let source = r#"
+[predict]
+enabled = false
+min_chars = 3
+"#;
+        let (config, _) = parse(source).expect("should parse predict section");
+        assert!(!config.predict.enabled);
+        assert_eq!(config.predict.min_chars, 3);
+    }
+
+    #[test]
+    fn test_validate_predict_min_chars() {
+        let mut config = Config::default();
+        config.predict.min_chars = 0;
+        assert!(
+            config
+                .validate()
+                .iter()
+                .any(|e| e.contains("predict.min_chars") && e.contains("1"))
+        );
+        config.predict.min_chars = 21;
+        assert!(
+            config
+                .validate()
+                .iter()
+                .any(|e| e.contains("predict.min_chars") && e.contains("20"))
+        );
     }
 
     #[test]

@@ -257,7 +257,8 @@
     - key: "Meta+c"
       expect: {commit: "あ", state: direct, consumed: false}
 
-- name: convert-tab-noop
+- name: convert-tab-next-candidate
+  # Tab は Converting では NextCand として働く（Composing での予測変換トリガーとの対比）
   backend: mock
   mock:
     sentences:
@@ -269,7 +270,7 @@
     - key: "Space"
       expect: {state: converting}
     - key: "Tab"
-      expect: {consumed: true, state: converting, result_preedit_present: false}
+      expect: {consumed: true, state: converting, result_preedit_present: true}
 
 - name: convert-pageup-noop
   backend: mock

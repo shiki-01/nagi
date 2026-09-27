@@ -13,6 +13,7 @@ use nagi_profile::{
 };
 use nagi_protocol::methods::{
     MemoryPressureState, NotifyLevel, SetEnvironmentParams, StatusResult, ThermalState,
+    UpdatePreeditParams,
 };
 use nagi_protocol::view::CandidateSource;
 use std::path::PathBuf;
@@ -57,6 +58,14 @@ pub struct Tunables {
     pub disabled_apps: Vec<String>,
     /// 候補の出所の優先順（`ranking.source_order`）
     pub ranking: Vec<CandidateSource>,
+    /// `conversion.n_threads`（0 = 自動）
+    pub n_threads: usize,
+    /// `conversion.live_conversion`
+    pub live_conversion_enabled: bool,
+    /// `conversion.live_conversion_delay_ms`
+    pub live_conversion_delay_ms: u64,
+    /// `conversion.live_conversion_min_key_length`
+    pub live_conversion_min_key_length: usize,
 }
 
 /// 出所名（`ranking.source_order` の要素）を出所に直す
@@ -107,6 +116,10 @@ impl Tunables {
                 .iter()
                 .filter_map(|n| parse_source(n))
                 .collect(),
+            n_threads: config.conversion.n_threads,
+            live_conversion_enabled: config.conversion.live_conversion,
+            live_conversion_delay_ms: config.conversion.live_conversion_delay_ms,
+            live_conversion_min_key_length: config.conversion.live_conversion_min_key_length,
         }
     }
 }
@@ -126,7 +139,10 @@ pub struct Effective {
     pub sync_budget: Duration,
     /// 候補の出所の優先順
     pub ranking: Vec<CandidateSource>,
-    /// 文全体の N-best（ビームサーチ）の幅。1 なら貪欲デコードと同じ
+    /// 推論のスレッド数（`light` プロファイルでは半分に絞る）
+    pub n_threads: usize,
+    /// 文全体の N-best（辞書のk-best・実LLMのビームサーチとも）の幅・候補数の起点。
+    /// 1 なら貪欲デコードと同じ（`conversion.beam_width`。未指定ならプロファイルの既定値）
     pub beam_width: usize,
 }
 
@@ -143,9 +159,15 @@ pub struct Runtime {
     last_flush: Mutex<Instant>,
     overlay: RwLock<Arc<Overlay>>,
     events: Mutex<Vec<Event>>,
+    /// ライブ変換等の非同期な preedit 更新（`update_preedit` 通知になる）
+    preedit_updates: Mutex<Vec<UpdatePreeditParams>>,
+    /// イベントが積まれたときに呼ぶフック（`Server::run` が非同期通知の配信に使う）。
+    /// `Box<dyn Fn() + Send + Sync>` なので中身は任意（チャンネルへの送信等）
+    event_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     config_path: Mutex<Option<PathBuf>>,
     config_error: AtomicBool,
     backend_name: Mutex<String>,
+    calibration_path: Mutex<Option<PathBuf>>,
 }
 
 impl Runtime {
@@ -172,9 +194,12 @@ impl Runtime {
             last_flush: Mutex::new(Instant::now()),
             overlay: RwLock::new(Arc::new(Overlay::default())),
             events: Mutex::new(Vec::new()),
+            preedit_updates: Mutex::new(Vec::new()),
+            event_hook: Mutex::new(None),
             config_path: Mutex::new(None),
             config_error: AtomicBool::new(false),
             backend_name: Mutex::new(String::new()),
+            calibration_path: Mutex::new(None),
         })
     }
 
@@ -234,11 +259,28 @@ impl Runtime {
         }
     }
 
-    /// 通知を積む
+    /// イベントが積まれたときに呼ぶフックを設定する（`Server::run` 用。既存のフックは置き換える）
+    pub fn set_event_hook(&self, hook: Box<dyn Fn() + Send + Sync>) {
+        if let Ok(mut h) = self.event_hook.lock() {
+            *h = Some(hook);
+        }
+    }
+
+    /// `event_hook` が設定されていれば呼ぶ（`push_event` / `push_preedit_update` 共通）
+    fn fire_event_hook(&self) {
+        if let Ok(hook) = self.event_hook.lock()
+            && let Some(f) = hook.as_ref()
+        {
+            f();
+        }
+    }
+
+    /// 通知を積む。フックが設定されていれば呼ぶ（`Server::run` を起こして即座に配信させる）
     pub fn push_event(&self, event: Event) {
         if let Ok(mut events) = self.events.lock() {
             events.push(event);
         }
+        self.fire_event_hook();
     }
 
     /// 積まれた通知を取り出す
@@ -246,6 +288,22 @@ impl Runtime {
         self.events
             .lock()
             .map(|mut e| std::mem::take(&mut *e))
+            .unwrap_or_default()
+    }
+
+    /// ライブ変換等の preedit 更新を積む。フックが設定されていれば呼ぶ
+    pub fn push_preedit_update(&self, params: UpdatePreeditParams) {
+        if let Ok(mut q) = self.preedit_updates.lock() {
+            q.push(params);
+        }
+        self.fire_event_hook();
+    }
+
+    /// 積まれた preedit 更新を取り出す
+    pub fn drain_preedit_updates(&self) -> Vec<UpdatePreeditParams> {
+        self.preedit_updates
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
             .unwrap_or_default()
     }
 
@@ -276,12 +334,49 @@ impl Runtime {
         self.announce(change);
     }
 
+    /// キャリブレーション結果の保存先を設定する（`None` なら保存しない）
+    pub fn set_calibration_path(&self, path: Option<PathBuf>) {
+        if let Ok(mut p) = self.calibration_path.lock() {
+            *p = path;
+        }
+    }
+
     /// キャリブレーション推論の実測（中央値、ミリ秒）で、初回判定をやり直す
     pub fn finish_calibration(&self, median_ms: f64) {
         if let Ok(mut c) = self.calibration_ms.lock() {
             *c = Some(median_ms);
         }
         self.recompute_profile(true);
+        self.save_calibration(median_ms);
+    }
+
+    fn save_calibration(&self, median_ms: f64) {
+        let Ok(path_guard) = self.calibration_path.lock() else {
+            return;
+        };
+        let Some(path) = path_guard.as_ref() else {
+            return;
+        };
+        let path = path.clone();
+        drop(path_guard);
+        let backend = self
+            .backend_name
+            .lock()
+            .map(|n| n.clone())
+            .unwrap_or_default();
+        let record = crate::calibration::CalibrationRecord {
+            median_ms,
+            cpu_cores: self.system.cpu_cores,
+            total_memory_mb: self.system.total_memory_mb,
+            backend,
+        };
+        if let Err(e) = crate::calibration::save(&path, &record) {
+            self.push_event(Event {
+                level: NotifyLevel::Warning,
+                code: "calibration_save_failed",
+                message: format!("キャリブレーション結果を保存できませんでした: {e}"),
+            });
+        }
     }
 
     fn recompute_profile(&self, force: bool) {
@@ -368,18 +463,37 @@ impl Runtime {
         }
     }
 
+    /// 現在の Tunables のコピー（`Server` がデバウンス判定に使う）
+    pub fn tunables(&self) -> Tunables {
+        self.tunables.read().map(|t| t.clone()).unwrap_or_default()
+    }
+
     /// 現在の有効なパラメータ
     pub fn effective(&self) -> Effective {
-        let params = self
+        let (params, profile) = self
             .controller
             .lock()
-            .map_or(Profile::Minimal.params(), |c| c.params());
+            .map_or((Profile::Minimal.params(), Profile::Minimal), |c| {
+                (c.params(), c.current())
+            });
         let t = self.tunables.read().map(|t| t.clone()).unwrap_or_default();
         let max_ctx = if t.use_context {
             t.max_context_override.unwrap_or(params.max_context_chars)
         } else {
             0
         };
+        let cpu_cores = self.system.cpu_cores.max(1);
+        let base_threads = if t.n_threads > 0 {
+            t.n_threads
+        } else {
+            cpu_cores
+        };
+        let n_threads = if profile == Profile::Light {
+            (base_threads / 2).max(1)
+        } else {
+            base_threads
+        };
+        let beam_width = t.beam_width_override.unwrap_or(params.beam_width).max(1);
         Effective {
             use_llm: params.use_llm && self.llm_loaded.load(Ordering::Relaxed),
             rescore_top: params.rescore_top,
@@ -387,7 +501,8 @@ impl Runtime {
             persona: (!t.persona.is_empty()).then_some(t.persona),
             sync_budget: t.sync_budget,
             ranking: t.ranking,
-            beam_width: t.beam_width_override.unwrap_or(params.beam_width).max(1),
+            n_threads,
+            beam_width,
         }
     }
 
@@ -444,6 +559,28 @@ impl Runtime {
             .lock()
             .map(|l| {
                 l.lookup_exact(reading, context_hash, Self::unix_now())
+                    .into_iter()
+                    .map(|s| (s.surface, s.score))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 予測変換用: 学習済みの候補（スコア降順の (表記, スコア)）を前方一致で返す。学習が無効なら空
+    pub fn learn_predict(
+        &self,
+        prefix: &str,
+        context_hash: u64,
+        limit: usize,
+    ) -> Vec<(String, f64)> {
+        let enabled = self.tunables.read().is_ok_and(|t| t.learning_enabled);
+        if !enabled {
+            return Vec::new();
+        }
+        self.learner
+            .lock()
+            .map(|l| {
+                l.lookup_prefix(prefix, context_hash, Self::unix_now(), limit)
                     .into_iter()
                     .map(|s| (s.surface, s.score))
                     .collect()
@@ -523,5 +660,26 @@ impl Runtime {
                 .and_then(|p| p.as_ref().map(|p| p.display().to_string())),
             config_error: self.config_error.load(Ordering::Relaxed),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finish_calibration_saves_to_configured_path() {
+        let runtime = Runtime::detached(true);
+        let path = std::env::temp_dir().join(format!(
+            "nagi-runtime-calibration-test-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        runtime.set_calibration_path(Some(path.clone()));
+        runtime.finish_calibration(42.0);
+        assert!(path.exists(), "キャリブレーション結果が保存されているはず");
+        let record = crate::calibration::load(&path).expect("読み込める");
+        assert_eq!(record.median_ms, 42.0);
+        let _ = std::fs::remove_file(&path);
     }
 }

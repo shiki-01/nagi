@@ -48,7 +48,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+      # cargo install は毎回 crates.io から最新版をビルドし直すため遅い（数分）。
+      # バイナリをキャッシュし、無ければインストールする。キーを変えれば強制的に入れ直せる
+      - name: Cache typeshare-cli
+        id: cache-typeshare
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/typeshare
+          key: typeshare-cli-${{ runner.os }}-v1
       - name: Install typeshare-cli
+        if: steps.cache-typeshare.outputs.cache-hit != 'true'
         run: cargo install typeshare-cli --locked
       - name: Regenerate Swift types and check diff
         run: cargo xtask check-types

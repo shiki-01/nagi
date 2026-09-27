@@ -104,6 +104,15 @@ pub trait ConversionModel: Send {
         let _ = (req, candidates);
         Err(InferError::Unsupported("score".to_string()))
     }
+
+    /// 推論のスレッド数のヒントを変更する。対応しないモデルは無視してよい（既定は無視）
+    fn set_n_threads(&mut self, _n_threads: usize) {}
+
+    /// モデルをアクティブにするかどうかを切り替える。`false` ならメモリ上の重みを解放してよい
+    /// （対応しないモデルは無視して常に成功を返す）。`true` で再度使う前に、内部で必要なら再読み込みする
+    fn set_active(&mut self, _active: bool) -> Result<(), InferError> {
+        Ok(())
+    }
 }
 
 /// プロンプト形式をモデルごとに吸収するトレイト
@@ -280,7 +289,7 @@ pub mod llama {
     use llama_cpp_2::token::LlamaToken;
     use std::ffi::CString;
     use std::num::NonZeroU32;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::pin::Pin;
     use std::sync::{Arc, OnceLock};
     use std::time::Instant;
@@ -357,13 +366,24 @@ pub mod llama {
     ///
     /// この crate の既定は `unsafe_code = "forbid"`（ワークスペース全体、G-2）だが、この
     /// `llama` モジュール（feature `llama`、FFI 境界）に限り `Cargo.toml` で解禁している
+    ///
+    /// # モデルの解放・再読み込み（`minimal` プロファイル・メモリ逼迫時）
+    ///
+    /// `set_active(false)` で `model`（と、それを借用している `ctx`）を解放できる。`ctx` を
+    /// 先に破棄してから `model` を破棄する必要がある（`ctx` は `model` の実体を指しているため）。
+    /// `set_active(true)` は `model` が無ければ `model_path` から読み直す。`ensure_ctx` の
+    /// 自己参照の安全性はこの「`model` を差し替える前に必ず `ctx` を `None` にする」という
+    /// 呼び出し規約に依存している（`load` 以降 `model` は不変、という単純な前提はもう成り立たない）
     pub struct LlamaModel {
         /// 構造体のフィールドは宣言順に drop される。`ctx` は `model` を指しているため、
         /// `model` より先に（内側の値として先に）drop されるよう、必ず `model` より前に置く
         ctx: Option<LlamaContext<'static>>,
-        /// `Box` で確保する: `LlamaModel`（この構造体）自体が move されても、`Box` の中身の
-        /// アドレスは変わらない。`ctx` が指す先として安定していることの根拠
-        model: Box<LlamaModelCore>,
+        /// 読み込んだモデル本体。`None` なら解放済み（`minimal` プロファイル・メモリ逼迫時）。
+        /// `Box` で確保する: 中身が `Some` である限り、`LlamaModel`（この構造体）自体が move
+        /// されてもアドレスは変わらない（`ctx` が指す先として安定していることの根拠）
+        model: Option<Box<LlamaModelCore>>,
+        /// `set_active(true)` で再読み込みするためのパス
+        model_path: PathBuf,
         backend: Arc<LlamaBackend>,
         adapter: Box<dyn PromptAdapter>,
         options: LlamaOptions,
@@ -394,7 +414,26 @@ pub mod llama {
             );
 
             let backend = shared_backend()?;
+            let model = Self::load_core(&backend, path, &options)?;
+            Ok(Self {
+                ctx: None,
+                model: Some(Box::new(model)),
+                model_path: path.to_path_buf(),
+                backend,
+                adapter: Box::new(ZenzV3Adapter),
+                options,
+                tokenizer,
+                stop_ids,
+                stats: None,
+            })
+        }
 
+        /// モデル本体だけを読み込む（`load` と `set_active(true)` の再読み込みの両方から使う）
+        fn load_core(
+            backend: &Arc<LlamaBackend>,
+            path: &Path,
+            options: &LlamaOptions,
+        ) -> Result<LlamaModelCore, InferError> {
             let mut params = LlamaModelParams::default().with_n_gpu_layers(options.gpu_layers);
             let key = CString::new("tokenizer.ggml.pre").expect("NUL を含まない");
             let mut value = [0 as std::os::raw::c_char; 128];
@@ -404,18 +443,8 @@ pub mod llama {
             Pin::new(&mut params)
                 .append_kv_override(key.as_c_str(), ParamOverrideValue::Str(value));
 
-            let model = LlamaModelCore::load_from_file(&backend, path, &params)
-                .map_err(|e| InferError::ModelLoad(format!("モデルロード失敗: {e}")))?;
-            Ok(Self {
-                ctx: None,
-                model: Box::new(model),
-                backend,
-                adapter: Box::new(ZenzV3Adapter),
-                options,
-                tokenizer,
-                stop_ids,
-                stats: None,
-            })
+            LlamaModelCore::load_from_file(backend, path, &params)
+                .map_err(|e| InferError::ModelLoad(format!("モデルロード失敗: {e}")))
         }
 
         /// 使い回すコンテキストを返す（無ければ作る。あれば KV キャッシュを空にして返す）。
@@ -429,12 +458,14 @@ pub mod llama {
         ///
         /// `LlamaContext<'a>` は `&'a LlamaModelCore` を借用する型だが、ここでは `'static` に
         /// 拡張して `ctx_slot` に格納する。安全性の根拠:
-        /// - `LlamaModel::model` は `Box<LlamaModelCore>` なので、`LlamaModel`（呼び出し元の
-        ///   構造体）自体が move されても中身のアドレスは変わらない
-        /// - `model` を差し替える操作（再代入・drop）は無い（`load` 以降 `model` フィールドは
-        ///   不変）。したがって `ctx_slot` の中身が生きている間、参照先は常に有効
-        /// - `LlamaModel::ctx` は `model` より前に宣言されているため、`LlamaModel` の drop 時は
-        ///   `ctx`（＝内部の `llama_context`）が先に破棄され、その後で `model` が破棄される
+        /// - 呼び出し元は必ず `model` に `set_active(true)` 済みの実体（`Box` の中身）への
+        ///   参照を渡す。`Box` である限り、`LlamaModel` 自体が move されてもアドレスは変わらない
+        /// - `set_active(false)` は `ctx` を `None` にしてから `model` を破棄する（宣言順どおり）。
+        ///   したがって `ctx_slot` の中身が `Some` である間、その参照先の `model` が
+        ///   差し替え・破棄されることは無い（差し替える前に必ず `ctx_slot` 側が先に空になる）
+        /// - `LlamaModel::ctx` は `model` より前に宣言されているため、`LlamaModel` を
+        ///   `set_active(false)` を経ずに丸ごと drop したときも、`ctx`（＝内部の
+        ///   `llama_context`）が先に破棄され、その後で `model` が破棄される
         /// - 借用チェッカー上は `'static` に見えるが、`ctx_slot` の中身はこの関数の外（呼び出し元
         ///   のローカル変数として）へ出た後も `convert` / `score` の中でのみ使われる
         fn ensure_ctx<'c>(
@@ -648,6 +679,7 @@ pub mod llama {
         }
 
         fn convert(&mut self, req: &ConvertRequest) -> Result<Vec<Hypothesis>, InferError> {
+            self.set_active(true)?;
             let started = Instant::now();
             let (prompt, _warnings) = self.adapter.build_prompt_checked(req);
             let prompt_ids = self.tokenizer.encode(&prompt);
@@ -663,7 +695,12 @@ pub mod llama {
                 )));
             }
 
-            let ctx = Self::ensure_ctx(&mut self.ctx, &self.model, &self.backend, &self.options)?;
+            // `set_active(true)` 直後なので必ず Some
+            let model = self
+                .model
+                .as_deref()
+                .expect("set_active(true) 直後なので必ず Some");
+            let ctx = Self::ensure_ctx(&mut self.ctx, model, &self.backend, &self.options)?;
 
             // プロンプト処理（最後のトークンだけロジットを取る）
             let mut batch = LlamaBatch::new(n_ctx, 1);
@@ -756,6 +793,7 @@ pub mod llama {
             req: &ConvertRequest,
             candidates: &[String],
         ) -> Result<Vec<f32>, InferError> {
+            self.set_active(true)?;
             let (prompt, _warnings) = self.adapter.build_prompt_checked(req);
             let prompt_ids = self.tokenizer.encode(&prompt);
             let n_ctx = self.options.n_ctx as usize;
@@ -764,7 +802,12 @@ pub mod llama {
                     "プロンプトの長さが不正です".to_string(),
                 ));
             }
-            let ctx = Self::ensure_ctx(&mut self.ctx, &self.model, &self.backend, &self.options)?;
+            // `set_active(true)` 直後なので必ず Some
+            let model = self
+                .model
+                .as_deref()
+                .expect("set_active(true) 直後なので必ず Some");
+            let ctx = Self::ensure_ctx(&mut self.ctx, model, &self.backend, &self.options)?;
 
             // プロンプトは 1 回だけ処理し、候補ごとにその続きだけをデコードして KV キャッシュから外す
             let mut batch = LlamaBatch::new(n_ctx, 1);
@@ -815,6 +858,31 @@ pub mod llama {
                 scores.push(total);
             }
             Ok(scores)
+        }
+
+        fn set_n_threads(&mut self, n_threads: usize) {
+            self.options.n_threads = n_threads;
+            // 既存の `ctx` はこの `n_threads` を反映していないため、次回 `ensure_ctx` で
+            // 作り直させる（コンテキスト作成は 1 回きりなので、変更を効かせるにはこれが要る）
+            self.ctx = None;
+        }
+
+        fn set_active(&mut self, active: bool) -> Result<(), InferError> {
+            if active {
+                if self.model.is_none() {
+                    self.model = Some(Box::new(Self::load_core(
+                        &self.backend,
+                        &self.model_path,
+                        &self.options,
+                    )?));
+                }
+            } else {
+                // 自己参照の不変条件（ensure_ctx の Safety 参照）を守るため、必ず ctx を
+                // 先に破棄してから model を破棄する
+                self.ctx = None;
+                self.model = None;
+            }
+            Ok(())
         }
     }
 
@@ -981,6 +1049,15 @@ mod tests {
     }
 
     #[test]
+    fn default_set_active_is_a_no_op_success() {
+        // トレイトの既定実装（no-op）が Ok(()) を返すことを確認する
+        let mut model = MockModel::new();
+        assert!(model.set_active(false).is_ok());
+        assert!(model.set_active(true).is_ok());
+        model.set_n_threads(4); // no-op。パニックしないことだけ確認
+    }
+
+    #[test]
     fn test_zenz_adapter_id() {
         let adapter = ZenzV3Adapter;
         assert_eq!(adapter.id(), "zenz-v3.1");
@@ -1077,6 +1154,35 @@ mod tests {
             let second = model.convert(&req).expect("変換");
             assert_eq!(first[0].surface, second[0].surface, "決定的であること");
         }
+    }
+
+    /// `set_active(false)` でモデルを解放し、`set_active(true)` で再読み込みできること
+    /// （モデル未取得なら skip）
+    #[cfg(feature = "llama")]
+    #[test]
+    fn test_llama_model_set_active_reloads() {
+        use crate::llama::{LlamaModel, LlamaOptions};
+        use std::path::Path;
+
+        let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/models/zenz-v3.1-small-Q5_K_M.gguf");
+        if !model_path.exists() {
+            eprintln!("skip: モデル未取得（cargo xtask fetch-model）");
+            return;
+        }
+        let mut model =
+            LlamaModel::load(&model_path, LlamaOptions::default()).expect("モデルロード");
+        model.set_active(false).expect("解放");
+        model.set_active(true).expect("再読み込み");
+        let req = ConvertRequest {
+            reading: "きょうはいいてんきです".to_string(),
+            left_context: String::new(),
+            profile: None,
+            max_new_tokens: 64,
+            beam_width: 1,
+        };
+        let result = model.convert(&req).expect("再読み込み後の変換");
+        assert!(!result[0].surface.is_empty());
     }
 
     /// 文脈込みの再採点（モデル未取得なら skip）

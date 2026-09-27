@@ -1,14 +1,9 @@
 //! `Engine` の公開 API（差分・revision・セッション・文脈）のテスト
 
-use nagi_engine::{
-    BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend, Engine,
-    EngineConfig, InitialView, KanaBackend, StateKind, parse_key,
-};
+use nagi_engine::{Engine, EngineConfig, KanaBackend, StateKind, parse_key};
 use nagi_protocol::methods::{SetContextParams, SurroundingText};
-use nagi_protocol::view::CandidateSource;
 use nagi_protocol::view::InputMode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 fn engine() -> Engine {
     Engine::new(Arc::new(KanaBackend), EngineConfig::default())
@@ -153,9 +148,13 @@ fn engine_is_send() {
 
 // ---- 確定の通知（学習）と設定の差し替え ----
 
-use nagi_engine::{CommitContext, CommitObserver, CommittedSegment, MockBackend};
-use nagi_protocol::view::SegmentKind;
+use nagi_engine::{
+    BackendCandidate, BackendSegment, BackendSentence, CommitContext, CommitObserver,
+    CommittedSegment, Completion, ConversionBackend, InitialView, MockBackend,
+};
+use nagi_protocol::view::{CandidateSource, SegmentKind};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// (セッション ID, アプリ ID, secure input, 確定した文節)
 type CommitRecord = (String, Option<String>, bool, Vec<CommittedSegment>);
@@ -183,6 +182,56 @@ impl CommitObserver for Recorder {
             .unwrap()
             .push((reading.to_string(), surface.to_string()));
         *self.forget_result.lock().unwrap()
+    }
+}
+
+/// `convert_sentence` の呼び出し（reading, left_context）を記録するテスト用バックエンド。
+/// 登録した reading にはその表記を返し、無ければ読みをそのまま返す
+#[derive(Default)]
+struct ChunkRecordingBackend {
+    calls: Mutex<Vec<(String, String)>>,
+    table: std::collections::HashMap<String, String>,
+}
+
+impl ChunkRecordingBackend {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_chunk(mut self, reading: &str, surface: &str) -> Self {
+        self.table.insert(reading.to_string(), surface.to_string());
+        self
+    }
+
+    fn calls(&self) -> Vec<(String, String)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl ConversionBackend for ChunkRecordingBackend {
+    fn name(&self) -> &str {
+        "chunk-recording"
+    }
+
+    fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((reading.to_string(), left_context.to_string()));
+        let surface = self
+            .table
+            .get(reading)
+            .cloned()
+            .unwrap_or_else(|| reading.to_string());
+        vec![BackendSegment {
+            reading: reading.to_string(),
+            surface,
+            sources: vec![],
+        }]
+    }
+
+    fn segment_candidates(&self, _: &str, _: &str, _: usize) -> Vec<BackendCandidate> {
+        Vec::new()
     }
 }
 
@@ -331,6 +380,430 @@ fn update_config_applies_to_existing_sessions() {
     assert_eq!(e.snapshot("t").unwrap().candidates.page_size, 5);
 }
 
+// ---- select_candidate（絶対インデックス） ----
+
+#[test]
+fn select_candidate_picks_absolute_index_and_closes_window() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    // 候補ウィンドウを開かずに、絶対 index=1（2番目の候補 "京は"）を直接選択できる
+    let r = e.select_candidate("s", 1);
+    assert!(r.consumed);
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.preedit.segments[0].surface, "京は");
+    assert!(!snap.candidates.visible, "選択後は候補ウィンドウを閉じる");
+}
+
+#[test]
+fn select_candidate_out_of_range_is_a_no_op_for_the_surface() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    let before = e.snapshot("s").unwrap().preedit.segments[0].surface.clone();
+    let r = e.select_candidate("s", 9999);
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().preedit.segments[0].surface, before);
+}
+
+#[test]
+fn select_candidate_does_nothing_outside_converting() {
+    let mut e = engine();
+    let r = e.select_candidate("s", 0);
+    assert!(r.consumed);
+    assert!(e.snapshot("s").unwrap().preedit.segments.is_empty());
+}
+
+// ---- ToHankaku ----
+
+/// `ToHankaku` に既定のキー割当は無いため、`KeyMap::with_overrides` で
+/// `[keymap.converting]` に一時的に `Ctrl+j` を割り当てて使う
+fn engine_with_hankaku_override() -> Engine {
+    let (keymap, warnings) = nagi_engine::KeyMap::with_overrides(&[(
+        nagi_engine::KeyContext::Converting,
+        "Ctrl+j".to_string(),
+        "ToHankaku".to_string(),
+    )]);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    Engine::new(
+        Arc::new(KanaBackend),
+        EngineConfig {
+            keymap,
+            ..EngineConfig::default()
+        },
+    )
+}
+
+#[test]
+fn to_hankaku_converts_katakana_segment_to_halfwidth_kana() {
+    let mut e = engine_with_hankaku_override();
+    type_str(&mut e, "s", "aiu");
+    // Composing 中の F7（ToKatakana）で Converting へ移り、カタカナ表記になる
+    press(&mut e, "s", "F7");
+    assert_eq!(
+        e.snapshot("s").unwrap().preedit.segments[0].surface,
+        "アイウ"
+    );
+    let r = press(&mut e, "s", "Ctrl+j");
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().preedit.segments[0].surface, "ｱｲｳ");
+}
+
+#[test]
+fn to_hankaku_is_a_no_op_when_not_convertible() {
+    let mut e = engine_with_hankaku_override();
+    type_str(&mut e, "s", "aiu");
+    // Space（StartConvert）: KanaBackend はひらがなのまま返す
+    press(&mut e, "s", "Space");
+    let before = e.snapshot("s").unwrap().preedit.segments[0].surface.clone();
+    assert_eq!(before, "あいう");
+    let r = press(&mut e, "s", "Ctrl+j");
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().preedit.segments[0].surface, before);
+}
+
+// ---- 予測変換（Tab） ----
+
+#[test]
+fn predict_enters_converting_when_backend_has_predictions() {
+    let backend = MockBackend::new().with_predictions("きょ", vec!["今日", "教"]);
+    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
+    type_str(&mut e, "s", "kyo");
+    let r = press(&mut e, "s", "Tab");
+    assert!(r.consumed);
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Converting);
+    assert_eq!(snap.preedit.segments[0].surface, "今日");
+    assert!(snap.candidates.visible);
+    assert_eq!(
+        snap.candidates
+            .items
+            .iter()
+            .map(|c| c.surface.as_str())
+            .collect::<Vec<_>>(),
+        ["今日", "教"]
+    );
+}
+
+#[test]
+fn predict_does_nothing_when_backend_has_no_predictions() {
+    let mut e = engine(); // KanaBackend（predict は既定実装で常に空）
+    type_str(&mut e, "s", "a");
+    let r = press(&mut e, "s", "Tab");
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+}
+
+#[test]
+fn predict_respects_min_chars() {
+    let backend = MockBackend::new().with_predictions("あ", vec!["亜"]);
+    let mut e = Engine::new(
+        Arc::new(backend),
+        EngineConfig {
+            predict_min_chars: 2,
+            ..EngineConfig::default()
+        },
+    );
+    type_str(&mut e, "s", "a");
+    let r = press(&mut e, "s", "Tab");
+    assert!(r.consumed);
+    // "あ" は1文字なので min_chars=2 では予測されない
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+}
+
+// ---- ライブ変換（live_convert） ----
+
+#[test]
+fn live_convert_updates_composing_preedit_with_converted_surface() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    // まだ Composing のまま（Space を押していない）
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    let r = e.live_convert("s", "きょうはいい");
+    let r = r.expect("変換結果が読みと異なるので通知されるはず");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "今日はいい");
+    // 状態は Composing のまま（Converting へは遷移しない）
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    // reading は保持される（ルビ表示用）
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(
+        snap.preedit
+            .segments
+            .iter()
+            .map(|s| s.reading.as_str())
+            .collect::<Vec<_>>()
+            .join(""),
+        "きょうはいい"
+    );
+}
+
+#[test]
+fn live_convert_ignores_stale_reading() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    // 実際の入力（"きょうはいい"）と異なる reading を渡すと無視される
+    let r = e.live_convert("s", "ちがうよみ");
+    assert!(r.is_none());
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはいい");
+}
+
+#[test]
+fn live_convert_does_nothing_outside_composing() {
+    let mut e = engine();
+    let r = e.live_convert("s", "");
+    assert!(r.is_none());
+}
+
+#[test]
+fn live_convert_keeps_cursor_position_consistent() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Left");
+    press(&mut e, "s", "Left");
+    // Left 2 回で、カーソルは読み上の "きょうは" と "いい" の境界（読み4文字目）に来る
+    let r = e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "今日はいい");
+    // カーソルは変換後も対応する文節境界（"今日は" の直後）に来る（surface 上の長さが
+    // reading と異なるため、変換前と同じ UTF-16 数値になるとは限らない）
+    assert_eq!(preedit.cursor, preedit.segments[0].range.end);
+    assert_eq!(preedit.segments[0].range.end, 3); // "今日は" の UTF-16 長
+}
+
+#[test]
+fn live_convert_splits_long_input_into_chunks() {
+    let backend = ChunkRecordingBackend::new()
+        .with_chunk("あいう", "亜伊宇")
+        .with_chunk("えお", "絵尾");
+    let mut e = Engine::new(
+        Arc::new(backend),
+        EngineConfig {
+            composing_chunk_len: 3,
+            ..EngineConfig::default()
+        },
+    );
+    type_str(&mut e, "s", "aiueo");
+    let r = e.live_convert("s", "あいうえお").expect("変換されるはず");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    // 3文字ずつ("あいう" / "えお")に分けてそれぞれ変換された結果が連結される
+    assert_eq!(preedit.text, "亜伊宇絵尾");
+}
+
+#[test]
+fn live_convert_chunking_passes_previous_chunk_surface_as_left_context() {
+    let backend = Arc::new(
+        ChunkRecordingBackend::new()
+            .with_chunk("あいう", "亜伊宇")
+            .with_chunk("えお", "絵尾"),
+    );
+    let mut e = Engine::new(
+        backend.clone(),
+        EngineConfig {
+            composing_chunk_len: 3,
+            ..EngineConfig::default()
+        },
+    );
+    type_str(&mut e, "s", "aiueo");
+    e.live_convert("s", "あいうえお");
+    let calls = backend.calls();
+    assert_eq!(
+        calls.len(),
+        2,
+        "2チャンクに分かれて2回呼ばれるはず: {calls:?}"
+    );
+    assert_eq!(calls[0].0, "あいう");
+    assert_eq!(calls[1].0, "えお");
+    // 2つ目のチャンクの左文脈には、1つ目のチャンクの変換結果（"亜伊宇"）が含まれる
+    assert!(
+        calls[1].1.ends_with("亜伊宇"),
+        "左文脈に前のチャンクの結果が含まれるはず: {:?}",
+        calls[1].1
+    );
+}
+
+#[test]
+fn live_convert_does_not_chunk_input_shorter_than_chunk_len() {
+    let (mut e, _rec) = mock_engine();
+    // mock_engine の既定 composing_chunk_len は 30。既存の短い入力の挙動が変わらないことを確認
+    type_str(&mut e, "s", "kyouhaii");
+    let r = e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "今日はいい");
+}
+
+// ---- 文全体N-best（`initial_view = "sentence"`） ----
+
+/// `sentence_candidates` に複数の文全体候補を登録できるテスト用バックエンド。
+/// `convert_sentence` は先頭の候補にフォールバックする（`initial_view = segment` や、
+/// 候補が1件だけの場合の通常経路で使われる）。`segment_candidates` は常に空
+#[derive(Default)]
+struct SentenceNBestBackend {
+    reading: String,
+    sentences: Vec<Vec<(&'static str, &'static str)>>,
+}
+
+impl SentenceNBestBackend {
+    fn new(reading: &str, sentences: Vec<Vec<(&'static str, &'static str)>>) -> Self {
+        SentenceNBestBackend {
+            reading: reading.to_string(),
+            sentences,
+        }
+    }
+
+    fn backend_segments(segs: &[(&'static str, &'static str)]) -> Vec<BackendSegment> {
+        segs.iter()
+            .map(|(r, s)| BackendSegment {
+                reading: r.to_string(),
+                surface: s.to_string(),
+                sources: vec![],
+            })
+            .collect()
+    }
+}
+
+impl ConversionBackend for SentenceNBestBackend {
+    fn name(&self) -> &str {
+        "sentence-nbest-test"
+    }
+
+    fn convert_sentence(&self, reading: &str, _left_context: &str) -> Vec<BackendSegment> {
+        if reading == self.reading
+            && let Some(first) = self.sentences.first()
+        {
+            return Self::backend_segments(first);
+        }
+        vec![BackendSegment {
+            reading: reading.to_string(),
+            surface: reading.to_string(),
+            sources: vec![],
+        }]
+    }
+
+    fn segment_candidates(&self, _: &str, _: &str, _: usize) -> Vec<BackendCandidate> {
+        Vec::new()
+    }
+
+    fn sentence_candidates(
+        &self,
+        reading: &str,
+        _left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendSentence> {
+        if reading != self.reading {
+            return Vec::new();
+        }
+        self.sentences
+            .iter()
+            .take(limit)
+            .map(|segs| BackendSentence {
+                segments: Self::backend_segments(segs),
+            })
+            .collect()
+    }
+}
+
+/// 読み「きょうはいい」に対して、文全体の表記が異なる2つの分割を返すバックエンド
+fn sentence_nbest_backend() -> Arc<SentenceNBestBackend> {
+    Arc::new(SentenceNBestBackend::new(
+        "きょうはいい",
+        vec![
+            vec![("きょうは", "今日は"), ("いい", "いい")],
+            vec![("きょうは", "京は"), ("いい", "いい")],
+        ],
+    ))
+}
+
+#[test]
+fn sentence_view_shows_multiple_whole_sentence_candidates() {
+    let mut e = Engine::new(sentence_nbest_backend(), EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    let r = press(&mut e, "s", "Space");
+    let candidates = r.candidates.expect("候補ウィンドウが開くはず");
+    assert!(candidates.visible);
+    let surfaces: Vec<&str> = candidates
+        .items
+        .iter()
+        .map(|c| c.surface.as_str())
+        .collect();
+    assert_eq!(surfaces, ["今日はいい", "京はいい"]);
+    // まだ1つの「メガ文節」のまま（文節には分かれていない）
+    let preedit = r.preedit.expect("preedit も差分に含まれるはず");
+    assert_eq!(preedit.segments.len(), 1);
+    assert_eq!(preedit.text, "今日はいい");
+}
+
+#[test]
+fn next_candidate_switches_whole_sentence_surface_without_segmenting() {
+    let mut e = Engine::new(sentence_nbest_backend(), EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    let r = press(&mut e, "s", "Space"); // NextCand
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "京はいい");
+    assert_eq!(preedit.segments.len(), 1, "まだ1つの文節のまま");
+}
+
+#[test]
+fn moving_focus_expands_selected_candidate_into_segments() {
+    let mut e = Engine::new(sentence_nbest_backend(), EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Space"); // 選択を「京はいい」に進める
+    let r = press(&mut e, "s", "Right"); // MoveFocus: 候補選択以外の操作なので展開される
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "京はいい");
+    let surfaces: Vec<&str> = preedit
+        .segments
+        .iter()
+        .map(|s| s.surface.as_str())
+        .collect();
+    assert_eq!(
+        surfaces,
+        ["京は", "いい"],
+        "選択中の候補の文節分割に展開される"
+    );
+}
+
+#[test]
+fn segment_initial_view_bypasses_sentence_n_best() {
+    let mut e = Engine::new(
+        sentence_nbest_backend(),
+        EngineConfig {
+            initial_view: InitialView::Segment,
+            ..EngineConfig::default()
+        },
+    );
+    type_str(&mut e, "s", "kyouhaii");
+    let r = press(&mut e, "s", "Space");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    // convert_sentence の1-bestにフォールバック（メガ文節ではなく通常の複数文節）
+    assert_eq!(preedit.text, "今日はいい");
+    assert_eq!(preedit.segments.len(), 2);
+    assert!(
+        r.candidates.is_none_or(|c| !c.visible),
+        "1回目のStartConvertでは候補ウィンドウはまだ開かない"
+    );
+}
+
+#[test]
+fn single_sentence_candidate_falls_back_to_normal_conversion() {
+    let backend = Arc::new(SentenceNBestBackend::new(
+        "きょうはいい",
+        vec![vec![("きょうは", "今日は"), ("いい", "いい")]],
+    ));
+    let mut e = Engine::new(backend, EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    let r = press(&mut e, "s", "Space");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(
+        preedit.segments.len(),
+        2,
+        "候補が1件のみ（多様性が無い）なら通常の文節ごとの変換にフォールバック"
+    );
+    assert_eq!(preedit.text, "今日はいい");
+}
+
 // ---- 非同期の変換結果の差し替え ----
 
 /// `ready` になるまでは読みそのまま、なったあとは「きょう → 今日」を返す
@@ -432,194 +905,4 @@ fn completion_is_ignored_while_composing() {
     }
     backend.ready.store(true, Ordering::SeqCst);
     assert!(e.apply_completions(&done("きょう", "")).is_empty());
-}
-
-// ---- 文全体の候補（sentence モード） ----
-
-/// 読み → 文全体の切り方の候補列（先頭が既定の 1 位）を固定で返すバックエンド
-struct SentenceBackend {
-    options: Vec<Vec<(&'static str, &'static str)>>,
-}
-
-impl SentenceBackend {
-    fn reading_of(opt: &[(&'static str, &'static str)]) -> String {
-        opt.iter().map(|(r, _)| *r).collect()
-    }
-}
-
-impl ConversionBackend for SentenceBackend {
-    fn name(&self) -> &str {
-        "sentence-mock"
-    }
-
-    fn convert_sentence(&self, reading: &str, _left_context: &str) -> Vec<BackendSegment> {
-        let best = &self.options[0];
-        if Self::reading_of(best) != reading {
-            return vec![BackendSegment {
-                reading: reading.to_string(),
-                surface: reading.to_string(),
-                sources: vec![CandidateSource::Kana],
-            }];
-        }
-        best.iter()
-            .map(|(r, s)| BackendSegment {
-                reading: r.to_string(),
-                surface: s.to_string(),
-                sources: vec![CandidateSource::SystemDict],
-            })
-            .collect()
-    }
-
-    fn segment_candidates(&self, _: &str, _: &str, _: usize) -> Vec<BackendCandidate> {
-        Vec::new()
-    }
-
-    fn sentence_candidates(
-        &self,
-        reading: &str,
-        _left_context: &str,
-        limit: usize,
-    ) -> Vec<BackendSentence> {
-        if Self::reading_of(&self.options[0]) != reading {
-            return Vec::new();
-        }
-        self.options
-            .iter()
-            .take(limit)
-            .map(|opt| BackendSentence {
-                segments: opt
-                    .iter()
-                    .map(|(r, s)| BackendSegment {
-                        reading: r.to_string(),
-                        surface: s.to_string(),
-                        sources: vec![CandidateSource::Llm],
-                    })
-                    .collect(),
-            })
-            .collect()
-    }
-}
-
-fn sentence_options() -> Vec<Vec<(&'static str, &'static str)>> {
-    vec![
-        vec![("きょう", "今日"), ("は", "は")],
-        vec![("きょう", "京"), ("は", "は")],
-    ]
-}
-
-fn type_kyouha(e: &mut Engine) {
-    for k in ["k", "y", "o", "u", "h", "a"] {
-        press(e, "s", k);
-    }
-}
-
-#[test]
-fn sentence_mode_shows_whole_sentence_candidates_on_first_open() {
-    let backend = SentenceBackend {
-        options: sentence_options(),
-    };
-    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
-    type_kyouha(&mut e);
-
-    let space1 = press(&mut e, "s", "Space"); // 変換開始: プリエディットのみ、候補は非表示
-    assert_eq!(space1.preedit.as_ref().unwrap().text, "今日は");
-    assert!(space1.candidates.is_none_or(|c| !c.visible));
-
-    // 候補ウィンドウを開く: sentence モード。文節候補と同様、開いた瞬間に現在値から
-    // 1 つ進む（`ensure_candidates` 直後に delta を適用する既存の挙動と揃えてある）
-    let space2 = press(&mut e, "s", "Space");
-    let candidates2 = space2.candidates.expect("候補が届く");
-    assert!(candidates2.visible);
-    assert_eq!(
-        candidates2
-            .items
-            .iter()
-            .map(|c| c.surface.as_str())
-            .collect::<Vec<_>>(),
-        ["今日は", "京は"],
-        "文全体の切り方が候補になる"
-    );
-    assert_eq!(candidates2.selected, 1);
-    assert_eq!(
-        space2.preedit.as_ref().unwrap().text,
-        "京は",
-        "プリエディットが選んだ切り方に差し替わる"
-    );
-
-    let space3 = press(&mut e, "s", "Space"); // 一周して元に戻る
-    assert_eq!(space3.preedit.as_ref().unwrap().text, "今日は");
-    assert_eq!(space3.candidates.expect("候補が届く").selected, 0);
-}
-
-#[test]
-fn moving_focus_exits_sentence_mode_permanently() {
-    let backend = SentenceBackend {
-        options: sentence_options(),
-    };
-    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
-    type_kyouha(&mut e);
-    press(&mut e, "s", "Space");
-    press(&mut e, "s", "Space"); // sentence モードに入る
-
-    press(&mut e, "s", "Right"); // 注目文節を移動 → sentence モードを抜ける
-    let after_move = press(&mut e, "s", "Space"); // 以後は文節候補
-    let candidates = after_move.candidates.expect("候補が届く");
-    assert!(
-        !candidates
-            .items
-            .iter()
-            .any(|c| c.surface == "今日は" || c.surface == "京は"),
-        "文全体候補には戻らない: {candidates:?}"
-    );
-
-    // Left で戻っても、sentence モードには戻らない（whole を消してあるため）
-    press(&mut e, "s", "Left");
-    let after_left = press(&mut e, "s", "Space");
-    let candidates_left = after_left.candidates.expect("候補が届く");
-    assert!(
-        !candidates_left
-            .items
-            .iter()
-            .any(|c| c.surface == "今日は" || c.surface == "京は")
-    );
-}
-
-#[test]
-fn segment_initial_view_skips_sentence_mode() {
-    let backend = SentenceBackend {
-        options: sentence_options(),
-    };
-    let config = EngineConfig {
-        initial_view: InitialView::Segment,
-        ..EngineConfig::default()
-    };
-    let mut e = Engine::new(Arc::new(backend), config);
-    type_kyouha(&mut e);
-    press(&mut e, "s", "Space");
-    let space2 = press(&mut e, "s", "Space");
-    let candidates = space2.candidates.expect("候補が届く");
-    assert!(
-        !candidates
-            .items
-            .iter()
-            .any(|c| c.surface == "今日は" || c.surface == "京は"),
-        "initial_view = segment では文全体候補を出さない: {candidates:?}"
-    );
-}
-
-#[test]
-fn single_sentence_candidate_does_not_enter_sentence_mode() {
-    // バックエンドが代替を返さない（1 件だけ）場合は、既存の文節候補にフォールバックする
-    let backend = SentenceBackend {
-        options: vec![sentence_options()[0].clone()],
-    };
-    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
-    type_kyouha(&mut e);
-    press(&mut e, "s", "Space");
-    let space2 = press(&mut e, "s", "Space");
-    let candidates = space2.candidates.expect("候補が届く");
-    assert!(candidates.visible);
-    // 文節候補（focus=0 の「きょう」）にフォールバックしているので、"今日は" 単体の
-    // 項目ではなく "今日"（文節の表記）などが並ぶはず
-    assert!(!candidates.items.iter().any(|c| c.surface == "今日は"));
 }

@@ -190,6 +190,23 @@ fn snippets_are_indexed_separately_and_not_added_to_the_lattice() {
 }
 
 #[test]
+fn overlay_lookup_prefix_matches_forward_only() {
+    let d = dict();
+    let (user, _) = parse("ふじさわ\t藤澤\t人名\nふじさわ\t不二沢\t名詞\nふじ\t富士\t名詞\n");
+    let overlay = d.make_overlay(&user);
+    // "ふじ" は "ふじさわ" の前方一致
+    let found = overlay.lookup_prefix("ふじ", 10);
+    let readings: Vec<&str> = found.iter().map(|(r, _)| *r).collect();
+    assert!(readings.contains(&"ふじさわ"));
+    // 完全一致（"ふじ" 自身）は除外される
+    assert!(!readings.contains(&"ふじ"));
+    // limit が効く（"ふじさわ" には2件登録されているが1件だけ返す）
+    assert_eq!(overlay.lookup_prefix("ふじ", 1).len(), 1);
+    // 前方一致しない読みは含まれない
+    assert!(overlay.lookup_prefix("さわ", 10).is_empty());
+}
+
+#[test]
 fn align_with_overlay_uses_user_words() {
     let d = dict();
     let (user, _) = parse("ふじさわ\t藤澤\t人名\n");

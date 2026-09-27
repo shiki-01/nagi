@@ -23,6 +23,7 @@
       expect:              # 書いたものだけ比較する
         consumed: true
         commit: null       # null = 確定なし。"文字列" = その確定
+        delete_before: null   # null = 応答に含まれない（確定取消なし）。数値 = 削除すべき UTF-16 長
         preedit: "k"       # PreeditView.text（保留ローマ字を含む）
         pending: "k"       # 保留ローマ字（無ければ ""）
         segments: ["か"]   # セグメントの surface 列

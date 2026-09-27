@@ -21,6 +21,7 @@ use nagi_engine::{
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
 use nagi_protocol::view::CandidateSource;
+use nagi_rewriter::RewriterChain;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -45,6 +46,8 @@ type Cache = Arc<Mutex<HashMap<(String, String), String>>>;
 struct Llm {
     model: SharedModel,
     cache: Cache,
+    /// 直前に `reconcile_active` を呼んだときのプロファイル（変化を検出するため）
+    last_profile: Mutex<nagi_profile::Profile>,
 }
 
 /// LLM の非同期完了通知の置き場
@@ -79,6 +82,16 @@ pub struct Pipeline {
     llm: Option<Llm>,
     runtime: Arc<Runtime>,
     completions: Arc<Completions>,
+    rewriter: RewriterChain,
+}
+
+/// dict・LLM の有無からバックエンド名を決める（`Pipeline::new` と `name()` の重複を1箇所にまとめる）
+pub fn backend_name(has_dict: bool, has_llm: bool) -> &'static str {
+    match (has_dict, has_llm) {
+        (true, true) => "dict+llm",
+        (true, false) => "dict",
+        (false, _) => "kana",
+    }
 }
 
 /// LLM の出力として受け入れられるか（空・極端な長さ・私用領域文字・置換文字を弾く）
@@ -112,22 +125,45 @@ impl Pipeline {
         model: Option<Box<dyn ConversionModel>>,
         runtime: Arc<Runtime>,
     ) -> Self {
+        let profile = runtime.profile();
         let llm = model.map(|m| Llm {
             model: Arc::new(Mutex::new(m)),
             cache: Arc::new(Mutex::new(HashMap::new())),
+            last_profile: Mutex::new(profile),
         });
-        let name = match (&dict, &llm) {
-            (Some(_), Some(_)) => "dict+llm",
-            (Some(_), None) => "dict",
-            _ => "kana",
-        };
+        let name = backend_name(dict.is_some(), llm.is_some());
         runtime.set_backend_name(name);
         Pipeline {
             dict,
             llm,
             runtime,
             completions: Arc::new(Completions::new()),
+            rewriter: RewriterChain::default_chain(),
         }
+    }
+
+    /// プロファイルの変化を見て、LLM をアクティブ / 非アクティブに切り替える
+    /// （`Minimal` になったら解放、そこから戻ったら再読み込み）。別スレッドで行うので待たせない
+    fn reconcile_active(&self) {
+        let Some(llm) = &self.llm else { return };
+        let current = self.runtime.profile();
+        let Ok(mut last) = llm.last_profile.lock() else {
+            return;
+        };
+        if *last == current {
+            return;
+        }
+        *last = current;
+        drop(last);
+        let should_be_active = current != nagi_profile::Profile::Minimal;
+        let model = llm.model.clone();
+        let _ = std::thread::Builder::new()
+            .name("nagi-llm-active".into())
+            .spawn(move || {
+                if let Ok(mut m) = model.lock() {
+                    let _ = m.set_active(should_be_active);
+                }
+            });
     }
 
     /// 起動直後の最初の推論が遅くならないよう、別スレッドでモデルを温め、続けてキャリブレーション
@@ -144,6 +180,7 @@ impl Pipeline {
                 let req = Self::request(CALIBRATION_READING, "", None);
                 let mut samples = Vec::new();
                 if let Ok(mut m) = model.lock() {
+                    m.set_n_threads(runtime.effective().n_threads);
                     let _ = m.convert(&req); // ページイン
                     for _ in 0..3 {
                         let started = Instant::now();
@@ -209,11 +246,12 @@ impl Pipeline {
         let slot_bg = slot.clone();
         let key_bg = key.clone();
         let outer_bg = outer.cloned();
-
+        let n_threads = eff.n_threads;
         std::thread::Builder::new()
             .name("nagi-llm-convert".into())
             .spawn(move || {
                 let result = model.lock().ok().and_then(|mut m| {
+                    m.set_n_threads(n_threads);
                     let started = Instant::now();
                     let out = m.convert(&req).ok();
                     runtime.note_latency(started.elapsed().as_secs_f64() * 1000.0);
@@ -321,13 +359,14 @@ impl Pipeline {
         let (tx, rx) = mpsc::sync_channel::<Option<Vec<f32>>>(1);
         let model = llm.model.clone();
         let req = Self::request(reading, left, eff.persona.as_deref());
+        let n_threads = eff.n_threads;
         std::thread::Builder::new()
             .name("nagi-llm-score".into())
             .spawn(move || {
-                let scores = model
-                    .lock()
-                    .ok()
-                    .and_then(|mut m| m.score(&req, &candidates).ok());
+                let scores = model.lock().ok().and_then(|mut m| {
+                    m.set_n_threads(n_threads);
+                    m.score(&req, &candidates).ok()
+                });
                 let _ = tx.send(scores);
             })
             .ok()?;
@@ -491,11 +530,7 @@ fn merge_by_order(
 
 impl ConversionBackend for Pipeline {
     fn name(&self) -> &str {
-        match (&self.dict, &self.llm) {
-            (Some(_), Some(_)) => "dict+llm",
-            (Some(_), None) => "dict",
-            _ => "kana",
-        }
+        backend_name(self.dict.is_some(), self.llm.is_some())
     }
 
     fn take_completions(&self) -> Vec<Completion> {
@@ -521,6 +556,7 @@ impl ConversionBackend for Pipeline {
 
     fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {
         self.runtime.tick();
+        self.reconcile_active();
         let eff = self.runtime.effective();
         let overlay = self.runtime.overlay();
         let left_llm = tail(left_context, eff.max_context_chars);
@@ -546,71 +582,6 @@ impl ConversionBackend for Pipeline {
         segments
     }
 
-    fn sentence_candidates(
-        &self,
-        reading: &str,
-        left_context: &str,
-        limit: usize,
-    ) -> Vec<BackendSentence> {
-        self.runtime.tick();
-        let eff = self.runtime.effective();
-        let overlay = self.runtime.overlay();
-        let left_llm = tail(left_context, eff.max_context_chars);
-        let fallback = || {
-            vec![BackendSentence {
-                segments: self.convert_sentence(reading, left_context),
-            }]
-        };
-
-        let Some(dict) = &self.dict else {
-            return fallback();
-        };
-        if !eff.use_llm
-            || self.llm.is_none()
-            || eff.beam_width <= 1
-            || reading.chars().count() > MAX_LLM_CHARS
-        {
-            return fallback();
-        }
-
-        let width = eff.beam_width.min(limit.max(1));
-        let hypotheses = self.llm_beam_convert(reading, &left_llm, &eff, width);
-        if hypotheses.len() < 2 {
-            return fallback();
-        }
-
-        let mut out: Vec<BackendSentence> = Vec::new();
-        let mut seen: Vec<String> = Vec::new();
-        for surface in hypotheses {
-            if seen.contains(&surface) {
-                continue;
-            }
-            seen.push(surface.clone());
-            let mut segments = match dict.align_with(reading, &surface, Some(&overlay)) {
-                Some(segs) => segs
-                    .into_iter()
-                    .map(|s| BackendSegment {
-                        sources: vec![CandidateSource::Llm],
-                        reading: s.reading,
-                        surface: s.surface,
-                    })
-                    .collect(),
-                None => vec![BackendSegment {
-                    sources: vec![CandidateSource::Llm],
-                    reading: reading.to_string(),
-                    surface,
-                }],
-            };
-            self.apply_preferences(&mut segments, left_context, &eff, &overlay);
-            out.push(BackendSentence { segments });
-        }
-        if out.len() < 2 {
-            return fallback();
-        }
-        out.truncate(limit);
-        out
-    }
-
     fn segment_candidates(
         &self,
         reading: &str,
@@ -618,6 +589,7 @@ impl ConversionBackend for Pipeline {
         limit: usize,
     ) -> Vec<BackendCandidate> {
         self.runtime.tick();
+        self.reconcile_active();
         let eff = self.runtime.effective();
         let overlay = self.runtime.overlay();
         let left_llm = tail(left_context, eff.max_context_chars);
@@ -686,9 +658,144 @@ impl ConversionBackend for Pipeline {
             groups.push((CandidateSource::SystemDict, system));
             groups.push((CandidateSource::Kana, kana));
         }
+        let rewriter_candidates = self.rewriter.candidates(reading);
+        groups.push((CandidateSource::Rewriter, rewriter_candidates));
 
         let mut out = merge_by_order(&eff.ranking, groups);
         out.truncate(limit);
+        out
+    }
+
+    fn predict(&self, prefix: &str, left_context: &str, limit: usize) -> Vec<BackendCandidate> {
+        if prefix.is_empty() {
+            return Vec::new();
+        }
+        let overlay = self.runtime.overlay();
+        let hash = context_hash(&tail(left_context, HASH_CONTEXT_CHARS));
+        let mut out: Vec<BackendCandidate> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for (surface, _score) in self.runtime.learn_predict(prefix, hash, limit) {
+            if seen.insert(surface.clone()) {
+                out.push(BackendCandidate {
+                    surface,
+                    sources: vec![CandidateSource::Learned],
+                });
+            }
+        }
+        for (_, entry) in overlay.lookup_prefix(prefix, limit) {
+            if seen.insert(entry.surface.clone()) {
+                out.push(BackendCandidate {
+                    surface: entry.surface.clone(),
+                    sources: vec![CandidateSource::UserDict],
+                });
+            }
+        }
+        out.truncate(limit);
+        out
+    }
+
+    fn reconvert(&self, surface: &str) -> Vec<BackendSegment> {
+        match &self.dict {
+            Some(dict) => dict
+                .reverse_convert(surface)
+                .into_iter()
+                .map(|s| BackendSegment {
+                    reading: s.reading,
+                    surface: s.surface,
+                    sources: vec![CandidateSource::SystemDict],
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// 文全体の N-best（`conversion.initial_view = "sentence"` 用）。
+    ///
+    /// 1件目は必ず `convert_sentence`（LLMが使えるなら再採点済みの1-best）と同じ結果にする。
+    /// コスト順・ビームサーチのスコア順だけで並べると、LLM再採点で選ばれるはずの表記が後ろに
+    /// 回って変換品質が落ちるため（G-30の訂正と同じ理由）。
+    ///
+    /// 2件目以降は、実LLMのビームサーチ（G-33・G-34。真のモデル確率順）が使えればそちらを
+    /// 優先し、使えない・件数が足りない場合は辞書ベースの k-best Viterbi（G-30）で補う
+    fn sentence_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendSentence> {
+        self.runtime.tick();
+        self.reconcile_active();
+        let Some(dict) = &self.dict else {
+            return Vec::new();
+        };
+        if limit == 0 {
+            return Vec::new();
+        }
+        let eff = self.runtime.effective();
+        let overlay = self.runtime.overlay();
+        let left_llm = tail(left_context, eff.max_context_chars);
+
+        let best = self.convert_sentence(reading, left_context);
+        let best_surface: String = best.iter().map(|s| s.surface.as_str()).collect();
+        let mut out: Vec<BackendSentence> = vec![BackendSentence { segments: best }];
+        let mut seen: Vec<String> = vec![best_surface];
+
+        if eff.use_llm
+            && self.llm.is_some()
+            && eff.beam_width > 1
+            && reading.chars().count() <= MAX_LLM_CHARS
+        {
+            let width = eff.beam_width.min(limit.max(1));
+            for surface in self.llm_beam_convert(reading, &left_llm, &eff, width) {
+                if out.len() >= limit || seen.contains(&surface) {
+                    continue;
+                }
+                seen.push(surface.clone());
+                let mut segments = match dict.align_with(reading, &surface, Some(&overlay)) {
+                    Some(segs) => segs
+                        .into_iter()
+                        .map(|s| BackendSegment {
+                            sources: vec![CandidateSource::Llm],
+                            reading: s.reading,
+                            surface: s.surface,
+                        })
+                        .collect(),
+                    None => vec![BackendSegment {
+                        sources: vec![CandidateSource::Llm],
+                        reading: reading.to_string(),
+                        surface,
+                    }],
+                };
+                self.apply_preferences(&mut segments, left_context, &eff, &overlay);
+                out.push(BackendSentence { segments });
+            }
+        }
+
+        if out.len() < limit {
+            for c in dict.convert_n_best(reading, limit, Some(&overlay)) {
+                if out.len() >= limit {
+                    break;
+                }
+                let surface: String = c.segments.iter().map(|s| s.surface.as_str()).collect();
+                if seen.contains(&surface) {
+                    continue;
+                }
+                seen.push(surface.clone());
+                out.push(BackendSentence {
+                    segments: c
+                        .segments
+                        .into_iter()
+                        .map(|s| BackendSegment {
+                            reading: s.reading,
+                            surface: s.surface,
+                            sources: vec![CandidateSource::SystemDict],
+                        })
+                        .collect(),
+                });
+            }
+        }
+
         out
     }
 }

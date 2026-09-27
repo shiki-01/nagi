@@ -322,15 +322,20 @@ public struct ProcessKeyResult: Codable {
 	public let candidates: CandidatesView?
 	/// 入力モードが変わった場合の新しいモード。None なら変化なし
 	public let mode: InputMode?
+	/// 確定取消（Ctrl+Backspace）が成功した場合、フロントがホストアプリのテキストから
+	/// 削除すべき直前の確定文字列の長さ（UTF-16 コード単位）。挿入ではなく削除なので
+	/// `commit` とは意味が異なる（両方が同時に Some になることは無い）
+	public let delete_before: UInt32?
 	/// リビジョン番号（古い非同期通知を破棄するため）
 	public let revision: UInt32
 
-	public init(consumed: Bool, commit: String?, preedit: PreeditView?, candidates: CandidatesView?, mode: InputMode?, revision: UInt32) {
+	public init(consumed: Bool, commit: String?, preedit: PreeditView?, candidates: CandidatesView?, mode: InputMode?, delete_before: UInt32?, revision: UInt32) {
 		self.consumed = consumed
 		self.commit = commit
 		self.preedit = preedit
 		self.candidates = candidates
 		self.mode = mode
+		self.delete_before = delete_before
 		self.revision = revision
 	}
 }

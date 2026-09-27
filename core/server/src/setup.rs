@@ -8,7 +8,9 @@ use crate::pipeline::Pipeline;
 use crate::runtime::{Event, Runtime, Tunables};
 use nagi_config::{Config, InitialView as ConfigInitialView, Issue, Severity, ShiftLetter};
 use nagi_dict::{Dictionary, UserDictionary};
-use nagi_engine::{EngineConfig, InitialView};
+use nagi_engine::EngineConfig;
+use nagi_engine::InitialView;
+use nagi_engine::KeyContext;
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_protocol::methods::NotifyLevel;
@@ -79,23 +81,60 @@ pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<ServerOptio
     Ok(options)
 }
 
-/// 設定から engine の設定を作る
-pub fn engine_config_from(config: &Config) -> EngineConfig {
+/// 設定から engine の設定を作る。キーマップの上書きに解析できないものがあれば、その警告を
+/// 通知イベントとして合わせて返す
+pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
     let punct = &config.input.punctuation;
-    EngineConfig {
-        shift_letter: match config.input.shift_letter {
-            ShiftLetter::LiteralContinue => ShiftLetterMode::LiteralContinue,
-            ShiftLetter::SingleUpper => ShiftLetterMode::SingleUpper,
-        },
-        punctuation: PunctuationStyle::from_config_str(&format!("{}{}", punct.comma, punct.period))
+    let bindings: Vec<(KeyContext, String, String)> = config
+        .keymap
+        .composing
+        .iter()
+        .map(|(k, v)| (KeyContext::Composing, k.clone(), v.clone()))
+        .chain(
+            config
+                .keymap
+                .converting
+                .iter()
+                .map(|(k, v)| (KeyContext::Converting, k.clone(), v.clone())),
+        )
+        .collect();
+    let (keymap, warnings) = nagi_engine::KeyMap::with_overrides(&bindings);
+    let events = warnings
+        .into_iter()
+        .map(|message| Event {
+            level: NotifyLevel::Warning,
+            code: "keymap_warning",
+            message,
+        })
+        .collect();
+    (
+        EngineConfig {
+            shift_letter: match config.input.shift_letter {
+                ShiftLetter::LiteralContinue => ShiftLetterMode::LiteralContinue,
+                ShiftLetter::SingleUpper => ShiftLetterMode::SingleUpper,
+            },
+            punctuation: PunctuationStyle::from_config_str(&format!(
+                "{}{}",
+                punct.comma, punct.period
+            ))
             .unwrap_or(PunctuationStyle::Japanese),
-        page_size: config.conversion.num_candidates,
-        initial_mode: InputMode::Hiragana,
-        initial_view: match config.conversion.initial_view {
-            ConfigInitialView::Sentence => InitialView::Sentence,
-            ConfigInitialView::Segment => InitialView::Segment,
+            page_size: config.conversion.num_candidates,
+            initial_mode: InputMode::Hiragana,
+            keymap,
+            predict_enabled: config.predict.enabled,
+            predict_min_chars: config.predict.min_chars,
+            composing_chunk_len: config.conversion.composing_chunk_len,
+            initial_view: match config.conversion.initial_view {
+                ConfigInitialView::Sentence => InitialView::Sentence,
+                ConfigInitialView::Segment => InitialView::Segment,
+            },
+            beam_width: config
+                .conversion
+                .beam_width
+                .unwrap_or(EngineConfig::default().beam_width),
         },
-    }
+        events,
+    )
 }
 
 /// 設定ファイルの問題を通知（`notify`）に直す
@@ -235,6 +274,7 @@ pub fn load_dictionary(data_dir: &Path) -> Result<Arc<Dictionary>, String> {
 fn load_model(
     data_dir: &Path,
     model_setting: Option<&str>,
+    n_threads: usize,
 ) -> Result<Box<dyn ConversionModel>, String> {
     use nagi_infer::llama::{LlamaModel, LlamaOptions};
     let path = match model_setting {
@@ -244,13 +284,23 @@ fn load_model(
     if !path.exists() {
         return Err(format!("変換モデルが見つかりません: {}", path.display()));
     }
-    LlamaModel::load(&path, LlamaOptions::default())
-        .map(|m| Box::new(m) as Box<dyn ConversionModel>)
-        .map_err(|e| format!("変換モデルの読み込みに失敗しました: {e}"))
+    LlamaModel::load(
+        &path,
+        LlamaOptions {
+            n_threads,
+            ..LlamaOptions::default()
+        },
+    )
+    .map(|m| Box::new(m) as Box<dyn ConversionModel>)
+    .map_err(|e| format!("変換モデルの読み込みに失敗しました: {e}"))
 }
 
 #[cfg(not(feature = "llama"))]
-fn load_model(_data_dir: &Path, _model: Option<&str>) -> Result<Box<dyn ConversionModel>, String> {
+fn load_model(
+    _data_dir: &Path,
+    _model: Option<&str>,
+    _n_threads: usize,
+) -> Result<Box<dyn ConversionModel>, String> {
     Err("このビルドは LLM 推論（feature `llama`）を含みません".to_string())
 }
 
@@ -292,7 +342,11 @@ pub fn build(options: &ServerOptions) -> Built {
             Ok(d) => {
                 dict = Some(d);
                 if options.use_llm {
-                    match load_model(dir, config.conversion.model.as_deref()) {
+                    match load_model(
+                        dir,
+                        config.conversion.model.as_deref(),
+                        config.conversion.n_threads,
+                    ) {
                         Ok(m) => model = Some(m),
                         Err(e) => notes.push(format!("{e}（辞書のみで起動します）")),
                     }
@@ -339,13 +393,26 @@ pub fn build(options: &ServerOptions) -> Built {
     };
 
     let has_llm = model.is_some();
+    let system = nagi_profile::detect();
+    let backend = crate::pipeline::backend_name(dict.is_some(), has_llm);
+    let calibration_path = user_dir.as_ref().map(|d| d.join("calibration.json"));
+    let cached_calibration_ms = calibration_path
+        .as_deref()
+        .and_then(crate::calibration::load)
+        .filter(|record| record.matches(&system, backend))
+        .map(|record| record.median_ms);
     let runtime = Runtime::new(
-        nagi_profile::detect(),
+        system,
         has_llm,
         Tunables::from_config(&config),
         learner,
         learn_path,
     );
+    runtime.set_calibration_path(calibration_path);
+    if let Some(ms) = cached_calibration_ms {
+        // 前回の実測値を即座に反映させる。直後の pipeline.warm_up() が新しい実測値で上書きする
+        runtime.finish_calibration(ms);
+    }
     runtime.set_config_state(config_path.clone(), config_error);
 
     // ユーザー辞書
@@ -357,6 +424,41 @@ pub fn build(options: &ServerOptions) -> Built {
     }
     for e in events {
         runtime.push_event(e);
+    }
+
+    if config.update.auto_check {
+        let runtime_for_update = runtime.clone();
+        let url = config
+            .update
+            .check_url
+            .clone()
+            .unwrap_or_else(|| crate::update_check::DEFAULT_CHECK_URL.to_string());
+        let state_path = user_dir.as_ref().map(|d| d.join("update_check.json"));
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        let _ = std::thread::Builder::new()
+            .name("nagi-update-check".into())
+            .spawn(move || {
+                if let Some(manifest) = crate::update_check::check_with_throttle(
+                    &url,
+                    &current_version,
+                    state_path.as_deref(),
+                ) {
+                    let message = match &manifest.notes_url {
+                        Some(u) => {
+                            format!(
+                                "新しいバージョン {} が利用可能です（{u}）",
+                                manifest.version
+                            )
+                        }
+                        None => format!("新しいバージョン {} が利用可能です", manifest.version),
+                    };
+                    runtime_for_update.push_event(Event {
+                        level: NotifyLevel::Info,
+                        code: "update_available",
+                        message,
+                    });
+                }
+            });
     }
 
     let applied_model = config.conversion.model.clone();
@@ -394,4 +496,50 @@ pub fn user_dict_events(issues: &[nagi_dict::UserDictIssue]) -> Vec<Event> {
             },
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nagi_engine::{Action, parse_key};
+
+    #[test]
+    fn engine_config_from_applies_keymap_overrides_and_reports_warnings() {
+        let mut config = Config::default();
+        config
+            .keymap
+            .composing
+            .insert("Ctrl+j".to_string(), "ToKatakana".to_string());
+        config
+            .keymap
+            .converting
+            .insert("Tab".to_string(), "NextCand".to_string());
+        // 不正な上書き: 存在しないキー
+        config
+            .keymap
+            .composing
+            .insert("NotAKey".to_string(), "ToKatakana".to_string());
+
+        let (engine_config, events) = engine_config_from(&config);
+
+        assert_eq!(
+            engine_config.keymap.resolve(
+                KeyContext::Composing,
+                InputMode::Hiragana,
+                &parse_key("Ctrl+j").unwrap()
+            ),
+            Some(Action::ToKatakana)
+        );
+        assert_eq!(
+            engine_config.keymap.resolve(
+                KeyContext::Converting,
+                InputMode::Hiragana,
+                &parse_key("Tab").unwrap()
+            ),
+            Some(Action::NextCand)
+        );
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].code, "keymap_warning");
+        assert_eq!(events[0].level, NotifyLevel::Warning);
+    }
 }

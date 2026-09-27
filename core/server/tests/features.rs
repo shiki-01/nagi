@@ -86,15 +86,21 @@ fn status(server: &mut Server) -> Value {
 const SYSTEM: SystemInfo = SystemInfo {
     total_memory_mb: 16384,
     cpu_cores: 8,
+    has_gpu: false,
 };
 
 /// 偽モデル + インライン辞書 + 一時ディレクトリの学習・ユーザー辞書・設定で Server を作る
 fn server_in(user_dir: &Path) -> Server {
     let config_path = user_dir.join("config.toml");
-    let config = match nagi_config::load_file(&config_path) {
+    let mut config = match nagi_config::load_file(&config_path) {
         Ok((c, _)) => c,
         Err(_) => Config::default(),
     };
+    // これらのテストは LLM 由来の再ランキング・学習・ユーザー辞書優先度を検証するものであり、
+    // 文全体N-best（`initial_view = "sentence"`、既定）の対象外にする。sentence モードでは
+    // `Pipeline::sentence_candidates`（辞書のみ、LLM再採点なし）が優先されてしまい、
+    // これらのテストが期待する LLM 由来の並び順を検証できなくなるため
+    config.conversion.initial_view = nagi_config::InitialView::Segment;
     let learn_path = user_dir.join("learning.tsv");
     let (learner, _) = Learner::load(&learn_path, LearnConfig::default()).unwrap();
     let runtime = Runtime::new(

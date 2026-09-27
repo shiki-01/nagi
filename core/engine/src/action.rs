@@ -21,6 +21,8 @@ pub enum Action {
     InsertText(String),
     /// 変換開始（Space）
     StartConvert,
+    /// 予測変換（Tab。Composing 中のみ有効。学習キャッシュ・ユーザー辞書の前方一致）
+    Predict,
     /// 次の候補へ（Space / Down / Ctrl+n）
     NextCand,
     /// 前の候補へ（Shift+Space / Up / Ctrl+p）
@@ -53,12 +55,17 @@ pub enum Action {
     ToKatakana,
     /// ひらがなに変換（F6）
     ToHiragana,
+    /// 半角化（カタカナ→半角カナ、または半角化可能な英数記号→半角。`nagi_rewriter` 経由）。
+    /// 既定のキー割当は無く、キーマップ（`[keymap.converting]`）で明示的に割り当てる
+    ToHankaku,
     /// 入力モードを設定
     SetMode(InputMode),
     /// 入力モードをトグル
     ToggleMode,
     /// 確定して キーを素通し（Ctrl/Alt/Meta 付き文字キー）
     CommitAndPassThrough,
+    /// 直前の確定を取り消し、確定前の状態に戻す（Ctrl+Backspace。確定直後のみ有効）
+    UndoCommit,
     /// キーを消費するだけで何もしない
     NoOp,
 }
@@ -69,6 +76,7 @@ impl fmt::Display for Action {
             Action::Insert(ch) => write!(f, "Insert({:?})", ch),
             Action::InsertText(t) => write!(f, "InsertText({:?})", t),
             Action::StartConvert => write!(f, "StartConvert"),
+            Action::Predict => write!(f, "Predict"),
             Action::NextCand => write!(f, "NextCand"),
             Action::PrevCand => write!(f, "PrevCand"),
             Action::SelectCand(n) => write!(f, "SelectCand({})", n),
@@ -89,9 +97,11 @@ impl fmt::Display for Action {
             Action::DeleteLearning => write!(f, "DeleteLearning"),
             Action::ToKatakana => write!(f, "ToKatakana"),
             Action::ToHiragana => write!(f, "ToHiragana"),
+            Action::ToHankaku => write!(f, "ToHankaku"),
             Action::SetMode(mode) => write!(f, "SetMode({:?})", mode),
             Action::ToggleMode => write!(f, "ToggleMode"),
             Action::CommitAndPassThrough => write!(f, "CommitAndPassThrough"),
+            Action::UndoCommit => write!(f, "UndoCommit"),
             Action::NoOp => write!(f, "NoOp"),
         }
     }

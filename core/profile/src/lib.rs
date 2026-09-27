@@ -129,6 +129,9 @@ pub struct SystemInfo {
     pub total_memory_mb: u64,
     /// 論理 CPU コア数
     pub cpu_cores: usize,
+    /// GPU を搭載しているか（検出のみ。GPU オフロード自体は未実装で、検出結果は将来の利用に
+    /// 備えるもの）
+    pub has_gpu: bool,
 }
 
 /// 実機のハードウェア情報を検出する
@@ -138,7 +141,26 @@ pub fn detect() -> SystemInfo {
     SystemInfo {
         total_memory_mb: sys.total_memory() / (1024 * 1024),
         cpu_cores: std::thread::available_parallelism().map_or(1, usize::from),
+        has_gpu: detect_gpu(),
     }
+}
+
+/// GPU の有無を判定する。GPU オフロード自体は未実装で、検出結果は将来の利用に備えるもの
+fn detect_gpu() -> bool {
+    if cfg!(target_os = "macos") {
+        // Metal 対応 GPU は事実上必ず搭載されている（Metal 非対応の古い Intel Mac は稀なため簡略化）
+        return true;
+    }
+    // Windows / Linux: プロセスは起動せず、PATH 上に nvidia-smi があるかどうかだけを見る
+    let exe_name = if cfg!(target_os = "windows") {
+        "nvidia-smi.exe"
+    } else {
+        "nvidia-smi"
+    };
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(exe_name).exists())
 }
 
 /// 複数回の計測（1 回の推論にかかった時間）の中央値をミリ秒で返す。空なら `None`
@@ -514,7 +536,14 @@ mod tests {
         SystemInfo {
             total_memory_mb: mem_mb,
             cpu_cores: cores,
+            has_gpu: false,
         }
+    }
+
+    #[test]
+    fn detect_gpu_returns_a_bool() {
+        // OS ごとの判定ロジックの正しさまでは検証できないので、bool が得られることだけ確認する
+        let _: bool = detect_gpu();
     }
 
     #[test]

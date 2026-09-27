@@ -309,7 +309,7 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 
 - `revision` は typeshare が 64 ビット整数を扱えないため、プロトコル上は `u32`（エンジン内部は `u64`、送出時に切り詰め）。フロントは差の符号でなく「等しい・新しい」で判定する前提（wrapping）
 - `Modifiers` の各フィールドは struct 単位の `#[serde(default)]`（Swift 生成型で `Bool` にするため）
-- `imserver` は `initialize` の `profile` を常に `minimal`（辞書があってもモデル未統合のため）。`capabilities` は全て false。`reload_config` は常に成功する no-op、`select_candidate` / `reconvert` は `NOT_IMPLEMENTED`（-32003）
+- `imserver` は `initialize` の `profile` を常に `minimal`（辞書があってもモデル未統合のため）。`capabilities` は全て false。`reload_config` は常に成功する no-op、`select_candidate` / `reconvert` は `NOT_IMPLEMENTED`（-32003）。**`select_candidate` は G-18 で実装済み。`reconvert` は未実装のまま**
 - パラメータ不正のエラーメッセージには serde の詳細を含めない（入力値がキー内容を含み得るため。分類のみ）
 - 辞書は `--data-dir` または `NAGI_DATA_DIR` の `dict/nagi-dict.bin`。無い・壊れている場合は読みをそのまま返す `KanaBackend` で起動し続ける（stderr に理由を出す）
 - 状態機械のゴールデンテスト用 YAML crate は `serde_yaml_ng`（`serde_yaml` は保守終了のため）
@@ -386,7 +386,183 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 
 **変換パイプラインの再編**: `HybridBackend` / `DictBackend` を `Pipeline`（辞書なし・辞書のみ・辞書 + LLM を 1 つで扱う）に統合した。LLM 呼び出しごとの実測レイテンシを環境プロファイルの制御器に渡す。`persona`（`profile.persona`）は zenz の `` 欄に注入する
 
-### G-13. LLM コンテキストの再利用（KV キャッシュ、2026-09-27）
+### G-13. 環境プロファイルの残り4項目（2026-09-27）
+
+G-12 で「未実装」としていた4項目を実装した。ユーザー不在の自律作業中の暫定判断。
+
+- **GPU 検出**（`core/profile/src/lib.rs`）: `SystemInfo.has_gpu` を追加。macOS は Metal 対応 GPU が事実上必ずあるとみなし常に `true`（古い Intel Mac の非対応は稀なため簡略化）。Windows / Linux は `PATH` 上に `nvidia-smi`（`.exe`）が存在するかだけを見る（プロセスは起動しない）。GPU オフロード自体は未実装で、検出結果は将来の利用に備えるもの
+- **light でのスレッド数削減**: `config.conversion.n_threads`（既定 0 = 自動）を実際に `LlamaOptions` へ反映するよう修正した（従来は常に既定値 0 が使われ設定が無視されていた）。加えて `Runtime::effective()` で `Profile::Light` のとき基準スレッド数を半分（最低 1）に絞る。`ConversionModel::set_n_threads`（既定 no-op）で変換の都度スレッド数を反映する（`LlamaModel` は変換ごとにコンテキストを作るため、モデルの再読み込みは不要）
+- **minimal・メモリ逼迫時のモデル解放**: `ConversionModel::set_active(bool)`（既定 no-op）を追加。`LlamaModel` は `model: Option<LlamaModelCore>` として保持し、`false` で解放・`true` で（未読み込みなら）再読み込みする。`Pipeline` がプロファイルの変化を検出して（`Minimal` か否かで）別スレッドで切り替える。再読み込み中に変換要求が来ても既存の `sync_budget` の仕組みで辞書結果にフォールバックするため待たせない。メモリ逼迫（critical）は既存の `Controller` のペナルティ計算で `Minimal` まで下がるため、同じ経路で解放される
+- **キャリブレーション結果の永続化**: `<user_dir>/calibration.json`（`core/server/src/calibration.rs`、JSON）に中央値・CPU コア数・メモリ量・バックエンド名を保存する。起動時に一致すれば即座に使い、直後の `warm_up()` が新しい実測値で上書き・再保存する。ハードウェアやバックエンドが変わったら使わない（`CalibrationRecord::matches`）
+- 副次的な整理: `Pipeline::new` と `ConversionBackend::name()` に重複していたバックエンド名の判定を `pipeline::backend_name()` に統合した
+
+### G-14. キーマップ TOML 上書き（2026-09-27）
+
+docs/progress.md 優先4「キーマップ TOML」を実装した。ユーザー不在の自律作業中の暫定判断。
+
+- **対象範囲**: `composing`（ローマ字入力中）/ `converting`（変換中）の2文脈に限る。`Direct` 文脈（ほぼ printable の挿入のみで remap の需要が薄い）とグローバルなモード切替キーは対象外
+- **TOML 形式**: `[keymap.composing]` / `[keymap.converting]` に `"キー仕様文字列" = "Action仕様文字列"` を並べる。キー仕様は既存の `parse_key`（`Ctrl+Shift+Right` 形式）をそのまま再利用
+- **Action 仕様文字列**: 引数なしの Action は名前そのまま（`NextCand` 等）。`Direction` を持つものは `名前:Left` / `名前:Right`。`SelectCand` は `SelectCand:1`〜`9`。**`Insert` / `InsertText` / `SetMode` への上書きは対象外**（文字・モードの値を TOML 文字列に埋め込むエスケープ構文が複雑になるため v1 では見送った）
+- **不正な上書きの扱い**: パースできないキー・Action はその1件だけ無視し、`notify`（`keymap_warning`、Warning）で知らせる（既存の `config_warning` と同じ「壊れていても動き続ける」方針）
+- **実装**: `core/engine/src/keymap.rs` の `KeyMap` が `HashMap<(KeyContext, KeySpec), Action>` の上書きテーブルを持ち、既定のハードコード分岐より先に確認する（上書きが無い設定では常に既定分岐にフォールバックし、既存のゴールデンテスト・単体テストへの影響はゼロ）
+- **設定検証**: `[keymap.composing]` / `[keymap.converting]` サブテーブル自体は既知キーに追加したが、その内側のキー（ユーザーが自由に指定するキー仕様文字列）は既存の「1階層しか見ない」不明キー検出の対象外（意図的）
+
+### G-15. Rewriter 基盤（全角/半角・半角カナ、2026-09-27）
+
+設計書 §4.13 の Rewriter（決定的変換の最終段）を新規実装した。ユーザー不在の自律作業中の暫定判断。
+
+- **スコープ**: v1 は全角/半角英数記号（ASCII 0x21-0x7E ⇔ U+FF01-FF5E、単純な `+0xFEE0` オフセット）と全角カタカナ→半角カナのみ。**日付・簡易計算は対象外**（曖昧さ・安全性の観点で見送り。`Rewriter` trait 経由で後から追加できる形だけ用意）
+- **実装**: 新規クレート `core/rewriter`（`nagi-rewriter`）。CLAUDE.md のリポジトリ構成案で「rewriter は各 Phase で分離」とされていた方針に沿う。`Rewriter` trait（`id` / `rewrite(reading) -> Vec<String>`）と `RewriterChain`（複数 Rewriter をまとめて候補を集める）
+- **半角カナの対応表**: 手入力ではなく、Python の `unicodedata` で全角カタカナの `<narrow>` 分解を機械的に導出して検証した値をそのまま `HANKAKU_KATAKANA_TABLE` に埋め込んだ（誤りのリスクを排除するため）。半角カナが存在しない文字（`ヮヰヱヵヶヸヹ` 等）を含む場合は変換候補を出さない
+- **Pipeline への統合**: `segment_candidates`（候補一覧）にのみ `CandidateSource::Rewriter` として追加する。`convert_sentence`（自動選択される変換結果）は変更しない。辞書の有無に依存しない決定的変換なので、`dict` が無い（`minimal`・辞書無し起動）場合でも動作するよう、辞書ブロックの外で候補を追加する
+
+### G-16. Rewriter: 漢数字変換の追加（2026-09-27）
+
+G-15 の Rewriter 基盤に、アラビア数字→漢数字の2種類を追加した。ユーザー不在の自律作業中の暫定判断。
+
+- **`KanjiDigits`**: 桁の重みを考慮しない1文字ずつの置換（`"2026"` → `"二〇二六"`）。曖昧さが無いので常に候補を出す
+- **`KanjiPositionalNumeral`**: 位取り漢数字（`"2026"` → `"二千二十六"`、`"10000"` → `"一万"`）。4桁ごとに 千/百/十/一 と 万/億/兆 を組み合わせる標準的な算出方法で、`十`/`百`/`千` の前の「一」は省略する。**先頭ゼロ（`"0"` 単独を除く）は位取り表記が定義できないため対象外**（`"007"` 等は変換しない）。**兆の桁（10^16 = 京）を超える17桁以上も対象外**（安全側に倒して変換しない）
+- 設計書 §4.13 の「数字表記」に相当。「日付」「簡易計算」は曖昧さ・安全性の観点で v1 のスコープ外のまま
+
+### G-17. 範囲操作: 複数文節選択（2026-09-27）
+
+設計書 §4.10「範囲操作」のうち、複数文節選択（`Ctrl+Shift+←/→`）の選択機構のみを実装した。ユーザー不在の自律作業中の暫定判断。
+
+- **対象範囲**: 選択の開始・伸縮・解除（`Preedit.selection` / `StateKind::RangeSelecting` への配線）のみ。**選択範囲に対する再変換（Space での範囲再変換）・`Ctrl+U/I/O` 等の Rewriter 直接書き換えは対象外**（設計書に記載はあるが UX の詳細が未確定なため。特に Rewriter 直接書き換えは、engine が dict/infer/rewriter に依存しない分離原則（decisions.md 記載）を保つには `ConversionBackend` 経由で候補の出所から選ぶ必要があり、`CandidateSource::Rewriter` だけでは「どの Rewriter か」を区別できず実装が曖昧になるため見送った）
+- **モデル**: `Conv` に `range_anchor: Option<usize>` を追加。`ExtendSelection` は `focus` を選択の可動端として動かし、押した瞬間の `focus` を固定端（`range_anchor`）にする（Shift+矢印のテキスト選択と同じ考え方）。`focus` が `range_anchor` まで戻ったら選択解除。境界（先頭/末尾）で `focus` が動けない場合は自動的に選択が作られない（`range_anchor == focus` が成立するため）
+- **選択中の既存操作**: 選択中でも `NextCand` / `ToKatakana` 等の単一文節操作は `focus` 文節に対してそのまま今まで通り動作する（意図的。範囲全体への操作は未実装なので、単一文節操作を止める理由がない）
+- **解除の挙動**: 通常の矢印（`MoveFocus`、Shift 無し）は選択を解除してから移動する。Escape は複数文節選択中ならまず選択だけを解除し、選択していなければ通常通り Composing に戻る
+- **テスト**: `core/engine/tests/golden/90_range_select.yaml`。既存のゴールデンテスト・`ir.rs` の `Preedit.selection` の UTF-16 変換テストは変更していない（`ExtendSelection`/`selection`/`Ctrl+Shift` を検査する既存テストが無いことを確認済み）
+
+### G-18. select_candidate メソッドの実装（2026-09-27）
+
+`select_candidate`（JSON-RPC、`NOT_IMPLEMENTED` スタブだった）を実装した。プロトコルの契約（`SelectCandidateParams{session_id, index}`）は既に確定していたので、それに沿って実装した。ユーザー不在の自律作業中の暫定判断。
+
+- **既存の `Action::SelectCand`（数字キー1〜9、ページ相対インデックス）とは別経路**。今回追加したのは候補ウィンドウの表示状態に関わらず候補一覧全体から絶対インデックスで直接選択するAPI（マウス操作等を想定）
+- 実装時にメソッド名の衝突が発生したため、既存の private メソッド（数字キー版）を `select_candidate_page_relative` に改名した（ロジックは無変更）
+- `reconvert` メソッドは今回変更していない（別途、辞書の逆引き機能が必要なため対象外）
+
+### G-19. update.auto_check の実装（2026-09-27）
+
+`update.auto_check` のアップデート確認クライアントを実装した。ユーザーの回答（「そこら辺は任せる」「ドメインは nagi.shiki-01.com」）に基づく。
+
+- **マニフェスト URL**: 既定 `https://nagi.shiki-01.com/updates/latest.json`（`[update] check_url` で上書き可能）。マニフェストの JSON 形式（`{"version": "x.y.z", "notes_url": "..."}`）はこちらで定義した暫定案（実サーバーは未整備）
+- **スコープ**: 確認して `notify`（`update_available`）で知らせるだけ。**ダウンロード・インストールは対象外**（署名検証付きアップデートの実装はインストーラ・配布フローの一部として別途必要）
+- **間引き**: `<user_dir>/update_check.json` に前回確認時刻を保存し、24時間以内は確認しない
+- **設定から任意のタイミングで確認**（`default.toml` の既存コメントにあった文言）に対応する JSON-RPC メソッドは無いため、今回は起動時の自動確認のみを実装した。オンデマンド確認は別途プロトコルメソッドの追加が必要（未着手）
+- 実サーバーが無いため、`nagi.shiki-01.com/updates/latest.json` を実際に用意しないと機能しない（クライアント側は準備済み）
+
+### G-20. Rewriter: 日付・簡易計算の追加（2026-09-27）
+
+G-15/16 で見送っていた日付・簡易計算をスコープに含める旨の回答を受け、Rewriter に追加した。
+
+- **`DigitsToDate`**: 8桁の数字（YYYYMMDD）を `2026/09/27` / `2026年9月27日` に変換する。月（1-12）・日（月の日数以内、うるう年考慮）として妥当でなければ変換しない（システム時刻には依存しない純粋な検証のみ）
+- **`SimpleCalculator`**: `数値 演算子 数値` の単一の二項演算（`+` `-` `*` `/`）のみ。括弧・複数演算・先頭の符号は対象外。0除算は候補を出さない。結果は整数ならそのまま、小数は小数点以下4桁に丸めて末尾の0を除去して表示する
+
+### G-21. KV キャッシュ再利用の見送り（2026-09-27）
+
+G-11・G-12・G-13 で未実装として残していた「KV キャッシュの再利用」について、ユーザーから「任せる」との回答を受け、実装しないことを決定した。
+
+- **技術的な問題**: `llama-cpp-2` の `LlamaContext<'a>` は `model: &'a LlamaModel` を借用する。これを `LlamaModel`（`core/infer`）に永続フィールドとして持たせると自己参照構造体になり、素直には安全に書けない（`ouroboros` crate 等の利用、または `unsafe` の個別解禁（G-2 が想定する「infer の FFI 境界」の緩和）が必要になる）
+- **判断**: 既存の計測（G-11）で `convert_sentence` は p50 32ms / p95 56ms とすでに設計書の目標（Space 変換 → 候補表示 p95 < 150ms）を満たしている。KV キャッシュ再利用は純粋な性能最適化であり、正誤（誤ったキャッシュ再利用による誤変換）のリスクを負って実装する優先度は現時点で低いと判断し、**見送る**
+- 将来、レイテンシが問題になった場合に再検討する。再検討時は `ouroboros` の利用を第一候補とする（手書き `unsafe` より安全側に倒せるため）
+- **2026-09-27 追記**: 別セッションでこの判断を覆し実装した（G-32）。`ouroboros` は使わず、`model` を `Box` 化してアドレスを固定し `ctx` の借用を `'static` と偽る手書きの自己参照構造にした（`unsafe` は G-2 の想定どおり `core/infer` の FFI 境界のみに限定）
+
+### G-22. 範囲選択への再変換・ToHankaku（2026-09-27）
+
+G-17 で選択機構のみとしていた範囲操作に、Mozkey（`koyasi777/mozkey`。Mozc + ローカル Zenz 補正の fork）を参照しつつ、ユーザーの回答（「選択状態の維持」「（Rewriter種類の識別問題は）追加していい」「（既定キーは）設定可にすれば良い」）に基づいて残りを実装した。
+
+- **「選択状態の維持」の解釈**: 複数文節選択中に Space で再変換すると、選択範囲は1つの文節に統合される（`Preedit.selection` の「2文節以上」という前提が成り立たなくなるため）。「選択状態を失う」のではなく、**再変換直後に候補ウィンドウを開いた状態にし、そのまま Space で候補をめくれる**（結果への候補アクセスの継続性）という形で実現した
+- **`CandidateSource::Rewriter` の種類識別問題の解決**: プロトコルは変更していない。`nagi-rewriter` が stdlib のみ依存の純粋関数クレートであることを踏まえ、**`core/engine` が `nagi-rewriter` に直接依存する**ことにした（`nagi-romaji` に依存しているのと同じ位置づけ。辞書・LLM のような「バックエンド」ではなく、決定的な変換ユーティリティとして扱う）。新しい `Action::ToHankaku` を追加し、候補一覧を経由せず `HankakuKatakana`/`HankakuAlnum` を直接呼ぶ
+- **既定キーバインドは割り当てない**（`Ctrl+U/I/O` はハードコードしない）。`parse_action` に `ToHankaku` を追加し、`[keymap.converting]` から利用可能にするだけ（G-17 の「デフォルトキーバインドを決めない」方針を継続）
+- `ToKatakana`/`ToHiragana` も選択範囲全体に対応させた（選択中は範囲全体を1文節にまとめてかな化）。**選択していない場合の既存ロジックは一切変更していない**（既存テストへの影響ゼロ）
+
+### G-23. 予測変換（Tab）の実装（2026-09-27）
+
+設計書 §4.11「予測変換」を実装した。ユーザーの回答（表示は候補ウィンドウ、設定可能にする、詳細は任せる）と Mozc/Mozkey の実際の実装を参考にした。
+
+- **設計書からの逸脱**: 設計書は「Tab/↓で選択」としていたが、Mozc の実際のキーマップ（`ms-ime.tsv`/`kotoeri.tsv`）では `Composition Tab → PredictAndConvert`、`Composition Down → MoveCursorToEnd` であり、**Down は予測変換に使われていない**（カーソル移動）。実績のある挙動を優先し、**Tab のみ**を予測変換のトリガーとした。Down は既存の挙動（Composing では何もしない）を変えていない
+- **状態遷移**: Mozc の `PredictAndConvert`（`session.cc`）を参考に、Composing 中に Tab を押すと `ConversionBackend::predict`（学習キャッシュ・ユーザー辞書の前方一致）を呼び、見つかれば **Converting 状態へ遷移して候補ウィンドウを開く**（Composing に留まってインライン候補を出す方式ではない）。見つからなければ何もしない。**Converting 中の Tab は `NextCand`（次候補）として働く**（Mozc と同じ。既存の Space と同じ効果になる）
+- **供給元**: `Learner::lookup_prefix`（既存）と `Overlay::lookup_prefix`（新規追加）。学習キャッシュを優先し、ユーザー辞書は重複しないものだけ追加する
+- **設定**: `[predict] enabled`（既定 true）・`min_chars`（既定 1、設計書の既定値と一致）
+- **既存テストの意図的な変更**: `core/engine/src/keymap.rs` の `composing_table`/`converting_table`、`core/engine/tests/golden/40_convert.yaml` の `convert-tab-noop`（→ `convert-tab-next-candidate` に改名）を、Tab の新しい挙動に合わせて更新した
+
+### G-24. 非同期通知の配信基盤（2026-09-27）
+
+`update_preedit`/`update_candidates` 等（ライブ変換・スタイル変換）の非同期通知を、キー入力を待たずに配信できる基盤を実装した。実装方針・通知タイミングはユーザーから「任せる」との回答。
+
+- **設計**: `Server::run` を「標準入力を読む専用スレッド + `mpsc` チャンネルを受信するメインループ」に分離した。`Runtime` に `event_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>` を追加し、`push_event` が呼ばれた瞬間にフック（チャンネルへの `Wake` 送信）を呼ぶ。メインループは `Msg::Line`（リクエスト処理）と `Msg::Wake`（溜まっている `notify` をすぐ出力）の両方を1つのチャンネルで受け取る
+- **既存挙動への影響**: `handle_line`（リクエストへの応答に続けて notify を出す既存の同期経路）は変更していない。今回の変更は「キー入力が無い間でも notify が届くようになる」という追加のみ
+- **副作用として直した問題**: `Server::run` は標準入力を別スレッドへ move するため `R: BufRead + Send + 'static` が必要になった。`StdinLock`（`MutexGuard` を内包）は `Send` ではないため、`main.rs` はロックせず `Stdin` をそのまま渡す形に変えた（`Stdin::read` は呼び出しごとに内部で lock/unlock するので、単一スレッドから使う限り挙動は変わらない）
+- **今回のスコープ外**: ライブ変換・スタイル変換など、実際にこの基盤を使って非同期通知を送出する機能自体はまだ実装していない（配信基盤のみ）。既存のキャリブレーション完了・アップデート確認・プロファイル変化の通知が、この基盤によって即時配信されるようになった（動作の変化として観測可能）
+- **テスト**: `core/server/tests/rpc.rs` に、`push_event` が次のリクエストを送らずに配信されることを検証する統合テストを追加した（`cargo test --workspace` を複数回連続実行して安定性を確認済み）
+
+### G-25. ライブ変換: engine側（Session.live_conversion / Engine::live_convert）（2026-09-27）
+
+設計書 §4.3 のライブ変換を実装した。「進める（推奨）」との回答を受けて着手。
+
+- **キャンセル不要のデバウンス設計**: エンジンはタイマーを持たない。`Engine::live_convert(session_id, expected_reading)` は呼ばれた時点の入力全体の reading と `expected_reading` を比較し、一致しなければ何もしない（`None` を返す）。サーバー側は「デバウンス完了時に呼んだ入力がまだ有効か」をこの一致判定だけで確認できるので、古いデバウンスタイマーをキャンセルする仕組み（世代カウンタ・トークン等）が不要になる。Mozkey（C++ 実装）はタイマーキャンセルを使うが、Rust 側の状態機械はより単純な「内容一致チェック」で同じ目的を達成できると判断した
+- **IR 変更なし**: `Preedit`/`Segment` の構造は変更していない。Composing 状態の表示に、既存の Converting 用 `Segment{reading, surface}` をそのまま再利用する（`Session.live_conversion: Option<LiveConversion>` というキャッシュを新設し、`build_preedit` の Composing 分岐がこれを見るだけ）。ふりがな（reading）表示もこの構造のままで実現できる
+- 4つのテストケースを追加。カーソル位置の整合性テスト（`live_convert_keeps_cursor_position_consistent`）で、変換後の surface が reading よりUTF-16単位で短くなるケースのカーソルクランプ挙動を確認した（既存の `build_preedit` のクランプロジックは無変更で正しく動作する）
+
+### G-26. ライブ変換: server側（デバウンス・非同期通知配信・設定）（2026-09-27）
+
+G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ変換の結果を配信するようにした。
+
+- **デバウンススレッド方式**: `process_key` のたびに、Composing 状態かつ入力の reading 文字数が `live_conversion_min_key_length` 以上なら、その場でスレッドを1本立てて `live_conversion_delay_ms` だけ sleep してから `Engine::live_convert` を呼ぶ。古いスレッドをキャンセルしない（G-25 の設計により無害）。高速に連続入力すると短命スレッドが積み重なる可能性があるが、遅延（既定228ms）より速いキー入力間隔は現実的にまれであり、各スレッドのコスト（sleep + 1回のロック取得）も小さいため許容する
+- **既定値は Mozkey の実測値を採用**: `live_conversion_delay_ms = 228`、`live_conversion_min_key_length = 2`（`koyasi777/mozkey` の `config.proto` 実測。ユーザーから「mozkey を参照」との回答）
+- **`Server.engine` を `Arc<Mutex<Engine>>` 化**: デバウンススレッドとメインスレッドが同じ `Engine` を安全に共有するための変更。ロックはポイズン時も中身を使って継続する（`unwrap_or_else(PoisonError::into_inner)`）方針にした。IME サーバーは一部の処理でパニックが起きても全体を落とさず動き続けることを優先する
+- **`update_candidates` の非同期配信は対象外**（今回のスコープ外）: ライブ変換は候補ウィンドウを開かない（Mozkey の挙動を参照）ため不要
+- テスト: `core/server/tests/rpc.rs` に `MockBackend` を使った統合テストを追加（`KanaBackend` は reading=surface のため差分が出ずテストにならない）。3回連続実行でフレーキーでないことを確認済み
+
+### G-27. ライブ変換: composing_chunk_len によるチャンク処理（2026-09-27）
+
+設計書 §4.6「`composing_chunk_len`（既定30文字）でreadingをチャンク分割し、編集されたチャンクのみ再変換」に対応した。今回実装したのは「チャンク分割して変換する」部分のみ（下記スコープ参照）。
+
+- **「数字の直後で分割しない」制約は自動的に満たされる**: `nagi-romaji` の `Composer::insert_char` は ASCII 数字・大文字・記号を常に `PieceKind::Literal`、それ以外（ひらがな等の非ASCII）を常に `PieceKind::Japanese` として扱い、`Composer::pieces()` は同種の連続文字だけを1つの `Piece` にまとめる。そのため `PieceKind::Japanese` の `Piece.text` に数字が混ざることは構造上あり得ず、単純な固定長チャンク分割（`composing_chunk_len` 文字ごと）で設計書の意図（数字と直後のかなを分断しない）を自動的に満たす。「記号の連続」「Fixed境界」も同じ理由でJapanese Piece内部には出現しない（Fixed はComposing状態にはまだ無い。Phase 3の部分確定機能）
+- **スコープ**: 今回実装したのはチャンク分割による変換の「正しさ」のみ。設計書が言う「編集されたチャンクのみ再変換」（前回のチャンク境界を記憶し、編集位置を含むチャンクだけを再変換してレイテンシを下げる）という**キャッシュ最適化は今回のスコープ外**。現時点では毎回のキー入力でチャンク全体を再変換する（既存のデバウンス設計（G-25・G-26）により、キー入力ごとにLLM/辞書を叩くわけではないため実害は限定的と判断したが、実機での長文入力時のレイテンシ計測は未実施）。実機確認後、必要であれば追加する
+- `composing_chunk_len` は元々 `config.toml`/`nagi-profile` には存在したが `EngineConfig` に橋渡しされていなかった（未使用のまま放置されていた設定値）。今回 `EngineConfig::composing_chunk_len`（既定30）を追加し `engine_config_from` で接続した。プロファイル別の値（`quality`=40 / `balanced`=30 / `light`=20 / `minimal`=20）への動的追従は他の類似パラメータ（`predict_min_chars` 等）と同様、現時点では未対応（設定ファイルの値を静的に使う。プロファイル自動切替時に反映されない）
+
+### G-28. 確定取消（Ctrl+Backspace）の実装（2026-09-27）
+
+設計書 §4 状態遷移表「確定直後 | Ctrl+Backspace（既定） | 確定取消: 直前の確定を未確定状態へ戻す（アプリが対応する場合）」を実装した。
+
+- **記憶と破棄の単一の choke point**: 確定は必ず `commit_all` を経由する（`focus_out`・Enter・モード切替時の確定・Ctrl/Alt/Meta付きキーでの確定等、すべての確定経路がここに集約されている）ため、ここで確定前の入力（Composer の Piece 列）を `Session.last_commit` に記憶させた。「確定直後のみ有効」という制約は `apply()` の中では実現できない（キーが未割当で `keymap.resolve` が `None` を返す場合、`handle_key` は `apply()` を呼ばずに直接素通しを返すため）。そのため破棄ロジックは `handle_key` に置いた: `Action::UndoCommit` 以外に解決された、または未割当（素通し）だった場合は必ず `last_commit` を捨てる
+- **Converting からの確定取消は reading に戻る**: 変換結果（surface）は失われ、ひらがな（reading）の Composing に戻る。既存の Escape での変換取消（`back_to_composing`）と同じ扱いで、一貫性がある
+- **プロトコル拡張**: `ProcessKeyResult.delete_before: Option<u32>`（UTF-16長）を追加した。ホストアプリのテキストから確定済み文字列を実際に削除するのはフロントエンド（未実装）の仕事であり、今回実装したのはエンジン側の記憶・復元機構とこの通知のみ。フロント側の対応（Surrounding Text APIでの削除）は別途必要
+- **`typeshare-cli` をこの実行環境にインストールして検証した**（`cargo install typeshare-cli --locked`。crates.io は到達可能）。これにより `cargo xtask check-types`/`gen-types` をこのサンドボックス内で実行・検証できることを確認した（以前はモデル・辞書取得（huggingface.co）が到達不可という制約はあったが、typeshare-cli の取得先である crates.io は無関係で問題なく到達できた）。生成された Swift 型（`frontend-macos/Sources/Generated/Protocol.swift`）も本コミットに含めてコミット済み
+
+### G-29. reconvert（確定済みテキストの再変換）の実装（2026-09-27）
+
+`reconvert` JSON-RPC メソッド（`ReconvertParams{session_id, text}`。それまで `NOT_IMPLEMENTED` だった）を実装した。設計書「読みは辞書の逆引きで推定し、不能区間はLLMで補う」のうち、辞書による推定部分を実装した（LLM補完は今回のスコープ外。設計書自体が将来の拡張として記述しているため問題ないと判断）。
+
+- **アルゴリズム**: `nagi-dict` に既存の順方向 Viterbi（読み→表記。`convert.rs`）と対になる逆方向 Viterbi（表記→読み。新規 `reverse.rs`）を実装した。辞書全体を1回舐めて「表記→[(読み, 語 index)]」の逆引き索引を構築し（`HashMap`。fst の2本目のトリエは作らず、前方一致探索は表記の最大文字数までの全長を試す単純な方法にした。速度上の実害は無いと判断: reconvert はユーザー操作起点でキー入力毎ではない）、あとは連接コスト表・文節区切りルール（`starts_bunsetsu`）を順方向と共有する
+- **未知語の扱い**: 辞書に登録の無い表記区間（例: 辞書にない漢字）は、既存の順方向 Viterbi の「1文字素通しノード」（`unknown_ids`。どの位置からでも経路が保証される）と同じ仕組みをそのまま流用し、`reading = その文字自身` として通す。正しい読みではないが、クラッシュせず、ユーザーがすぐに打ち直せる状態にはなる
+- **遅延構築・メモリコスト**: 逆引き索引は `OnceLock` で初回 `reconvert` 呼び出し時にだけ構築する。実データ（辞書語数約120万）ではこの索引が数十MB程度のメモリを追加消費すると見積もっている（読み文字列を表記ごとに複製して保持するため）。`reconvert` を一度も呼ばなければコストはゼロ。実際のメモリ増加量は実機での計測が必要（未実施。実機確認事項に追加する）
+- **バックエンドが対応できない場合の扱い**: `ConversionBackend::reconvert` の既定実装は空を返す（`KanaBackend` 等、辞書を持たないバックエンドはそのまま非対応）。`Engine::reconvert` はこれを受けて、表記全体を1つの `Literal` セグメント（`reading = surface`）として扱う。読みの再変換はできないが、確定済みテキストを一旦編集可能な状態に戻せる（クラッシュや無反応にはならない）
+- **ユーザー辞書（Overlay）は今回の逆引き対象に含めていない**（システム辞書のみ）。将来の拡張余地として残す
+- テストは合成辞書（`DictionaryBuilder`）による単体テスト（`nagi-dict`）が中心。実データでの実際の精度・メモリ計測は未実施（本環境に `data/dict/nagi-dict.bin` が無いため）
+
+### G-30. ビームサーチ: 辞書ベースの文全体N-best（2026-09-27）
+
+ユーザーの決定に基づき実装した: (1) 実LLMでの本物のビームサーチ（トークン生成、KVキャッシュ管理を伴う）は本環境で検証不能なため、辞書のk-best Viterbiで実装する。(2) 文全体N-best候補を選ぶと、選んだ分割へ丸ごと置き換える（複数の分割を保持し続ける複雑な設計は採用しない）。
+
+- **アルゴリズム**: `nagi-dict` に既存の1-best Viterbi（`convert.rs`）を一般化したk-best版（`nbest.rs::convert_n_best`）を実装した。各セル（文字位置, 右ID）で上位1件だけでなく上位k件を保持しながら格子を前進する標準的な手法。既存の1-best実装は無変更（性能・挙動に影響なし）
+- **エンジン側の状態設計**: `initial_view = sentence`（既定）かつ入力全体が1つの日本語Pieceのときだけ、Space変換の1回目でN-best候補を1つの「メガ文節」として候補窓に表示する（`Conv.sentence_alternatives: Option<Vec<Vec<Segment>>>`）。候補選択（NextCand/PrevCand/SelectCand/select_candidate）以外の操作が来たら、選択中の候補の文節分割へ展開する（`ensure_segmented`。`apply_converting` の先頭で全操作に対して呼ぶ、候補選択だけ除外）。複数Pieceが混在する場合（記号・数字と日本語が混じる）は今回のスコープ外で、常に既存の1-best・文節ごとの変換にフォールバックする
+- **重要な訂正（実装レビューで発見）**: 当初 `Pipeline::sentence_candidates` は辞書のコスト順だけで候補を並べる実装だったが、これは実際の変換品質を落とす重大な問題だった。既存の `convert_sentence`（LLMが使えるときは再採点済みの1-best。G-11で精度76.4%まで改善したもの）を1件目にし、辞書のN-bestで2件目以降を補う形に修正した。修正前のままだと、LLM搭載環境でも`initial_view=sentence`（既定）が有効な限りLLM再採点を経由しない辞書コスト順が最初の候補になってしまい、精度が66.0%相当まで後退していた（`server/tests/features.rs` の同音異義語（こうえん→公園/公苑/講演/後援）に関するテスト群がこれを検出した）
+- `server/tests/features.rs` の `server_in()` は `initial_view = Segment` を明示するよう変更した。これらのテストはLLM再採点・学習・ユーザー辞書優先度（`segment_candidates` 経路）を検証する目的であり、文全体N-bestとは別の関心事のため、テストの対象を明確に分離した
+- `conversion.beam_width`（既存だが未接続だった設定値）を `EngineConfig.beam_width` に接続した（文全体N-bestの候補数の起点）。`nagi-profile::ProfileParams.beam_width`（プロファイル別既定値）に基づく `Effective.beam_width`（`nagi-server::Runtime`）も別途接続したが、こちらは辞書ベースのN-bestからは現時点で参照されない（将来、実LLMビームサーチを実装する際に使う想定のプレースホルダー）。つまり `conversion.beam_width` を設定ファイルで指定すればエンジン側のN-best候補数には反映されるが、プロファイル自動切替による値の変動は反映されない
+
+### G-31. アップデート配布物のed25519署名検証（2026-09-27）
+
+設計書「ed25519署名検証付きアップデート」に対応した。`update_check.rs`（G-19）のマニフェストに `download_url`/`sha256`/`signature` を追加し、ダウンロードしたバイト列のSHA-256・ed25519署名の両方を検証する `download_verified()` を実装した。
+
+- **スコープ**: 検証のみ。実際にファイルをディスクへ書き込む・展開する・自己更新する処理はプラットフォームごとの実装が必要なため対象外（G-19の「確認のみ」というスコープの延長）
+- **`hex` クレートは使わず自作**: 依存を増やさない方針（既存コードの他の部分と同じ）
+- **`UPDATE_PUBLIC_KEY_HEX` はプレースホルダー**: 実装確認のため `openssl genpkey -algorithm ed25519` で使い捨ての鍵ペアを生成し、公開鍵をこの定数に埋め込んだ。**対応する秘密鍵は生成後すぐに破棄し、このリポジトリのどこにも残していない**。実際に配布する前に、新しい鍵ペアを生成し直し、秘密鍵はリリース署名を行う環境（ビルドサーバー等）でのみオフラインで保管する必要がある
+- テストは実際にこの使い捨て鍵ペアで署名した既知の値（`openssl pkeyutl -sign`）を使い、`ed25519-dalek` 2.x との相互運用性（署名の受理・改竄検知・鍵不一致検知・不正な長さの検知）を確認した
+
+### G-32. LLM コンテキストの再利用（KV キャッシュ、2026-09-27）
 
 実装: `core/infer/src/lib.rs`（`llama::LlamaModel`）、`core/infer/Cargo.toml`（`unsafe_code` の局所解禁）。
 
@@ -400,7 +576,7 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 - **実測**（同じ 7 文、`test_llama_model_convert` の `prefill_ms`。実装前 → 実装後、CPU のみ・24 スレッド）: 24→28、19→16、19→15、17→13、19→15、17→14、17→14ms。母数が小さく機械のノイズもあるため参考値だが、悪化はしていない。zenz-v3.1-small・n_ctx=512 では確保コスト自体が小さく、改善幅は大きくない（大きいモデル・長い `n_ctx` では差が広がる見込み）
 - **未実装**: 複数セッションを跨いだ会話的な KV キャッシュ差分再利用（プロンプトの共通接頭辞を保持したままの継続）は行っていない。`clear_kv_cache` は毎回全消去する暫定
 
-### G-14. LLM のビームサーチ（文全体の N-best、Stage 1: infer 単体、2026-09-27）
+### G-33. LLM のビームサーチ（文全体の N-best、Stage 1: infer 単体、2026-09-27）
 
 実装: `core/infer/src/lib.rs`（`ConvertRequest::beam_width`、`LlamaOptions::max_beam_width`、`llama::LlamaModel::beam_search` / `decode_beams` / `top_k_logprobs`）。段階分けの方針（ユーザー承認済み）: 今回は infer 単体の実装・検証のみ。`server`（`Pipeline::sentence_candidates`）・`engine`（候補ウィンドウの sentence モード）・キーマップへの統合は次段で行う（進捗は `docs/progress.md`）。
 
@@ -410,9 +586,9 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 - **`kv_unified = true` が必要だった**: 既定の `kv_unified = false`（分離バッファ）では `kv_cache_seq_cp` が異なるバッファ間のコピーになり、llama.cpp 側が「全域コピーのみ対応（`is_full` アサート）」で拒否する（プロンプト分だけの部分コピーができずクラッシュする）。`with_kv_unified(true)` で 1 つの共有バッファにして解決した。コンテキストは既存の再利用（G-13）と同じ 1 つを使い回すため、`beam_width` を使わない呼び出し（貪欲デコード・`score`）にも影響するが、動作・既存テストに変化はない
 - **実測**（zenz-v3.1-small、`width=3`、代表 4 文）: 曖昧性の低い文では貪欲デコードと同じ表記が最上位に来て、2 位以降に表記ゆれ・別の妥当な変換が並ぶ。例: 「こうえん」→ 公園 / 講演 / 公演、「きょうはいいてんきです」→ 今日はいい天気です / 今日は良い天気です / 今日はイイ天気です、「とうきょうにいく」→ 東京に行く / 東京にいく / 東京に行、「かんじへんかんのてすと」→ 漢字変換のテスト / 漢字変換のtest / 感じ変換のテスト。最上位のスコアは貪欲デコードとバッチ化による浮動小数点誤差の範囲（< 0.01）で一致した
 - **既知の限界**: 貪欲デコードの経路がビームサーチで必ず生き残る保証は一般には無い（弱い競合を持つ他ビームの累積スコアが上回れば刈られ得る）。実測 4 文では一致したが、理論的な不変条件としては扱わない。early stopping（十分良い確定仮説が出た時点で打ち切る最適化）は未実装で、常に `max_new_tokens` まで回す（`width` が小さく生成長も短いため実害は小さい）
-- **未実装（次段）は G-15 で実装済み**
+- **未実装（次段）は G-34 で実装済み**
 
-### G-15. LLM のビームサーチ（Stage 2: server / engine への統合、2026-09-27）
+### G-34. LLM のビームサーチ（Stage 2: server / engine への統合、2026-09-27）
 
 実装: `core/server/src/{runtime,pipeline,setup}.rs`（`Effective::beam_width`・`Pipeline::sentence_candidates`・`llm_beam_convert`）、`core/engine/src/{backend,engine}.rs`（`ConversionBackend::sentence_candidates` 既定実装・`InitialView`・`Conv::{whole,sentence}`）。
 

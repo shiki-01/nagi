@@ -16,6 +16,7 @@ fn backend(model: FakeModel, budget_ms: u64) -> Pipeline {
         SystemInfo {
             total_memory_mb: 16384,
             cpu_cores: 8,
+            has_gpu: false,
         },
         true,
         Tunables {
@@ -40,6 +41,7 @@ fn backend_with_beam_width(model: FakeModel, beam_width: usize) -> Pipeline {
         SystemInfo {
             total_memory_mb: 16384,
             cpu_cores: 8,
+            has_gpu: false,
         },
         true,
         Tunables {
@@ -339,14 +341,20 @@ fn sentence_candidates_are_beam_hypotheses_force_aligned() {
     let b = backend_with_beam_width(model, 3);
     let sentences = b.sentence_candidates("きょうはこうえんにいく", "", 10);
 
-    assert_eq!(sentences.len(), 3, "{sentences:?}");
+    // 先頭3件は実LLMのビームサーチ由来（スコア順のまま強制アライメントされる）。
+    // 4件目は辞書のk-best Viterbi（G-30）で件数を補った「こうえん」の未変換（かな）表記
+    assert_eq!(sentences.len(), 4, "{sentences:?}");
     let surfaces: Vec<String> = sentences.iter().map(full_surface).collect();
     assert_eq!(
         surfaces,
-        ["今日は公園に行く", "今日は講演に行く", "今日は後援に行く"],
-        "スコア順のまま、それぞれ強制アライメントされる"
+        [
+            "今日は公園に行く",
+            "今日は講演に行く",
+            "今日は後援に行く",
+            "今日はこうえんに行く",
+        ],
     );
-    for s in &sentences {
+    for s in sentences.iter().take(3) {
         assert_eq!(
             full_reading(s),
             "きょうはこうえんにいく",
@@ -374,26 +382,28 @@ fn sentence_candidates_respects_limit() {
 }
 
 #[test]
-fn sentence_candidates_falls_back_to_single_when_beam_width_is_1() {
+fn sentence_candidates_uses_dictionary_alternatives_when_beam_width_is_1() {
+    // beam_width <= 1 では実LLMのビームサーチは使わないが、辞書のk-best Viterbi（G-30）が
+    // 代わりに代替を補う（LLMが無い環境でもsentenceモードが機能するという設計意図どおり）
     let model = FakeModel::new(&[("こうえん", "公園")])
         .with_beam("こうえん", &[("公園", -0.1), ("講演", -1.0)]);
     let b = backend_with_beam_width(model, 1);
     let sentences = b.sentence_candidates("こうえん", "", 10);
-    assert_eq!(sentences.len(), 1, "beam_width <= 1 では代替を出さない");
-    assert_eq!(full_surface(&sentences[0]), "公園");
+    let surfaces: Vec<String> = sentences.iter().map(full_surface).collect();
+    assert_eq!(surfaces, ["公園", "講演", "後援", "こうえん"]);
 }
 
 #[test]
-fn sentence_candidates_falls_back_when_hypotheses_collapse_to_one() {
-    // ビームサーチが同じ表記ばかり返した場合（重複除去後 1 件）は代替なし扱いにする
+fn sentence_candidates_falls_back_to_dictionary_when_hypotheses_collapse_to_one() {
+    // ビームサーチが同じ表記ばかり返した場合（重複除去後 1 件）は、辞書のk-best Viterbiで補う
     let model = FakeModel::new(&[("こうえん", "公園")]).with_beam(
         "こうえん",
         &[("公園", -0.1), ("公園", -0.2), ("公園", -0.3)],
     );
     let b = backend_with_beam_width(model, 3);
     let sentences = b.sentence_candidates("こうえん", "", 10);
-    assert_eq!(sentences.len(), 1);
-    assert_eq!(full_surface(&sentences[0]), "公園");
+    let surfaces: Vec<String> = sentences.iter().map(full_surface).collect();
+    assert_eq!(surfaces, ["公園", "講演", "後援", "こうえん"]);
 }
 
 #[test]
@@ -401,6 +411,14 @@ fn sentence_candidates_without_model_falls_back_to_dictionary() {
     let model = FakeModel::new(&[]);
     let b = backend_with_beam_width(model, 3);
     let sentences = b.sentence_candidates("きょうはこうえんにいく", "", 10);
-    assert_eq!(sentences.len(), 1);
-    assert_eq!(full_surface(&sentences[0]), "今日は公園に行く");
+    let surfaces: Vec<String> = sentences.iter().map(full_surface).collect();
+    assert_eq!(
+        surfaces,
+        [
+            "今日は公園に行く",
+            "今日は講演に行く",
+            "今日は後援に行く",
+            "今日はこうえんに行く",
+        ],
+    );
 }

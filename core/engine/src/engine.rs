@@ -18,21 +18,22 @@ use nagi_protocol::key::{KeyEvent, KeyKind};
 use nagi_protocol::methods::{ProcessKeyResult, RestoreSessionParams, SetContextParams};
 use nagi_protocol::utf16;
 use nagi_protocol::view::{CandidateView, CandidatesView, InputMode, PreeditView};
+use nagi_rewriter::Rewriter;
 use nagi_romaji::{Composer, Piece, PieceKind, PunctuationStyle, RomajiTable, ShiftLetterMode};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// 推論・変換に渡す左文脈の最大文字数（Unicode スカラー）
 const LEFT_CONTEXT_CHARS: usize = 40;
 /// 文節 1 つ分に集める候補数の上限
 const CANDIDATE_LIMIT: usize = 50;
-/// 文全体の候補（sentence モード）の上限
-const SENTENCE_CANDIDATE_LIMIT: usize = 8;
 
-/// 候補ウィンドウの初期表示形式（`conversion.initial_view`。設計書 §4.4）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 候補ウィンドウの初期表示（`conversion.initial_view`。設計書 §4.4）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InitialView {
     /// 文全体の N-best を表示する（既定）
+    #[default]
     Sentence,
     /// 先頭文節の候補を表示する（MS-IME / Mozc と同じ）
     Segment,
@@ -49,8 +50,20 @@ pub struct EngineConfig {
     pub page_size: usize,
     /// セッション開始時の入力モード
     pub initial_mode: InputMode,
-    /// 候補ウィンドウの初期表示形式（`conversion.initial_view`）
+    /// キーマップ（`[keymap]`。既定は内蔵の既定テーブルのみで上書きなし）
+    pub keymap: KeyMap,
+    /// 予測変換を行うか（`predict.enabled`）
+    pub predict_enabled: bool,
+    /// 予測変換を表示する最小の読みの文字数（`predict.min_chars`）
+    pub predict_min_chars: usize,
+    /// ライブ変換のチャンク長（`conversion.composing_chunk_len`）。この文字数を超える
+    /// Composing 中の1つの日本語入力は、この文字数ごとに分けて変換する
+    pub composing_chunk_len: usize,
+    /// 候補ウィンドウの初期表示（`conversion.initial_view`）
     pub initial_view: InitialView,
+    /// 文全体N-bestの候補数の起点（`conversion.beam_width`。既定値のみ。実行時のプロファイル
+    /// 反映は `Effective.beam_width`（`nagi-server`）が別に持つ）
+    pub beam_width: usize,
 }
 
 impl Default for EngineConfig {
@@ -60,7 +73,12 @@ impl Default for EngineConfig {
             punctuation: PunctuationStyle::Japanese,
             page_size: 9,
             initial_mode: InputMode::Hiragana,
+            keymap: KeyMap::default_preset(),
+            predict_enabled: true,
+            predict_min_chars: 1,
+            composing_chunk_len: 30,
             initial_view: InitialView::Sentence,
+            beam_width: 3,
         }
     }
 }
@@ -100,20 +118,13 @@ struct Conv {
     segments: Vec<Segment>,
     focus: usize,
     visible: bool,
-    /// preedit 全体がちょうど 1 回の `convert_sentence` 呼び出し（`start_converting` 時点）から
-    /// 成るときだけ Some（(reading, left_context)）。文全体モードの候補取得に使う。
-    /// Literal との混在などで複数ピースにまたがる入力では None（sentence モードは提供しない）
-    whole: Option<(String, String)>,
-    /// 文全体の候補（sentence モード）。遅延生成。`←/→` 等で操作したら None に戻す
-    sentence: Option<SentenceCandidates>,
-}
-
-/// 文全体の N-best（候補ウィンドウの sentence モード）。1 候補 = 文全体の 1 つの切り方
-#[derive(Clone)]
-struct SentenceCandidates {
-    /// 各候補の文節列。採用すると `Conv.segments` を丸ごと差し替える
-    options: Vec<Vec<Segment>>,
-    selected: usize,
+    /// 範囲選択の反対側の端（`Some` の間は複数文節を選択中）。選択範囲は `focus` と
+    /// `range_anchor` を含む最小区間。`focus == range_anchor` になったら選択解除（`None` に戻す）
+    range_anchor: Option<usize>,
+    /// 文全体N-bestの表示中、各候補ごとの文節分割（`segments[0].candidates` の index と対応）。
+    /// 候補選択（`NextCand`/`PrevCand`/`SelectCand`/`select_candidate`）以外の操作が来たら、
+    /// 選択中の候補の分割へ丸ごと置き換えて `None` にする（`ensure_segmented`）
+    sentence_alternatives: Option<Vec<Vec<Segment>>>,
 }
 
 enum State {
@@ -155,6 +166,34 @@ struct Session {
     sent: Sent,
     /// 非同期の LLM 完了に対応する差し替え対象。未操作なら差し替える
     origins: Vec<Origin>,
+    /// ライブ変換の結果（Composing 中のみ使う）。`source_reading` が現在の入力全体の reading と
+    /// 一致する間だけ表示に使う。一致しなくなったら（次の入力があった等）自然に無視される
+    live_conversion: Option<LiveConversion>,
+    /// 直前の確定の記憶（`Action::UndoCommit` 用）
+    last_commit: Option<LastCommit>,
+    /// このキー処理で確定取消が成功した場合の `delete_before`（`finish` が読んで消費する）
+    pending_delete_before: Option<u32>,
+}
+
+/// ライブ変換のキャッシュ
+#[derive(Clone)]
+struct LiveConversion {
+    /// 計算時点の入力全体（Composing の全 piece を連結した）reading
+    source_reading: String,
+    /// 変換結果のセグメント列（reading を連結すると `source_reading` に一致する）
+    segments: Vec<Segment>,
+}
+
+/// 直前の確定の記憶（Ctrl+Backspace での確定取消に使う。確定のたびに置き換わり、
+/// 確定取消以外の操作が来ると `handle_key` が破棄する。1回分だけ保持する）
+#[derive(Clone)]
+struct LastCommit {
+    /// 確定前の入力（Composer に復元するための Piece 列。Converting だった場合は
+    /// 各文節の reading から作る。変換結果は失われ、ひらがなに戻る（Escape での
+    /// 変換取消と同じ扱い）
+    pieces: Vec<Piece>,
+    /// 確定した文字列の UTF-16 コード単位での長さ（`ProcessKeyResult.delete_before` に使う）
+    committed_len_utf16: u32,
 }
 
 /// 変換の始め方
@@ -199,10 +238,11 @@ impl Engine {
     /// エンジンを作る
     pub fn new(backend: Arc<dyn ConversionBackend>, config: EngineConfig) -> Self {
         let table = Arc::new(RomajiTable::standard().with_punctuation(config.punctuation));
+        let keymap = config.keymap.clone();
         Engine {
             backend,
             config,
-            keymap: KeyMap::default_preset(),
+            keymap,
             table,
             sessions: HashMap::new(),
             observer: None,
@@ -222,6 +262,7 @@ impl Engine {
                 .reconfigure(self.table.clone(), config.shift_letter);
             sess.sent.candidates.page_size = config.page_size as u32;
         }
+        self.keymap = config.keymap.clone();
         self.config = config;
     }
 
@@ -264,6 +305,9 @@ impl Engine {
                 mode: self.config.initial_mode,
             },
             origins: Vec::new(),
+            live_conversion: None,
+            last_commit: None,
+            pending_delete_before: None,
         }
     }
 
@@ -319,6 +363,142 @@ impl Engine {
         result
     }
 
+    /// `select_candidate` メソッド: 注目文節の候補一覧から絶対インデックスで選択する
+    /// （マウス操作等。ページ相対の数字キー（`Action::SelectCand`）とは別経路）。
+    /// Converting 状態でなければ何もしない。候補一覧が未生成なら作ってから選択する。
+    /// index が範囲外なら選択を変えない
+    pub fn select_candidate(&mut self, session_id: &str, index: u32) -> ProcessKeyResult {
+        let mut sess = self.take_session(session_id);
+        if let State::Converting(conv) = &mut sess.state {
+            let f = conv.focus;
+            self.ensure_candidates(&sess.left_context, conv, f);
+            let index = index as usize;
+            if let Some(set) = conv.segments[f].candidates.as_mut()
+                && index < set.items.len()
+            {
+                set.selected = index;
+                let surface = set.items[index].surface.clone();
+                conv.segments[f].surface = surface;
+            }
+            conv.visible = false;
+        }
+        let result = self.finish(&mut sess, true, String::new());
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// 現在 Composing 状態なら、入力中の全体の reading（ローマ字変換済みのひらがな連結）を返す。
+    /// Composing でない・未入力なら `None`（サーバーがライブ変換のデバウンス判定に使う）
+    pub fn composing_reading(&self, session_id: &str) -> Option<String> {
+        let sess = self.sessions.get(session_id)?;
+        let State::Composing = sess.state else {
+            return None;
+        };
+        let pieces = sess.composer.pieces();
+        if pieces.is_empty() {
+            return None;
+        }
+        Some(pieces.iter().map(|p| p.text.as_str()).collect())
+    }
+
+    /// ライブ変換の再変換を試みる（サーバーがデバウンス後に呼ぶ）。Composing 状態で、かつ
+    /// 現在の入力全体の reading が `expected_reading` と一致する場合だけ変換を行い、Session に
+    /// 反映する。一致しない（すでに別の入力になっている）場合や、変換しても表示が変わらない
+    /// 場合は `None` を返す（フロントへ何も送らなくてよいという意味）
+    pub fn live_convert(
+        &mut self,
+        session_id: &str,
+        expected_reading: &str,
+    ) -> Option<ProcessKeyResult> {
+        let mut sess = self.take_session(session_id);
+        let applied = self.try_apply_live_conversion(&mut sess, expected_reading);
+        let result = if applied {
+            let r = self.finish(&mut sess, false, String::new());
+            r.preedit.is_some().then_some(r)
+        } else {
+            None
+        };
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// `live_convert` の内部処理。反映できたら `true`
+    fn try_apply_live_conversion(&self, sess: &mut Session, expected_reading: &str) -> bool {
+        let State::Composing = sess.state else {
+            return false;
+        };
+        let pieces = sess.composer.pieces();
+        if pieces.is_empty() {
+            return false;
+        }
+        let full_reading: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        if full_reading != expected_reading {
+            return false;
+        }
+        let mut segments: Vec<Segment> = Vec::new();
+        let mut context = sess.left_context.clone();
+        for piece in &pieces {
+            match piece.kind {
+                PieceKind::Japanese => {
+                    self.convert_japanese_chunked(&piece.text, &mut context, &mut segments);
+                }
+                PieceKind::Literal => {
+                    context.push_str(&piece.text);
+                    let id = segments.len() as u32;
+                    segments.push(Segment::plain(&piece.text, SegmentKind::Literal, id));
+                }
+            }
+        }
+        sess.live_conversion = Some(LiveConversion {
+            source_reading: full_reading,
+            segments,
+        });
+        true
+    }
+
+    /// 日本語の入力（ひらがなのみ）を `composing_chunk_len` 文字ずつのチャンクに分けて変換し、
+    /// `segments` に追記する。`context` はチャンクをまたいで更新される左文脈（前のチャンクの
+    /// 変換結果を含む）。1文字数が `composing_chunk_len` 以下なら1回のループで既存と同じ動作になる
+    fn convert_japanese_chunked(
+        &self,
+        text: &str,
+        context: &mut String,
+        segments: &mut Vec<Segment>,
+    ) {
+        let chunk_len = self.config.composing_chunk_len.max(1);
+        let chars: Vec<char> = text.chars().collect();
+        for start in (0..chars.len()).step_by(chunk_len) {
+            let end = (start + chunk_len).min(chars.len());
+            let chunk: String = chars[start..end].iter().collect();
+            let converted = self
+                .backend
+                .convert_sentence(&chunk, &tail_chars(context, LEFT_CONTEXT_CHARS));
+            let valid = !converted.is_empty()
+                && converted
+                    .iter()
+                    .map(|s| s.reading.as_str())
+                    .collect::<String>()
+                    == chunk;
+            if valid {
+                for bs in converted {
+                    context.push_str(&bs.surface);
+                    let id = segments.len() as u32;
+                    segments.push(Segment {
+                        reading: bs.reading,
+                        surface: bs.surface,
+                        kind: SegmentKind::Japanese,
+                        candidates: None,
+                        chunk_id: id,
+                    });
+                }
+            } else {
+                context.push_str(&chunk);
+                let id = segments.len() as u32;
+                segments.push(Segment::plain(&chunk, SegmentKind::Japanese, id));
+            }
+        }
+    }
+
     /// エンジン再起動後に、フロントが保持していた preedit を復元する
     pub fn restore_session(
         &mut self,
@@ -348,8 +528,8 @@ impl Engine {
                     segments,
                     focus,
                     visible: false,
-                    whole: None,
-                    sentence: None,
+                    range_anchor: None,
+                    sentence_alternatives: None,
                 });
             } else {
                 let pieces: Vec<Piece> = params
@@ -368,6 +548,44 @@ impl Engine {
             }
         }
         let result = self.finish(&mut sess, true, String::new());
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// 確定済みテキストの再変換要求（`reconvert` RPC。OS の再変換 API から）。
+    /// 読みは辞書の逆引きで推定する（[`ConversionBackend::reconvert`]）。推定できなければ
+    /// （バックエンドが空を返したら）Literal な1文節として扱う（reading = surface。
+    /// 再変換はできないが表示・編集はできる）
+    pub fn reconvert(&mut self, session_id: &str, text: &str) -> ProcessKeyResult {
+        let mut sess = self.take_session(session_id);
+        let mut commit = String::new();
+        self.commit_all(&mut sess, &mut commit);
+        if !text.is_empty() {
+            let backend_segments = self.backend.reconvert(text);
+            let segments: Vec<Segment> = if backend_segments.is_empty() {
+                vec![Segment::plain(text, SegmentKind::Literal, 0)]
+            } else {
+                backend_segments
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, bs)| Segment {
+                        reading: bs.reading,
+                        surface: bs.surface,
+                        kind: SegmentKind::Japanese,
+                        candidates: None,
+                        chunk_id: i as u32,
+                    })
+                    .collect()
+            };
+            sess.state = State::Converting(Conv {
+                segments,
+                focus: 0,
+                visible: false,
+                range_anchor: None,
+                sentence_alternatives: None,
+            });
+        }
+        let result = self.finish(&mut sess, true, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
     }
@@ -457,6 +675,9 @@ impl Engine {
                 s.chunk_id = i as u32;
             }
             conv.focus = conv.focus.min(conv.segments.len() - 1);
+            // 差し替え前の sentence_alternatives は、もう conv.segments と対応しないので捨てる
+            // （そのまま残すと、次の ensure_segmented で古い切り方に巻き戻ってしまう）
+            conv.sentence_alternatives = None;
         }
         changed
     }
@@ -468,6 +689,9 @@ impl Engine {
             state: match sess.state {
                 State::Direct => StateKind::Direct,
                 State::Composing => StateKind::Composing,
+                State::Converting(ref conv) if conv.range_anchor.is_some() => {
+                    StateKind::RangeSelecting
+                }
                 State::Converting(_) => StateKind::Converting,
             },
             preedit: self.build_preedit(sess).to_view(),
@@ -488,7 +712,13 @@ impl Engine {
             State::Composing => KeyContext::Composing,
             State::Converting(_) => KeyContext::Converting,
         };
-        match self.keymap.resolve(ctx, sess.mode, key) {
+        let action = self.keymap.resolve(ctx, sess.mode, key);
+        // 確定取消（Ctrl+Backspace）以外の操作が来たら、確定直後の記憶を捨てる。
+        // 未割当キー（素通し）でも捨てる（「確定直後のみ有効」という制約はここで実現する）
+        if !matches!(action, Some(Action::UndoCommit)) {
+            sess.last_commit = None;
+        }
+        match action {
             Some(action) => self.apply(sess, action, commit),
             // 割当なし: 未入力なら素通し、入力中はキーを消費して何もしない
             None => !matches!(sess.state, State::Direct),
@@ -515,6 +745,7 @@ impl Engine {
                 self.commit_all(sess, commit);
                 false
             }
+            Action::UndoCommit => self.try_undo_commit(sess),
             Action::NoOp => true,
             Action::Insert(c) => {
                 self.insert_char(sess, c, commit);
@@ -574,6 +805,7 @@ impl Engine {
             }
             Action::Commit => self.commit_all(sess, commit),
             Action::StartConvert | Action::NextCand => self.start_converting(sess, Start::Convert),
+            Action::Predict => self.predict(sess),
             Action::ToKatakana => self.start_converting(sess, Start::Katakana),
             Action::ToHiragana => self.start_converting(sess, Start::Hiragana),
             _ => {}
@@ -619,41 +851,192 @@ impl Engine {
         (segments, valid)
     }
 
+    /// 文全体N-best（`conv.sentence_alternatives`）を表示中に、候補選択以外の操作が来たら、
+    /// 現在選択中の候補の文節分割へ丸ごと置き換える（以後は通常の文節編集として扱う）
+    fn ensure_segmented(&self, conv: &mut Conv) {
+        let Some(alternatives) = conv.sentence_alternatives.take() else {
+            return;
+        };
+        let selected = conv
+            .segments
+            .first()
+            .and_then(|s| s.candidates.as_ref())
+            .map(|c| c.selected)
+            .unwrap_or(0);
+        if let Some(segments) = alternatives.into_iter().nth(selected) {
+            conv.segments = segments;
+            conv.focus = 0;
+        }
+    }
+
     fn apply_converting(&self, sess: &mut Session, action: Action, commit: &mut String) {
+        if !matches!(
+            action,
+            Action::NextCand | Action::StartConvert | Action::PrevCand | Action::SelectCand(_)
+        ) && let State::Converting(conv) = &mut sess.state
+        {
+            self.ensure_segmented(conv);
+        }
+        let selecting =
+            matches!(&sess.state, State::Converting(conv) if conv.range_anchor.is_some());
         match action {
+            Action::NextCand | Action::StartConvert | Action::PrevCand if selecting => {
+                self.reconvert_selection(sess);
+            }
             Action::NextCand | Action::StartConvert => self.step_candidate(sess, 1),
             Action::PrevCand => self.step_candidate(sess, -1),
             Action::MoveFocus(dir) => self.move_focus(sess, dir),
             Action::ResizeSegment(dir) => self.resize_segment(sess, dir),
+            Action::ExtendSelection(dir) => self.extend_selection(sess, dir),
             Action::Commit => self.commit_all(sess, commit),
-            Action::Cancel => self.back_to_composing(sess),
+            Action::Cancel => self.cancel_converting(sess),
             Action::ToKatakana => self.set_focus_kana(sess, true),
             Action::ToHiragana => self.set_focus_kana(sess, false),
-            Action::SelectCand(n) => self.select_candidate(sess, n, commit),
+            Action::ToHankaku => self.set_focus_hankaku(sess),
+            Action::SelectCand(n) => self.select_candidate_page_relative(sess, n, commit),
             Action::DeleteLearning => self.delete_learning(sess),
-            // ExtendSelection（範囲選択）は Phase 3
             _ => {}
         }
+    }
+
+    /// Escape: 複数文節選択中はまず選択だけ解除する。選択していなければ Composing へ戻る
+    fn cancel_converting(&self, sess: &mut Session) {
+        let cleared = if let State::Converting(conv) = &mut sess.state {
+            conv.range_anchor.take().is_some()
+        } else {
+            false
+        };
+        if !cleared {
+            self.back_to_composing(sess);
+        }
+    }
+
+    /// `Ctrl+Shift+←/→`: 複数文節の選択を開始・伸縮する。`focus` を選択の可動端として動かし、
+    /// 反対側の固定端を `range_anchor` に持つ。`focus` が `range_anchor` まで戻ったら選択を解除する
+    fn extend_selection(&self, sess: &mut Session, dir: Direction) {
+        let State::Converting(conv) = &mut sess.state else {
+            return;
+        };
+        if conv.range_anchor.is_none() {
+            conv.range_anchor = Some(conv.focus);
+        }
+        conv.visible = false;
+        match dir {
+            Direction::Left => conv.focus = conv.focus.saturating_sub(1),
+            Direction::Right => conv.focus = (conv.focus + 1).min(conv.segments.len() - 1),
+        }
+        if conv.range_anchor == Some(conv.focus) {
+            conv.range_anchor = None;
+        }
+    }
+
+    /// 現在の選択範囲（セグメント index の半開区間）。選択していなければ `None`
+    fn selection_range(conv: &Conv) -> Option<Range<usize>> {
+        let anchor = conv.range_anchor?;
+        let lo = anchor.min(conv.focus);
+        let hi = anchor.max(conv.focus);
+        Some(lo..hi + 1)
+    }
+
+    /// 複数文節選択中に Space（`NextCand`/`PrevCand`/`StartConvert`）が来たら、選択範囲全体を
+    /// 1つの読みとして再変換する（設計書 §4.10「範囲のみ再変換（候補は範囲の reading に対して
+    /// 生成）」）。結果は1つの文節に置き換わり、候補ウィンドウを開いた状態にする
+    /// （そのまま Space で候補をめくれる。「選択状態の維持」の意図を、選択そのものではなく
+    /// 再変換結果への候補アクセスの継続として実現する）
+    fn reconvert_selection(&self, sess: &mut Session) {
+        let State::Converting(conv) = &mut sess.state else {
+            return;
+        };
+        let Some(range) = Self::selection_range(conv) else {
+            return;
+        };
+        let merged_reading: String = conv.segments[range.clone()]
+            .iter()
+            .map(|s| s.reading.as_str())
+            .collect();
+        let left = Self::left_context_for(&sess.left_context, conv, range.start);
+        let backend_candidates =
+            self.backend
+                .segment_candidates(&merged_reading, &left, CANDIDATE_LIMIT);
+        let katakana = to_katakana(&merged_reading);
+        let mut items: Vec<Candidate> = Vec::new();
+        for c in &backend_candidates {
+            push_candidate(&mut items, &c.surface, &c.sources);
+        }
+        push_candidate(&mut items, &merged_reading, &[CandidateSource::Kana]);
+        push_candidate(&mut items, &katakana, &[CandidateSource::Kana]);
+        let surface = items
+            .first()
+            .map(|c| c.surface.clone())
+            .unwrap_or_else(|| merged_reading.clone());
+        let new_focus = range.start;
+        let new_segment = Segment {
+            reading: merged_reading,
+            surface,
+            kind: SegmentKind::Japanese,
+            candidates: Some(CandidateSet { items, selected: 0 }),
+            chunk_id: range.start as u32,
+        };
+        conv.segments.splice(range, [new_segment]);
+        for (i, s) in conv.segments.iter_mut().enumerate() {
+            s.chunk_id = i as u32;
+        }
+        conv.focus = new_focus;
+        conv.range_anchor = None;
+        conv.visible = true;
     }
 
     // ---- 確定・遷移 ----
 
     /// 表示中の内容をすべて確定文字列へ移し、Direct に戻す
     fn commit_all(&self, sess: &mut Session, commit: &mut String) {
-        match std::mem::replace(&mut sess.state, State::Direct) {
-            State::Direct => {}
+        let before_len = commit.len();
+        let pieces = match std::mem::replace(&mut sess.state, State::Direct) {
+            State::Direct => None,
             State::Composing => {
                 sess.composer.flush_pending();
+                let pieces = sess.composer.pieces();
                 commit.push_str(&sess.composer.text());
+                (!pieces.is_empty()).then_some(pieces)
             }
             State::Converting(conv) => {
                 self.notify_commit(sess, &conv);
+                let pieces: Vec<Piece> = conv
+                    .segments
+                    .iter()
+                    .map(|s| Piece {
+                        kind: match s.kind {
+                            SegmentKind::Literal => PieceKind::Literal,
+                            _ => PieceKind::Japanese,
+                        },
+                        text: s.reading.clone(),
+                    })
+                    .collect();
                 for s in &conv.segments {
                     commit.push_str(&s.surface);
                 }
+                (!pieces.is_empty()).then_some(pieces)
             }
-        }
+        };
         sess.composer.clear();
+        sess.last_commit = pieces.map(|pieces| LastCommit {
+            pieces,
+            committed_len_utf16: utf16::utf16_len(&commit[before_len..]),
+        });
+    }
+
+    /// `Action::UndoCommit`（Ctrl+Backspace）の処理。確定直後で `last_commit` が残っている
+    /// 場合だけ、確定前の入力状態（Composing）に戻す。戻り値は「キーを消費したか」
+    /// （何も戻すものが無ければ消費せず素通しする。ホスト側の Ctrl+Backspace の既定動作に譲る）
+    fn try_undo_commit(&self, sess: &mut Session) -> bool {
+        let Some(last) = sess.last_commit.take() else {
+            return false;
+        };
+        let len = last.pieces.iter().map(|p| p.text.chars().count()).sum();
+        sess.composer.load_pieces(&last.pieces, len);
+        sess.state = State::Composing;
+        sess.pending_delete_before = Some(last.committed_len_utf16);
+        true
     }
 
     /// 変換を経て確定した文節を observer（学習など）へ通知する
@@ -696,8 +1079,6 @@ impl Engine {
         let State::Converting(conv) = state else {
             return;
         };
-        conv.whole = None;
-        conv.sentence = None; // sentence モードを抜ける（以後この Conv では二度と入らない）
         let f = conv.focus;
         if conv.segments[f].kind != SegmentKind::Japanese {
             return;
@@ -717,6 +1098,51 @@ impl Engine {
         }
     }
 
+    /// `Tab`: Composing 中に学習キャッシュ・ユーザー辞書の前方一致（`ConversionBackend::predict`）
+    /// から予測変換を行う。見つかれば Converting へ入り候補ウィンドウを開く
+    /// （Mozc の `PredictAndConvert` と同じ考え方）。見つからなければ何もしない（Composing のまま）
+    fn predict(&self, sess: &mut Session) {
+        if !self.config.predict_enabled {
+            return;
+        }
+        if !matches!(sess.state, State::Composing) {
+            return;
+        }
+        sess.composer.flush_pending();
+        let pieces = sess.composer.pieces();
+        if pieces.is_empty() || pieces.iter().any(|p| p.kind != PieceKind::Japanese) {
+            return;
+        }
+        let prefix: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        if prefix.chars().count() < self.config.predict_min_chars {
+            return;
+        }
+        let left = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
+        let backend_candidates = self.backend.predict(&prefix, &left, CANDIDATE_LIMIT);
+        if backend_candidates.is_empty() {
+            return;
+        }
+        let mut items: Vec<Candidate> = Vec::new();
+        for c in &backend_candidates {
+            push_candidate(&mut items, &c.surface, &c.sources);
+        }
+        let surface = items[0].surface.clone();
+        sess.composer.clear();
+        sess.state = State::Converting(Conv {
+            segments: vec![Segment {
+                reading: prefix,
+                surface,
+                kind: SegmentKind::Japanese,
+                candidates: Some(CandidateSet { items, selected: 0 }),
+                chunk_id: 0,
+            }],
+            focus: 0,
+            visible: true,
+            range_anchor: None,
+            sentence_alternatives: None,
+        });
+    }
+
     fn start_converting(&self, sess: &mut Session, how: Start) {
         sess.composer.flush_pending();
         sess.composer.end_literal_run();
@@ -727,6 +1153,24 @@ impl Engine {
             return;
         }
         sess.origins.clear();
+        if how == Start::Convert
+            && self.config.initial_view == InitialView::Sentence
+            && pieces.len() == 1
+            && pieces[0].kind == PieceKind::Japanese
+            && let Some(conv) = self.start_converting_sentence_n_best(sess, &pieces[0].text)
+        {
+            // メガ文節も他の文節と同じく非同期のLLM完了差し替えの対象にする（G-32 系の統合）。
+            // 予算超過で最初は辞書寄りの表示になっていても、遅延結果が届き次第 replace_origins
+            // で差し替えられる
+            sess.origins.push(Origin {
+                start: 0,
+                count: conv.segments.len(),
+                reading: pieces[0].text.clone(),
+                left: tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS),
+            });
+            sess.state = State::Converting(conv);
+            return;
+        }
         let mut segments: Vec<Segment> = Vec::new();
         let mut context = sess.left_context.clone();
         for piece in pieces {
@@ -772,21 +1216,76 @@ impl Engine {
                 }
             }
         }
-        // preedit 全体がちょうど 1 つの Origin（1 回の convert_sentence 呼び出し）から成るときだけ、
-        // 文全体モード（sentence モード）の候補取得に使う (reading, left_context) を残す
-        let whole = match sess.origins.as_slice() {
-            [origin] if origin.start == 0 && origin.count == segments.len() => {
-                Some((origin.reading.clone(), origin.left.clone()))
-            }
-            _ => None,
-        };
         sess.state = State::Converting(Conv {
             segments,
             focus: 0,
             visible: false,
-            whole,
-            sentence: None,
+            range_anchor: None,
+            sentence_alternatives: None,
         });
+    }
+
+    /// `initial_view = sentence` かつ入力全体が1つの日本語 Piece のときに、文全体のN-bestを
+    /// 候補ウィンドウに載せた単一の「メガ文節」を作る。候補が2件未満（多様性が無い）なら
+    /// `None` を返し、呼び出し側は通常の（1-best・文節ごとの）変換にフォールバックする
+    fn start_converting_sentence_n_best(&self, sess: &Session, reading: &str) -> Option<Conv> {
+        let context = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
+        let beam_width = self.config.beam_width.max(2);
+        let candidates = self
+            .backend
+            .sentence_candidates(reading, &context, beam_width);
+        let mut alternatives: Vec<Vec<Segment>> = Vec::new();
+        let mut items: Vec<Candidate> = Vec::new();
+        for bs in candidates {
+            let joined_reading: String = bs.segments.iter().map(|s| s.reading.as_str()).collect();
+            if joined_reading != reading {
+                continue;
+            }
+            // 文節ごとに異なりうる出所（辞書のk-best・実LLMのビームサーチなど）の和集合を併記する
+            let mut sources: Vec<CandidateSource> = Vec::new();
+            for seg in &bs.segments {
+                for s in &seg.sources {
+                    if !sources.contains(s) {
+                        sources.push(*s);
+                    }
+                }
+            }
+            if sources.is_empty() {
+                sources.push(CandidateSource::SystemDict);
+            }
+            let segments: Vec<Segment> = bs
+                .segments
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| Segment {
+                    reading: s.reading,
+                    surface: s.surface,
+                    kind: SegmentKind::Japanese,
+                    candidates: None,
+                    chunk_id: i as u32,
+                })
+                .collect();
+            let surface: String = segments.iter().map(|s| s.surface.as_str()).collect();
+            items.push(Candidate { surface, sources });
+            alternatives.push(segments);
+        }
+        if alternatives.len() < 2 {
+            return None;
+        }
+        let mega = Segment {
+            reading: reading.to_string(),
+            surface: items[0].surface.clone(),
+            kind: SegmentKind::Japanese,
+            candidates: Some(CandidateSet { items, selected: 0 }),
+            chunk_id: 0,
+        };
+        Some(Conv {
+            segments: vec![mega],
+            focus: 0,
+            visible: true,
+            range_anchor: None,
+            sentence_alternatives: Some(alternatives),
+        })
     }
 
     fn back_to_composing(&self, sess: &mut Session) {
@@ -856,68 +1355,10 @@ impl Engine {
         conv.segments[idx].candidates = Some(CandidateSet { items, selected: 0 });
     }
 
-    /// `conv.sentence` がまだ無く条件を満たせば、文全体の候補を取得して sentence モードに入る。
-    /// 既に候補ウィンドウを開いた後（`conv.visible`）や、`conv.whole` が無い（複数ピースに
-    /// またがる入力など）場合、`conversion.initial_view = segment` の場合は何もしない。
-    /// バックエンドが 1 件しか返さない（代替が無い）ときも sentence モードには入らない
-    fn try_sentence_mode(&self, conv: &mut Conv) {
-        if self.config.initial_view != InitialView::Sentence {
-            return;
-        }
-        let Some((reading, left)) = conv.whole.clone() else {
-            return;
-        };
-        let sentences = self
-            .backend
-            .sentence_candidates(&reading, &left, SENTENCE_CANDIDATE_LIMIT);
-        if sentences.len() < 2 {
-            return;
-        }
-        let mut options: Vec<Vec<Segment>> = sentences
-            .into_iter()
-            .map(|s| {
-                s.segments
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, bs)| Segment {
-                        reading: bs.reading,
-                        surface: bs.surface,
-                        kind: SegmentKind::Japanese,
-                        candidates: None,
-                        chunk_id: i as u32,
-                    })
-                    .collect()
-            })
-            .collect();
-        // 現在表示中の切り方（学習・ユーザー辞書の反映済み）が候補に無ければ先頭に加える
-        let joined =
-            |segs: &[Segment]| -> String { segs.iter().map(|s| s.surface.as_str()).collect() };
-        let current_joined = joined(&conv.segments);
-        let selected = options
-            .iter()
-            .position(|o| joined(o) == current_joined)
-            .unwrap_or_else(|| {
-                options.insert(0, conv.segments.clone());
-                0
-            });
-        conv.sentence = Some(SentenceCandidates { options, selected });
-    }
-
     fn step_candidate(&self, sess: &mut Session, delta: isize) {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
-        if conv.sentence.is_none() && !conv.visible {
-            self.try_sentence_mode(conv);
-        }
-        if let Some(sc) = conv.sentence.as_mut() {
-            let n = sc.options.len() as isize;
-            sc.selected = ((sc.selected as isize + delta).rem_euclid(n)) as usize;
-            conv.segments = sc.options[sc.selected].clone();
-            conv.focus = conv.focus.min(conv.segments.len().saturating_sub(1));
-            conv.visible = true;
-            return;
-        }
         let f = conv.focus;
         self.ensure_candidates(&sess.left_context, conv, f);
         conv.visible = true;
@@ -933,16 +1374,17 @@ impl Engine {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
-        conv.whole = None;
-        conv.sentence = None; // sentence モードを抜けて、通常の文節候補に切り替える（以後戻らない）
         conv.visible = false;
+        conv.range_anchor = None;
         match dir {
             Direction::Left => conv.focus = conv.focus.saturating_sub(1),
             Direction::Right => conv.focus = (conv.focus + 1).min(conv.segments.len() - 1),
         }
     }
 
-    fn select_candidate(&self, sess: &mut Session, n: usize, commit: &mut String) {
+    /// `Action::SelectCand`（数字キー）: 候補ウィンドウ表示中のページ相対インデックス（1〜9）で選択する。
+    /// `select_candidate`（public, RPC 用の絶対インデックス版）とは別物
+    fn select_candidate_page_relative(&self, sess: &mut Session, n: usize, commit: &mut String) {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
@@ -950,17 +1392,6 @@ impl Engine {
             // 候補ウィンドウが出ていない間の数字キーは、確定して数字を入力する
             if let Some(c) = char::from_digit(n as u32, 10) {
                 self.insert_char(sess, c, commit);
-            }
-            return;
-        }
-        if let Some(sc) = conv.sentence.as_mut() {
-            let page_size = self.config.page_size.max(1);
-            let index = (sc.selected / page_size) * page_size + n - 1;
-            if index < sc.options.len() {
-                sc.selected = index;
-                conv.segments = sc.options[index].clone();
-                conv.focus = conv.focus.min(conv.segments.len().saturating_sub(1));
-                conv.visible = false;
             }
             return;
         }
@@ -981,8 +1412,10 @@ impl Engine {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
-        conv.whole = None;
-        conv.sentence = None; // sentence モードを抜ける（以後この Conv では二度と入らない）
+        if let Some(range) = Self::selection_range(conv) {
+            self.set_range_kana(conv, range, katakana);
+            return;
+        }
         let f = conv.focus;
         if conv.segments[f].kind != SegmentKind::Japanese {
             return;
@@ -1003,13 +1436,93 @@ impl Engine {
         conv.visible = false;
     }
 
+    /// 複数文節選択中の `ToKatakana`/`ToHiragana`: 選択範囲全体の reading をまとめてかな化し、
+    /// 1つの文節に置き換える（選択は解除する。混在する非日本語文節があれば何もしない）
+    fn set_range_kana(&self, conv: &mut Conv, range: Range<usize>, katakana: bool) {
+        if conv.segments[range.clone()]
+            .iter()
+            .any(|s| s.kind != SegmentKind::Japanese)
+        {
+            return;
+        }
+        let merged_reading: String = conv.segments[range.clone()]
+            .iter()
+            .map(|s| s.reading.as_str())
+            .collect();
+        let surface = if katakana {
+            to_katakana(&merged_reading)
+        } else {
+            merged_reading.clone()
+        };
+        let new_focus = range.start;
+        let new_segment = Segment {
+            reading: merged_reading,
+            surface,
+            kind: SegmentKind::Japanese,
+            candidates: None,
+            chunk_id: range.start as u32,
+        };
+        conv.segments.splice(range, [new_segment]);
+        for (i, s) in conv.segments.iter_mut().enumerate() {
+            s.chunk_id = i as u32;
+        }
+        conv.focus = new_focus;
+        conv.range_anchor = None;
+        conv.visible = false;
+    }
+
+    /// `ToHankaku`: 注目文節（複数文節選択中はその範囲）の表記を半角化する
+    /// （カタカナ→半角カナ、または半角化可能な英数記号→半角。`nagi_rewriter` 経由）。
+    /// どちらの変換も適用できなければ何もしない
+    fn set_focus_hankaku(&self, sess: &mut Session) {
+        let State::Converting(conv) = &mut sess.state else {
+            return;
+        };
+        let range = Self::selection_range(conv).unwrap_or(conv.focus..conv.focus + 1);
+        let merged_surface: String = conv.segments[range.clone()]
+            .iter()
+            .map(|s| s.surface.as_str())
+            .collect();
+        let merged_reading: String = conv.segments[range.clone()]
+            .iter()
+            .map(|s| s.reading.as_str())
+            .collect();
+        let hankaku = nagi_rewriter::HankakuKatakana
+            .rewrite(&merged_surface)
+            .into_iter()
+            .next()
+            .or_else(|| {
+                nagi_rewriter::HankakuAlnum
+                    .rewrite(&merged_surface)
+                    .into_iter()
+                    .next()
+            });
+        let Some(surface) = hankaku else {
+            return;
+        };
+        let new_focus = range.start;
+        let kind = conv.segments[range.start].kind;
+        let new_segment = Segment {
+            reading: merged_reading,
+            surface,
+            kind,
+            candidates: None,
+            chunk_id: range.start as u32,
+        };
+        conv.segments.splice(range, [new_segment]);
+        for (i, s) in conv.segments.iter_mut().enumerate() {
+            s.chunk_id = i as u32;
+        }
+        conv.focus = new_focus;
+        conv.range_anchor = None;
+        conv.visible = false;
+    }
+
     /// 注目文節の区切りを reading 1 文字分だけ伸縮し、その文節と後続を再変換する
     fn resize_segment(&self, sess: &mut Session, dir: Direction) {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
-        conv.whole = None;
-        conv.sentence = None; // sentence モードを抜ける（以後この Conv では二度と入らない）
         let f = conv.focus;
         if conv.segments[f].kind != SegmentKind::Japanese {
             return;
@@ -1094,19 +1607,26 @@ impl Engine {
         match &sess.state {
             State::Direct => Preedit::default(),
             State::Composing => {
-                let segments: Vec<Segment> = sess
-                    .composer
-                    .pieces()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| {
-                        let kind = match p.kind {
-                            PieceKind::Japanese => SegmentKind::Japanese,
-                            PieceKind::Literal => SegmentKind::Literal,
-                        };
-                        Segment::plain(&p.text, kind, i as u32)
-                    })
-                    .collect();
+                let pieces = sess.composer.pieces();
+                let full_reading: String = pieces.iter().map(|p| p.text.as_str()).collect();
+                let live = sess
+                    .live_conversion
+                    .as_ref()
+                    .filter(|lc| lc.source_reading == full_reading);
+                let segments: Vec<Segment> = match live {
+                    Some(lc) => lc.segments.clone(),
+                    None => pieces
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| {
+                            let kind = match p.kind {
+                                PieceKind::Japanese => SegmentKind::Japanese,
+                                PieceKind::Literal => SegmentKind::Literal,
+                            };
+                            Segment::plain(&p.text, kind, i as u32)
+                        })
+                        .collect(),
+                };
                 let mut remaining = sess.composer.cursor();
                 let mut cursor = CursorPos::default();
                 for (i, s) in segments.iter().enumerate() {
@@ -1131,6 +1651,7 @@ impl Engine {
             State::Converting(conv) => Preedit {
                 segments: conv.segments.clone(),
                 focus: Some(conv.focus),
+                selection: Self::selection_range(conv),
                 revision: sess.revision,
                 ..Default::default()
             },
@@ -1141,38 +1662,21 @@ impl Engine {
         let page_size = self.config.page_size as u32;
         if let State::Converting(conv) = &sess.state
             && conv.visible
+            && let Some(set) = &conv.segments[conv.focus].candidates
         {
-            if let Some(sc) = &conv.sentence {
-                return CandidatesView {
-                    items: sc
-                        .options
-                        .iter()
-                        .map(|o| CandidateView {
-                            surface: o.iter().map(|s| s.surface.as_str()).collect(),
-                            // 文全体候補は現状すべて LLM（ビームサーチ）由来
-                            sources: vec![CandidateSource::Llm],
-                        })
-                        .collect(),
-                    selected: sc.selected as u32,
-                    page_size,
-                    visible: true,
-                };
-            }
-            if let Some(set) = &conv.segments[conv.focus].candidates {
-                return CandidatesView {
-                    items: set
-                        .items
-                        .iter()
-                        .map(|c| CandidateView {
-                            surface: c.surface.clone(),
-                            sources: c.sources.clone(),
-                        })
-                        .collect(),
-                    selected: set.selected as u32,
-                    page_size,
-                    visible: true,
-                };
-            }
+            return CandidatesView {
+                items: set
+                    .items
+                    .iter()
+                    .map(|c| CandidateView {
+                        surface: c.surface.clone(),
+                        sources: c.sources.clone(),
+                    })
+                    .collect(),
+                selected: set.selected as u32,
+                page_size,
+                visible: true,
+            };
         }
         CandidatesView {
             page_size,
@@ -1187,9 +1691,10 @@ impl Engine {
         let mut result = ProcessKeyResult {
             consumed,
             commit: (!commit.is_empty()).then_some(commit),
+            delete_before: sess.pending_delete_before.take(),
             ..Default::default()
         };
-        let mut changed = result.commit.is_some();
+        let mut changed = result.commit.is_some() || result.delete_before.is_some();
         if preedit != sess.sent.preedit {
             sess.sent.preedit = preedit.clone();
             result.preedit = Some(preedit);

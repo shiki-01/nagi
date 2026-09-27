@@ -3,10 +3,12 @@
 use nagi_engine::{EngineConfig, KanaBackend};
 use nagi_server::Server;
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Arc;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 // ---- プロセス内 ----
 
@@ -58,7 +60,7 @@ fn initialize_reports_profile_and_capabilities() {
     assert_eq!(r["result"]["profile"], "minimal");
     assert_eq!(r["result"]["mode"], "hiragana");
     assert_eq!(r["result"]["server_name"], "nagi-server");
-    assert_eq!(r["result"]["capabilities"]["reconvert"], false);
+    assert_eq!(r["result"]["capabilities"]["reconvert"], true);
     assert!(r.get("error").is_none());
 }
 
@@ -116,11 +118,8 @@ fn unknown_method_and_bad_params() {
     );
     assert_eq!(r["error"]["code"], -32602);
     assert!(!r.to_string().contains("SECRET-TEXT"), "{r}");
-    let r = call(
-        &mut s,
-        json!({"jsonrpc":"2.0","id":8,"method":"reconvert","params":{"session_id":"s","text":"a"}}),
-    );
-    assert_eq!(r["error"]["code"], -32003);
+    // `reconvert` は実装済みになったため、NOT_IMPLEMENTED（-32003）を返す未実装メソッドの
+    // 例がここには無くなった。他に未実装のメソッドが増えたら、ここに検査を追加する
 }
 
 #[test]
@@ -199,6 +198,27 @@ fn convert_flow_with_kana_backend() {
 }
 
 #[test]
+fn select_candidate_picks_absolute_index() {
+    let mut s = server();
+    init(&mut s);
+    type_str(&mut s, "s", "ka");
+    // Space で変換（KanaBackend は読みのまま。候補は ["か", "カ"]）
+    call(&mut s, key(60, "s", 0x20, " ", false));
+    // 2 回目の Space で候補ウィンドウを開く（選択が「カ」に進む）
+    let r = call(&mut s, key(61, "s", 0x20, " ", false));
+    assert_eq!(r["result"]["candidates"]["visible"], true);
+    assert_eq!(r["result"]["preedit"]["segments"][0]["surface"], "カ");
+    // 絶対 index=0（「か」）を直接選択する。候補ウィンドウは閉じる
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":62,"method":"select_candidate","params":{
+            "session_id":"s","index":0}}),
+    );
+    assert_eq!(r["result"]["preedit"]["segments"][0]["surface"], "か");
+    assert_eq!(r["result"]["candidates"]["visible"], false);
+}
+
+#[test]
 fn focus_out_commits_and_reset_discards() {
     let mut s = server();
     init(&mut s);
@@ -236,6 +256,34 @@ fn restore_session_rebuilds_preedit() {
 }
 
 #[test]
+fn reconvert_with_kana_backend_falls_back_to_literal() {
+    let mut s = server();
+    init(&mut s);
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":90,"method":"reconvert","params":{
+            "session_id":"s","text":"今日"}}),
+    );
+    assert_eq!(r["result"]["preedit"]["text"], "今日");
+    assert_eq!(r["result"]["preedit"]["segments"][0]["kind"], "literal");
+    assert_eq!(r["result"]["preedit"]["focus"], 0);
+}
+
+#[test]
+fn reconvert_commits_any_pending_composing_input_first() {
+    let mut s = server();
+    init(&mut s);
+    type_str(&mut s, "s", "ka");
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":91,"method":"reconvert","params":{
+            "session_id":"s","text":"今日"}}),
+    );
+    assert_eq!(r["result"]["commit"], "か");
+    assert_eq!(r["result"]["preedit"]["text"], "今日");
+}
+
+#[test]
 fn shutdown_stops_the_loop() {
     let mut s = server();
     let input = concat!(
@@ -251,6 +299,173 @@ fn shutdown_stops_the_loop() {
     let text = String::from_utf8(out).unwrap();
     assert_eq!(text.lines().count(), 2, "shutdown 後は処理しない: {text}");
     assert!(s.should_shutdown());
+}
+
+/// テスト用の `Read`: チャンネルから受け取ったバイト列を順に返す。
+/// 送信側がチャンネルを閉じると EOF（`read` が `Ok(0)`）を返す
+struct ChannelReader {
+    rx: mpsc::Receiver<Vec<u8>>,
+    buf: Vec<u8>,
+    pos: usize,
+}
+
+impl Read for ChannelReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.buf.len() {
+            match self.rx.recv() {
+                Ok(chunk) => {
+                    self.buf = chunk;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = out.len().min(self.buf.len() - self.pos);
+        out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+/// テスト用の `Write`: `Arc<Mutex<Vec<u8>>>` に書き込むだけ。テスト側で同じ Arc を持って中身を検査する
+#[derive(Clone)]
+struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedBuf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `buf` の中身（UTF-8）に `needle` が含まれるまで、`timeout` の範囲でポーリングする
+fn wait_for(buf: &Arc<Mutex<Vec<u8>>>, needle: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap_or_default();
+        if text.contains(needle) {
+            return text;
+        }
+        if Instant::now() >= deadline {
+            panic!("タイムアウト: {needle:?} が出力されませんでした。実際の出力: {text:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn push_event_is_delivered_without_waiting_for_the_next_request() {
+    use nagi_protocol::methods::NotifyLevel;
+    use nagi_server::runtime::Event;
+
+    let mut s = server();
+    let runtime = s.runtime().clone();
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let reader = ChannelReader {
+        rx,
+        buf: Vec::new(),
+        pos: 0,
+    };
+    let output_store = Arc::new(Mutex::new(Vec::new()));
+    let mut output_for_thread = SharedBuf(output_store.clone());
+
+    let handle = std::thread::spawn(move || {
+        s.run(BufReader::new(reader), &mut output_for_thread)
+            .unwrap();
+    });
+
+    // initialize を送って応答が来るまで待つ
+    tx.send(
+        format!(
+            "{}\n",
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocol_version":1,"client_name":"t","client_version":"0","os":"test"}})
+        )
+        .into_bytes(),
+    )
+    .unwrap();
+    wait_for(&output_store, "\"id\":1", Duration::from_secs(5));
+
+    // ここではまだ次の行を送っていない（読み取りスレッドは rx.recv() でブロック中のはず）。
+    // この状態で push_event を呼び、次のリクエストを送らずに notify が出ることを確認する
+    runtime.push_event(Event {
+        level: NotifyLevel::Info,
+        code: "test_async_event",
+        message: "非同期通知のテスト".to_string(),
+    });
+    wait_for(&output_store, "test_async_event", Duration::from_secs(5));
+
+    // 後始末: shutdown を送ってループを終える
+    tx.send(format!("{}\n", json!({"jsonrpc":"2.0","id":2,"method":"shutdown"})).into_bytes())
+        .unwrap();
+    wait_for(&output_store, "\"id\":2", Duration::from_secs(5));
+    drop(tx); // reader スレッドに EOF を伝える（無くても shutdown で run は終わるはず）
+    handle.join().unwrap();
+}
+
+#[test]
+fn live_conversion_delivers_update_preedit_without_further_input() {
+    use nagi_engine::MockBackend;
+
+    let backend = MockBackend::new().with_sentence("きょう", vec![("きょう", vec!["今日"])]);
+    let mut s = Server::new(Arc::new(backend), "minimal", EngineConfig::default());
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let reader = ChannelReader {
+        rx,
+        buf: Vec::new(),
+        pos: 0,
+    };
+    let output_store = Arc::new(Mutex::new(Vec::new()));
+    let mut output_for_thread = SharedBuf(output_store.clone());
+
+    let handle = std::thread::spawn(move || {
+        s.run(BufReader::new(reader), &mut output_for_thread)
+            .unwrap();
+    });
+
+    tx.send(
+        format!(
+            "{}\n",
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocol_version":1,"client_name":"t","client_version":"0","os":"test"}})
+        )
+        .into_bytes(),
+    )
+    .unwrap();
+    wait_for(&output_store, "\"id\":1", Duration::from_secs(5));
+
+    // "kyou" と打つ（読み「きょう」、3 文字なので既定の min_key_length=2 を満たす）
+    for (i, c) in "kyou".chars().enumerate() {
+        tx.send(
+            format!(
+                "{}\n",
+                key(10 + i as i64, "s", c as u32, &c.to_string(), false)
+            )
+            .into_bytes(),
+        )
+        .unwrap();
+    }
+    wait_for(&output_store, "\"id\":13", Duration::from_secs(5));
+
+    // ここでは何も送っていない。既定の live_conversion_delay_ms(228ms) 後に、
+    // デバウンスされたライブ変換結果が update_preedit 通知として届くはず
+    let text = wait_for(
+        &output_store,
+        "\"method\":\"update_preedit\"",
+        Duration::from_secs(5),
+    );
+    assert!(text.contains("今日"), "変換結果が届くはず: {text}");
+
+    tx.send(format!("{}\n", json!({"jsonrpc":"2.0","id":99,"method":"shutdown"})).into_bytes())
+        .unwrap();
+    wait_for(&output_store, "\"id\":99", Duration::from_secs(5));
+    drop(tx);
+    handle.join().unwrap();
 }
 
 // ---- 実プロセス ----
@@ -383,6 +598,20 @@ fn data_dir() -> Option<PathBuf> {
     dir.join("dict/nagi-dict.bin").exists().then_some(dir)
 }
 
+/// `initial_view = segment`（既定の `sentence` を無効化）の一時設定ファイルを書き出し、パスを返す。
+/// 文節ごとの候補送りを検証するテストは、sentence モード（最初のSpaceで複数文節がまとめて
+/// 1つの候補になる）の対象外にする必要がある
+fn write_segment_view_config() -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!(
+        "nagi-rpc-segment-view-{}-{n}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, "[conversion]\ninitial_view = \"segment\"\n").unwrap();
+    path
+}
+
 /// 実辞書での E2E（辞書が無い環境では skip）: ローマ字入力 → Space 変換 → 文節移動 → 確定
 #[test]
 fn dictionary_backed_conversion_end_to_end() {
@@ -390,7 +619,14 @@ fn dictionary_backed_conversion_end_to_end() {
         eprintln!("skip: data/dict/nagi-dict.bin が無い（cargo xtask build-dict）");
         return;
     };
-    let mut p = Proc::spawn(&["--data-dir", dir.to_str().unwrap(), "--no-llm"]);
+    let config_path = write_segment_view_config();
+    let mut p = Proc::spawn(&[
+        "--data-dir",
+        dir.to_str().unwrap(),
+        "--no-llm",
+        "--config",
+        config_path.to_str().unwrap(),
+    ]);
     assert_eq!(p.initialize()["result"]["profile"], "minimal");
     for c in "kyouhaiitenkidesu".chars() {
         p.press("s", c);
@@ -454,7 +690,13 @@ fn llm_backed_conversion_end_to_end() {
         eprintln!("skip: モデルが無い（cargo xtask fetch-model）");
         return;
     }
-    let mut p = Proc::spawn(&["--data-dir", dir.to_str().unwrap()]);
+    let config_path = write_segment_view_config();
+    let mut p = Proc::spawn(&[
+        "--data-dir",
+        dir.to_str().unwrap(),
+        "--config",
+        config_path.to_str().unwrap(),
+    ]);
     let init = p.initialize();
     assert_eq!(init["result"]["profile"], "balanced");
     // 起動後、別スレッドのキャリブレーション推論が終わるとプロファイルの理由に実測値が入る
