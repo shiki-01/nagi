@@ -115,6 +115,10 @@ struct Expect {
     cursor: Option<u32>,
     #[serde(default, deserialize_with = "double_option")]
     focus: Option<Option<u32>>,
+    /// 選択範囲（UTF-16 コード単位の [start, end)）。`null` で「選択なし」を期待、
+    /// キー自体を省略すれば検査しない
+    #[serde(default, deserialize_with = "double_option")]
+    selection: Option<Option<(u32, u32)>>,
     state: Option<String>,
     mode: Option<String>,
     candidates: Option<Vec<String>>,
@@ -293,6 +297,10 @@ fn check(
     }
     if let Some(v) = &expect.focus {
         eq!("focus", &snap.preedit.focus, v);
+    }
+    if let Some(v) = &expect.selection {
+        let actual = snap.preedit.selection.map(|r| (r.start, r.end));
+        eq!("selection", &actual, v);
     }
     if let Some(v) = &expect.state {
         eq!("state", state_name(snap.state), v.as_str());

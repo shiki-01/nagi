@@ -20,6 +20,7 @@ use nagi_protocol::utf16;
 use nagi_protocol::view::{CandidateView, CandidatesView, InputMode, PreeditView};
 use nagi_romaji::{Composer, Piece, PieceKind, PunctuationStyle, RomajiTable, ShiftLetterMode};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// 推論・変換に渡す左文脈の最大文字数（Unicode スカラー）
@@ -89,6 +90,9 @@ struct Conv {
     segments: Vec<Segment>,
     focus: usize,
     visible: bool,
+    /// 範囲選択の反対側の端（`Some` の間は複数文節を選択中）。選択範囲は `focus` と
+    /// `range_anchor` を含む最小区間。`focus == range_anchor` になったら選択解除（`None` に戻す）
+    range_anchor: Option<usize>,
 }
 
 enum State {
@@ -295,6 +299,7 @@ impl Engine {
                     segments,
                     focus,
                     visible: false,
+                    range_anchor: None,
                 });
             } else {
                 let pieces: Vec<Piece> = params
@@ -351,6 +356,9 @@ impl Engine {
             state: match sess.state {
                 State::Direct => StateKind::Direct,
                 State::Composing => StateKind::Composing,
+                State::Converting(ref conv) if conv.range_anchor.is_some() => {
+                    StateKind::RangeSelecting
+                }
                 State::Converting(_) => StateKind::Converting,
             },
             preedit: self.build_preedit(sess).to_view(),
@@ -476,15 +484,54 @@ impl Engine {
             Action::PrevCand => self.step_candidate(sess, -1),
             Action::MoveFocus(dir) => self.move_focus(sess, dir),
             Action::ResizeSegment(dir) => self.resize_segment(sess, dir),
+            Action::ExtendSelection(dir) => self.extend_selection(sess, dir),
             Action::Commit => self.commit_all(sess, commit),
-            Action::Cancel => self.back_to_composing(sess),
+            Action::Cancel => self.cancel_converting(sess),
             Action::ToKatakana => self.set_focus_kana(sess, true),
             Action::ToHiragana => self.set_focus_kana(sess, false),
             Action::SelectCand(n) => self.select_candidate(sess, n, commit),
             Action::DeleteLearning => self.delete_learning(sess),
-            // ExtendSelection（範囲選択）は Phase 3
             _ => {}
         }
+    }
+
+    /// Escape: 複数文節選択中はまず選択だけ解除する。選択していなければ Composing へ戻る
+    fn cancel_converting(&self, sess: &mut Session) {
+        let cleared = if let State::Converting(conv) = &mut sess.state {
+            conv.range_anchor.take().is_some()
+        } else {
+            false
+        };
+        if !cleared {
+            self.back_to_composing(sess);
+        }
+    }
+
+    /// `Ctrl+Shift+←/→`: 複数文節の選択を開始・伸縮する。`focus` を選択の可動端として動かし、
+    /// 反対側の固定端を `range_anchor` に持つ。`focus` が `range_anchor` まで戻ったら選択を解除する
+    fn extend_selection(&self, sess: &mut Session, dir: Direction) {
+        let State::Converting(conv) = &mut sess.state else {
+            return;
+        };
+        if conv.range_anchor.is_none() {
+            conv.range_anchor = Some(conv.focus);
+        }
+        conv.visible = false;
+        match dir {
+            Direction::Left => conv.focus = conv.focus.saturating_sub(1),
+            Direction::Right => conv.focus = (conv.focus + 1).min(conv.segments.len() - 1),
+        }
+        if conv.range_anchor == Some(conv.focus) {
+            conv.range_anchor = None;
+        }
+    }
+
+    /// 現在の選択範囲（セグメント index の半開区間）。選択していなければ `None`
+    fn selection_range(conv: &Conv) -> Option<Range<usize>> {
+        let anchor = conv.range_anchor?;
+        let lo = anchor.min(conv.focus);
+        let hi = anchor.max(conv.focus);
+        Some(lo..hi + 1)
     }
 
     // ---- 確定・遷移 ----
@@ -635,6 +682,7 @@ impl Engine {
             segments,
             focus: 0,
             visible: false,
+            range_anchor: None,
         });
     }
 
@@ -725,6 +773,7 @@ impl Engine {
             return;
         };
         conv.visible = false;
+        conv.range_anchor = None;
         match dir {
             Direction::Left => conv.focus = conv.focus.saturating_sub(1),
             Direction::Right => conv.focus = (conv.focus + 1).min(conv.segments.len() - 1),
@@ -905,6 +954,7 @@ impl Engine {
             State::Converting(conv) => Preedit {
                 segments: conv.segments.clone(),
                 focus: Some(conv.focus),
+                selection: Self::selection_range(conv),
                 revision: sess.revision,
                 ..Default::default()
             },
