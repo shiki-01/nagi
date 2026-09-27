@@ -148,7 +148,10 @@ fn engine_is_send() {
 
 // ---- 確定の通知（学習）と設定の差し替え ----
 
-use nagi_engine::{CommitContext, CommitObserver, CommittedSegment, MockBackend};
+use nagi_engine::{
+    BackendCandidate, BackendSegment, CommitContext, CommitObserver, CommittedSegment,
+    ConversionBackend, MockBackend,
+};
 use nagi_protocol::view::SegmentKind;
 use std::sync::Mutex;
 
@@ -178,6 +181,56 @@ impl CommitObserver for Recorder {
             .unwrap()
             .push((reading.to_string(), surface.to_string()));
         *self.forget_result.lock().unwrap()
+    }
+}
+
+/// `convert_sentence` の呼び出し（reading, left_context）を記録するテスト用バックエンド。
+/// 登録した reading にはその表記を返し、無ければ読みをそのまま返す
+#[derive(Default)]
+struct ChunkRecordingBackend {
+    calls: Mutex<Vec<(String, String)>>,
+    table: std::collections::HashMap<String, String>,
+}
+
+impl ChunkRecordingBackend {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_chunk(mut self, reading: &str, surface: &str) -> Self {
+        self.table.insert(reading.to_string(), surface.to_string());
+        self
+    }
+
+    fn calls(&self) -> Vec<(String, String)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl ConversionBackend for ChunkRecordingBackend {
+    fn name(&self) -> &str {
+        "chunk-recording"
+    }
+
+    fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((reading.to_string(), left_context.to_string()));
+        let surface = self
+            .table
+            .get(reading)
+            .cloned()
+            .unwrap_or_else(|| reading.to_string());
+        vec![BackendSegment {
+            reading: reading.to_string(),
+            surface,
+            sources: vec![],
+        }]
+    }
+
+    fn segment_candidates(&self, _: &str, _: &str, _: usize) -> Vec<BackendCandidate> {
+        Vec::new()
     }
 }
 
@@ -515,4 +568,65 @@ fn live_convert_keeps_cursor_position_consistent() {
     // reading と異なるため、変換前と同じ UTF-16 数値になるとは限らない）
     assert_eq!(preedit.cursor, preedit.segments[0].range.end);
     assert_eq!(preedit.segments[0].range.end, 3); // "今日は" の UTF-16 長
+}
+
+#[test]
+fn live_convert_splits_long_input_into_chunks() {
+    let backend = ChunkRecordingBackend::new()
+        .with_chunk("あいう", "亜伊宇")
+        .with_chunk("えお", "絵尾");
+    let mut e = Engine::new(
+        Arc::new(backend),
+        EngineConfig {
+            composing_chunk_len: 3,
+            ..EngineConfig::default()
+        },
+    );
+    type_str(&mut e, "s", "aiueo");
+    let r = e.live_convert("s", "あいうえお").expect("変換されるはず");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    // 3文字ずつ("あいう" / "えお")に分けてそれぞれ変換された結果が連結される
+    assert_eq!(preedit.text, "亜伊宇絵尾");
+}
+
+#[test]
+fn live_convert_chunking_passes_previous_chunk_surface_as_left_context() {
+    let backend = Arc::new(
+        ChunkRecordingBackend::new()
+            .with_chunk("あいう", "亜伊宇")
+            .with_chunk("えお", "絵尾"),
+    );
+    let mut e = Engine::new(
+        backend.clone(),
+        EngineConfig {
+            composing_chunk_len: 3,
+            ..EngineConfig::default()
+        },
+    );
+    type_str(&mut e, "s", "aiueo");
+    e.live_convert("s", "あいうえお");
+    let calls = backend.calls();
+    assert_eq!(
+        calls.len(),
+        2,
+        "2チャンクに分かれて2回呼ばれるはず: {calls:?}"
+    );
+    assert_eq!(calls[0].0, "あいう");
+    assert_eq!(calls[1].0, "えお");
+    // 2つ目のチャンクの左文脈には、1つ目のチャンクの変換結果（"亜伊宇"）が含まれる
+    assert!(
+        calls[1].1.ends_with("亜伊宇"),
+        "左文脈に前のチャンクの結果が含まれるはず: {:?}",
+        calls[1].1
+    );
+}
+
+#[test]
+fn live_convert_does_not_chunk_input_shorter_than_chunk_len() {
+    let (mut e, _rec) = mock_engine();
+    // mock_engine の既定 composing_chunk_len は 30。既存の短い入力の挙動が変わらないことを確認
+    type_str(&mut e, "s", "kyouhaii");
+    let r = e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "今日はいい");
 }

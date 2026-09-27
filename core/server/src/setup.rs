@@ -122,6 +122,7 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
             keymap,
             predict_enabled: config.predict.enabled,
             predict_min_chars: config.predict.min_chars,
+            composing_chunk_len: config.conversion.composing_chunk_len,
         },
         events,
     )

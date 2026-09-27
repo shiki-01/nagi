@@ -46,6 +46,9 @@ pub struct EngineConfig {
     pub predict_enabled: bool,
     /// 予測変換を表示する最小の読みの文字数（`predict.min_chars`）
     pub predict_min_chars: usize,
+    /// ライブ変換のチャンク長（`conversion.composing_chunk_len`）。この文字数を超える
+    /// Composing 中の1つの日本語入力は、この文字数ごとに分けて変換する
+    pub composing_chunk_len: usize,
 }
 
 impl Default for EngineConfig {
@@ -58,6 +61,7 @@ impl Default for EngineConfig {
             keymap: KeyMap::default_preset(),
             predict_enabled: true,
             predict_min_chars: 1,
+            composing_chunk_len: 30,
         }
     }
 }
@@ -368,32 +372,7 @@ impl Engine {
         for piece in &pieces {
             match piece.kind {
                 PieceKind::Japanese => {
-                    let converted = self
-                        .backend
-                        .convert_sentence(&piece.text, &tail_chars(&context, LEFT_CONTEXT_CHARS));
-                    let valid = !converted.is_empty()
-                        && converted
-                            .iter()
-                            .map(|s| s.reading.as_str())
-                            .collect::<String>()
-                            == piece.text;
-                    if valid {
-                        for bs in converted {
-                            context.push_str(&bs.surface);
-                            let id = segments.len() as u32;
-                            segments.push(Segment {
-                                reading: bs.reading,
-                                surface: bs.surface,
-                                kind: SegmentKind::Japanese,
-                                candidates: None,
-                                chunk_id: id,
-                            });
-                        }
-                    } else {
-                        context.push_str(&piece.text);
-                        let id = segments.len() as u32;
-                        segments.push(Segment::plain(&piece.text, SegmentKind::Japanese, id));
-                    }
+                    self.convert_japanese_chunked(&piece.text, &mut context, &mut segments);
                 }
                 PieceKind::Literal => {
                     context.push_str(&piece.text);
@@ -407,6 +386,49 @@ impl Engine {
             segments,
         });
         true
+    }
+
+    /// 日本語の入力（ひらがなのみ）を `composing_chunk_len` 文字ずつのチャンクに分けて変換し、
+    /// `segments` に追記する。`context` はチャンクをまたいで更新される左文脈（前のチャンクの
+    /// 変換結果を含む）。1文字数が `composing_chunk_len` 以下なら1回のループで既存と同じ動作になる
+    fn convert_japanese_chunked(
+        &self,
+        text: &str,
+        context: &mut String,
+        segments: &mut Vec<Segment>,
+    ) {
+        let chunk_len = self.config.composing_chunk_len.max(1);
+        let chars: Vec<char> = text.chars().collect();
+        for start in (0..chars.len()).step_by(chunk_len) {
+            let end = (start + chunk_len).min(chars.len());
+            let chunk: String = chars[start..end].iter().collect();
+            let converted = self
+                .backend
+                .convert_sentence(&chunk, &tail_chars(context, LEFT_CONTEXT_CHARS));
+            let valid = !converted.is_empty()
+                && converted
+                    .iter()
+                    .map(|s| s.reading.as_str())
+                    .collect::<String>()
+                    == chunk;
+            if valid {
+                for bs in converted {
+                    context.push_str(&bs.surface);
+                    let id = segments.len() as u32;
+                    segments.push(Segment {
+                        reading: bs.reading,
+                        surface: bs.surface,
+                        kind: SegmentKind::Japanese,
+                        candidates: None,
+                        chunk_id: id,
+                    });
+                }
+            } else {
+                context.push_str(&chunk);
+                let id = segments.len() as u32;
+                segments.push(Segment::plain(&chunk, SegmentKind::Japanese, id));
+            }
+        }
     }
 
     /// エンジン再起動後に、フロントが保持していた preedit を復元する
