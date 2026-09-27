@@ -262,6 +262,10 @@ pub struct ConversionSection {
     pub max_latency_ms: u64,
     /// 同期応答の最大予算（ミリ秒）。既定: 150。
     pub sync_budget_ms: u64,
+    /// ライブ変換の入力から実際に変換するまでの遅延（ミリ秒）。既定: 228（Mozkey の実測値を参考）。
+    pub live_conversion_delay_ms: u64,
+    /// ライブ変換を試みる最小文字数（読み・Unicodeスカラー単位）。既定: 2。
+    pub live_conversion_min_key_length: usize,
 }
 
 impl Default for ConversionSection {
@@ -278,6 +282,8 @@ impl Default for ConversionSection {
             max_context_length: None,
             max_latency_ms: 100,
             sync_budget_ms: 150,
+            live_conversion_delay_ms: 228,
+            live_conversion_min_key_length: 2,
         }
     }
 }
@@ -496,6 +502,22 @@ impl Config {
             ));
         }
 
+        // live_conversion_delay_ms: 0 <= live_conversion_delay_ms <= 5000
+        if !(0..=5000).contains(&self.conversion.live_conversion_delay_ms) {
+            errors.push(format!(
+                "conversion.live_conversion_delay_ms は 0 から 5000 の間である必要があります: {}",
+                self.conversion.live_conversion_delay_ms
+            ));
+        }
+
+        // live_conversion_min_key_length: 1 <= live_conversion_min_key_length <= 20
+        if !(1..=20).contains(&self.conversion.live_conversion_min_key_length) {
+            errors.push(format!(
+                "conversion.live_conversion_min_key_length は 1 から 20 の間である必要があります: {}",
+                self.conversion.live_conversion_min_key_length
+            ));
+        }
+
         // learning.max_entries: 100 <= max_entries <= 1000000
         if !(100..=1_000_000).contains(&self.learning.max_entries) {
             errors.push(format!(
@@ -617,6 +639,8 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "max_context_length",
             "max_latency_ms",
             "sync_budget_ms",
+            "live_conversion_delay_ms",
+            "live_conversion_min_key_length",
         ],
         "input" => &["shift_letter", "punctuation"],
         "ranking" => &["source_order"],
@@ -790,6 +814,8 @@ mod tests {
         assert_eq!(default.conversion.initial_view, InitialView::Sentence);
         assert_eq!(default.conversion.composing_chunk_len, 30);
         assert_eq!(default.conversion.num_candidates, 9);
+        assert_eq!(default.conversion.live_conversion_delay_ms, 228);
+        assert_eq!(default.conversion.live_conversion_min_key_length, 2);
         assert!(default.input.punctuation.comma == '、');
         assert!(default.input.punctuation.period == '。');
     }
@@ -990,6 +1016,47 @@ foo = 42
         config.conversion.sync_budget_ms = 5001;
         let errors = config.validate();
         assert!(errors.iter().any(|e| e.contains("sync_budget_ms")));
+    }
+
+    #[test]
+    fn test_validate_live_conversion_delay_ms() {
+        let mut config = Config::default();
+        config.conversion.live_conversion_delay_ms = 5001;
+        let errors = config.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("live_conversion_delay_ms"))
+        );
+
+        // 下限は 0（許容される）
+        config.conversion.live_conversion_delay_ms = 0;
+        let errors = config.validate();
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.contains("live_conversion_delay_ms"))
+        );
+    }
+
+    #[test]
+    fn test_validate_live_conversion_min_key_length() {
+        let mut config = Config::default();
+        config.conversion.live_conversion_min_key_length = 0;
+        let errors = config.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("live_conversion_min_key_length"))
+        );
+
+        config.conversion.live_conversion_min_key_length = 21;
+        let errors = config.validate();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("live_conversion_min_key_length"))
+        );
     }
 
     #[test]

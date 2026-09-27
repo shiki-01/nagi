@@ -382,6 +382,67 @@ fn push_event_is_delivered_without_waiting_for_the_next_request() {
     handle.join().unwrap();
 }
 
+#[test]
+fn live_conversion_delivers_update_preedit_without_further_input() {
+    use nagi_engine::MockBackend;
+
+    let backend = MockBackend::new().with_sentence("きょう", vec![("きょう", vec!["今日"])]);
+    let mut s = Server::new(Arc::new(backend), "minimal", EngineConfig::default());
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let reader = ChannelReader {
+        rx,
+        buf: Vec::new(),
+        pos: 0,
+    };
+    let output_store = Arc::new(Mutex::new(Vec::new()));
+    let mut output_for_thread = SharedBuf(output_store.clone());
+
+    let handle = std::thread::spawn(move || {
+        s.run(BufReader::new(reader), &mut output_for_thread)
+            .unwrap();
+    });
+
+    tx.send(
+        format!(
+            "{}\n",
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocol_version":1,"client_name":"t","client_version":"0","os":"test"}})
+        )
+        .into_bytes(),
+    )
+    .unwrap();
+    wait_for(&output_store, "\"id\":1", Duration::from_secs(5));
+
+    // "kyou" と打つ（読み「きょう」、3 文字なので既定の min_key_length=2 を満たす）
+    for (i, c) in "kyou".chars().enumerate() {
+        tx.send(
+            format!(
+                "{}\n",
+                key(10 + i as i64, "s", c as u32, &c.to_string(), false)
+            )
+            .into_bytes(),
+        )
+        .unwrap();
+    }
+    wait_for(&output_store, "\"id\":13", Duration::from_secs(5));
+
+    // ここでは何も送っていない。既定の live_conversion_delay_ms(228ms) 後に、
+    // デバウンスされたライブ変換結果が update_preedit 通知として届くはず
+    let text = wait_for(
+        &output_store,
+        "\"method\":\"update_preedit\"",
+        Duration::from_secs(5),
+    );
+    assert!(text.contains("今日"), "変換結果が届くはず: {text}");
+
+    tx.send(format!("{}\n", json!({"jsonrpc":"2.0","id":99,"method":"shutdown"})).into_bytes())
+        .unwrap();
+    wait_for(&output_store, "\"id\":99", Duration::from_secs(5));
+    drop(tx);
+    handle.join().unwrap();
+}
+
 // ---- 実プロセス ----
 
 struct Proc {

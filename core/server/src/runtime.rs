@@ -13,6 +13,7 @@ use nagi_profile::{
 };
 use nagi_protocol::methods::{
     MemoryPressureState, NotifyLevel, SetEnvironmentParams, StatusResult, ThermalState,
+    UpdatePreeditParams,
 };
 use nagi_protocol::view::CandidateSource;
 use std::path::PathBuf;
@@ -57,6 +58,12 @@ pub struct Tunables {
     pub ranking: Vec<CandidateSource>,
     /// `conversion.n_threads`（0 = 自動）
     pub n_threads: usize,
+    /// `conversion.live_conversion`
+    pub live_conversion_enabled: bool,
+    /// `conversion.live_conversion_delay_ms`
+    pub live_conversion_delay_ms: u64,
+    /// `conversion.live_conversion_min_key_length`
+    pub live_conversion_min_key_length: usize,
 }
 
 /// 出所名（`ranking.source_order` の要素）を出所に直す
@@ -107,6 +114,9 @@ impl Tunables {
                 .filter_map(|n| parse_source(n))
                 .collect(),
             n_threads: config.conversion.n_threads,
+            live_conversion_enabled: config.conversion.live_conversion,
+            live_conversion_delay_ms: config.conversion.live_conversion_delay_ms,
+            live_conversion_min_key_length: config.conversion.live_conversion_min_key_length,
         }
     }
 }
@@ -143,6 +153,8 @@ pub struct Runtime {
     last_flush: Mutex<Instant>,
     overlay: RwLock<Arc<Overlay>>,
     events: Mutex<Vec<Event>>,
+    /// ライブ変換等の非同期な preedit 更新（`update_preedit` 通知になる）
+    preedit_updates: Mutex<Vec<UpdatePreeditParams>>,
     /// イベントが積まれたときに呼ぶフック（`Server::run` が非同期通知の配信に使う）。
     /// `Box<dyn Fn() + Send + Sync>` なので中身は任意（チャンネルへの送信等）
     event_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -176,6 +188,7 @@ impl Runtime {
             last_flush: Mutex::new(Instant::now()),
             overlay: RwLock::new(Arc::new(Overlay::default())),
             events: Mutex::new(Vec::new()),
+            preedit_updates: Mutex::new(Vec::new()),
             event_hook: Mutex::new(None),
             config_path: Mutex::new(None),
             config_error: AtomicBool::new(false),
@@ -247,11 +260,8 @@ impl Runtime {
         }
     }
 
-    /// 通知を積む。フックが設定されていれば呼ぶ（`Server::run` を起こして即座に配信させる）
-    pub fn push_event(&self, event: Event) {
-        if let Ok(mut events) = self.events.lock() {
-            events.push(event);
-        }
+    /// `event_hook` が設定されていれば呼ぶ（`push_event` / `push_preedit_update` 共通）
+    fn fire_event_hook(&self) {
         if let Ok(hook) = self.event_hook.lock()
             && let Some(f) = hook.as_ref()
         {
@@ -259,11 +269,35 @@ impl Runtime {
         }
     }
 
+    /// 通知を積む。フックが設定されていれば呼ぶ（`Server::run` を起こして即座に配信させる）
+    pub fn push_event(&self, event: Event) {
+        if let Ok(mut events) = self.events.lock() {
+            events.push(event);
+        }
+        self.fire_event_hook();
+    }
+
     /// 積まれた通知を取り出す
     pub fn drain_events(&self) -> Vec<Event> {
         self.events
             .lock()
             .map(|mut e| std::mem::take(&mut *e))
+            .unwrap_or_default()
+    }
+
+    /// ライブ変換等の preedit 更新を積む。フックが設定されていれば呼ぶ
+    pub fn push_preedit_update(&self, params: UpdatePreeditParams) {
+        if let Ok(mut q) = self.preedit_updates.lock() {
+            q.push(params);
+        }
+        self.fire_event_hook();
+    }
+
+    /// 積まれた preedit 更新を取り出す
+    pub fn drain_preedit_updates(&self) -> Vec<UpdatePreeditParams> {
+        self.preedit_updates
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
             .unwrap_or_default()
     }
 
@@ -421,6 +455,11 @@ impl Runtime {
         if let Ok(mut n) = self.backend_name.lock() {
             *n = name.to_string();
         }
+    }
+
+    /// 現在の Tunables のコピー（`Server` がデバウンス判定に使う）
+    pub fn tunables(&self) -> Tunables {
+        self.tunables.read().map(|t| t.clone()).unwrap_or_default()
     }
 
     /// 現在の有効なパラメータ

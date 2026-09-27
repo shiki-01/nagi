@@ -315,6 +315,20 @@ impl Engine {
         result
     }
 
+    /// 現在 Composing 状態なら、入力中の全体の reading（ローマ字変換済みのひらがな連結）を返す。
+    /// Composing でない・未入力なら `None`（サーバーがライブ変換のデバウンス判定に使う）
+    pub fn composing_reading(&self, session_id: &str) -> Option<String> {
+        let sess = self.sessions.get(session_id)?;
+        let State::Composing = sess.state else {
+            return None;
+        };
+        let pieces = sess.composer.pieces();
+        if pieces.is_empty() {
+            return None;
+        }
+        Some(pieces.iter().map(|p| p.text.as_str()).collect())
+    }
+
     /// ライブ変換の再変換を試みる（サーバーがデバウンス後に呼ぶ）。Composing 状態で、かつ
     /// 現在の入力全体の reading が `expected_reading` と一致する場合だけ変換を行い、Session に
     /// 反映する。一致しない（すでに別の入力になっている）場合や、変換しても表示が変わらない

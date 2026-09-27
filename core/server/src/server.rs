@@ -13,14 +13,14 @@ use nagi_protocol::jsonrpc::{
 use nagi_protocol::methods::{
     ConfigError, EmptyResult, InitializeParams, InitializeResult, NotifyParams, ProcessKeyParams,
     ReloadConfigResult, RestoreSessionParams, SelectCandidateParams, ServerCapabilities,
-    SessionParams, SetContextParams, SetEnvironmentParams, method,
+    SessionParams, SetContextParams, SetEnvironmentParams, UpdatePreeditParams, method,
 };
 use nagi_protocol::view::InputMode;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::{BufRead, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// 設定ファイル・ユーザー辞書の変更を確認する最短の間隔
@@ -28,7 +28,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// JSON-RPC サーバー
 pub struct Server {
-    engine: Engine,
+    engine: Arc<Mutex<Engine>>,
     runtime: Arc<Runtime>,
     reload: Reloadable,
     initial_mode: InputMode,
@@ -58,7 +58,7 @@ impl Server {
     pub fn new(backend: Arc<dyn ConversionBackend>, _profile: &str, config: EngineConfig) -> Self {
         Server {
             initial_mode: config.initial_mode,
-            engine: Engine::new(backend, config),
+            engine: Arc::new(Mutex::new(Engine::new(backend, config))),
             runtime: Runtime::detached(false),
             reload: Reloadable::detached(),
             initialized: false,
@@ -76,7 +76,7 @@ impl Server {
         engine.set_commit_observer(Arc::new(LearningObserver::new(built.runtime.clone())));
         Server {
             initial_mode: config.initial_mode,
-            engine,
+            engine: Arc::new(Mutex::new(engine)),
             runtime: built.runtime,
             reload: built.reload,
             initialized: false,
@@ -137,7 +137,8 @@ impl Server {
 
     /// 共有状態に積まれた出来事を `notify` 通知の行にする
     fn notifications(&self) -> Vec<String> {
-        self.runtime
+        let mut lines: Vec<String> = self
+            .runtime
             .drain_events()
             .into_iter()
             .filter_map(|e| {
@@ -150,7 +151,54 @@ impl Server {
                     .ok()
                     .and_then(|n| serde_json::to_string(&n).ok())
             })
-            .collect()
+            .collect();
+        lines.extend(
+            self.runtime
+                .drain_preedit_updates()
+                .into_iter()
+                .filter_map(|p| {
+                    Notification::new(method::UPDATE_PREEDIT, p)
+                        .ok()
+                        .and_then(|n| serde_json::to_string(&n).ok())
+                }),
+        );
+        lines
+    }
+
+    /// ライブ変換の対象なら、デバウンス後に `live_convert` を試みるスレッドを立てる。
+    /// スレッドが増えても無害（`Engine::live_convert` が、実行時点の入力と reading が
+    /// 一致しない限り何もしないため。古いスレッドをキャンセルする仕組みは不要）
+    fn maybe_schedule_live_conversion(&self, session_id: &str) {
+        let tunables = self.runtime.tunables();
+        if !tunables.live_conversion_enabled {
+            return;
+        }
+        let Some(reading) = self.engine_lock().composing_reading(session_id) else {
+            return;
+        };
+        if reading.chars().count() < tunables.live_conversion_min_key_length {
+            return;
+        }
+        let engine = self.engine.clone();
+        let runtime = self.runtime.clone();
+        let session_id = session_id.to_string();
+        let delay = std::time::Duration::from_millis(tunables.live_conversion_delay_ms);
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            let result = engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .live_convert(&session_id, &reading);
+            if let Some(r) = result
+                && let Some(preedit) = r.preedit
+            {
+                runtime.push_preedit_update(UpdatePreeditParams {
+                    session_id,
+                    revision: r.revision,
+                    preedit,
+                });
+            }
+        });
     }
 
     /// 設定ファイル・ユーザー辞書の変更の確認、プロファイルの時間経過による復帰、学習の定期保存
@@ -173,7 +221,7 @@ impl Server {
                         config.conversion.sync_budget_ms = ms;
                     }
                     let (new_config, keymap_events) = engine_config_from(&config);
-                    self.engine.update_config(new_config);
+                    self.engine_lock().update_config(new_config);
                     for e in keymap_events {
                         self.runtime.push_event(e);
                     }
@@ -219,6 +267,14 @@ impl Server {
         }
         self.reload.mark_read();
         ReloadConfigResult { ok, errors }
+    }
+
+    /// `engine` のロックを取る。ポイズン（他スレッドでのパニック中の取得）でも中身を使って継続する
+    /// （IME サーバーは動き続けることを優先し、パニックで全体を落とさない方針）
+    fn engine_lock(&self) -> std::sync::MutexGuard<'_, Engine> {
+        self.engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn require_initialized(&self) -> Result<(), ErrorObject> {
@@ -268,17 +324,21 @@ impl Server {
             method::PROCESS_KEY => {
                 self.require_initialized()?;
                 let p: ProcessKeyParams = params(req)?;
-                to_value(self.engine.process_key(&p.session_id, &p.key_event()))
+                let result = self
+                    .engine_lock()
+                    .process_key(&p.session_id, &p.key_event());
+                self.maybe_schedule_live_conversion(&p.session_id);
+                to_value(result)
             }
             method::FOCUS_IN => {
                 self.require_initialized()?;
                 let p: SessionParams = params(req)?;
-                to_value(self.engine.focus_in(&p.session_id))
+                to_value(self.engine_lock().focus_in(&p.session_id))
             }
             method::FOCUS_OUT => {
                 self.require_initialized()?;
                 let p: SessionParams = params(req)?;
-                let result = self.engine.focus_out(&p.session_id);
+                let result = self.engine_lock().focus_out(&p.session_id);
                 // フォーカス喪失時に学習を保存する（変更があるときだけ書かれる）
                 self.runtime.flush_learning(true);
                 to_value(result)
@@ -286,17 +346,20 @@ impl Server {
             method::RESET => {
                 self.require_initialized()?;
                 let p: SessionParams = params(req)?;
-                to_value(self.engine.reset(&p.session_id))
+                to_value(self.engine_lock().reset(&p.session_id))
             }
             method::RESTORE_SESSION => {
                 self.require_initialized()?;
                 let p: RestoreSessionParams = params(req)?;
-                to_value(self.engine.restore_session(&p.session_id.clone(), &p))
+                to_value(
+                    self.engine_lock()
+                        .restore_session(&p.session_id.clone(), &p),
+                )
             }
             method::SET_CONTEXT => {
                 self.require_initialized()?;
                 let p: SetContextParams = params(req)?;
-                self.engine.set_context(&p.session_id.clone(), &p);
+                self.engine_lock().set_context(&p.session_id.clone(), &p);
                 to_value(EmptyResult {})
             }
             method::SET_ENVIRONMENT => {
@@ -321,7 +384,7 @@ impl Server {
             method::SELECT_CANDIDATE => {
                 self.require_initialized()?;
                 let p: SelectCandidateParams = params(req)?;
-                to_value(self.engine.select_candidate(&p.session_id, p.index))
+                to_value(self.engine_lock().select_candidate(&p.session_id, p.index))
             }
             method::RECONVERT => {
                 self.require_initialized()?;

@@ -20,6 +20,14 @@ persona = ""
 # 既定: true
 live_conversion = true
 
+# ライブ変換の入力から実際に変換するまでの遅延（ミリ秒）。短いと変換頻度が増え負荷が上がる
+# 既定: 228
+live_conversion_delay_ms = 228
+
+# ライブ変換を試みる最小文字数（読み）。これより短い入力では変換しない
+# 既定: 2
+live_conversion_min_key_length = 2
+
 # 変換の初期表示形式
 # "sentence": 文全体の N-best を表示（既定）
 # "segment": 先頭文節の候補を表示
