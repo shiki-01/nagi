@@ -51,6 +51,13 @@ pub trait ConversionBackend: Send + Sync {
         let _ = (prefix, left_context, limit);
         Vec::new()
     }
+
+    /// 確定済みの表記（surface）から読みを推定し、文節に区切る（`reconvert` 用）。
+    /// 辞書を持たないバックエンドは非対応でよい（既定実装は非対応。空を返す）
+    fn reconvert(&self, surface: &str) -> Vec<BackendSegment> {
+        let _ = surface;
+        Vec::new()
+    }
 }
 
 /// 辞書もモデルも使わないバックエンド（読みをそのまま返す）

@@ -60,7 +60,7 @@ fn initialize_reports_profile_and_capabilities() {
     assert_eq!(r["result"]["profile"], "minimal");
     assert_eq!(r["result"]["mode"], "hiragana");
     assert_eq!(r["result"]["server_name"], "nagi-server");
-    assert_eq!(r["result"]["capabilities"]["reconvert"], false);
+    assert_eq!(r["result"]["capabilities"]["reconvert"], true);
     assert!(r.get("error").is_none());
 }
 
@@ -118,11 +118,8 @@ fn unknown_method_and_bad_params() {
     );
     assert_eq!(r["error"]["code"], -32602);
     assert!(!r.to_string().contains("SECRET-TEXT"), "{r}");
-    let r = call(
-        &mut s,
-        json!({"jsonrpc":"2.0","id":8,"method":"reconvert","params":{"session_id":"s","text":"a"}}),
-    );
-    assert_eq!(r["error"]["code"], -32003);
+    // `reconvert` は実装済みになったため、NOT_IMPLEMENTED（-32003）を返す未実装メソッドの
+    // 例がここには無くなった。他に未実装のメソッドが増えたら、ここに検査を追加する
 }
 
 #[test]
@@ -256,6 +253,34 @@ fn restore_session_rebuilds_preedit() {
     // 復元後も編集を続けられる
     let r = type_str(&mut s, "s", "ki");
     assert_eq!(r["result"]["preedit"]["text"], "かなきN");
+}
+
+#[test]
+fn reconvert_with_kana_backend_falls_back_to_literal() {
+    let mut s = server();
+    init(&mut s);
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":90,"method":"reconvert","params":{
+            "session_id":"s","text":"今日"}}),
+    );
+    assert_eq!(r["result"]["preedit"]["text"], "今日");
+    assert_eq!(r["result"]["preedit"]["segments"][0]["kind"], "literal");
+    assert_eq!(r["result"]["preedit"]["focus"], 0);
+}
+
+#[test]
+fn reconvert_commits_any_pending_composing_input_first() {
+    let mut s = server();
+    init(&mut s);
+    type_str(&mut s, "s", "ka");
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":91,"method":"reconvert","params":{
+            "session_id":"s","text":"今日"}}),
+    );
+    assert_eq!(r["result"]["commit"], "か");
+    assert_eq!(r["result"]["preedit"]["text"], "今日");
 }
 
 #[test]

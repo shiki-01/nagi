@@ -19,6 +19,7 @@
 use crate::error::DictError;
 use crate::pos::{Pos, PosClass, PosSub};
 use fst::Map;
+use std::sync::OnceLock;
 
 const MAGIC: &[u8; 8] = b"NAGIDICT";
 const VERSION: u32 = 1;
@@ -62,6 +63,9 @@ pub struct Dictionary {
     conn: Vec<u16>,
     conn_n: usize,
     fallback: FallbackIds,
+    /// 逆引き索引（表記 → 読み）。`reverse_convert` で最初に使われた時に一度だけ構築する
+    /// （辞書全体を毎回舐めるコストがあるため遅延構築。使わない限りコストは無い）
+    reverse: OnceLock<crate::reverse::ReverseIndex>,
 }
 
 impl std::fmt::Debug for Dictionary {
@@ -177,6 +181,7 @@ impl Dictionary {
             conn: p.conn,
             conn_n: p.conn_n,
             fallback,
+            reverse: OnceLock::new(),
         })
     }
 
@@ -324,6 +329,16 @@ impl Dictionary {
 
     pub(crate) fn fallback_ids(&self) -> FallbackIds {
         self.fallback
+    }
+
+    /// `reverse` フィールドへの参照（逆引き索引を初回構築・キャッシュするための `OnceLock`）
+    pub(crate) fn reverse_index_cell(&self) -> &OnceLock<crate::reverse::ReverseIndex> {
+        &self.reverse
+    }
+
+    /// 表記から読みへの trie（読み → 語グループ）を最初から辿るストリーム
+    pub(crate) fn trie_stream(&self) -> fst::map::Stream<'_> {
+        self.trie.stream()
     }
 
     /// 読みの完全一致（コスト昇順）

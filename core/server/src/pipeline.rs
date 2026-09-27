@@ -536,6 +536,21 @@ impl ConversionBackend for Pipeline {
         out.truncate(limit);
         out
     }
+
+    fn reconvert(&self, surface: &str) -> Vec<BackendSegment> {
+        match &self.dict {
+            Some(dict) => dict
+                .reverse_convert(surface)
+                .into_iter()
+                .map(|s| BackendSegment {
+                    reading: s.reading,
+                    surface: s.surface,
+                    sources: vec![CandidateSource::SystemDict],
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 /// 使い方の確認用に、設定なしの既定の待ち時間を返す

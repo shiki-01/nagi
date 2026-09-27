@@ -17,6 +17,7 @@ pub mod dictionary;
 pub mod error;
 pub mod overlay;
 pub mod pos;
+mod reverse;
 pub mod user;
 
 pub use builder::{ConnectionLayout, DictionaryBuilder, build_from_mozc_dir};

@@ -12,8 +12,9 @@ use nagi_protocol::jsonrpc::{
 };
 use nagi_protocol::methods::{
     ConfigError, EmptyResult, InitializeParams, InitializeResult, NotifyParams, ProcessKeyParams,
-    ReloadConfigResult, RestoreSessionParams, SelectCandidateParams, ServerCapabilities,
-    SessionParams, SetContextParams, SetEnvironmentParams, UpdatePreeditParams, method,
+    ReconvertParams, ReloadConfigResult, RestoreSessionParams, SelectCandidateParams,
+    ServerCapabilities, SessionParams, SetContextParams, SetEnvironmentParams, UpdatePreeditParams,
+    method,
 };
 use nagi_protocol::view::InputMode;
 use serde::Serialize;
@@ -309,7 +310,7 @@ impl Server {
                     profile: self.runtime.profile().as_str().to_string(),
                     mode: self.initial_mode,
                     capabilities: ServerCapabilities {
-                        reconvert: false,
+                        reconvert: true,
                         live_conversion: false,
                         style_conversion: false,
                     },
@@ -388,10 +389,8 @@ impl Server {
             }
             method::RECONVERT => {
                 self.require_initialized()?;
-                Err(ErrorObject::new(
-                    error_code::NOT_IMPLEMENTED,
-                    format!("{} は未実装です", req.method),
-                ))
+                let p: ReconvertParams = params(req)?;
+                to_value(self.engine_lock().reconvert(&p.session_id, &p.text))
             }
             other => Err(ErrorObject::new(
                 error_code::METHOD_NOT_FOUND,

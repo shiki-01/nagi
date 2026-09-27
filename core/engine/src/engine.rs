@@ -500,6 +500,43 @@ impl Engine {
         result
     }
 
+    /// 確定済みテキストの再変換要求（`reconvert` RPC。OS の再変換 API から）。
+    /// 読みは辞書の逆引きで推定する（[`ConversionBackend::reconvert`]）。推定できなければ
+    /// （バックエンドが空を返したら）Literal な1文節として扱う（reading = surface。
+    /// 再変換はできないが表示・編集はできる）
+    pub fn reconvert(&mut self, session_id: &str, text: &str) -> ProcessKeyResult {
+        let mut sess = self.take_session(session_id);
+        let mut commit = String::new();
+        self.commit_all(&mut sess, &mut commit);
+        if !text.is_empty() {
+            let backend_segments = self.backend.reconvert(text);
+            let segments: Vec<Segment> = if backend_segments.is_empty() {
+                vec![Segment::plain(text, SegmentKind::Literal, 0)]
+            } else {
+                backend_segments
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, bs)| Segment {
+                        reading: bs.reading,
+                        surface: bs.surface,
+                        kind: SegmentKind::Japanese,
+                        candidates: None,
+                        chunk_id: i as u32,
+                    })
+                    .collect()
+            };
+            sess.state = State::Converting(Conv {
+                segments,
+                focus: 0,
+                visible: false,
+                range_anchor: None,
+            });
+        }
+        let result = self.finish(&mut sess, true, commit);
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
     /// Surrounding Text・secure input などの文脈を保存する（secure input 中は文脈を持たない）
     pub fn set_context(&mut self, session_id: &str, ctx: &SetContextParams) {
         let mut sess = self.take_session(session_id);
