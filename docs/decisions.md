@@ -389,3 +389,14 @@ G-12 で「未実装」としていた4項目を実装した。ユーザー不�
 - **minimal・メモリ逼迫時のモデル解放**: `ConversionModel::set_active(bool)`（既定 no-op）を追加。`LlamaModel` は `model: Option<LlamaModelCore>` として保持し、`false` で解放・`true` で（未読み込みなら）再読み込みする。`Pipeline` がプロファイルの変化を検出して（`Minimal` か否かで）別スレッドで切り替える。再読み込み中に変換要求が来ても既存の `sync_budget` の仕組みで辞書結果にフォールバックするため待たせない。メモリ逼迫（critical）は既存の `Controller` のペナルティ計算で `Minimal` まで下がるため、同じ経路で解放される
 - **キャリブレーション結果の永続化**: `<user_dir>/calibration.json`（`core/server/src/calibration.rs`、JSON）に中央値・CPU コア数・メモリ量・バックエンド名を保存する。起動時に一致すれば即座に使い、直後の `warm_up()` が新しい実測値で上書き・再保存する。ハードウェアやバックエンドが変わったら使わない（`CalibrationRecord::matches`）
 - 副次的な整理: `Pipeline::new` と `ConversionBackend::name()` に重複していたバックエンド名の判定を `pipeline::backend_name()` に統合した
+
+### G-14. キーマップ TOML 上書き（2026-09-27）
+
+docs/progress.md 優先4「キーマップ TOML」を実装した。ユーザー不在の自律作業中の暫定判断。
+
+- **対象範囲**: `composing`（ローマ字入力中）/ `converting`（変換中）の2文脈に限る。`Direct` 文脈（ほぼ printable の挿入のみで remap の需要が薄い）とグローバルなモード切替キーは対象外
+- **TOML 形式**: `[keymap.composing]` / `[keymap.converting]` に `"キー仕様文字列" = "Action仕様文字列"` を並べる。キー仕様は既存の `parse_key`（`Ctrl+Shift+Right` 形式）をそのまま再利用
+- **Action 仕様文字列**: 引数なしの Action は名前そのまま（`NextCand` 等）。`Direction` を持つものは `名前:Left` / `名前:Right`。`SelectCand` は `SelectCand:1`〜`9`。**`Insert` / `InsertText` / `SetMode` への上書きは対象外**（文字・モードの値を TOML 文字列に埋め込むエスケープ構文が複雑になるため v1 では見送った）
+- **不正な上書きの扱い**: パースできないキー・Action はその1件だけ無視し、`notify`（`keymap_warning`、Warning）で知らせる（既存の `config_warning` と同じ「壊れていても動き続ける」方針）
+- **実装**: `core/engine/src/keymap.rs` の `KeyMap` が `HashMap<(KeyContext, KeySpec), Action>` の上書きテーブルを持ち、既定のハードコード分岐より先に確認する（上書きが無い設定では常に既定分岐にフォールバックし、既存のゴールデンテスト・単体テストへの影響はゼロ）
+- **設定検証**: `[keymap.composing]` / `[keymap.converting]` サブテーブル自体は既知キーに追加したが、その内側のキー（ユーザーが自由に指定するキー仕様文字列）は既存の「1階層しか見ない」不明キー検出の対象外（意図的）

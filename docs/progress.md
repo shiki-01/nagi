@@ -25,7 +25,7 @@
 1. **LLM 接続の残り**: 非同期通知（`update_preedit` / `update_candidates`）での結果差し替え、ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
 2. **予測変換**（Phase 2）: 学習・ユーザー辞書の前方一致（`Learner::lookup_prefix` は用意済み）、候補ウィンドウの Tab / ↓ 選択
 3. ~~**環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化~~ → 実装済み（G-13）。残るは `quality` で使う大きいモデル・reranker（Laya 評価。Phase 0 の比較が必要）
-4. **設定の残り**: キーマップ TOML（Phase 3。`[keymap]` は `preset` だけ）、設定 GUI（Phase 4）、`update.auto_check` の実装
+4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。**設定の残り**: 設定 GUI（Phase 4）、`update.auto_check` の実装（配布用のアップデート確認エンドポイントが未整備のため未着手）
 5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測
 6. macOS フロントエンド（IMKit。`set_environment` の送信、`set_context.app_id` の報告を含む）、インストールスクリプト、アップデート確認、`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）
 7. Phase 3 以降: 範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）、確定取消、Rewriter、スタイル変換
@@ -44,6 +44,7 @@
 - G-11 LLM の変換パイプライン接続（構成・計測結果・未実装事項）
 - G-12 設定・環境プロファイル・学習・ユーザー辞書（仕様・優先順位・未実装事項）
 - G-13 環境プロファイルの残り4項目（GPU 検出・light のスレッド数削減・minimal 時のモデル解放・キャリブレーション永続化）
+- G-14 キーマップ TOML 上書き（composing/converting の個別キー上書き）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 
