@@ -28,7 +28,7 @@
 4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。**設定の残り**: 設定 GUI（Phase 4）、`update.auto_check` の実装（配布用のアップデート確認エンドポイントが未整備のため未着手）
 5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測
 6. macOS フロントエンド（IMKit。`set_environment` の送信、`set_context.app_id` の報告を含む）、インストールスクリプト、アップデート確認、`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）
-7. Phase 3 以降: 範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）、確定取消、スタイル変換。~~Rewriter~~ → 基盤を実装済み（G-15・G-16。全角/半角英数記号・半角カナ・漢数字。日付・簡易計算は未着手）
+7. Phase 3 以降: ~~範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）~~ → 選択機構のみ実装済み（G-17。選択範囲への再変換・Ctrl+U/I/O直接書き換えは未着手）、確定取消、スタイル変換。~~Rewriter~~ → 基盤を実装済み（G-15・G-16。全角/半角英数記号・半角カナ・漢数字。日付・簡易計算は未着手）
 
 ## G 節（`docs/decisions.md`）に記録した要レビュー事項
 
@@ -47,6 +47,7 @@
 - G-14 キーマップ TOML 上書き（composing/converting の個別キー上書き）
 - G-15 Rewriter 基盤（全角/半角英数記号・半角カナ）
 - G-16 Rewriter: 漢数字変換（digit-for-digit・位取り）
+- G-17 範囲操作: 複数文節選択（選択の開始・伸縮・解除のみ。再変換・Rewriter直接書き換えは未着手）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 
