@@ -19,6 +19,7 @@ use nagi_engine::{BackendCandidate, BackendSegment, ConversionBackend};
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
 use nagi_protocol::view::CandidateSource;
+use nagi_rewriter::RewriterChain;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -52,6 +53,7 @@ pub struct Pipeline {
     dict: Option<Arc<Dictionary>>,
     llm: Option<Llm>,
     runtime: Arc<Runtime>,
+    rewriter: RewriterChain,
 }
 
 /// dict・LLM の有無からバックエンド名を決める（`Pipeline::new` と `name()` の重複を1箇所にまとめる）
@@ -102,7 +104,12 @@ impl Pipeline {
         });
         let name = backend_name(dict.is_some(), llm.is_some());
         runtime.set_backend_name(name);
-        Pipeline { dict, llm, runtime }
+        Pipeline {
+            dict,
+            llm,
+            runtime,
+            rewriter: RewriterChain::default_chain(),
+        }
     }
 
     /// プロファイルの変化を見て、LLM をアクティブ / 非アクティブに切り替える
@@ -493,6 +500,8 @@ impl ConversionBackend for Pipeline {
             groups.push((CandidateSource::SystemDict, system));
             groups.push((CandidateSource::Kana, kana));
         }
+        let rewriter_candidates = self.rewriter.candidates(reading);
+        groups.push((CandidateSource::Rewriter, rewriter_candidates));
 
         let mut out = merge_by_order(&eff.ranking, groups);
         out.truncate(limit);

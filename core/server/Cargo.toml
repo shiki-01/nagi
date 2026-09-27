@@ -25,6 +25,7 @@ nagi-infer.workspace = true
 nagi-config.workspace = true
 nagi-learn.workspace = true
 nagi-profile.workspace = true
+nagi-rewriter.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

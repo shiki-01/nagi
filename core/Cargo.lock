@@ -674,6 +674,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nagi-rewriter"
+version = "0.0.1"
+
+[[package]]
 name = "nagi-romaji"
 version = "0.0.1"
 dependencies = [
@@ -691,6 +695,7 @@ dependencies = [
  "nagi-learn",
  "nagi-profile",
  "nagi-protocol",
+ "nagi-rewriter",
  "nagi-romaji",
  "serde",
  "serde_json",
