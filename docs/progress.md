@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-09-27（設定・環境プロファイル・学習・ユーザー辞書の実装後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-09-27（ライブ変換の実装後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -22,7 +22,7 @@
 
 優先順:
 
-1. **LLM 接続の残り**: 非同期通知（`update_preedit` / `update_candidates`）での結果差し替え、ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
+1. **LLM 接続の残り**: ~~非同期通知（`update_preedit`）でのライブ変換結果差し替え~~ → 実装済み（G-25・G-26）。ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用（見送り、G-21）、`update_candidates` の非同期送出（未着手）、ライブ変換のチャンク処理（`composing_chunk_len` を使った長文分割。Phase 2、未着手）。数詞の表記ゆれは Rewriter（Phase 4）
 2. ~~**予測変換**（Phase 2）~~ → 実装済み（G-23）
 3. ~~**環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化~~ → 実装済み（G-13）。残るは `quality` で使う大きいモデル・reranker（Laya 評価。Phase 0 の比較が必要）
 4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。~~`update.auto_check` の実装~~ → 実装済み（G-19。起動時の自動確認・notify のみ。実サーバー（`nagi.shiki-01.com/updates/latest.json`）は未整備なので機能するにはサーバー側の用意が必要）。**設定の残り**: 設定 GUI（Phase 4）
@@ -57,6 +57,8 @@
 - G-22 範囲選択への再変換・ToHankaku（Mozkey を参照。engine が nagi-rewriter に直接依存する方針転換を含む）
 - G-23 予測変換（Tab）。設計書の「Tab/↓」を Mozc の実際のキーマップに合わせて Tab のみに変更した経緯を記載
 - G-24 非同期通知の配信基盤（`Server::run` の非同期化。`StdinLock` が `Send` でない問題の対処を含む）
+- G-25 ライブ変換: engine側（`Session.live_conversion` / `Engine::live_convert`。タイマーキャンセル不要のデバウンス設計）
+- G-26 ライブ変換: server側（デバウンススレッド・`Arc<Mutex<Engine>>` 化・`update_preedit` 配信。Mozkey の実測既定値を採用）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 
@@ -65,8 +67,8 @@
 2026-09-27、ユーザーが回答した内容に基づき着手中・着手予定。**Mozkey**（`koyasi777/mozkey`。Mozc + ローカル Zenz 補正の fork。ユーザーが実際に使用しており「使いやすい」と評価）の実装を UX の参考にする方針（ユーザー指示）。
 
 - ~~**予測変換**~~ → 実装済み（G-23。Tab のみ（Down は Mozc でも予測選択に使われないため対象外）。`[predict]` で設定可能）
-- **ライブ変換**: 既定 ON。トリガー・Enter/Backspaceの挙動・下線スタイルは Mozkey を参照する。Mozkey の実測既定値: `live_conversion_delay_msec`＝228ms（デバウンス）、`live_conversion_min_key_length`＝2文字、変換結果を主表示・読みをルビ風オーバーレイ表示。**非同期通知の実装に依存するため後着手**
-- ~~**非同期通知の配信基盤**~~ → 実装済み（G-24。`Server::run` の非同期化）。**`update_preedit`/`update_candidates` 自体の送出（ライブ変換・スタイル変換）はまだ無い**（配信基盤のみ）
+- ~~**ライブ変換**~~ → 実装済み（G-25・G-26。既定 ON、`live_conversion_delay_ms`＝228ms・`live_conversion_min_key_length`＝2文字は Mozkey の実測既定値。デバウンス完了時に `update_preedit` で配信）。**未対応**: ふりがな（reading）のルビ風オーバーレイ表示はプロトコル上は可能（`SegmentView.reading` が既に載っている）だが、フロント（macOS/Windows）側の描画実装がまだ無い。Enter/Backspace の細かい挙動（ライブ変換結果からの部分確定・取消）は既存の Composing 用ロジックのまま（Mozkey との詳細比較は未実施）
+- ~~**非同期通知の配信基盤**~~ → 実装済み（G-24。`Server::run` の非同期化）。`update_preedit` の送出（ライブ変換）は実装済み（G-26）。**`update_candidates` の送出（スタイル変換等）はまだ無い**
 - **ビームサーチ（文全体 N-best）**: 実装方針・表示方法とも任せられている。**未着手**
 - ~~**範囲選択への再変換・Ctrl+U/I/O 直接書き換え**~~ → 実装済み（G-22）
 

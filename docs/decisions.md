@@ -489,3 +489,21 @@ G-17 で選択機構のみとしていた範囲操作に、Mozkey（`koyasi777/m
 - **副作用として直した問題**: `Server::run` は標準入力を別スレッドへ move するため `R: BufRead + Send + 'static` が必要になった。`StdinLock`（`MutexGuard` を内包）は `Send` ではないため、`main.rs` はロックせず `Stdin` をそのまま渡す形に変えた（`Stdin::read` は呼び出しごとに内部で lock/unlock するので、単一スレッドから使う限り挙動は変わらない）
 - **今回のスコープ外**: ライブ変換・スタイル変換など、実際にこの基盤を使って非同期通知を送出する機能自体はまだ実装していない（配信基盤のみ）。既存のキャリブレーション完了・アップデート確認・プロファイル変化の通知が、この基盤によって即時配信されるようになった（動作の変化として観測可能）
 - **テスト**: `core/server/tests/rpc.rs` に、`push_event` が次のリクエストを送らずに配信されることを検証する統合テストを追加した（`cargo test --workspace` を複数回連続実行して安定性を確認済み）
+
+### G-25. ライブ変換: engine側（Session.live_conversion / Engine::live_convert）（2026-09-27）
+
+設計書 §4.3 のライブ変換を実装した。「進める（推奨）」との回答を受けて着手。
+
+- **キャンセル不要のデバウンス設計**: エンジンはタイマーを持たない。`Engine::live_convert(session_id, expected_reading)` は呼ばれた時点の入力全体の reading と `expected_reading` を比較し、一致しなければ何もしない（`None` を返す）。サーバー側は「デバウンス完了時に呼んだ入力がまだ有効か」をこの一致判定だけで確認できるので、古いデバウンスタイマーをキャンセルする仕組み（世代カウンタ・トークン等）が不要になる。Mozkey（C++ 実装）はタイマーキャンセルを使うが、Rust 側の状態機械はより単純な「内容一致チェック」で同じ目的を達成できると判断した
+- **IR 変更なし**: `Preedit`/`Segment` の構造は変更していない。Composing 状態の表示に、既存の Converting 用 `Segment{reading, surface}` をそのまま再利用する（`Session.live_conversion: Option<LiveConversion>` というキャッシュを新設し、`build_preedit` の Composing 分岐がこれを見るだけ）。ふりがな（reading）表示もこの構造のままで実現できる
+- 4つのテストケースを追加。カーソル位置の整合性テスト（`live_convert_keeps_cursor_position_consistent`）で、変換後の surface が reading よりUTF-16単位で短くなるケースのカーソルクランプ挙動を確認した（既存の `build_preedit` のクランプロジックは無変更で正しく動作する）
+
+### G-26. ライブ変換: server側（デバウンス・非同期通知配信・設定）（2026-09-27）
+
+G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ変換の結果を配信するようにした。
+
+- **デバウンススレッド方式**: `process_key` のたびに、Composing 状態かつ入力の reading 文字数が `live_conversion_min_key_length` 以上なら、その場でスレッドを1本立てて `live_conversion_delay_ms` だけ sleep してから `Engine::live_convert` を呼ぶ。古いスレッドをキャンセルしない（G-25 の設計により無害）。高速に連続入力すると短命スレッドが積み重なる可能性があるが、遅延（既定228ms）より速いキー入力間隔は現実的にまれであり、各スレッドのコスト（sleep + 1回のロック取得）も小さいため許容する
+- **既定値は Mozkey の実測値を採用**: `live_conversion_delay_ms = 228`、`live_conversion_min_key_length = 2`（`koyasi777/mozkey` の `config.proto` 実測。ユーザーから「mozkey を参照」との回答）
+- **`Server.engine` を `Arc<Mutex<Engine>>` 化**: デバウンススレッドとメインスレッドが同じ `Engine` を安全に共有するための変更。ロックはポイズン時も中身を使って継続する（`unwrap_or_else(PoisonError::into_inner)`）方針にした。IME サーバーは一部の処理でパニックが起きても全体を落とさず動き続けることを優先する
+- **`update_candidates` の非同期配信は対象外**（今回のスコープ外）: ライブ変換は候補ウィンドウを開かない（Mozkey の挙動を参照）ため不要
+- テスト: `core/server/tests/rpc.rs` に `MockBackend` を使った統合テストを追加（`KanaBackend` は reading=surface のため差分が出ずテストにならない）。3回連続実行でフレーキーでないことを確認済み
