@@ -684,10 +684,14 @@ dependencies = [
 name = "nagi-server"
 version = "0.0.1"
 dependencies = [
+ "nagi-config",
  "nagi-dict",
  "nagi-engine",
  "nagi-infer",
+ "nagi-learn",
+ "nagi-profile",
  "nagi-protocol",
+ "nagi-romaji",
  "serde",
  "serde_json",
 ]

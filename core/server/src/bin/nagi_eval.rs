@@ -14,7 +14,8 @@
 //!
 //! `Prediction` / `Suggestion` は対象外（予測変換は Phase 2）。
 
-use nagi_server::{ServerOptions, load_backend};
+use nagi_engine::ConversionBackend;
+use nagi_server::{ServerOptions, build};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -34,8 +35,9 @@ fn main() {
         match arg.as_str() {
             "--data-dir" => options.data_dir = args.next().map(PathBuf::from),
             "--no-llm" => options.use_llm = false,
+            "--user-dir" => options.user_dir = args.next().map(PathBuf::from),
             "--sync-budget-ms" => {
-                options.sync_budget_ms = args.next().and_then(|v| v.parse().ok()).unwrap_or(150);
+                options.sync_budget_ms = args.next().and_then(|v| v.parse().ok());
             }
             "--limit" => {
                 limit = args
@@ -75,8 +77,16 @@ fn main() {
         .take(limit)
         .collect();
 
-    let (backend, profile, note) = load_backend(&options);
-    eprintln!("backend={} profile={profile}: {note}", backend.name());
+    let built = build(&options);
+    for note in &built.notes {
+        eprintln!("{note}");
+    }
+    let backend = built.pipeline.clone();
+    eprintln!(
+        "backend={} profile={}",
+        backend.name(),
+        built.runtime.profile().as_str()
+    );
 
     let mut stats: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     let mut latencies_ms: Vec<f64> = Vec::new();

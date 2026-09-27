@@ -1,132 +1,36 @@
-//! JSON-RPC サーバー本体。`handle_line` は 1 行の入力に対する出力行を返す純粋な関数に近い形で、
+//! JSON-RPC サーバー本体。`handle_line` は 1 行の入力に対する出力行を返す形で、
 //! プロセスを起こさずにテストできる。
 
-use crate::backend::DictBackend;
-use nagi_dict::Dictionary;
-use nagi_engine::{ConversionBackend, Engine, EngineConfig, KanaBackend};
+use crate::learning::LearningObserver;
+use crate::runtime::Runtime;
+use crate::setup::{Built, Reloadable, engine_config_from, issue_events, user_dict_events};
+use nagi_dict::UserDictionary;
+use nagi_engine::{ConversionBackend, Engine, EngineConfig};
 use nagi_protocol::PROTOCOL_VERSION;
-use nagi_protocol::jsonrpc::{ErrorObject, Request, Response, error_code, parse_message};
+use nagi_protocol::jsonrpc::{
+    ErrorObject, Notification, Request, Response, error_code, parse_message,
+};
 use nagi_protocol::methods::{
-    EmptyResult, InitializeParams, InitializeResult, ProcessKeyParams, ReloadConfigResult,
-    RestoreSessionParams, ServerCapabilities, SessionParams, SetContextParams, method,
+    ConfigError, EmptyResult, InitializeParams, InitializeResult, NotifyParams, ProcessKeyParams,
+    ReloadConfigResult, RestoreSessionParams, ServerCapabilities, SessionParams, SetContextParams,
+    SetEnvironmentParams, method,
 };
 use nagi_protocol::view::InputMode;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::io::{BufRead, Write};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
-/// 起動オプション
-#[derive(Debug, Clone)]
-pub struct ServerOptions {
-    /// 取得済みデータ（`dict/nagi-dict.bin`、`models/*.gguf`）のディレクトリ。`--data-dir` または `NAGI_DATA_DIR`
-    pub data_dir: Option<PathBuf>,
-    /// LLM を使うか（`--no-llm` で無効化）。feature `llama` が無い、またはモデルが無ければ使えない
-    pub use_llm: bool,
-    /// LLM の推論を待つ最長時間（ミリ秒、`--sync-budget-ms`。設計書の `conversion.sync_budget_ms`）
-    pub sync_budget_ms: u64,
-}
-
-impl Default for ServerOptions {
-    fn default() -> Self {
-        ServerOptions {
-            data_dir: None,
-            use_llm: true,
-            sync_budget_ms: 150,
-        }
-    }
-}
-
-/// 既定の変換モデルのファイル名（`<data_dir>/models/` 下。`cargo xtask fetch-model` の出力）
-pub const DEFAULT_MODEL_FILE: &str = "zenz-v3.1-small-Q5_K_M.gguf";
-
-/// 変換バックエンドを用意する。戻り値は (バックエンド, プロファイル名, 診断メッセージ)。
-///
-/// 縮退の順: 辞書 + LLM（`balanced`）→ 辞書のみ（`minimal`）→ 読みをそのまま返す（`minimal`）。
-/// どの段階でも入力は続けられる。診断メッセージに入力内容は含まない。
-pub fn load_backend(options: &ServerOptions) -> (Arc<dyn ConversionBackend>, &'static str, String) {
-    let Some(dir) = &options.data_dir else {
-        return (
-            Arc::new(KanaBackend),
-            "minimal",
-            "データディレクトリが未指定のため辞書なしで起動します".to_string(),
-        );
-    };
-    let path = dir.join("dict").join("nagi-dict.bin");
-    if !path.exists() {
-        return (
-            Arc::new(KanaBackend),
-            "minimal",
-            format!("辞書が見つかりません: {}", path.display()),
-        );
-    }
-    let dict = match Dictionary::load(&path) {
-        Ok(dict) => Arc::new(dict),
-        Err(e) => {
-            return (
-                Arc::new(KanaBackend),
-                "minimal",
-                format!("辞書の読み込みに失敗したため辞書なしで起動します: {e}"),
-            );
-        }
-    };
-    let dict_only = |note: String| -> (Arc<dyn ConversionBackend>, &'static str, String) {
-        (Arc::new(DictBackend::new(dict.clone())), "minimal", note)
-    };
-    if !options.use_llm {
-        return dict_only("LLM は無効です（辞書のみで起動します）".to_string());
-    }
-    load_llm(options, dir, &dict).unwrap_or_else(dict_only)
-}
-
-#[cfg(feature = "llama")]
-fn load_llm(
-    options: &ServerOptions,
-    dir: &Path,
-    dict: &Arc<Dictionary>,
-) -> Result<(Arc<dyn ConversionBackend>, &'static str, String), String> {
-    use crate::llm_backend::{HybridBackend, LlmOptions};
-    use nagi_infer::llama::{LlamaModel, LlamaOptions};
-    let model_path = dir.join("models").join(DEFAULT_MODEL_FILE);
-    if !model_path.exists() {
-        return Err(format!(
-            "変換モデルが見つかりません（辞書のみで起動します）: {}",
-            model_path.display()
-        ));
-    }
-    let model = LlamaModel::load(&model_path, LlamaOptions::default())
-        .map_err(|e| format!("変換モデルの読み込みに失敗したため辞書のみで起動します: {e}"))?;
-    let backend = HybridBackend::new(
-        dict.clone(),
-        Box::new(model),
-        LlmOptions {
-            sync_budget: std::time::Duration::from_millis(options.sync_budget_ms),
-            ..LlmOptions::default()
-        },
-    );
-    backend.warm_up();
-    Ok((
-        Arc::new(backend),
-        "balanced",
-        format!("辞書 + LLM で起動します: {}", model_path.display()),
-    ))
-}
-
-#[cfg(not(feature = "llama"))]
-fn load_llm(
-    _options: &ServerOptions,
-    _dir: &Path,
-    _dict: &Arc<Dictionary>,
-) -> Result<(Arc<dyn ConversionBackend>, &'static str, String), String> {
-    Err("このビルドは LLM 推論（feature `llama`）を含みません（辞書のみで起動します）".to_string())
-}
+/// 設定ファイル・ユーザー辞書の変更を確認する最短の間隔
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// JSON-RPC サーバー
 pub struct Server {
     engine: Engine,
-    profile: String,
+    runtime: Arc<Runtime>,
+    reload: Reloadable,
     initial_mode: InputMode,
     initialized: bool,
     shutdown: bool,
@@ -150,15 +54,36 @@ fn params<T: DeserializeOwned>(req: &Request) -> Result<T, ErrorObject> {
 }
 
 impl Server {
-    /// サーバーを作る
-    pub fn new(backend: Arc<dyn ConversionBackend>, profile: &str, config: EngineConfig) -> Self {
+    /// 変換バックエンドだけを指定して作る（学習・設定・ユーザー辞書なし。テスト・簡易用）
+    pub fn new(backend: Arc<dyn ConversionBackend>, _profile: &str, config: EngineConfig) -> Self {
         Server {
             initial_mode: config.initial_mode,
             engine: Engine::new(backend, config),
-            profile: profile.to_string(),
+            runtime: Runtime::detached(false),
+            reload: Reloadable::detached(),
             initialized: false,
             shutdown: false,
         }
+    }
+
+    /// [`crate::setup::build`] の結果から作る（学習・環境プロファイル・設定の再読み込みを含む）
+    pub fn from_built(built: Built) -> Self {
+        let config = engine_config_from(&built.config);
+        let mut engine = Engine::new(built.pipeline.clone(), config.clone());
+        engine.set_commit_observer(Arc::new(LearningObserver::new(built.runtime.clone())));
+        Server {
+            initial_mode: config.initial_mode,
+            engine,
+            runtime: built.runtime,
+            reload: built.reload,
+            initialized: false,
+            shutdown: false,
+        }
+    }
+
+    /// 共有状態（診断・テスト用）
+    pub fn runtime(&self) -> &Arc<Runtime> {
+        &self.runtime
     }
 
     /// `shutdown` を受けたか
@@ -166,19 +91,20 @@ impl Server {
         self.shutdown
     }
 
-    /// 1 行の入力を処理し、出力する行（0 行以上）を返す
+    /// 1 行の入力を処理し、出力する行（0 行以上）を返す。応答のあとに、積まれた `notify` 通知が続く
     pub fn handle_line(&mut self, line: &str) -> Vec<String> {
         let line = line.trim();
         if line.is_empty() {
             return Vec::new();
         }
+        self.poll_changes();
         let request = match parse_message(line) {
             Ok(r) => r,
             Err(e) => return vec![Self::encode(&Response::error(None, e))],
         };
         let id = request.id.clone();
         let outcome = self.dispatch(&request);
-        match (id, outcome) {
+        let mut lines = match (id, outcome) {
             // 通知には応答しない
             (None, _) => Vec::new(),
             (Some(id), Ok(result)) => {
@@ -191,7 +117,12 @@ impl Server {
                 vec![Self::encode(&response)]
             }
             (Some(id), Err(e)) => vec![Self::encode(&Response::error(Some(id), e))],
+        };
+        // 初期化前は通知を出さない（フロントが受け取れる状態になってから）
+        if self.initialized {
+            lines.extend(self.notifications());
         }
+        lines
     }
 
     fn encode(response: &Response) -> String {
@@ -199,6 +130,88 @@ impl Server {
             r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"内部エラー"}}"#
                 .to_string()
         })
+    }
+
+    /// 共有状態に積まれた出来事を `notify` 通知の行にする
+    fn notifications(&self) -> Vec<String> {
+        self.runtime
+            .drain_events()
+            .into_iter()
+            .filter_map(|e| {
+                let params = NotifyParams {
+                    level: e.level,
+                    message: e.message,
+                    code: Some(e.code.to_string()),
+                };
+                Notification::new(method::NOTIFY, params)
+                    .ok()
+                    .and_then(|n| serde_json::to_string(&n).ok())
+            })
+            .collect()
+    }
+
+    /// 設定ファイル・ユーザー辞書の変更の確認、プロファイルの時間経過による復帰、学習の定期保存
+    fn poll_changes(&mut self) {
+        self.runtime.tick();
+        self.runtime.flush_learning(false);
+        if self.reload.changed(POLL_INTERVAL) {
+            self.reload_all();
+        }
+    }
+
+    /// 設定ファイルとユーザー辞書を読み直す。設定が壊れていれば旧設定のまま（`ok = false`）
+    fn reload_all(&mut self) -> ReloadConfigResult {
+        let mut errors = Vec::new();
+        let mut ok = true;
+        if let Some(path) = self.reload.config_path.clone() {
+            match nagi_config::load_file(&path) {
+                Ok((mut config, issues)) => {
+                    if let Some(ms) = self.reload.cli_sync_budget_ms {
+                        config.conversion.sync_budget_ms = ms;
+                    }
+                    self.engine.update_config(engine_config_from(&config));
+                    self.runtime.apply_config(&config);
+                    self.runtime.set_config_state(Some(path.clone()), false);
+                    if config.conversion.model != self.reload.applied_model {
+                        self.runtime.push_event(crate::runtime::Event {
+                            level: nagi_protocol::methods::NotifyLevel::Info,
+                            code: "restart_required",
+                            message: "conversion.model の変更は次回起動時に反映されます"
+                                .to_string(),
+                        });
+                    }
+                    for e in issue_events(Some(&path), &issues) {
+                        self.runtime.push_event(e);
+                    }
+                    errors.extend(issues.iter().map(|i| ConfigError {
+                        line: i.line,
+                        message: i.message.clone(),
+                    }));
+                }
+                Err(issues) => {
+                    ok = false;
+                    self.runtime.set_config_state(Some(path.clone()), true);
+                    for e in issue_events(Some(&path), &issues) {
+                        self.runtime.push_event(e);
+                    }
+                    errors.extend(issues.iter().map(|i| ConfigError {
+                        line: i.line,
+                        message: i.message.clone(),
+                    }));
+                }
+            }
+        }
+        if let (Some(dir), Some(dict)) =
+            (self.reload.user_dict_dir.clone(), self.reload.dict.clone())
+        {
+            let (user, issues) = UserDictionary::load_dir(&dir);
+            self.runtime.set_overlay(dict.make_overlay(&user));
+            for e in user_dict_events(&issues) {
+                self.runtime.push_event(e);
+            }
+        }
+        self.reload.mark_read();
+        ReloadConfigResult { ok, errors }
     }
 
     fn require_initialized(&self) -> Result<(), ErrorObject> {
@@ -230,7 +243,7 @@ impl Server {
                     protocol_version: PROTOCOL_VERSION,
                     server_name: "nagi-server".to_string(),
                     server_version: env!("CARGO_PKG_VERSION").to_string(),
-                    profile: self.profile.clone(),
+                    profile: self.runtime.profile().as_str().to_string(),
                     mode: self.initial_mode,
                     capabilities: ServerCapabilities {
                         reconvert: false,
@@ -242,6 +255,7 @@ impl Server {
             method::PING => to_value(EmptyResult {}),
             method::SHUTDOWN => {
                 self.shutdown = true;
+                self.runtime.flush_learning(true);
                 to_value(EmptyResult {})
             }
             method::PROCESS_KEY => {
@@ -257,7 +271,10 @@ impl Server {
             method::FOCUS_OUT => {
                 self.require_initialized()?;
                 let p: SessionParams = params(req)?;
-                to_value(self.engine.focus_out(&p.session_id))
+                let result = self.engine.focus_out(&p.session_id);
+                // フォーカス喪失時に学習を保存する（変更があるときだけ書かれる）
+                self.runtime.flush_learning(true);
+                to_value(result)
             }
             method::RESET => {
                 self.require_initialized()?;
@@ -275,13 +292,24 @@ impl Server {
                 self.engine.set_context(&p.session_id.clone(), &p);
                 to_value(EmptyResult {})
             }
+            method::SET_ENVIRONMENT => {
+                self.require_initialized()?;
+                let p: SetEnvironmentParams = params(req)?;
+                self.runtime.set_environment(&p);
+                to_value(EmptyResult {})
+            }
+            method::GET_STATUS => {
+                self.require_initialized()?;
+                to_value(self.runtime.status())
+            }
+            method::CLEAR_LEARNING => {
+                self.require_initialized()?;
+                self.runtime.learn_clear();
+                to_value(EmptyResult {})
+            }
             method::RELOAD_CONFIG => {
                 self.require_initialized()?;
-                // 設定ファイルの読み込みは未実装（設計書 §6）。現時点では常に成功として扱う
-                to_value(ReloadConfigResult {
-                    ok: true,
-                    errors: Vec::new(),
-                })
+                to_value(self.reload_all())
             }
             method::SELECT_CANDIDATE | method::RECONVERT => {
                 self.require_initialized()?;
@@ -297,17 +325,17 @@ impl Server {
         }
     }
 
-    /// 入力を EOF または `shutdown` まで処理する
+    /// 入力を EOF または `shutdown` まで処理する。終了時に学習を保存する
     pub fn run<R: BufRead, W: Write>(
         &mut self,
         mut input: R,
         output: &mut W,
     ) -> std::io::Result<()> {
         let mut line = String::new();
-        loop {
+        let result = loop {
             line.clear();
             if input.read_line(&mut line)? == 0 {
-                return Ok(());
+                break Ok(());
             }
             for out in self.handle_line(&line) {
                 output.write_all(out.as_bytes())?;
@@ -315,33 +343,10 @@ impl Server {
             }
             output.flush()?;
             if self.shutdown {
-                return Ok(());
+                break Ok(());
             }
-        }
+        };
+        self.runtime.flush_learning(true);
+        result
     }
-}
-
-/// 引数から起動オプションを作る（`--data-dir <path>`、環境変数 `NAGI_DATA_DIR`）
-pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<ServerOptions, String> {
-    let mut options = ServerOptions {
-        data_dir: std::env::var_os("NAGI_DATA_DIR").map(PathBuf::from),
-        ..ServerOptions::default()
-    };
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--data-dir" => {
-                let value = args.next().ok_or("--data-dir に値がありません")?;
-                options.data_dir = Some(Path::new(&value).to_path_buf());
-            }
-            "--no-llm" => options.use_llm = false,
-            "--sync-budget-ms" => {
-                let value = args.next().ok_or("--sync-budget-ms に値がありません")?;
-                options.sync_budget_ms = value
-                    .parse()
-                    .map_err(|_| format!("--sync-budget-ms が数値ではありません: {value}"))?;
-            }
-            other => return Err(format!("不明な引数: {other}")),
-        }
-    }
-    Ok(options)
 }

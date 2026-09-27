@@ -379,6 +379,11 @@ impl Controller {
         &self.reason
     }
 
+    /// 直近に報告された実行環境
+    pub fn environment(&self) -> Environment {
+        self.env
+    }
+
     /// 現在のパラメータ
     pub fn params(&self) -> ProfileParams {
         self.current.params()

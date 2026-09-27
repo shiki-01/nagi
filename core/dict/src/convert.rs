@@ -2,6 +2,7 @@
 
 use crate::bunsetsu::starts_bunsetsu;
 use crate::dictionary::Dictionary;
+use crate::overlay::Overlay;
 use crate::pos::{Pos, PosClass};
 use std::collections::HashMap;
 
@@ -36,6 +37,8 @@ enum Source {
     Entry(usize),
     /// 辞書に無い 1 文字
     Unknown,
+    /// ユーザー辞書（オーバーレイ）の語（`Path::extras` の index）
+    Extra(usize),
 }
 
 struct Node {
@@ -61,22 +64,29 @@ struct PathWord {
 struct Path {
     words: Vec<PathWord>,
     total: i32,
+    /// オーバーレイの語の表記
+    extras: Vec<String>,
 }
 
 impl Dictionary {
     /// 読み（ひらがな）を Viterbi で最良経路に変換し、文節に区切って返す
     pub fn convert(&self, reading: &str) -> Vec<ConvertedSegment> {
+        self.convert_with(reading, None)
+    }
+
+    /// [`Dictionary::convert`] にユーザー辞書（オーバーレイ）を加えたもの
+    pub fn convert_with(&self, reading: &str, overlay: Option<&Overlay>) -> Vec<ConvertedSegment> {
         let chars: Vec<char> = reading.chars().collect();
         if chars.is_empty() {
             return Vec::new();
         }
-        let path = self.viterbi(reading, &chars);
+        let path = self.viterbi(reading, &chars, overlay);
         let mut segments: Vec<ConvertedSegment> = Vec::new();
         let mut prev_pos: Option<Pos> = None;
         for w in &path.words {
             let pos = self.pos_of(w.lid);
             let text: String = chars[w.start..w.end].iter().collect();
-            let surface = self.word_surface(w, &text);
+            let surface = self.word_surface(w, &text, &path.extras);
             if starts_bunsetsu(prev_pos, pos) || segments.is_empty() {
                 segments.push(ConvertedSegment {
                     reading: text,
@@ -96,11 +106,21 @@ impl Dictionary {
     /// 順序: (1) その読み全体の Viterbi 最良経路 →(2) 先頭の語だけを同じ読みの別の語に
     /// 置き換えたもの（付属語は据え置き）→(3) その読み全体に一致する辞書語。(2)(3) はコスト昇順。
     pub fn segment_candidates(&self, reading: &str, limit: usize) -> Vec<SegmentCandidate> {
+        self.segment_candidates_with(reading, limit, None)
+    }
+
+    /// [`Dictionary::segment_candidates`] にユーザー辞書（オーバーレイ）を加えたもの
+    pub fn segment_candidates_with(
+        &self,
+        reading: &str,
+        limit: usize,
+        overlay: Option<&Overlay>,
+    ) -> Vec<SegmentCandidate> {
         let chars: Vec<char> = reading.chars().collect();
         if chars.is_empty() || limit == 0 {
             return Vec::new();
         }
-        let path = self.viterbi(reading, &chars);
+        let path = self.viterbi(reading, &chars, overlay);
         let mut out: Vec<SegmentCandidate> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut push = |out: &mut Vec<SegmentCandidate>, surface: String, cost: i32| {
@@ -113,7 +133,7 @@ impl Dictionary {
             .iter()
             .map(|w| {
                 let text: String = chars[w.start..w.end].iter().collect();
-                self.word_surface(w, &text)
+                self.word_surface(w, &text, &path.extras)
             })
             .collect();
         push(&mut out, best, path.total);
@@ -132,7 +152,7 @@ impl Dictionary {
                 .iter()
                 .map(|w| {
                     let text: String = chars[w.start..w.end].iter().collect();
-                    self.word_surface(w, &text)
+                    self.word_surface(w, &text, &path.extras)
                 })
                 .collect();
             for e in self.lookup(&head_reading).into_iter().take(6) {
@@ -159,9 +179,10 @@ impl Dictionary {
         out
     }
 
-    fn word_surface(&self, w: &PathWord, reading_text: &str) -> String {
+    fn word_surface(&self, w: &PathWord, reading_text: &str, extras: &[String]) -> String {
         match w.source {
             Source::Entry(i) => self.surface(i).to_string(),
+            Source::Extra(i) => extras[i].clone(),
             Source::Unknown => reading_text.to_string(),
         }
     }
@@ -185,7 +206,7 @@ impl Dictionary {
         }
     }
 
-    fn viterbi(&self, reading: &str, chars: &[char]) -> Path {
+    fn viterbi(&self, reading: &str, chars: &[char], overlay: Option<&Overlay>) -> Path {
         let n = chars.len();
         let bytes = reading.as_bytes();
         // 文字位置 → バイト位置、バイト位置 → 文字位置
@@ -199,6 +220,7 @@ impl Dictionary {
         char_at_byte[bytes.len()] = n;
 
         let mut nodes: Vec<Node> = Vec::new();
+        let mut extras: Vec<String> = Vec::new();
         // best_at[p]: 位置 p で終わるノードのうち、右 ID ごとの最小総コスト (総コスト, ノード index)
         let mut best_at: Vec<HashMap<u16, (i32, usize)>> = vec![HashMap::new(); n + 1];
         best_at[0].insert(0, (0, usize::MAX));
@@ -237,6 +259,26 @@ impl Dictionary {
                         prev,
                         source: Source::Entry(idx),
                     });
+                }
+            }
+            // ユーザー辞書の語
+            if let Some(ov) = overlay {
+                for len in 1..=ov.max_reading_chars().min(n - p) {
+                    let key: String = chars[p..p + len].iter().collect();
+                    for e in ov.lookup(&key) {
+                        let (pc, prev) = best_pred(e.lid);
+                        extras.push(e.surface.clone());
+                        new_nodes.push(Node {
+                            start: p,
+                            end: p + len,
+                            lid: e.lid,
+                            rid: e.rid,
+                            word_cost: i32::from(e.cost),
+                            total: pc + i32::from(e.cost),
+                            prev,
+                            source: Source::Extra(extras.len() - 1),
+                        });
+                    }
                 }
             }
             // 1 文字の素通しノード（どの位置からでも経路が存在することを保証する）
@@ -285,6 +327,10 @@ impl Dictionary {
             cur = node.prev;
         }
         words.reverse();
-        Path { words, total }
+        Path {
+            words,
+            total,
+            extras,
+        }
     }
 }

@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-09-27（LLM 接続後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-09-27（設定・環境プロファイル・学習・ユーザー辞書の実装後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -16,18 +16,19 @@
 | 6 | dict | `cargo xtask fetch-dict`（Mozc OSS 辞書、コミット固定 + SHA-256 検証）、`build-dict`（53MB、2 秒）、`fst` による trie、連接コスト、Viterbi、POS ベースの文節区切り（暫定）、文節候補。実データで「今日は\|いい天気です」等を確認。単体 13 + 実データ 4 テスト。`minimal` 経路として server に接続済み（`--data-dir`） |
 | 7 | infer | `ConversionModel` / `PromptAdapter` trait、zenz-v3.1 アダプタ、`MockModel`、`llama-cpp-2 =0.1.157`（feature `llama`）による実推論、`cargo xtask fetch-model`（SHA-256 検証）。zenz-v3.1-small で 7 文すべて正しく変換（28〜47ms/文）。自前の GGUF 語彙リーダーとトークナイザを実装（G-3）。既定 feature では llama.cpp をビルドしない |
 | 8 | LLM の変換パイプラインへの接続 | `HybridBackend`（server）: LLM で文全体を変換 → 辞書の格子で強制アライメントして文節に分ける（`Dictionary::align`）、文節候補は LLM の最良変換 + 辞書候補の LLM 再採点（`ConversionModel::score`）、`sync_budget` 超過時は辞書の結果 + 結果キャッシュ、縮退（LLM → 辞書 → 読み）、`--no-llm` / `--sync-budget-ms`。`nagi-eval`（Mozc `evaluation.tsv` での精度・レイテンシ計測）。評価データ 609 件で辞書のみ 66.0% → 辞書 + LLM 76.4%、`convert_sentence` p50 32ms / p95 56ms。詳細は G-11。LLM を使うには server を `--features llama` でビルドする |
+| 9 | 設定・環境プロファイル・学習・ユーザー辞書 | `nagi-config`（行番号付きエラー・`default.toml`・再読み込み）、`nagi-profile`（初回判定・キャリブレーション・自動切替）、`nagi-learn`（学習の記録・削除・原子的保存）、ユーザー辞書（Mozc TSV・スニペット・オーバーレイ）、`Pipeline` の優先順統合、`set_environment` / `get_status` / `clear_learning`、`Ctrl+Delete`。詳細は G-12 |
 
 ## 未完了の項目と次の一手
 
 優先順:
 
-1. **LLM 接続の残り**: 非同期通知（`update_preedit` / `update_candidates`）での結果差し替え、ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用、`profile`（persona）注入、ライブ変換のチャンク処理。数詞の表記ゆれは Rewriter（Phase 4）
-2. **環境プロファイルの自動判定**（`quality` / `balanced` / `light` / `minimal`、設計書 §4.7）。現状は「LLM が読み込めれば `balanced`、無ければ `minimal`」の 2 段階だけ
-3. **設定ファイル**（`config.toml`、`config/default.toml`、ホットリロード、行番号付きエラー通知）。`reload_config` は no-op。`--sync-budget-ms` などの起動引数を設定へ移す
-4. **学習・ユーザー辞書**（Phase 2）: LLM の弱点（固有名詞・表記ゆれ・数詞）を補う
-5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。Laya の reranker 評価、基準機での実測
-6. macOS フロントエンド（IMKit）、インストールスクリプト、アップデート確認、`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）
-7. Phase 2 以降: ライブ変換、範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）、確定取消、キーマップ TOML
+1. **LLM 接続の残り**: 非同期通知（`update_preedit` / `update_candidates`）での結果差し替え、ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
+2. **予測変換**（Phase 2）: 学習・ユーザー辞書の前方一致（`Learner::lookup_prefix` は用意済み）、候補ウィンドウの Tab / ↓ 選択
+3. **環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化、`quality` で使う大きいモデル・reranker（Laya 評価）
+4. **設定の残り**: キーマップ TOML（Phase 3。`[keymap]` は `preset` だけ）、設定 GUI（Phase 4）、`update.auto_check` の実装
+5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測
+6. macOS フロントエンド（IMKit。`set_environment` の送信、`set_context.app_id` の報告を含む）、インストールスクリプト、アップデート確認、`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）
+7. Phase 3 以降: 範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）、確定取消、Rewriter、スタイル変換
 
 ## G 節（`docs/decisions.md`）に記録した要レビュー事項
 
@@ -41,6 +42,7 @@
 - G-9 プロトコル・サーバーの判断（`revision` を u32、`reload_config` no-op など）
 - G-10 その他（CI、xtask、コミット粒度）
 - G-11 LLM の変換パイプライン接続（構成・計測結果・未実装事項）
+- G-12 設定・環境プロファイル・学習・ユーザー辞書（仕様・優先順位・未実装事項）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 

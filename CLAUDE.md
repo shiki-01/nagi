@@ -26,7 +26,7 @@
 
 - CI（`.github/workflows/ci.yml`）は ubuntu / windows / macos で fmt・clippy・build・test を実行する
 - 取得データ（モデル・辞書）は `data/`（.gitignore 済み）に置く。取得は `cargo xtask` のタスクで行う: `fetch-dict` → `build-dict`（`data/dict/nagi-dict.bin`）、`fetch-model`（`data/models/`）、`gen-types` / `check-types`（Swift 型の生成・差分検査。`typeshare-cli` が必要）
-- サーバー: `cargo run -p nagi-server --bin imserver -- --data-dir ../data`（JSON-RPC は stdin/stdout。辞書が無ければ読みそのまま返す）
+- サーバー: `cargo run -p nagi-server --bin imserver -- --data-dir ../data [--user-dir <dir>] [--config <file>] [--no-llm]`（JSON-RPC は stdin/stdout。辞書が無ければ読みそのまま返す。`--user-dir` は `config.toml`・`learning.tsv`・`user_dict/` の置き場で、未指定なら OS の設定ディレクトリ（`NAGI_CONFIG_DIR` で上書き）。**開発中は実ユーザーの学習データを汚さないよう `--user-dir` を指定する**）
 - LLM 推論（zenz）は feature `llama`（infer・server とも既定 OFF）: `LIBCLANG_PATH` と cmake が必要。`cargo test -p nagi-infer -p nagi-server --features llama`（モデル未取得なら skip）。LLM を使うサーバーは `cargo run --release -p nagi-server --features llama --bin imserver -- --data-dir ../data`（`--no-llm` で辞書のみ、`--sync-budget-ms` で推論の待ち時間）
 - 精度・レイテンシ計測: `cargo run --release -p nagi-server --features llama --bin nagi-eval -- --data-dir ../data [--no-llm] [--verbose]`（Mozc の `evaluation.tsv`。`cargo xtask fetch-dict` で取得）
 

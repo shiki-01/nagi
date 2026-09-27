@@ -15,9 +15,13 @@ pub mod bunsetsu;
 pub mod convert;
 pub mod dictionary;
 pub mod error;
+pub mod overlay;
 pub mod pos;
+pub mod user;
 
 pub use builder::{ConnectionLayout, DictionaryBuilder, build_from_mozc_dir};
 pub use convert::{ConvertedSegment, SegmentCandidate};
 pub use dictionary::{Dictionary, Entry};
 pub use error::DictError;
+pub use overlay::{Overlay, OverlayEntry};
+pub use user::{SNIPPET_POS, UserDictIssue, UserDictionary, UserEntry, decode_text};

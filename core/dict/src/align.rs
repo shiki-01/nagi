@@ -13,6 +13,7 @@
 use crate::bunsetsu::starts_bunsetsu;
 use crate::convert::ConvertedSegment;
 use crate::dictionary::Dictionary;
+use crate::overlay::Overlay;
 use crate::pos::Pos;
 use std::collections::{BTreeMap, HashMap};
 
@@ -60,6 +61,16 @@ impl Dictionary {
     /// 長さに対応づけて 1 語として扱う。それでも経路が無い場合（表記のひらがなが読みに
     /// 存在しないなど）は `None`。
     pub fn align(&self, reading: &str, surface: &str) -> Option<Vec<ConvertedSegment>> {
+        self.align_with(reading, surface, None)
+    }
+
+    /// [`Dictionary::align`] にユーザー辞書（オーバーレイ）の語も辞書語として加える
+    pub fn align_with(
+        &self,
+        reading: &str,
+        surface: &str,
+        overlay: Option<&Overlay>,
+    ) -> Option<Vec<ConvertedSegment>> {
         let r: Vec<char> = reading.chars().collect();
         let s: Vec<char> = surface.chars().collect();
         if r.is_empty() || s.is_empty() {
@@ -145,6 +156,19 @@ impl Dictionary {
                                 self.rid_of(idx),
                                 i32::from(self.cost_of(idx)),
                             ));
+                        }
+                    }
+                }
+                // 1b. ユーザー辞書の語
+                if let Some(ov) = overlay {
+                    for len in 1..=ov.max_reading_chars().min(n - i) {
+                        let key: String = r[i..i + len].iter().collect();
+                        for e in ov.lookup(&key) {
+                            if rest_surface.starts_with(e.surface.as_str())
+                                && let Some(&j2) = s_char_at.get(&(s_byte[j] + e.surface.len()))
+                            {
+                                edges.push((i + len, j2, e.lid, e.rid, i32::from(e.cost)));
+                            }
                         }
                     }
                 }

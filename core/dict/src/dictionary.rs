@@ -318,6 +318,10 @@ impl Dictionary {
         })
     }
 
+    pub(crate) fn pos_defs(&self) -> &[String] {
+        &self.pos_defs
+    }
+
     pub(crate) fn fallback_ids(&self) -> FallbackIds {
         self.fallback
     }

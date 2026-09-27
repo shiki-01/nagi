@@ -346,3 +346,36 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
   Space 1 回の E2E（プロセス起動済み・ローマ字 26 文字入力後）は 46ms。設計書の目標（Space 変換 → 候補表示 p95 < 150ms）を満たす見込み（候補窓は別途 `score` が 40〜50ms 加わる）
 - **既知の失敗の傾向**（`nagi-eval --verbose`）: 数詞・助数詞（三千円 / 3000円、十万 / 10万）、固有名詞・当て字、送り仮名の揺れ（見出だす）、表記ゆれ（超え/越え、方/ほう）。数の表記は Rewriter（Phase 4）、その他はモデルの規模・辞書の語彙・学習（Phase 2）の領域。zenz-v3.1-small 単独の限界も含む
 - **未実装**: LLM のビームサーチ（文全体の N-best）、KV キャッシュの再利用（現状は変換ごとにコンテキスト作成）、非同期通知での結果差し替え、`profile`（persona）の注入、環境プロファイルの自動切替
+
+### G-12. 設定・環境プロファイル・学習・ユーザー辞書（2026-09-27）
+
+実装: `core/config`（`nagi-config`）、`core/profile`（`nagi-profile`）、`core/learn`（`nagi-learn`）、`core/dict/src/{user,overlay}.rs`、`core/server/src/{setup,runtime,pipeline,learning}.rs`。
+
+**設定（`config.toml`）**
+- 場所: `NAGI_CONFIG_DIR` > Windows `%APPDATA%\Nagi` / macOS `~/Library/Application Support/com.shiki.nagi` / Linux `$XDG_CONFIG_HOME/nagi`（`~/.config/nagi`）。サーバー引数 `--user-dir`（学習・ユーザー辞書・設定の置き場）、`--config`（設定ファイルのパス）で上書き。優先順位は コマンドライン > 設定ファイル > 既定値
+- 全項目は `config/default.toml`（日本語コメント付き。`Config::default()` と一致することをテストで保証）。未指定の項目はプロファイルが決め、明示指定が常に優先（`beam_width` `model` `max_context_length` は `Option`）
+- 構文・型・enum の不正値は値の行番号付き、範囲違反は該当キーの行番号付き（`[section]` を追跡して同名キーを取り違えない）、不明キー・不明セクションは警告。問題は全部まとめて返す。壊れた設定では旧設定（起動時は既定値）で動き続け、`notify`（`config_error` / `config_warning`）で行番号付きで知らせる
+- 再読み込み: `reload_config` と、リクエスト処理時の更新時刻の確認（最短 1 秒間隔。設定ファイルとユーザー辞書ディレクトリ）。反映されるもの: `input.*`（既存セッションにも）、`conversion.num_candidates` `sync_budget_ms` `max_context_length` `use_context`、`profile.*`、`ranking`、`learning.*`。**次回起動時に反映**: `conversion.model`（通知する）、`n_threads`
+- 設計書の「ファイル監視」は、OS のファイル監視 API を使わずリクエスト時の mtime 確認で代用した（スレッド・依存を増やさないため。フォーカス中に別アプリで設定を編集しても、次のキー入力で反映される）
+
+**環境プロファイル（設計書 §4.7）**
+- `Profile`: minimal < light < balanced < quality。パラメータ（`ProfileParams`）: LLM 使用、再採点する辞書候補数（12 / 8 / 3 / 0）、左文脈の文字数（40 / 20 / 10 / 0）、ビーム幅・チャンク長（ビームサーチ・ライブ変換の実装後に使う）
+- 初回判定（`initial_profile`）: モデル無し → minimal。メモリ 4GB 未満または 1 コア → light。実測（キャリブレーション推論 3 回の中央値）が ≤40ms → quality、≤120ms → balanced、≤300ms → light、それ以上 → minimal。ただしメモリ 8GB 未満は light まで、quality はメモリ 16GB 以上かつ 8 コア以上のみ。実測前は暫定（ハードウェアから balanced 以下）。キャリブレーションは起動直後にバックグラウンドで走り、終わると判定をやり直して `notify` する（この機械: 65ms → balanced）
+- 実行時の自動切替（`Controller`、`profile.auto_switch`）: バッテリー駆動・低電力モード・サーマル悪化（serious −1、critical −2）・メモリ逼迫（warning −1、critical で minimal まで）・レイテンシ（直近 20 回の p95 が `max_latency_ms` を超えたら −1）。**下げるのは即座に、戻すのは最短 60 秒のヒステリシス**。レイテンシは p95 が目標の半分未満で 60 秒続けば 1 段戻す。`profile.mode` を明示すると固定（自動切替なし）。切替は `notify`（`profile_changed`）で理由付きで通知し、`get_status` で現在のプロファイルと理由を取れる
+- OS の電源・サーマル・メモリ情報の取得はフロントの責務（コアは OS の API を呼ばない）: 新しい通知 `set_environment`（`on_battery` / `low_power_mode` / `thermal` / `memory_pressure`。省略した項目は前回の値を維持）。GPU の検出は未実装
+- 未実装: minimal / メモリ逼迫時の**モデルの解放**（現状は LLM を使わなくなるだけでメモリに残る）、`light` でのスレッド数削減、キャリブレーション結果の永続化（毎回起動時に測る）
+
+**学習（設計書 §4.11）**
+- `nagi-learn`: 行 = (reading, surface, context_hash)、`score = ln(1+Σcount) × 0.5^(経過日数/14)` + 文脈一致行の `0.5 × ln(1+count)`、`max_entries` 超過は低スコアから削除、TSV（1 行目 `#nagi-learn\tv1`、エスケープ付き、一時ファイル + rename + `File::lock` で原子的保存）、壊れた行は読み飛ばして元ファイルを `.bak` に退避、未知バージョンは読み込まずファイルを壊さない。`context_hash` は左文脈の末尾 4 文字の FNV-1a 64bit
+- 記録: engine の `CommitObserver`（変換を経て確定した Japanese 文節。ひらがなのまま確定した入力は記録しない）。**記録しない条件**: `learning.enabled = false`、secure input、`learning.disabled_apps`（既定: 1Password・Bitwarden・KeePassXC・LastPass。フロントが `set_context.app_id` で報告）。保存: フォーカス喪失・`shutdown`・5 分ごと・誤学習削除時
+- 反映: 文の変換結果で、優先順が LLM より前の出所（既定では学習 → ユーザー辞書）が文節の読みと完全一致する結果を持てば、その表記に置き換える（学習はスコア 0.3 以上 = 14 日以内に 1 回でも確定していれば有効）。文節候補では優先順どおりに並べ、出所 `learned` を付ける
+- **誤学習の削除**: 候補ウィンドウで `Ctrl+Delete`（Action `DeleteLearning`）→ その文節の現在の表記の学習を忘れさせ、候補一覧を作り直す。全削除は `clear_learning`
+- 予測変換（前方一致の候補表示）は未実装（`lookup_prefix` は用意済み）
+
+**ユーザー辞書・スニペット（設計書 §4.13）**
+- `<user_dir>/user_dict/*.txt|*.tsv` の Mozc TSV（`読み\t単語\t品詞\tコメント`、`#` と MS-IME の `!` ヘッダはコメント、UTF-8 / BOM / UTF-16 LE・BE、カタカナの読みはひらがなに正規化）。不正な行は行番号付きで通知して読み飛ばす。エクスポートは Mozc TSV（`UserDictionary::to_mozc_tsv`）。MS-IME / Google 日本語入力のエクスポートは同じ列構成なので、そのまま置けばインポートになる
+- 実装は**オーバーレイ**: システム辞書（不変）を作り直さず、実行時に Viterbi の格子と強制アライメントへユーザー語を追加する（語コスト 1500 でシステム辞書の語より優先）。品詞は Mozc のユーザー辞書の品詞名を `id.def` の品詞 ID に前方一致で対応づける（人名・姓・名・地名・組織・固有名詞・副詞・形容詞・動詞 ほか。未知は名詞,一般）。動詞は基本形の 1 形のみ登録（活用の展開は未実装）
+- スニペット: 品詞 `スニペット` の行（単語欄の `\n` `\t` `\` をエスケープとして解釈）。読みが一致する文節の**候補**として出る（変換結果を自動で置き換えない）
+- 優先順位: `[ranking] source_order`（既定 `learned, user_dict, llm, system_dict, kana, rewriter`）。優先順に無い出所は既定順で最後に付く
+
+**変換パイプラインの再編**: `HybridBackend` / `DictBackend` を `Pipeline`（辞書なし・辞書のみ・辞書 + LLM を 1 つで扱う）に統合した。LLM 呼び出しごとの実測レイテンシを環境プロファイルの制御器に渡す。`persona`（`profile.persona`）は zenz の `` 欄に注入する

@@ -256,6 +256,7 @@ fn shutdown_stops_the_loop() {
 // ---- 実プロセス ----
 
 struct Proc {
+    user_dir: std::path::PathBuf,
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
@@ -264,7 +265,13 @@ struct Proc {
 
 impl Proc {
     fn spawn(args: &[&str]) -> Proc {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // 開発者の実際の学習・設定ファイルに触れないよう、プロセスごとの一時ディレクトリを使う
+        let user_dir = std::env::temp_dir().join(format!("nagi-rpc-{}-{n}", std::process::id()));
+        let _ = std::fs::create_dir_all(&user_dir);
         let mut child = Command::new(env!("CARGO_BIN_EXE_imserver"))
+            .args(["--user-dir", user_dir.to_str().unwrap()])
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -274,6 +281,7 @@ impl Proc {
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         Proc {
+            user_dir,
             child,
             stdin: Some(stdin),
             stdout,
@@ -315,6 +323,7 @@ impl Drop for Proc {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.user_dir);
     }
 }
 
@@ -448,6 +457,20 @@ fn llm_backed_conversion_end_to_end() {
     let mut p = Proc::spawn(&["--data-dir", dir.to_str().unwrap()]);
     let init = p.initialize();
     assert_eq!(init["result"]["profile"], "balanced");
+    // 起動後、別スレッドのキャリブレーション推論が終わるとプロファイルの理由に実測値が入る
+    let started = std::time::Instant::now();
+    let reason = loop {
+        let st = p.rpc("get_status", json!({}));
+        let reason = st["result"]["profile_reason"].as_str().unwrap().to_string();
+        if reason.contains("キャリブレーション")
+            || started.elapsed() > std::time::Duration::from_secs(10)
+        {
+            break reason;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    eprintln!("profile: {reason}");
+    assert!(reason.contains("キャリブレーション"), "{reason}");
     for c in "watashinonamaehanakanodesu".chars() {
         p.press("s", c);
     }
