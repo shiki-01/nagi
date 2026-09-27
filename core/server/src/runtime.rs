@@ -64,6 +64,8 @@ pub struct Tunables {
     pub live_conversion_delay_ms: u64,
     /// `conversion.live_conversion_min_key_length`
     pub live_conversion_min_key_length: usize,
+    /// `conversion.beam_width`（未指定ならプロファイルの既定値に従う）
+    pub beam_width_override: Option<usize>,
 }
 
 /// 出所名（`ranking.source_order` の要素）を出所に直す
@@ -117,6 +119,7 @@ impl Tunables {
             live_conversion_enabled: config.conversion.live_conversion,
             live_conversion_delay_ms: config.conversion.live_conversion_delay_ms,
             live_conversion_min_key_length: config.conversion.live_conversion_min_key_length,
+            beam_width_override: config.conversion.beam_width,
         }
     }
 }
@@ -138,6 +141,8 @@ pub struct Effective {
     pub ranking: Vec<CandidateSource>,
     /// 推論のスレッド数（`light` プロファイルでは半分に絞る）
     pub n_threads: usize,
+    /// 文全体N-bestの候補数（`conversion.beam_width`。未指定ならプロファイルの既定値）
+    pub beam_width: usize,
 }
 
 /// 実行時の共有状態
@@ -487,6 +492,7 @@ impl Runtime {
         } else {
             base_threads
         };
+        let beam_width = t.beam_width_override.unwrap_or(params.beam_width).max(1);
         Effective {
             use_llm: params.use_llm && self.llm_loaded.load(Ordering::Relaxed),
             rescore_top: params.rescore_top,
@@ -495,6 +501,7 @@ impl Runtime {
             sync_budget: t.sync_budget,
             ranking: t.ranking,
             n_threads,
+            beam_width,
         }
     }
 

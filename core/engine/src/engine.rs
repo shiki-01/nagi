@@ -29,6 +29,16 @@ const LEFT_CONTEXT_CHARS: usize = 40;
 /// 文節 1 つ分に集める候補数の上限
 const CANDIDATE_LIMIT: usize = 50;
 
+/// 候補ウィンドウの初期表示（`conversion.initial_view`）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InitialView {
+    /// 文全体の N-best
+    #[default]
+    Sentence,
+    /// 先頭文節の候補
+    Segment,
+}
+
 /// エンジンの設定（`config.toml` の `[input]` `[conversion]` に対応する部分）
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -49,6 +59,11 @@ pub struct EngineConfig {
     /// ライブ変換のチャンク長（`conversion.composing_chunk_len`）。この文字数を超える
     /// Composing 中の1つの日本語入力は、この文字数ごとに分けて変換する
     pub composing_chunk_len: usize,
+    /// 候補ウィンドウの初期表示（`conversion.initial_view`）
+    pub initial_view: InitialView,
+    /// 文全体N-bestの候補数の起点（`conversion.beam_width`。既定値のみ。実行時のプロファイル
+    /// 反映は `Effective.beam_width`（`nagi-server`）が別に持つ）
+    pub beam_width: usize,
 }
 
 impl Default for EngineConfig {
@@ -62,6 +77,8 @@ impl Default for EngineConfig {
             predict_enabled: true,
             predict_min_chars: 1,
             composing_chunk_len: 30,
+            initial_view: InitialView::Sentence,
+            beam_width: 3,
         }
     }
 }
@@ -104,6 +121,10 @@ struct Conv {
     /// 範囲選択の反対側の端（`Some` の間は複数文節を選択中）。選択範囲は `focus` と
     /// `range_anchor` を含む最小区間。`focus == range_anchor` になったら選択解除（`None` に戻す）
     range_anchor: Option<usize>,
+    /// 文全体N-bestの表示中、各候補ごとの文節分割（`segments[0].candidates` の index と対応）。
+    /// 候補選択（`NextCand`/`PrevCand`/`SelectCand`/`select_candidate`）以外の操作が来たら、
+    /// 選択中の候補の分割へ丸ごと置き換えて `None` にする（`ensure_segmented`）
+    sentence_alternatives: Option<Vec<Vec<Segment>>>,
 }
 
 enum State {
@@ -478,6 +499,7 @@ impl Engine {
                     focus,
                     visible: false,
                     range_anchor: None,
+                    sentence_alternatives: None,
                 });
             } else {
                 let pieces: Vec<Piece> = params
@@ -530,6 +552,7 @@ impl Engine {
                 focus: 0,
                 visible: false,
                 range_anchor: None,
+                sentence_alternatives: None,
             });
         }
         let result = self.finish(&mut sess, true, commit);
@@ -701,7 +724,32 @@ impl Engine {
         }
     }
 
+    /// 文全体N-best（`conv.sentence_alternatives`）を表示中に、候補選択以外の操作が来たら、
+    /// 現在選択中の候補の文節分割へ丸ごと置き換える（以後は通常の文節編集として扱う）
+    fn ensure_segmented(&self, conv: &mut Conv) {
+        let Some(alternatives) = conv.sentence_alternatives.take() else {
+            return;
+        };
+        let selected = conv
+            .segments
+            .first()
+            .and_then(|s| s.candidates.as_ref())
+            .map(|c| c.selected)
+            .unwrap_or(0);
+        if let Some(segments) = alternatives.into_iter().nth(selected) {
+            conv.segments = segments;
+            conv.focus = 0;
+        }
+    }
+
     fn apply_converting(&self, sess: &mut Session, action: Action, commit: &mut String) {
+        if !matches!(
+            action,
+            Action::NextCand | Action::StartConvert | Action::PrevCand | Action::SelectCand(_)
+        ) && let State::Converting(conv) = &mut sess.state
+        {
+            self.ensure_segmented(conv);
+        }
         let selecting =
             matches!(&sess.state, State::Converting(conv) if conv.range_anchor.is_some());
         match action {
@@ -964,6 +1012,7 @@ impl Engine {
             focus: 0,
             visible: true,
             range_anchor: None,
+            sentence_alternatives: None,
         });
     }
 
@@ -974,6 +1023,15 @@ impl Engine {
         if pieces.is_empty() {
             sess.composer.clear();
             sess.state = State::Direct;
+            return;
+        }
+        if how == Start::Convert
+            && self.config.initial_view == InitialView::Sentence
+            && pieces.len() == 1
+            && pieces[0].kind == PieceKind::Japanese
+            && let Some(conv) = self.start_converting_sentence_n_best(sess, &pieces[0].text)
+        {
+            sess.state = State::Converting(conv);
             return;
         }
         let mut segments: Vec<Segment> = Vec::new();
@@ -1037,7 +1095,62 @@ impl Engine {
             focus: 0,
             visible: false,
             range_anchor: None,
+            sentence_alternatives: None,
         });
+    }
+
+    /// `initial_view = sentence` かつ入力全体が1つの日本語 Piece のときに、文全体のN-bestを
+    /// 候補ウィンドウに載せた単一の「メガ文節」を作る。候補が2件未満（多様性が無い）なら
+    /// `None` を返し、呼び出し側は通常の（1-best・文節ごとの）変換にフォールバックする
+    fn start_converting_sentence_n_best(&self, sess: &Session, reading: &str) -> Option<Conv> {
+        let context = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
+        let beam_width = self.config.beam_width.max(2);
+        let candidates = self
+            .backend
+            .sentence_candidates(reading, &context, beam_width);
+        let mut alternatives: Vec<Vec<Segment>> = Vec::new();
+        let mut items: Vec<Candidate> = Vec::new();
+        for bs in candidates {
+            let joined_reading: String = bs.segments.iter().map(|s| s.reading.as_str()).collect();
+            if joined_reading != reading {
+                continue;
+            }
+            let segments: Vec<Segment> = bs
+                .segments
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| Segment {
+                    reading: s.reading,
+                    surface: s.surface,
+                    kind: SegmentKind::Japanese,
+                    candidates: None,
+                    chunk_id: i as u32,
+                })
+                .collect();
+            let surface: String = segments.iter().map(|s| s.surface.as_str()).collect();
+            items.push(Candidate {
+                surface,
+                sources: vec![CandidateSource::SystemDict],
+            });
+            alternatives.push(segments);
+        }
+        if alternatives.len() < 2 {
+            return None;
+        }
+        let mega = Segment {
+            reading: reading.to_string(),
+            surface: items[0].surface.clone(),
+            kind: SegmentKind::Japanese,
+            candidates: Some(CandidateSet { items, selected: 0 }),
+            chunk_id: 0,
+        };
+        Some(Conv {
+            segments: vec![mega],
+            focus: 0,
+            visible: true,
+            range_anchor: None,
+            sentence_alternatives: Some(alternatives),
+        })
     }
 
     fn back_to_composing(&self, sess: &mut Session) {

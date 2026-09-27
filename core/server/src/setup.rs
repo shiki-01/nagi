@@ -6,9 +6,10 @@
 
 use crate::pipeline::Pipeline;
 use crate::runtime::{Event, Runtime, Tunables};
-use nagi_config::{Config, Issue, Severity, ShiftLetter};
+use nagi_config::{Config, InitialView as ConfigInitialView, Issue, Severity, ShiftLetter};
 use nagi_dict::{Dictionary, UserDictionary};
 use nagi_engine::EngineConfig;
+use nagi_engine::InitialView;
 use nagi_engine::KeyContext;
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
@@ -123,6 +124,14 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
             predict_enabled: config.predict.enabled,
             predict_min_chars: config.predict.min_chars,
             composing_chunk_len: config.conversion.composing_chunk_len,
+            initial_view: match config.conversion.initial_view {
+                ConfigInitialView::Sentence => InitialView::Sentence,
+                ConfigInitialView::Segment => InitialView::Segment,
+            },
+            beam_width: config
+                .conversion
+                .beam_width
+                .unwrap_or(EngineConfig::default().beam_width),
         },
         events,
     )

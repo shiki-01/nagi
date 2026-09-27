@@ -149,8 +149,8 @@ fn engine_is_send() {
 // ---- 確定の通知（学習）と設定の差し替え ----
 
 use nagi_engine::{
-    BackendCandidate, BackendSegment, CommitContext, CommitObserver, CommittedSegment,
-    ConversionBackend, MockBackend,
+    BackendCandidate, BackendSegment, BackendSentence, CommitContext, CommitObserver,
+    CommittedSegment, ConversionBackend, InitialView, MockBackend,
 };
 use nagi_protocol::view::SegmentKind;
 use std::sync::Mutex;
@@ -628,5 +628,177 @@ fn live_convert_does_not_chunk_input_shorter_than_chunk_len() {
     type_str(&mut e, "s", "kyouhaii");
     let r = e.live_convert("s", "きょうはいい").expect("変換されるはず");
     let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "今日はいい");
+}
+
+// ---- 文全体N-best（`initial_view = "sentence"`） ----
+
+/// `sentence_candidates` に複数の文全体候補を登録できるテスト用バックエンド。
+/// `convert_sentence` は先頭の候補にフォールバックする（`initial_view = segment` や、
+/// 候補が1件だけの場合の通常経路で使われる）。`segment_candidates` は常に空
+#[derive(Default)]
+struct SentenceNBestBackend {
+    reading: String,
+    sentences: Vec<Vec<(&'static str, &'static str)>>,
+}
+
+impl SentenceNBestBackend {
+    fn new(reading: &str, sentences: Vec<Vec<(&'static str, &'static str)>>) -> Self {
+        SentenceNBestBackend {
+            reading: reading.to_string(),
+            sentences,
+        }
+    }
+
+    fn backend_segments(segs: &[(&'static str, &'static str)]) -> Vec<BackendSegment> {
+        segs.iter()
+            .map(|(r, s)| BackendSegment {
+                reading: r.to_string(),
+                surface: s.to_string(),
+                sources: vec![],
+            })
+            .collect()
+    }
+}
+
+impl ConversionBackend for SentenceNBestBackend {
+    fn name(&self) -> &str {
+        "sentence-nbest-test"
+    }
+
+    fn convert_sentence(&self, reading: &str, _left_context: &str) -> Vec<BackendSegment> {
+        if reading == self.reading
+            && let Some(first) = self.sentences.first()
+        {
+            return Self::backend_segments(first);
+        }
+        vec![BackendSegment {
+            reading: reading.to_string(),
+            surface: reading.to_string(),
+            sources: vec![],
+        }]
+    }
+
+    fn segment_candidates(&self, _: &str, _: &str, _: usize) -> Vec<BackendCandidate> {
+        Vec::new()
+    }
+
+    fn sentence_candidates(
+        &self,
+        reading: &str,
+        _left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendSentence> {
+        if reading != self.reading {
+            return Vec::new();
+        }
+        self.sentences
+            .iter()
+            .take(limit)
+            .map(|segs| BackendSentence {
+                segments: Self::backend_segments(segs),
+            })
+            .collect()
+    }
+}
+
+/// 読み「きょうはいい」に対して、文全体の表記が異なる2つの分割を返すバックエンド
+fn sentence_nbest_backend() -> Arc<SentenceNBestBackend> {
+    Arc::new(SentenceNBestBackend::new(
+        "きょうはいい",
+        vec![
+            vec![("きょうは", "今日は"), ("いい", "いい")],
+            vec![("きょうは", "京は"), ("いい", "いい")],
+        ],
+    ))
+}
+
+#[test]
+fn sentence_view_shows_multiple_whole_sentence_candidates() {
+    let mut e = Engine::new(sentence_nbest_backend(), EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    let r = press(&mut e, "s", "Space");
+    let candidates = r.candidates.expect("候補ウィンドウが開くはず");
+    assert!(candidates.visible);
+    let surfaces: Vec<&str> = candidates
+        .items
+        .iter()
+        .map(|c| c.surface.as_str())
+        .collect();
+    assert_eq!(surfaces, ["今日はいい", "京はいい"]);
+    // まだ1つの「メガ文節」のまま（文節には分かれていない）
+    let preedit = r.preedit.expect("preedit も差分に含まれるはず");
+    assert_eq!(preedit.segments.len(), 1);
+    assert_eq!(preedit.text, "今日はいい");
+}
+
+#[test]
+fn next_candidate_switches_whole_sentence_surface_without_segmenting() {
+    let mut e = Engine::new(sentence_nbest_backend(), EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    let r = press(&mut e, "s", "Space"); // NextCand
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "京はいい");
+    assert_eq!(preedit.segments.len(), 1, "まだ1つの文節のまま");
+}
+
+#[test]
+fn moving_focus_expands_selected_candidate_into_segments() {
+    let mut e = Engine::new(sentence_nbest_backend(), EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Space"); // 選択を「京はいい」に進める
+    let r = press(&mut e, "s", "Right"); // MoveFocus: 候補選択以外の操作なので展開される
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(preedit.text, "京はいい");
+    let surfaces: Vec<&str> = preedit
+        .segments
+        .iter()
+        .map(|s| s.surface.as_str())
+        .collect();
+    assert_eq!(
+        surfaces,
+        ["京は", "いい"],
+        "選択中の候補の文節分割に展開される"
+    );
+}
+
+#[test]
+fn segment_initial_view_bypasses_sentence_n_best() {
+    let mut e = Engine::new(
+        sentence_nbest_backend(),
+        EngineConfig {
+            initial_view: InitialView::Segment,
+            ..EngineConfig::default()
+        },
+    );
+    type_str(&mut e, "s", "kyouhaii");
+    let r = press(&mut e, "s", "Space");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    // convert_sentence の1-bestにフォールバック（メガ文節ではなく通常の複数文節）
+    assert_eq!(preedit.text, "今日はいい");
+    assert_eq!(preedit.segments.len(), 2);
+    assert!(
+        r.candidates.is_none_or(|c| !c.visible),
+        "1回目のStartConvertでは候補ウィンドウはまだ開かない"
+    );
+}
+
+#[test]
+fn single_sentence_candidate_falls_back_to_normal_conversion() {
+    let backend = Arc::new(SentenceNBestBackend::new(
+        "きょうはいい",
+        vec![vec![("きょうは", "今日は"), ("いい", "いい")]],
+    ));
+    let mut e = Engine::new(backend, EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    let r = press(&mut e, "s", "Space");
+    let preedit = r.preedit.expect("preedit が差分に含まれるはず");
+    assert_eq!(
+        preedit.segments.len(),
+        2,
+        "候補が1件のみ（多様性が無い）なら通常の文節ごとの変換にフォールバック"
+    );
     assert_eq!(preedit.text, "今日はいい");
 }

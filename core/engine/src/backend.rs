@@ -17,6 +17,13 @@ pub struct BackendSegment {
     pub sources: Vec<CandidateSource>,
 }
 
+/// 文全体のN-best候補の1つ（[`ConversionBackend::sentence_candidates`] 用）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendSentence {
+    /// 文節に区切られたセグメント列
+    pub segments: Vec<BackendSegment>,
+}
+
 /// 1 文節分の候補
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendCandidate {
@@ -56,6 +63,19 @@ pub trait ConversionBackend: Send + Sync {
     /// 辞書を持たないバックエンドは非対応でよい（既定実装は非対応。空を返す）
     fn reconvert(&self, surface: &str) -> Vec<BackendSegment> {
         let _ = surface;
+        Vec::new()
+    }
+
+    /// 文全体のN-best（`conversion.initial_view = "sentence"` 用。上位 `limit` 件、コスト昇順)。
+    /// 辞書を持たないバックエンドは非対応でよい（既定実装は非対応。空を返す。呼び出し側は
+    /// 通常の `convert_sentence`（1-best）にフォールバックする）
+    fn sentence_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendSentence> {
+        let _ = (reading, left_context, limit);
         Vec::new()
     }
 }

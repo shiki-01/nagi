@@ -15,7 +15,7 @@
 
 use crate::runtime::{Effective, Runtime};
 use nagi_dict::{Dictionary, Overlay};
-use nagi_engine::{BackendCandidate, BackendSegment, ConversionBackend};
+use nagi_engine::{BackendCandidate, BackendSegment, BackendSentence, ConversionBackend};
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
 use nagi_protocol::view::CandidateSource;
@@ -549,6 +549,47 @@ impl ConversionBackend for Pipeline {
                 })
                 .collect(),
             None => Vec::new(),
+        }
+    }
+
+    fn sentence_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendSentence> {
+        match &self.dict {
+            Some(dict) if limit > 0 => {
+                // 1件目は convert_sentence（LLMが使えるなら再採点済みの1-best）と同じ結果にする。
+                // 辞書のコスト順だけで並べると、LLM再採点で選ばれるはずの表記が後ろに回って
+                // 変換品質が落ちるため（辞書ベースのN-bestはLLM再採点を行わない。v1のスコープ外）
+                let best = self.convert_sentence(reading, left_context);
+                let best_surface: String = best.iter().map(|s| s.surface.as_str()).collect();
+                let mut out = vec![BackendSentence { segments: best }];
+                let overlay = self.runtime.overlay();
+                for c in dict.convert_n_best(reading, limit, Some(&overlay)) {
+                    if out.len() >= limit {
+                        break;
+                    }
+                    let surface: String = c.segments.iter().map(|s| s.surface.as_str()).collect();
+                    if surface == best_surface {
+                        continue;
+                    }
+                    out.push(BackendSentence {
+                        segments: c
+                            .segments
+                            .into_iter()
+                            .map(|s| BackendSegment {
+                                reading: s.reading,
+                                surface: s.surface,
+                                sources: vec![CandidateSource::SystemDict],
+                            })
+                            .collect(),
+                    });
+                }
+                out
+            }
+            _ => Vec::new(),
         }
     }
 }
