@@ -266,6 +266,7 @@ impl ConversionModel for MockModel {
 pub mod llama {
     use super::gguf::{CharBpeTokenizer, read_vocab};
     use super::*;
+    use llama_cpp_2::context::LlamaContext;
     use llama_cpp_2::context::params::LlamaContextParams;
     use llama_cpp_2::llama_backend::LlamaBackend;
     use llama_cpp_2::llama_batch::LlamaBatch;
@@ -331,8 +332,28 @@ pub mod llama {
     }
 
     /// llama.cpp バックエンドによる変換モデル
+    ///
+    /// # コンテキストの再利用（KV キャッシュ）
+    ///
+    /// `llama.cpp` の `new_context` はモデルの重みとは別に、`n_ctx` に比例した KV キャッシュの
+    /// バッファを確保する。以前はこれを [`ConversionModel::convert`] / [`ConversionModel::score`]
+    /// を呼ぶたびに作り直していた（計測値 `prefill_ms` に確保コストが混ざっていた。G-11）。
+    ///
+    /// `ctx` フィールドに一度作ったコンテキストを保持し、次回以降は `clear_kv_cache` で
+    /// 中身だけ空にして使い回す。`LlamaContext<'a>` はモデルを借用する型なので、同じ構造体に
+    /// 「モデルへの参照を持つ値」と「そのモデル自身」を同居させる自己参照構造になる。
+    /// これは Rust の借用チェッカーでは素直に表現できないため、`model` を `Box` に置いて
+    /// アドレスを固定し、`ctx` の借用を `'static` と偽って保持する（[`LlamaModel::ensure_ctx`] 参照）。
+    ///
+    /// この crate の既定は `unsafe_code = "forbid"`（ワークスペース全体、G-2）だが、この
+    /// `llama` モジュール（feature `llama`、FFI 境界）に限り `Cargo.toml` で解禁している
     pub struct LlamaModel {
-        model: LlamaModelCore,
+        /// 構造体のフィールドは宣言順に drop される。`ctx` は `model` を指しているため、
+        /// `model` より先に（内側の値として先に）drop されるよう、必ず `model` より前に置く
+        ctx: Option<LlamaContext<'static>>,
+        /// `Box` で確保する: `LlamaModel`（この構造体）自体が move されても、`Box` の中身の
+        /// アドレスは変わらない。`ctx` が指す先として安定していることの根拠
+        model: Box<LlamaModelCore>,
         backend: Arc<LlamaBackend>,
         adapter: Box<dyn PromptAdapter>,
         options: LlamaOptions,
@@ -376,7 +397,8 @@ pub mod llama {
             let model = LlamaModelCore::load_from_file(&backend, path, &params)
                 .map_err(|e| InferError::ModelLoad(format!("モデルロード失敗: {e}")))?;
             Ok(Self {
-                model,
+                ctx: None,
+                model: Box::new(model),
                 backend,
                 adapter: Box::new(ZenzV3Adapter),
                 options,
@@ -386,11 +408,67 @@ pub mod llama {
             })
         }
 
+        /// 使い回すコンテキストを返す（無ければ作る。あれば KV キャッシュを空にして返す）。
+        ///
+        /// `&mut self` を取るメソッドにせず、`ctx_slot` だけを借用する関連関数にしてあるのは、
+        /// 呼び出し側で `self.ctx` だけを借用させ、同時に `self.model` / `self.tokenizer` などの
+        /// 他フィールドを自由に読めるようにするため（`&mut self` にすると戻り値の生存期間中、
+        /// 借用チェッカーは `self` 全体が借用中とみなす）
+        ///
+        /// # Safety（自己参照）
+        ///
+        /// `LlamaContext<'a>` は `&'a LlamaModelCore` を借用する型だが、ここでは `'static` に
+        /// 拡張して `ctx_slot` に格納する。安全性の根拠:
+        /// - `LlamaModel::model` は `Box<LlamaModelCore>` なので、`LlamaModel`（呼び出し元の
+        ///   構造体）自体が move されても中身のアドレスは変わらない
+        /// - `model` を差し替える操作（再代入・drop）は無い（`load` 以降 `model` フィールドは
+        ///   不変）。したがって `ctx_slot` の中身が生きている間、参照先は常に有効
+        /// - `LlamaModel::ctx` は `model` より前に宣言されているため、`LlamaModel` の drop 時は
+        ///   `ctx`（＝内部の `llama_context`）が先に破棄され、その後で `model` が破棄される
+        /// - 借用チェッカー上は `'static` に見えるが、`ctx_slot` の中身はこの関数の外（呼び出し元
+        ///   のローカル変数として）へ出た後も `convert` / `score` の中でのみ使われる
+        fn ensure_ctx<'c>(
+            ctx_slot: &'c mut Option<LlamaContext<'static>>,
+            model: &LlamaModelCore,
+            backend: &Arc<LlamaBackend>,
+            options: &LlamaOptions,
+        ) -> Result<&'c mut LlamaContext<'static>, InferError> {
+            if ctx_slot.is_none() {
+                let mut ctx_params =
+                    LlamaContextParams::default().with_n_ctx(NonZeroU32::new(options.n_ctx));
+                if options.n_threads > 0 {
+                    ctx_params = ctx_params.with_n_threads(options.n_threads as i32);
+                    ctx_params = ctx_params.with_n_threads_batch(options.n_threads as i32);
+                }
+                // SAFETY: 上記コメントの根拠により、`model` の実体（Box の中身）は `ctx_slot`
+                // より長生きすることが `LlamaModel` の不変条件として保証されている
+                let model_ref: &'static LlamaModelCore =
+                    unsafe { &*(model as *const LlamaModelCore) };
+                let new_ctx = model_ref
+                    .new_context(backend, ctx_params)
+                    .map_err(|e| InferError::ModelLoad(format!("コンテキスト作成失敗: {e}")))?;
+                *ctx_slot = Some(new_ctx);
+            }
+            let ctx = ctx_slot.as_mut().expect("直前に作成済み");
+            // 前回の変換で残った内容を消し、コンテキストの確保コストだけを再利用する
+            ctx.clear_kv_cache();
+            Ok(ctx)
+        }
+
         /// 直近の [`ConversionModel::convert`] の計測値
         pub fn last_stats(&self) -> Option<InferStats> {
             self.stats
         }
     }
+
+    // SAFETY: `LlamaModel` は `ctx`（`LlamaContext`、生ポインタや `LlamaSampler` を含むため
+    // 自動導出では !Send）を持つため `Send` が自動導出されない。`ConversionModel: Send` の
+    // 実装には必要だが、実際の呼び出し元（`nagi-server` の `Pipeline`）は常に `Mutex` 越しに
+    // `Box<dyn ConversionModel>` を使うため、同時に複数スレッドから触られることはない。
+    // llama.cpp 自体もコンテキストへのアクセスをスレッドに固定しない（`n_threads_batch` は
+    // 内部並列度の設定であり、呼び出し元スレッドの固定を要求しない）ため、呼び出しが
+    // 直列化されている限りスレッドをまたいで使い回すことは健全
+    unsafe impl Send for LlamaModel {}
 
     impl ConversionModel for LlamaModel {
         fn id(&self) -> &str {
@@ -413,16 +491,7 @@ pub mod llama {
                 )));
             }
 
-            let mut ctx_params =
-                LlamaContextParams::default().with_n_ctx(NonZeroU32::new(self.options.n_ctx));
-            if self.options.n_threads > 0 {
-                ctx_params = ctx_params.with_n_threads(self.options.n_threads as i32);
-                ctx_params = ctx_params.with_n_threads_batch(self.options.n_threads as i32);
-            }
-            let mut ctx = self
-                .model
-                .new_context(&self.backend, ctx_params)
-                .map_err(|e| InferError::ModelLoad(format!("コンテキスト作成失敗: {e}")))?;
+            let ctx = Self::ensure_ctx(&mut self.ctx, &self.model, &self.backend, &self.options)?;
 
             // プロンプト処理（最後のトークンだけロジットを取る）
             let mut batch = LlamaBatch::new(n_ctx, 1);
@@ -458,7 +527,7 @@ pub mod llama {
                     .ln()
                     + best_logit;
                 let id = best as u32;
-                if self.stop_ids.contains(&id) || self.model.is_eog_token(LlamaToken(best as i32)) {
+                if self.stop_ids.contains(&id) || ctx.model.is_eog_token(LlamaToken(best as i32)) {
                     break;
                 }
                 score += best_logit - log_sum;
@@ -500,16 +569,7 @@ pub mod llama {
                     "プロンプトの長さが不正です".to_string(),
                 ));
             }
-            let mut ctx_params =
-                LlamaContextParams::default().with_n_ctx(NonZeroU32::new(self.options.n_ctx));
-            if self.options.n_threads > 0 {
-                ctx_params = ctx_params.with_n_threads(self.options.n_threads as i32);
-                ctx_params = ctx_params.with_n_threads_batch(self.options.n_threads as i32);
-            }
-            let mut ctx = self
-                .model
-                .new_context(&self.backend, ctx_params)
-                .map_err(|e| InferError::ModelLoad(format!("コンテキスト作成失敗: {e}")))?;
+            let ctx = Self::ensure_ctx(&mut self.ctx, &self.model, &self.backend, &self.options)?;
 
             // プロンプトは 1 回だけ処理し、候補ごとにその続きだけをデコードして KV キャッシュから外す
             let mut batch = LlamaBatch::new(n_ctx, 1);
@@ -839,5 +899,59 @@ mod tests {
             assert_eq!(best, expected, "文脈 {context:?}");
             assert!(scores.iter().all(|s| s.is_finite() && *s <= 0.0));
         }
+    }
+
+    /// コンテキスト（KV キャッシュ）を使い回しても、`convert` / `score` を交互に呼んだり
+    /// 読みを変えたりして前回の内容が混ざらないことを確認する（モデル未取得なら skip）
+    #[cfg(feature = "llama")]
+    #[test]
+    fn test_llama_context_reuse_does_not_leak_between_calls() {
+        use crate::llama::{LlamaModel, LlamaOptions};
+        use std::path::Path;
+
+        let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/models/zenz-v3.1-small-Q5_K_M.gguf");
+        if !model_path.exists() {
+            eprintln!("skip: モデル未取得（cargo xtask fetch-model）");
+            return;
+        }
+        let mut model =
+            LlamaModel::load(&model_path, LlamaOptions::default()).expect("モデルロード");
+        let req = |reading: &str, left: &str| ConvertRequest {
+            reading: reading.to_string(),
+            left_context: left.to_string(),
+            profile: None,
+            max_new_tokens: 32,
+        };
+
+        // convert → score → convert → score と、同じコンテキストを使い回しながら
+        // 呼び方（メソッド・reading・left_context）を毎回変える
+        let r1 = model.convert(&req("とうきょうにいく", "")).expect("変換1");
+        assert_eq!(r1[0].surface, "東京に行く");
+
+        let candidates = vec!["公園".to_string(), "講演".to_string()];
+        let s1 = model
+            .score(&req("こうえん", "近所の"), &candidates)
+            .expect("score1");
+        assert!(s1[0] > s1[1], "近所の こうえん は公園が優勢: {s1:?}");
+
+        let r2 = model
+            .convert(&req("にほんごをにゅうりょくする", ""))
+            .expect("変換2");
+        assert_eq!(
+            r2[0].surface, "日本語を入力する",
+            "1 回目の結果が混ざらない"
+        );
+
+        let s2 = model
+            .score(&req("こうえん", "大学の先生が"), &candidates)
+            .expect("score2");
+        assert!(s2[1] > s2[0], "大学の先生が こうえん は講演が優勢: {s2:?}");
+
+        // 最初の変換をもう一度: コンテキストを使い回しても決定的であること
+        let r1_again = model
+            .convert(&req("とうきょうにいく", ""))
+            .expect("変換1再");
+        assert_eq!(r1_again[0].surface, r1[0].surface);
     }
 }

@@ -21,5 +21,11 @@ optional = true
 [features]
 llama = ["dep:llama-cpp-2"]
 
-[lints]
-workspace = true
+[lints.rust]
+# ワークスペース既定は forbid（G-2）。infer の llama FFI 境界（feature `llama`）だけ、
+# コンテキストの自己参照的な再利用のために解禁する（G-2 で許容済み、詳細は decisions.md G-11）
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

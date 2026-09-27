@@ -247,9 +247,9 @@
 - 判明した問題と対処: 同梱の llama.cpp は zenz-v3.1 の `tokenizer.ggml.pre = gpt2-small-japanese-char` を未知の pre-tokenizer として拒否する
   - ロード時のみ KV override で `tokenizer.ggml.pre` を `default` に上書きして通す
   - zenz の語彙は GPT-2 のバイトエスケープ表記の BPE（merges 5,764 件、6,000 トークン）で、私用領域文字（U+EE00〜）は複数のバイトトークンに分かれる。llama.cpp のトークナイザ／デトークナイザを使うと化けるので、`infer::gguf` に最小の GGUF リーダー（語彙・merges）と `CharBpeTokenizer`（1 文字ずつ BPE）を自作し、トークン化・デコードを自前で行う
-- 実測（CPU のみ、n_ctx=512、Windows・24 スレッド、コンテキストは毎回作成）: きょうはいいてんきです → 今日はいい天気です（47ms）、なかのです（左文脈「私の名前は」）→ 中野です（33ms）、東京に行く（28ms）ほか 7 文すべて正しい。モデルロード 160ms（mmap）。プロンプト 14〜19 トークン、生成 4〜9 トークン
+- 実測（CPU のみ、n_ctx=512、Windows・24 スレッド、コンテキストは毎回作成。この後 G-13 で使い回すよう変更）: きょうはいいてんきです → 今日はいい天気です（47ms）、なかのです（左文脈「私の名前は」）→ 中野です（33ms）、東京に行く（28ms）ほか 7 文すべて正しい。モデルロード 160ms（mmap）。プロンプト 14〜19 トークン、生成 4〜9 トークン
 - 代替案: llama.cpp を更新して pre-tokenizer を追加する（パッチ管理が重い）。GGUF を書き換えて配布する（再配布・SHA-256 検証の扱いが複雑）
-- 未実装: ビームサーチ（N-best）、KV キャッシュの再利用、GPU オフロードの検証、`profile` 注入のエンドツーエンド確認（アダプタの組み立てはテスト済み）
+- 未実装: ビームサーチ（N-best）、GPU オフロードの検証、`profile` 注入のエンドツーエンド確認（アダプタの組み立てはテスト済み）。KV キャッシュの再利用は実装済み（G-13）
 
 ### G-4. システム辞書は Mozc OSS 辞書を暫定採用（Phase 0 の比較は未実施）
 
@@ -351,7 +351,7 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
   - 受け渡しの競合は `Slot`（Waiting / Abandoned / Done）で解決する。待ちが尽きた直後に結果が届いた場合は結果をそのまま使い、通知は出さない
   - server は標準入力を別スレッドで読み（`Server::run_threaded`）、入力行と waker の起床を 1 本のチャンネルで受ける。`run`（同期版）はテスト用に残した
   - 制約: 再変換は engine のスレッド上で行うため、複数チャンクの入力ではチャンクごとに最大 `sync_budget` だけ塞ぐことがある。`segment_candidates`（候補ウィンドウ）の予算超過は対象外（次回は `llm_convert` のキャッシュで即応答）。フロントはキー応答より通知が先に届いても、`revision` の大小で新旧を判定する
-- **未実装**: LLM のビームサーチ（文全体の N-best）、KV キャッシュの再利用（現状は変換ごとにコンテキスト作成）、`profile`（persona）の注入、環境プロファイルの自動切替
+- **未実装**: LLM のビームサーチ（文全体の N-best）、`profile`（persona）の注入、環境プロファイルの自動切替。KV キャッシュの再利用は実装済み（G-13）
 
 ### G-12. 設定・環境プロファイル・学習・ユーザー辞書（2026-09-27）
 
@@ -385,3 +385,17 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 - 優先順位: `[ranking] source_order`（既定 `learned, user_dict, llm, system_dict, kana, rewriter`）。優先順に無い出所は既定順で最後に付く
 
 **変換パイプラインの再編**: `HybridBackend` / `DictBackend` を `Pipeline`（辞書なし・辞書のみ・辞書 + LLM を 1 つで扱う）に統合した。LLM 呼び出しごとの実測レイテンシを環境プロファイルの制御器に渡す。`persona`（`profile.persona`）は zenz の `` 欄に注入する
+
+### G-13. LLM コンテキストの再利用（KV キャッシュ、2026-09-27）
+
+実装: `core/infer/src/lib.rs`（`llama::LlamaModel`）、`core/infer/Cargo.toml`（`unsafe_code` の局所解禁）。
+
+- **課題**: `LlamaModel::convert` / `score` は呼ぶたびに `new_context`（`n_ctx` に比例した KV キャッシュのバッファ確保を含む）でコンテキストを作り直していた。この確保コストは計測値 `prefill_ms` / `total_ms` に混ざっていた（G-3）
+- **実装**: `LlamaModel` にコンテキストを 1 つ保持し（`ctx: Option<LlamaContext<'static>>`）、2 回目以降は `clear_kv_cache()` で中身だけ空にして使い回す。`LlamaContext<'a>` はモデルを借用する型のため、同じ構造体にモデルとその借用を同居させる自己参照構造になる
+  - `model` を `Box<LlamaModelCore>` にしてアドレスを固定し、`ctx` の借用を `'static` と偽って保持する（実体は `LlamaModel` が生きている間だけ有効）。`ctx` フィールドは `model` より前に宣言し、drop 順（宣言順）で `ctx`（内部の `llama_context`）を先に破棄してから `model` を破棄する
+  - `ensure_ctx` は `&mut self` を取るメソッドにせず、`ctx` フィールドだけを借用する関連関数にした。`&mut self` にすると戻り値の生存期間中コンパイラは `self` 全体を借用中とみなし、`self.model` / `self.tokenizer` など他フィールドに（`score` のループ内で候補ごとに）同時にアクセスできなくなるため
+  - この自己参照は `unsafe` が要る（G-2 で「`infer` の FFI 境界のみ、必要になった時点で個別に緩和する」と決めていた実例）。ワークスペース既定の `unsafe_code = "forbid"` を `core/infer/Cargo.toml` だけ `allow` に緩和した（`llama` feature 配下、他のクレートは forbid のまま）
+  - `LlamaContext` は生ポインタを持つため `Send` が自動導出されない。`ConversionModel: Send` を満たすため `unsafe impl Send for LlamaModel {}` を追加した。安全性の根拠: 呼び出し元（`nagi-server` の `Pipeline`）は常に `Mutex` 越しに使うため同時に複数スレッドから触られない。llama.cpp 自体もコンテキストをスレッドに固定しない
+- **正しさ**: 同一モデルインスタンスで異なる reading / 左文脈 / `convert` と `score` の呼び出しを交互に行っても結果が混ざらないことをテストで確認した（`test_llama_context_reuse_does_not_leak_between_calls`）。既存の決定的性・文脈込み再採点のテストも変更なしで通る
+- **実測**（同じ 7 文、`test_llama_model_convert` の `prefill_ms`。実装前 → 実装後、CPU のみ・24 スレッド）: 24→28、19→16、19→15、17→13、19→15、17→14、17→14ms。母数が小さく機械のノイズもあるため参考値だが、悪化はしていない。zenz-v3.1-small・n_ctx=512 では確保コスト自体が小さく、改善幅は大きくない（大きいモデル・長い `n_ctx` では差が広がる見込み）
+- **未実装**: 複数セッションを跨いだ会話的な KV キャッシュ差分再利用（プロンプトの共通接頭辞を保持したままの継続）は行っていない。`clear_kv_cache` は毎回全消去する暫定
