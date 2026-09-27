@@ -199,6 +199,27 @@ fn convert_flow_with_kana_backend() {
 }
 
 #[test]
+fn select_candidate_picks_absolute_index() {
+    let mut s = server();
+    init(&mut s);
+    type_str(&mut s, "s", "ka");
+    // Space で変換（KanaBackend は読みのまま。候補は ["か", "カ"]）
+    call(&mut s, key(60, "s", 0x20, " ", false));
+    // 2 回目の Space で候補ウィンドウを開く（選択が「カ」に進む）
+    let r = call(&mut s, key(61, "s", 0x20, " ", false));
+    assert_eq!(r["result"]["candidates"]["visible"], true);
+    assert_eq!(r["result"]["preedit"]["segments"][0]["surface"], "カ");
+    // 絶対 index=0（「か」）を直接選択する。候補ウィンドウは閉じる
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":62,"method":"select_candidate","params":{
+            "session_id":"s","index":0}}),
+    );
+    assert_eq!(r["result"]["preedit"]["segments"][0]["surface"], "か");
+    assert_eq!(r["result"]["candidates"]["visible"], false);
+}
+
+#[test]
 fn focus_out_commits_and_reset_discards() {
     let mut s = server();
     init(&mut s);

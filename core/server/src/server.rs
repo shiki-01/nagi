@@ -12,8 +12,8 @@ use nagi_protocol::jsonrpc::{
 };
 use nagi_protocol::methods::{
     ConfigError, EmptyResult, InitializeParams, InitializeResult, NotifyParams, ProcessKeyParams,
-    ReloadConfigResult, RestoreSessionParams, ServerCapabilities, SessionParams, SetContextParams,
-    SetEnvironmentParams, method,
+    ReloadConfigResult, RestoreSessionParams, SelectCandidateParams, ServerCapabilities,
+    SessionParams, SetContextParams, SetEnvironmentParams, method,
 };
 use nagi_protocol::view::InputMode;
 use serde::Serialize;
@@ -318,7 +318,12 @@ impl Server {
                 self.require_initialized()?;
                 to_value(self.reload_all())
             }
-            method::SELECT_CANDIDATE | method::RECONVERT => {
+            method::SELECT_CANDIDATE => {
+                self.require_initialized()?;
+                let p: SelectCandidateParams = params(req)?;
+                to_value(self.engine.select_candidate(&p.session_id, p.index))
+            }
+            method::RECONVERT => {
                 self.require_initialized()?;
                 Err(ErrorObject::new(
                     error_code::NOT_IMPLEMENTED,

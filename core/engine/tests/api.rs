@@ -325,3 +325,37 @@ fn update_config_applies_to_existing_sessions() {
     assert_eq!(press(&mut e, "t", ",").preedit.unwrap().text, "，");
     assert_eq!(e.snapshot("t").unwrap().candidates.page_size, 5);
 }
+
+// ---- select_candidate（絶対インデックス） ----
+
+#[test]
+fn select_candidate_picks_absolute_index_and_closes_window() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    // 候補ウィンドウを開かずに、絶対 index=1（2番目の候補 "京は"）を直接選択できる
+    let r = e.select_candidate("s", 1);
+    assert!(r.consumed);
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.preedit.segments[0].surface, "京は");
+    assert!(!snap.candidates.visible, "選択後は候補ウィンドウを閉じる");
+}
+
+#[test]
+fn select_candidate_out_of_range_is_a_no_op_for_the_surface() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    let before = e.snapshot("s").unwrap().preedit.segments[0].surface.clone();
+    let r = e.select_candidate("s", 9999);
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().preedit.segments[0].surface, before);
+}
+
+#[test]
+fn select_candidate_does_nothing_outside_converting() {
+    let mut e = engine();
+    let r = e.select_candidate("s", 0);
+    assert!(r.consumed);
+    assert!(e.snapshot("s").unwrap().preedit.segments.is_empty());
+}

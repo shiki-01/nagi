@@ -271,6 +271,30 @@ impl Engine {
         result
     }
 
+    /// `select_candidate` メソッド: 注目文節の候補一覧から絶対インデックスで選択する
+    /// （マウス操作等。ページ相対の数字キー（`Action::SelectCand`）とは別経路）。
+    /// Converting 状態でなければ何もしない。候補一覧が未生成なら作ってから選択する。
+    /// index が範囲外なら選択を変えない
+    pub fn select_candidate(&mut self, session_id: &str, index: u32) -> ProcessKeyResult {
+        let mut sess = self.take_session(session_id);
+        if let State::Converting(conv) = &mut sess.state {
+            let f = conv.focus;
+            self.ensure_candidates(&sess.left_context, conv, f);
+            let index = index as usize;
+            if let Some(set) = conv.segments[f].candidates.as_mut()
+                && index < set.items.len()
+            {
+                set.selected = index;
+                let surface = set.items[index].surface.clone();
+                conv.segments[f].surface = surface;
+            }
+            conv.visible = false;
+        }
+        let result = self.finish(&mut sess, true, String::new());
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
     /// エンジン再起動後に、フロントが保持していた preedit を復元する
     pub fn restore_session(
         &mut self,
@@ -489,7 +513,7 @@ impl Engine {
             Action::Cancel => self.cancel_converting(sess),
             Action::ToKatakana => self.set_focus_kana(sess, true),
             Action::ToHiragana => self.set_focus_kana(sess, false),
-            Action::SelectCand(n) => self.select_candidate(sess, n, commit),
+            Action::SelectCand(n) => self.select_candidate_page_relative(sess, n, commit),
             Action::DeleteLearning => self.delete_learning(sess),
             _ => {}
         }
@@ -780,7 +804,9 @@ impl Engine {
         }
     }
 
-    fn select_candidate(&self, sess: &mut Session, n: usize, commit: &mut String) {
+    /// `Action::SelectCand`（数字キー）: 候補ウィンドウ表示中のページ相対インデックス（1〜9）で選択する。
+    /// `select_candidate`（public, RPC 用の絶対インデックス版）とは別物
+    fn select_candidate_page_relative(&self, sess: &mut Session, n: usize, commit: &mut String) {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
