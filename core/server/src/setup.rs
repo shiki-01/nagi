@@ -414,6 +414,41 @@ pub fn build(options: &ServerOptions) -> Built {
         runtime.push_event(e);
     }
 
+    if config.update.auto_check {
+        let runtime_for_update = runtime.clone();
+        let url = config
+            .update
+            .check_url
+            .clone()
+            .unwrap_or_else(|| crate::update_check::DEFAULT_CHECK_URL.to_string());
+        let state_path = user_dir.as_ref().map(|d| d.join("update_check.json"));
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        let _ = std::thread::Builder::new()
+            .name("nagi-update-check".into())
+            .spawn(move || {
+                if let Some(manifest) = crate::update_check::check_with_throttle(
+                    &url,
+                    &current_version,
+                    state_path.as_deref(),
+                ) {
+                    let message = match &manifest.notes_url {
+                        Some(u) => {
+                            format!(
+                                "新しいバージョン {} が利用可能です（{u}）",
+                                manifest.version
+                            )
+                        }
+                        None => format!("新しいバージョン {} が利用可能です", manifest.version),
+                    };
+                    runtime_for_update.push_event(Event {
+                        level: NotifyLevel::Info,
+                        code: "update_available",
+                        message,
+                    });
+                }
+            });
+    }
+
     let applied_model = config.conversion.model.clone();
     let pipeline = Arc::new(Pipeline::new(dict.clone(), model, runtime.clone()));
     pipeline.warm_up();

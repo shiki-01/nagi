@@ -382,11 +382,18 @@ impl Default for KeymapSection {
 pub struct UpdateSection {
     /// 自動的にアップデートをチェックするかどうか。既定: true。
     pub auto_check: bool,
+    /// アップデート確認マニフェストの URL。未指定なら既定の URL
+    /// （`nagi_server::update_check::DEFAULT_CHECK_URL`）を使う。既定: 未指定。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_url: Option<String>,
 }
 
 impl Default for UpdateSection {
     fn default() -> Self {
-        UpdateSection { auto_check: true }
+        UpdateSection {
+            auto_check: true,
+            check_url: None,
+        }
     }
 }
 
@@ -585,7 +592,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         "ranking" => &["source_order"],
         "learning" => &["enabled", "max_entries", "disabled_apps"],
         "keymap" => &["preset", "composing", "converting"],
-        "update" => &["auto_check"],
+        "update" => &["auto_check", "check_url"],
         _ => &[],
     }
 }
@@ -1207,6 +1214,21 @@ preset = "default"
                 .iter()
                 .all(|i| !i.message.contains("composing") && !i.message.contains("converting")),
             "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn test_update_check_url_parse() {
+        let source = r#"
+[update]
+auto_check = false
+check_url = "https://example.com/latest.json"
+"#;
+        let (config, _) = parse(source).expect("should parse update.check_url");
+        assert!(!config.update.auto_check);
+        assert_eq!(
+            config.update.check_url.as_deref(),
+            Some("https://example.com/latest.json")
         );
     }
 

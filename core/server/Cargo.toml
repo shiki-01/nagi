@@ -28,6 +28,7 @@ nagi-profile.workspace = true
 nagi-rewriter.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ureq = { version = "2.11", features = ["json"] }
 
 [features]
 # llama.cpp による zenz 推論（C++ ビルドが必要。リリースビルドでは有効にする）

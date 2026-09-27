@@ -144,7 +144,11 @@ preset = "default"
 
 [update]
 # アップデートの自動確認
-# true = 起動時と設定から任意のタイミングで新バージョンを確認
-# false = 手動でのみ確認
+# true = 起動時に新バージョンを確認（ダウンロード・インストールは行わず、通知のみ）
+# false = 確認しない
 # 既定: true
 auto_check = true
+
+# アップデート確認マニフェストの URL（省略時は既定の URL を使う）
+# 既定: 未指定
+# check_url = "https://nagi.shiki-01.com/updates/latest.json"
