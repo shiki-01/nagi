@@ -400,3 +400,12 @@ docs/progress.md 優先4「キーマップ TOML」を実装した。ユーザー
 - **不正な上書きの扱い**: パースできないキー・Action はその1件だけ無視し、`notify`（`keymap_warning`、Warning）で知らせる（既存の `config_warning` と同じ「壊れていても動き続ける」方針）
 - **実装**: `core/engine/src/keymap.rs` の `KeyMap` が `HashMap<(KeyContext, KeySpec), Action>` の上書きテーブルを持ち、既定のハードコード分岐より先に確認する（上書きが無い設定では常に既定分岐にフォールバックし、既存のゴールデンテスト・単体テストへの影響はゼロ）
 - **設定検証**: `[keymap.composing]` / `[keymap.converting]` サブテーブル自体は既知キーに追加したが、その内側のキー（ユーザーが自由に指定するキー仕様文字列）は既存の「1階層しか見ない」不明キー検出の対象外（意図的）
+
+### G-15. Rewriter 基盤（全角/半角・半角カナ、2026-09-27）
+
+設計書 §4.13 の Rewriter（決定的変換の最終段）を新規実装した。ユーザー不在の自律作業中の暫定判断。
+
+- **スコープ**: v1 は全角/半角英数記号（ASCII 0x21-0x7E ⇔ U+FF01-FF5E、単純な `+0xFEE0` オフセット）と全角カタカナ→半角カナのみ。**日付・簡易計算は対象外**（曖昧さ・安全性の観点で見送り。`Rewriter` trait 経由で後から追加できる形だけ用意）
+- **実装**: 新規クレート `core/rewriter`（`nagi-rewriter`）。CLAUDE.md のリポジトリ構成案で「rewriter は各 Phase で分離」とされていた方針に沿う。`Rewriter` trait（`id` / `rewrite(reading) -> Vec<String>`）と `RewriterChain`（複数 Rewriter をまとめて候補を集める）
+- **半角カナの対応表**: 手入力ではなく、Python の `unicodedata` で全角カタカナの `<narrow>` 分解を機械的に導出して検証した値をそのまま `HANKAKU_KATAKANA_TABLE` に埋め込んだ（誤りのリスクを排除するため）。半角カナが存在しない文字（`ヮヰヱヵヶヸヹ` 等）を含む場合は変換候補を出さない
+- **Pipeline への統合**: `segment_candidates`（候補一覧）にのみ `CandidateSource::Rewriter` として追加する。`convert_sentence`（自動選択される変換結果）は変更しない。辞書の有無に依存しない決定的変換なので、`dict` が無い（`minimal`・辞書無し起動）場合でも動作するよう、辞書ブロックの外で候補を追加する
