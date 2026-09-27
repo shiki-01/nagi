@@ -309,7 +309,7 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 
 - `revision` は typeshare が 64 ビット整数を扱えないため、プロトコル上は `u32`（エンジン内部は `u64`、送出時に切り詰め）。フロントは差の符号でなく「等しい・新しい」で判定する前提（wrapping）
 - `Modifiers` の各フィールドは struct 単位の `#[serde(default)]`（Swift 生成型で `Bool` にするため）
-- `imserver` は `initialize` の `profile` を常に `minimal`（辞書があってもモデル未統合のため）。`capabilities` は全て false。`reload_config` は常に成功する no-op、`select_candidate` / `reconvert` は `NOT_IMPLEMENTED`（-32003）
+- `imserver` は `initialize` の `profile` を常に `minimal`（辞書があってもモデル未統合のため）。`capabilities` は全て false。`reload_config` は常に成功する no-op、`select_candidate` / `reconvert` は `NOT_IMPLEMENTED`（-32003）。**`select_candidate` は G-18 で実装済み。`reconvert` は未実装のまま**
 - パラメータ不正のエラーメッセージには serde の詳細を含めない（入力値がキー内容を含み得るため。分類のみ）
 - 辞書は `--data-dir` または `NAGI_DATA_DIR` の `dict/nagi-dict.bin`。無い・壊れている場合は読みをそのまま返す `KanaBackend` で起動し続ける（stderr に理由を出す）
 - 状態機械のゴールデンテスト用 YAML crate は `serde_yaml_ng`（`serde_yaml` は保守終了のため）
@@ -427,3 +427,11 @@ G-15 の Rewriter 基盤に、アラビア数字→漢数字の2種類を追加�
 - **選択中の既存操作**: 選択中でも `NextCand` / `ToKatakana` 等の単一文節操作は `focus` 文節に対してそのまま今まで通り動作する（意図的。範囲全体への操作は未実装なので、単一文節操作を止める理由がない）
 - **解除の挙動**: 通常の矢印（`MoveFocus`、Shift 無し）は選択を解除してから移動する。Escape は複数文節選択中ならまず選択だけを解除し、選択していなければ通常通り Composing に戻る
 - **テスト**: `core/engine/tests/golden/90_range_select.yaml`。既存のゴールデンテスト・`ir.rs` の `Preedit.selection` の UTF-16 変換テストは変更していない（`ExtendSelection`/`selection`/`Ctrl+Shift` を検査する既存テストが無いことを確認済み）
+
+### G-18. select_candidate メソッドの実装（2026-09-27）
+
+`select_candidate`（JSON-RPC、`NOT_IMPLEMENTED` スタブだった）を実装した。プロトコルの契約（`SelectCandidateParams{session_id, index}`）は既に確定していたので、それに沿って実装した。ユーザー不在の自律作業中の暫定判断。
+
+- **既存の `Action::SelectCand`（数字キー1〜9、ページ相対インデックス）とは別経路**。今回追加したのは候補ウィンドウの表示状態に関わらず候補一覧全体から絶対インデックスで直接選択するAPI（マウス操作等を想定）
+- 実装時にメソッド名の衝突が発生したため、既存の private メソッド（数字キー版）を `select_candidate_page_relative` に改名した（ロジックは無変更）
+- `reconvert` メソッドは今回変更していない（別途、辞書の逆引き機能が必要なため対象外）
