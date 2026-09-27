@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-09-27（LLM ビームサーチの実装後。infer 単体、Stage 1）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-09-27（LLM ビームサーチの server/engine 統合後。Stage 2 完了）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -19,13 +19,14 @@
 | 9 | 設定・環境プロファイル・学習・ユーザー辞書 | `nagi-config`（行番号付きエラー・`default.toml`・再読み込み）、`nagi-profile`（初回判定・キャリブレーション・自動切替）、`nagi-learn`（学習の記録・削除・原子的保存）、ユーザー辞書（Mozc TSV・スニペット・オーバーレイ）、`Pipeline` の優先順統合、`set_environment` / `get_status` / `clear_learning`、`Ctrl+Delete`。詳細は G-12 |
 | 10 | 予算超過した LLM 結果の非同期差し替え | Space 変換で LLM が `sync_budget` を超えたとき、辞書の結果で応答したあと、完了時に `update_preedit` / `update_candidates` で表示を差し替える（未操作のときだけ）。`Engine::apply_completions`、`Pipeline` の `Completion` 通知、`Server::run_threaded`（入力読み取りスレッド + waker）。詳細は G-11 |
 | 11 | LLM コンテキストの再利用（KV キャッシュ） | `llama::LlamaModel` が `convert` / `score` のたびにコンテキストを作り直すのをやめ、1 つを使い回して `clear_kv_cache` で空にする。自己参照構造（`model` を `Box` で固定・`ctx` を `'static` と偽って保持）のため `core/infer` の `unsafe_code` を局所解禁（G-2 が想定していた緩和）。`convert` / `score` を交互に呼んでも結果が混ざらないことをテストで確認。詳細は G-13 |
-| 12 | LLM のビームサーチ（infer 単体、Stage 1） | `ConvertRequest::beam_width` を新設し、`llama::LlamaModel::convert` に設計書 B-4 どおりの真のビームサーチ（各ステップで上位 `width` 本に絞りながら進める）を実装。KV キャッシュの分岐・合流は `kv_cache_seq_cp`（要 `kv_unified = true`）。`beam_width <= 1` は既存の貪欲デコードのまま（挙動・レイテンシとも無変更）。実モデルで曖昧性の低い文でも表記ゆれ・別の妥当な変換が上位に出ることを確認。`server`（`Pipeline`）・`engine`（候補ウィンドウの sentence モード）への統合は次段。詳細は G-14 |
+| 12 | LLM のビームサーチ（infer 単体、Stage 1） | `ConvertRequest::beam_width` を新設し、`llama::LlamaModel::convert` に設計書 B-4 どおりの真のビームサーチ（各ステップで上位 `width` 本に絞りながら進める）を実装。KV キャッシュの分岐・合流は `kv_cache_seq_cp`（要 `kv_unified = true`）。`beam_width <= 1` は既存の貪欲デコードのまま（挙動・レイテンシとも無変更）。実モデルで曖昧性の低い文でも表記ゆれ・別の妥当な変換が上位に出ることを確認。詳細は G-14 |
+| 13 | LLM のビームサーチ（server/engine 統合、Stage 2） | `Effective::beam_width`（プロファイル既定 + `conversion.beam_width` 上書き）、`Pipeline::sentence_candidates`（仮説を強制アライメント + 学習/ユーザー辞書の優先を適用、重複除去、縮退条件）、engine の候補ウィンドウ sentence モード（`Conv::whole`/`sentence`、`conversion.initial_view`、`←/→` 等での恒久的な離脱）。プロトコル・Swift 型の変更は無し。詳細は G-15 |
 
 ## 未完了の項目と次の一手
 
 優先順:
 
-1. **LLM 接続の残り**: ビームサーチの `server`/`engine` への統合（Stage 2。`Pipeline::sentence_candidates`・候補ウィンドウの sentence モード・`conversion.initial_view = sentence`・キーマップ。infer 単体の実装は完了、G-14）、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
+1. **LLM 接続の残り**: ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）。ビームサーチの N-best は infer/server/engine とも実装済み（G-14, G-15）。残るのはキーマップでの sentence モード専用割当と `nagi-eval` でのビームサーチ込み精度計測（優先度低）
 2. **予測変換**（Phase 2）: 学習・ユーザー辞書の前方一致（`Learner::lookup_prefix` は用意済み）、候補ウィンドウの Tab / ↓ 選択
 3. **環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化、`quality` で使う大きいモデル・reranker（Laya 評価）
 4. **設定の残り**: キーマップ TOML（Phase 3。`[keymap]` は `preset` だけ）、設定 GUI（Phase 4）、`update.auto_check` の実装
@@ -48,6 +49,7 @@
 - G-12 設定・環境プロファイル・学習・ユーザー辞書（仕様・優先順位・未実装事項）
 - G-13 LLM コンテキストの再利用（KV キャッシュ。自己参照構造・`unsafe_code` の局所解禁・`unsafe impl Send` の根拠・実測値）
 - G-14 LLM のビームサーチ（infer 単体、Stage 1。アルゴリズム・`kv_unified` の必要性・実測・未実装の統合作業）
+- G-15 LLM のビームサーチ（server/engine 統合、Stage 2。`Effective::beam_width`・`Pipeline::sentence_candidates`・候補ウィンドウの sentence モード・既知の限界）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 

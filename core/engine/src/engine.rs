@@ -26,6 +26,17 @@ use std::sync::Arc;
 const LEFT_CONTEXT_CHARS: usize = 40;
 /// 文節 1 つ分に集める候補数の上限
 const CANDIDATE_LIMIT: usize = 50;
+/// 文全体の候補（sentence モード）の上限
+const SENTENCE_CANDIDATE_LIMIT: usize = 8;
+
+/// 候補ウィンドウの初期表示形式（`conversion.initial_view`。設計書 §4.4）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitialView {
+    /// 文全体の N-best を表示する（既定）
+    Sentence,
+    /// 先頭文節の候補を表示する（MS-IME / Mozc と同じ）
+    Segment,
+}
 
 /// エンジンの設定（`config.toml` の `[input]` `[conversion]` に対応する部分）
 #[derive(Debug, Clone)]
@@ -38,6 +49,8 @@ pub struct EngineConfig {
     pub page_size: usize,
     /// セッション開始時の入力モード
     pub initial_mode: InputMode,
+    /// 候補ウィンドウの初期表示形式（`conversion.initial_view`）
+    pub initial_view: InitialView,
 }
 
 impl Default for EngineConfig {
@@ -47,6 +60,7 @@ impl Default for EngineConfig {
             punctuation: PunctuationStyle::Japanese,
             page_size: 9,
             initial_mode: InputMode::Hiragana,
+            initial_view: InitialView::Sentence,
         }
     }
 }
@@ -86,6 +100,20 @@ struct Conv {
     segments: Vec<Segment>,
     focus: usize,
     visible: bool,
+    /// preedit 全体がちょうど 1 回の `convert_sentence` 呼び出し（`start_converting` 時点）から
+    /// 成るときだけ Some（(reading, left_context)）。文全体モードの候補取得に使う。
+    /// Literal との混在などで複数ピースにまたがる入力では None（sentence モードは提供しない）
+    whole: Option<(String, String)>,
+    /// 文全体の候補（sentence モード）。遅延生成。`←/→` 等で操作したら None に戻す
+    sentence: Option<SentenceCandidates>,
+}
+
+/// 文全体の N-best（候補ウィンドウの sentence モード）。1 候補 = 文全体の 1 つの切り方
+#[derive(Clone)]
+struct SentenceCandidates {
+    /// 各候補の文節列。採用すると `Conv.segments` を丸ごと差し替える
+    options: Vec<Vec<Segment>>,
+    selected: usize,
 }
 
 enum State {
@@ -320,6 +348,8 @@ impl Engine {
                     segments,
                     focus,
                     visible: false,
+                    whole: None,
+                    sentence: None,
                 });
             } else {
                 let pieces: Vec<Piece> = params
@@ -666,6 +696,8 @@ impl Engine {
         let State::Converting(conv) = state else {
             return;
         };
+        conv.whole = None;
+        conv.sentence = None; // sentence モードを抜ける（以後この Conv では二度と入らない）
         let f = conv.focus;
         if conv.segments[f].kind != SegmentKind::Japanese {
             return;
@@ -740,10 +772,20 @@ impl Engine {
                 }
             }
         }
+        // preedit 全体がちょうど 1 つの Origin（1 回の convert_sentence 呼び出し）から成るときだけ、
+        // 文全体モード（sentence モード）の候補取得に使う (reading, left_context) を残す
+        let whole = match sess.origins.as_slice() {
+            [origin] if origin.start == 0 && origin.count == segments.len() => {
+                Some((origin.reading.clone(), origin.left.clone()))
+            }
+            _ => None,
+        };
         sess.state = State::Converting(Conv {
             segments,
             focus: 0,
             visible: false,
+            whole,
+            sentence: None,
         });
     }
 
@@ -814,10 +856,68 @@ impl Engine {
         conv.segments[idx].candidates = Some(CandidateSet { items, selected: 0 });
     }
 
+    /// `conv.sentence` がまだ無く条件を満たせば、文全体の候補を取得して sentence モードに入る。
+    /// 既に候補ウィンドウを開いた後（`conv.visible`）や、`conv.whole` が無い（複数ピースに
+    /// またがる入力など）場合、`conversion.initial_view = segment` の場合は何もしない。
+    /// バックエンドが 1 件しか返さない（代替が無い）ときも sentence モードには入らない
+    fn try_sentence_mode(&self, conv: &mut Conv) {
+        if self.config.initial_view != InitialView::Sentence {
+            return;
+        }
+        let Some((reading, left)) = conv.whole.clone() else {
+            return;
+        };
+        let sentences = self
+            .backend
+            .sentence_candidates(&reading, &left, SENTENCE_CANDIDATE_LIMIT);
+        if sentences.len() < 2 {
+            return;
+        }
+        let mut options: Vec<Vec<Segment>> = sentences
+            .into_iter()
+            .map(|s| {
+                s.segments
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, bs)| Segment {
+                        reading: bs.reading,
+                        surface: bs.surface,
+                        kind: SegmentKind::Japanese,
+                        candidates: None,
+                        chunk_id: i as u32,
+                    })
+                    .collect()
+            })
+            .collect();
+        // 現在表示中の切り方（学習・ユーザー辞書の反映済み）が候補に無ければ先頭に加える
+        let joined =
+            |segs: &[Segment]| -> String { segs.iter().map(|s| s.surface.as_str()).collect() };
+        let current_joined = joined(&conv.segments);
+        let selected = options
+            .iter()
+            .position(|o| joined(o) == current_joined)
+            .unwrap_or_else(|| {
+                options.insert(0, conv.segments.clone());
+                0
+            });
+        conv.sentence = Some(SentenceCandidates { options, selected });
+    }
+
     fn step_candidate(&self, sess: &mut Session, delta: isize) {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
+        if conv.sentence.is_none() && !conv.visible {
+            self.try_sentence_mode(conv);
+        }
+        if let Some(sc) = conv.sentence.as_mut() {
+            let n = sc.options.len() as isize;
+            sc.selected = ((sc.selected as isize + delta).rem_euclid(n)) as usize;
+            conv.segments = sc.options[sc.selected].clone();
+            conv.focus = conv.focus.min(conv.segments.len().saturating_sub(1));
+            conv.visible = true;
+            return;
+        }
         let f = conv.focus;
         self.ensure_candidates(&sess.left_context, conv, f);
         conv.visible = true;
@@ -833,6 +933,8 @@ impl Engine {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
+        conv.whole = None;
+        conv.sentence = None; // sentence モードを抜けて、通常の文節候補に切り替える（以後戻らない）
         conv.visible = false;
         match dir {
             Direction::Left => conv.focus = conv.focus.saturating_sub(1),
@@ -848,6 +950,17 @@ impl Engine {
             // 候補ウィンドウが出ていない間の数字キーは、確定して数字を入力する
             if let Some(c) = char::from_digit(n as u32, 10) {
                 self.insert_char(sess, c, commit);
+            }
+            return;
+        }
+        if let Some(sc) = conv.sentence.as_mut() {
+            let page_size = self.config.page_size.max(1);
+            let index = (sc.selected / page_size) * page_size + n - 1;
+            if index < sc.options.len() {
+                sc.selected = index;
+                conv.segments = sc.options[index].clone();
+                conv.focus = conv.focus.min(conv.segments.len().saturating_sub(1));
+                conv.visible = false;
             }
             return;
         }
@@ -868,6 +981,8 @@ impl Engine {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
+        conv.whole = None;
+        conv.sentence = None; // sentence モードを抜ける（以後この Conv では二度と入らない）
         let f = conv.focus;
         if conv.segments[f].kind != SegmentKind::Japanese {
             return;
@@ -893,6 +1008,8 @@ impl Engine {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
+        conv.whole = None;
+        conv.sentence = None; // sentence モードを抜ける（以後この Conv では二度と入らない）
         let f = conv.focus;
         if conv.segments[f].kind != SegmentKind::Japanese {
             return;
@@ -1024,21 +1141,38 @@ impl Engine {
         let page_size = self.config.page_size as u32;
         if let State::Converting(conv) = &sess.state
             && conv.visible
-            && let Some(set) = &conv.segments[conv.focus].candidates
         {
-            return CandidatesView {
-                items: set
-                    .items
-                    .iter()
-                    .map(|c| CandidateView {
-                        surface: c.surface.clone(),
-                        sources: c.sources.clone(),
-                    })
-                    .collect(),
-                selected: set.selected as u32,
-                page_size,
-                visible: true,
-            };
+            if let Some(sc) = &conv.sentence {
+                return CandidatesView {
+                    items: sc
+                        .options
+                        .iter()
+                        .map(|o| CandidateView {
+                            surface: o.iter().map(|s| s.surface.as_str()).collect(),
+                            // 文全体候補は現状すべて LLM（ビームサーチ）由来
+                            sources: vec![CandidateSource::Llm],
+                        })
+                        .collect(),
+                    selected: sc.selected as u32,
+                    page_size,
+                    visible: true,
+                };
+            }
+            if let Some(set) = &conv.segments[conv.focus].candidates {
+                return CandidatesView {
+                    items: set
+                        .items
+                        .iter()
+                        .map(|c| CandidateView {
+                            surface: c.surface.clone(),
+                            sources: c.sources.clone(),
+                        })
+                        .collect(),
+                    selected: set.selected as u32,
+                    page_size,
+                    visible: true,
+                };
+            }
         }
         CandidatesView {
             page_size,

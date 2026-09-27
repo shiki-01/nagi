@@ -1,8 +1,8 @@
 //! `Engine` の公開 API（差分・revision・セッション・文脈）のテスト
 
 use nagi_engine::{
-    BackendCandidate, BackendSegment, Completion, ConversionBackend, Engine, EngineConfig,
-    KanaBackend, StateKind, parse_key,
+    BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend, Engine,
+    EngineConfig, InitialView, KanaBackend, StateKind, parse_key,
 };
 use nagi_protocol::methods::{SetContextParams, SurroundingText};
 use nagi_protocol::view::CandidateSource;
@@ -432,4 +432,194 @@ fn completion_is_ignored_while_composing() {
     }
     backend.ready.store(true, Ordering::SeqCst);
     assert!(e.apply_completions(&done("きょう", "")).is_empty());
+}
+
+// ---- 文全体の候補（sentence モード） ----
+
+/// 読み → 文全体の切り方の候補列（先頭が既定の 1 位）を固定で返すバックエンド
+struct SentenceBackend {
+    options: Vec<Vec<(&'static str, &'static str)>>,
+}
+
+impl SentenceBackend {
+    fn reading_of(opt: &[(&'static str, &'static str)]) -> String {
+        opt.iter().map(|(r, _)| *r).collect()
+    }
+}
+
+impl ConversionBackend for SentenceBackend {
+    fn name(&self) -> &str {
+        "sentence-mock"
+    }
+
+    fn convert_sentence(&self, reading: &str, _left_context: &str) -> Vec<BackendSegment> {
+        let best = &self.options[0];
+        if Self::reading_of(best) != reading {
+            return vec![BackendSegment {
+                reading: reading.to_string(),
+                surface: reading.to_string(),
+                sources: vec![CandidateSource::Kana],
+            }];
+        }
+        best.iter()
+            .map(|(r, s)| BackendSegment {
+                reading: r.to_string(),
+                surface: s.to_string(),
+                sources: vec![CandidateSource::SystemDict],
+            })
+            .collect()
+    }
+
+    fn segment_candidates(&self, _: &str, _: &str, _: usize) -> Vec<BackendCandidate> {
+        Vec::new()
+    }
+
+    fn sentence_candidates(
+        &self,
+        reading: &str,
+        _left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendSentence> {
+        if Self::reading_of(&self.options[0]) != reading {
+            return Vec::new();
+        }
+        self.options
+            .iter()
+            .take(limit)
+            .map(|opt| BackendSentence {
+                segments: opt
+                    .iter()
+                    .map(|(r, s)| BackendSegment {
+                        reading: r.to_string(),
+                        surface: s.to_string(),
+                        sources: vec![CandidateSource::Llm],
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+}
+
+fn sentence_options() -> Vec<Vec<(&'static str, &'static str)>> {
+    vec![
+        vec![("きょう", "今日"), ("は", "は")],
+        vec![("きょう", "京"), ("は", "は")],
+    ]
+}
+
+fn type_kyouha(e: &mut Engine) {
+    for k in ["k", "y", "o", "u", "h", "a"] {
+        press(e, "s", k);
+    }
+}
+
+#[test]
+fn sentence_mode_shows_whole_sentence_candidates_on_first_open() {
+    let backend = SentenceBackend {
+        options: sentence_options(),
+    };
+    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
+    type_kyouha(&mut e);
+
+    let space1 = press(&mut e, "s", "Space"); // 変換開始: プリエディットのみ、候補は非表示
+    assert_eq!(space1.preedit.as_ref().unwrap().text, "今日は");
+    assert!(space1.candidates.is_none_or(|c| !c.visible));
+
+    // 候補ウィンドウを開く: sentence モード。文節候補と同様、開いた瞬間に現在値から
+    // 1 つ進む（`ensure_candidates` 直後に delta を適用する既存の挙動と揃えてある）
+    let space2 = press(&mut e, "s", "Space");
+    let candidates2 = space2.candidates.expect("候補が届く");
+    assert!(candidates2.visible);
+    assert_eq!(
+        candidates2
+            .items
+            .iter()
+            .map(|c| c.surface.as_str())
+            .collect::<Vec<_>>(),
+        ["今日は", "京は"],
+        "文全体の切り方が候補になる"
+    );
+    assert_eq!(candidates2.selected, 1);
+    assert_eq!(
+        space2.preedit.as_ref().unwrap().text,
+        "京は",
+        "プリエディットが選んだ切り方に差し替わる"
+    );
+
+    let space3 = press(&mut e, "s", "Space"); // 一周して元に戻る
+    assert_eq!(space3.preedit.as_ref().unwrap().text, "今日は");
+    assert_eq!(space3.candidates.expect("候補が届く").selected, 0);
+}
+
+#[test]
+fn moving_focus_exits_sentence_mode_permanently() {
+    let backend = SentenceBackend {
+        options: sentence_options(),
+    };
+    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
+    type_kyouha(&mut e);
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Space"); // sentence モードに入る
+
+    press(&mut e, "s", "Right"); // 注目文節を移動 → sentence モードを抜ける
+    let after_move = press(&mut e, "s", "Space"); // 以後は文節候補
+    let candidates = after_move.candidates.expect("候補が届く");
+    assert!(
+        !candidates
+            .items
+            .iter()
+            .any(|c| c.surface == "今日は" || c.surface == "京は"),
+        "文全体候補には戻らない: {candidates:?}"
+    );
+
+    // Left で戻っても、sentence モードには戻らない（whole を消してあるため）
+    press(&mut e, "s", "Left");
+    let after_left = press(&mut e, "s", "Space");
+    let candidates_left = after_left.candidates.expect("候補が届く");
+    assert!(
+        !candidates_left
+            .items
+            .iter()
+            .any(|c| c.surface == "今日は" || c.surface == "京は")
+    );
+}
+
+#[test]
+fn segment_initial_view_skips_sentence_mode() {
+    let backend = SentenceBackend {
+        options: sentence_options(),
+    };
+    let config = EngineConfig {
+        initial_view: InitialView::Segment,
+        ..EngineConfig::default()
+    };
+    let mut e = Engine::new(Arc::new(backend), config);
+    type_kyouha(&mut e);
+    press(&mut e, "s", "Space");
+    let space2 = press(&mut e, "s", "Space");
+    let candidates = space2.candidates.expect("候補が届く");
+    assert!(
+        !candidates
+            .items
+            .iter()
+            .any(|c| c.surface == "今日は" || c.surface == "京は"),
+        "initial_view = segment では文全体候補を出さない: {candidates:?}"
+    );
+}
+
+#[test]
+fn single_sentence_candidate_does_not_enter_sentence_mode() {
+    // バックエンドが代替を返さない（1 件だけ）場合は、既存の文節候補にフォールバックする
+    let backend = SentenceBackend {
+        options: vec![sentence_options()[0].clone()],
+    };
+    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
+    type_kyouha(&mut e);
+    press(&mut e, "s", "Space");
+    let space2 = press(&mut e, "s", "Space");
+    let candidates = space2.candidates.expect("候補が届く");
+    assert!(candidates.visible);
+    // 文節候補（focus=0 の「きょう」）にフォールバックしているので、"今日は" 単体の
+    // 項目ではなく "今日"（文節の表記）などが並ぶはず
+    assert!(!candidates.items.iter().any(|c| c.surface == "今日は"));
 }

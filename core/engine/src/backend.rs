@@ -36,6 +36,13 @@ pub struct Completion {
     pub left_context: String,
 }
 
+/// [`ConversionBackend::sentence_candidates`] が返す、文全体の 1 つの切り方
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendSentence {
+    /// 文節列。reading を連結すると入力の reading に一致すること（`convert_sentence` と同じ制約）
+    pub segments: Vec<BackendSegment>,
+}
+
 /// 変換バックエンド
 pub trait ConversionBackend: Send + Sync {
     /// バックエンド名（診断用。入力内容は含めない）
@@ -54,6 +61,23 @@ pub trait ConversionBackend: Send + Sync {
         left_context: &str,
         limit: usize,
     ) -> Vec<BackendCandidate>;
+
+    /// 文全体の N-best（別の切り方・変換の候補列）。良い順、最大 `limit` 件。
+    ///
+    /// 候補ウィンドウの `sentence` モード（設計書 §4.4・`conversion.initial_view = sentence`）用。
+    /// 既定実装は非対応で、`convert_sentence` の結果を 1 件だけ返す（呼び出し側はこれで
+    /// 「代替なし」として扱う。B-4 のビームサーチに対応しないバックエンドはこれで縮退する）
+    fn sentence_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendSentence> {
+        let _ = limit;
+        vec![BackendSentence {
+            segments: self.convert_sentence(reading, left_context),
+        }]
+    }
 
     /// 溜まった完了通知を取り出す（取り出すと空になる）
     fn take_completions(&self) -> Vec<Completion> {

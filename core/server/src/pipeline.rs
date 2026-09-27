@@ -15,7 +15,9 @@
 
 use crate::runtime::{Effective, Runtime};
 use nagi_dict::{Dictionary, Overlay};
-use nagi_engine::{BackendCandidate, BackendSegment, Completion, ConversionBackend};
+use nagi_engine::{
+    BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend,
+};
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
 use nagi_protocol::view::CandidateSource;
@@ -268,6 +270,45 @@ impl Pipeline {
         }
     }
 
+    /// 文全体の N-best（ビームサーチ）。予算内に終わらない・失敗・モデルなしなら空を返す
+    /// （呼び出し側が最良の 1 案に縮退する）。文節候補の再採点（[`Self::llm_scores`]）と同様、
+    /// 候補ウィンドウを開いたときだけの呼び出しなので、非同期の完了通知は行わない
+    fn llm_beam_convert(
+        &self,
+        reading: &str,
+        left: &str,
+        eff: &Effective,
+        width: usize,
+    ) -> Vec<String> {
+        let Some(llm) = &self.llm else {
+            return Vec::new();
+        };
+        let (tx, rx) = mpsc::sync_channel::<Vec<String>>(1);
+        let model = llm.model.clone();
+        let mut req = Self::request(reading, left, eff.persona.as_deref());
+        req.beam_width = width;
+        let reading_owned = reading.to_string();
+        let spawned = std::thread::Builder::new()
+            .name("nagi-llm-beam".into())
+            .spawn(move || {
+                let hyps = model
+                    .lock()
+                    .ok()
+                    .and_then(|mut m| m.convert(&req).ok())
+                    .unwrap_or_default();
+                let surfaces: Vec<String> = hyps
+                    .into_iter()
+                    .map(|h| h.surface)
+                    .filter(|s| plausible(&reading_owned, s))
+                    .collect();
+                let _ = tx.send(surfaces);
+            });
+        if spawned.is_err() {
+            return Vec::new();
+        }
+        rx.recv_timeout(eff.sync_budget).unwrap_or_default()
+    }
+
     /// 候補の対数確率スコア（予算内に終わらなければ `None`）
     fn llm_scores(
         &self,
@@ -503,6 +544,71 @@ impl ConversionBackend for Pipeline {
         };
         self.apply_preferences(&mut segments, left_context, &eff, &overlay);
         segments
+    }
+
+    fn sentence_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendSentence> {
+        self.runtime.tick();
+        let eff = self.runtime.effective();
+        let overlay = self.runtime.overlay();
+        let left_llm = tail(left_context, eff.max_context_chars);
+        let fallback = || {
+            vec![BackendSentence {
+                segments: self.convert_sentence(reading, left_context),
+            }]
+        };
+
+        let Some(dict) = &self.dict else {
+            return fallback();
+        };
+        if !eff.use_llm
+            || self.llm.is_none()
+            || eff.beam_width <= 1
+            || reading.chars().count() > MAX_LLM_CHARS
+        {
+            return fallback();
+        }
+
+        let width = eff.beam_width.min(limit.max(1));
+        let hypotheses = self.llm_beam_convert(reading, &left_llm, &eff, width);
+        if hypotheses.len() < 2 {
+            return fallback();
+        }
+
+        let mut out: Vec<BackendSentence> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+        for surface in hypotheses {
+            if seen.contains(&surface) {
+                continue;
+            }
+            seen.push(surface.clone());
+            let mut segments = match dict.align_with(reading, &surface, Some(&overlay)) {
+                Some(segs) => segs
+                    .into_iter()
+                    .map(|s| BackendSegment {
+                        sources: vec![CandidateSource::Llm],
+                        reading: s.reading,
+                        surface: s.surface,
+                    })
+                    .collect(),
+                None => vec![BackendSegment {
+                    sources: vec![CandidateSource::Llm],
+                    reading: reading.to_string(),
+                    surface,
+                }],
+            };
+            self.apply_preferences(&mut segments, left_context, &eff, &overlay);
+            out.push(BackendSentence { segments });
+        }
+        if out.len() < 2 {
+            return fallback();
+        }
+        out.truncate(limit);
+        out
     }
 
     fn segment_candidates(

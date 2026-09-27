@@ -34,6 +34,41 @@ fn joined(segs: &[nagi_engine::BackendSegment]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// `beam_width` を固定した `Pipeline`（プロファイルの自動判定に依存しないテスト用）
+fn backend_with_beam_width(model: FakeModel, beam_width: usize) -> Pipeline {
+    let runtime = Runtime::new(
+        SystemInfo {
+            total_memory_mb: 16384,
+            cpu_cores: 8,
+        },
+        true,
+        Tunables {
+            sync_budget: Duration::from_millis(1000),
+            beam_width_override: Some(beam_width),
+            ..Tunables::default()
+        },
+        Learner::new(LearnConfig::default()),
+        None,
+    );
+    Pipeline::new(Some(dict()), Some(Box::new(model)), runtime)
+}
+
+fn full_surface(sentence: &nagi_engine::BackendSentence) -> String {
+    sentence
+        .segments
+        .iter()
+        .map(|s| s.surface.as_str())
+        .collect()
+}
+
+fn full_reading(sentence: &nagi_engine::BackendSentence) -> String {
+    sentence
+        .segments
+        .iter()
+        .map(|s| s.reading.as_str())
+        .collect()
+}
+
 #[test]
 fn llm_surface_is_aligned_into_bunsetsu_with_llm_source() {
     let b = backend(
@@ -287,4 +322,85 @@ fn late_llm_result_is_pushed_as_update_preedit() {
     assert_eq!(params["session_id"], "s");
     assert_eq!(params["preedit"]["text"], "講演");
     assert!(params["revision"].as_u64().unwrap() > space_revision);
+}
+
+// ---- 文全体の N-best（sentence_candidates、ビームサーチの Pipeline への統合） ----
+
+#[test]
+fn sentence_candidates_are_beam_hypotheses_force_aligned() {
+    let model = FakeModel::new(&[("きょうはこうえんにいく", "今日は公園に行く")]).with_beam(
+        "きょうはこうえんにいく",
+        &[
+            ("今日は公園に行く", -0.1),
+            ("今日は講演に行く", -1.5),
+            ("今日は後援に行く", -2.0),
+        ],
+    );
+    let b = backend_with_beam_width(model, 3);
+    let sentences = b.sentence_candidates("きょうはこうえんにいく", "", 10);
+
+    assert_eq!(sentences.len(), 3, "{sentences:?}");
+    let surfaces: Vec<String> = sentences.iter().map(full_surface).collect();
+    assert_eq!(
+        surfaces,
+        ["今日は公園に行く", "今日は講演に行く", "今日は後援に行く"],
+        "スコア順のまま、それぞれ強制アライメントされる"
+    );
+    for s in &sentences {
+        assert_eq!(
+            full_reading(s),
+            "きょうはこうえんにいく",
+            "reading を連結すると入力に一致すること"
+        );
+        assert!(
+            s.segments
+                .iter()
+                .all(|seg| seg.sources == [CandidateSource::Llm])
+        );
+    }
+    // それぞれ文節に分かれている（1 文節にまとまっていない）ことも確認する
+    assert!(sentences.iter().all(|s| s.segments.len() >= 3));
+}
+
+#[test]
+fn sentence_candidates_respects_limit() {
+    let model = FakeModel::new(&[("こうえん", "公園")]).with_beam(
+        "こうえん",
+        &[("公園", -0.1), ("講演", -1.0), ("後援", -2.0)],
+    );
+    let b = backend_with_beam_width(model, 3);
+    let sentences = b.sentence_candidates("こうえん", "", 2);
+    assert_eq!(sentences.len(), 2);
+}
+
+#[test]
+fn sentence_candidates_falls_back_to_single_when_beam_width_is_1() {
+    let model = FakeModel::new(&[("こうえん", "公園")])
+        .with_beam("こうえん", &[("公園", -0.1), ("講演", -1.0)]);
+    let b = backend_with_beam_width(model, 1);
+    let sentences = b.sentence_candidates("こうえん", "", 10);
+    assert_eq!(sentences.len(), 1, "beam_width <= 1 では代替を出さない");
+    assert_eq!(full_surface(&sentences[0]), "公園");
+}
+
+#[test]
+fn sentence_candidates_falls_back_when_hypotheses_collapse_to_one() {
+    // ビームサーチが同じ表記ばかり返した場合（重複除去後 1 件）は代替なし扱いにする
+    let model = FakeModel::new(&[("こうえん", "公園")]).with_beam(
+        "こうえん",
+        &[("公園", -0.1), ("公園", -0.2), ("公園", -0.3)],
+    );
+    let b = backend_with_beam_width(model, 3);
+    let sentences = b.sentence_candidates("こうえん", "", 10);
+    assert_eq!(sentences.len(), 1);
+    assert_eq!(full_surface(&sentences[0]), "公園");
+}
+
+#[test]
+fn sentence_candidates_without_model_falls_back_to_dictionary() {
+    let model = FakeModel::new(&[]);
+    let b = backend_with_beam_width(model, 3);
+    let sentences = b.sentence_candidates("きょうはこうえんにいく", "", 10);
+    assert_eq!(sentences.len(), 1);
+    assert_eq!(full_surface(&sentences[0]), "今日は公園に行く");
 }

@@ -66,6 +66,9 @@ pub fn dict() -> Arc<Dictionary> {
 /// 読み → 表記 の表で答え、`score` は表にある表記を最良にする。呼び出し回数と遅延を制御できる
 pub struct FakeModel {
     pub table: HashMap<String, String>,
+    /// `beam_width > 1` のときに使う表: 読み → [(表記, スコア), ...]（スコア降順で渡すこと）。
+    /// 無ければ `table` の 1 件だけを返す（既定の貪欲デコードと同じ）
+    pub beam_table: HashMap<String, Vec<(String, f32)>>,
     pub delay: Duration,
     pub converts: Arc<AtomicUsize>,
     pub last_contexts: Arc<Mutex<Vec<String>>>,
@@ -78,10 +81,23 @@ impl FakeModel {
                 .iter()
                 .map(|(r, s)| (r.to_string(), s.to_string()))
                 .collect(),
+            beam_table: HashMap::new(),
             delay: Duration::ZERO,
             converts: Arc::new(AtomicUsize::new(0)),
             last_contexts: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// `beam_width > 1` で呼ばれたときの複数仮説を登録する
+    pub fn with_beam(mut self, reading: &str, hypotheses: &[(&str, f32)]) -> Self {
+        self.beam_table.insert(
+            reading.to_string(),
+            hypotheses
+                .iter()
+                .map(|(s, score)| (s.to_string(), *score))
+                .collect(),
+        );
+        self
     }
 }
 
@@ -97,6 +113,18 @@ impl ConversionModel for FakeModel {
             .lock()
             .unwrap()
             .push(req.left_context.clone());
+        if req.beam_width > 1
+            && let Some(hyps) = self.beam_table.get(&req.reading)
+        {
+            return Ok(hyps
+                .iter()
+                .take(req.beam_width)
+                .map(|(s, score)| Hypothesis {
+                    surface: s.clone(),
+                    score: *score,
+                })
+                .collect());
+        }
         self.table
             .get(&req.reading)
             .map(|s| {

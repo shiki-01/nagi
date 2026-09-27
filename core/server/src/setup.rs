@@ -6,9 +6,9 @@
 
 use crate::pipeline::Pipeline;
 use crate::runtime::{Event, Runtime, Tunables};
-use nagi_config::{Config, Issue, Severity, ShiftLetter};
+use nagi_config::{Config, InitialView as ConfigInitialView, Issue, Severity, ShiftLetter};
 use nagi_dict::{Dictionary, UserDictionary};
-use nagi_engine::EngineConfig;
+use nagi_engine::{EngineConfig, InitialView};
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_protocol::methods::NotifyLevel;
@@ -91,6 +91,10 @@ pub fn engine_config_from(config: &Config) -> EngineConfig {
             .unwrap_or(PunctuationStyle::Japanese),
         page_size: config.conversion.num_candidates,
         initial_mode: InputMode::Hiragana,
+        initial_view: match config.conversion.initial_view {
+            ConfigInitialView::Sentence => InitialView::Sentence,
+            ConfigInitialView::Segment => InitialView::Segment,
+        },
     }
 }
 

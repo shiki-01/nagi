@@ -410,4 +410,16 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 - **`kv_unified = true` が必要だった**: 既定の `kv_unified = false`（分離バッファ）では `kv_cache_seq_cp` が異なるバッファ間のコピーになり、llama.cpp 側が「全域コピーのみ対応（`is_full` アサート）」で拒否する（プロンプト分だけの部分コピーができずクラッシュする）。`with_kv_unified(true)` で 1 つの共有バッファにして解決した。コンテキストは既存の再利用（G-13）と同じ 1 つを使い回すため、`beam_width` を使わない呼び出し（貪欲デコード・`score`）にも影響するが、動作・既存テストに変化はない
 - **実測**（zenz-v3.1-small、`width=3`、代表 4 文）: 曖昧性の低い文では貪欲デコードと同じ表記が最上位に来て、2 位以降に表記ゆれ・別の妥当な変換が並ぶ。例: 「こうえん」→ 公園 / 講演 / 公演、「きょうはいいてんきです」→ 今日はいい天気です / 今日は良い天気です / 今日はイイ天気です、「とうきょうにいく」→ 東京に行く / 東京にいく / 東京に行、「かんじへんかんのてすと」→ 漢字変換のテスト / 漢字変換のtest / 感じ変換のテスト。最上位のスコアは貪欲デコードとバッチ化による浮動小数点誤差の範囲（< 0.01）で一致した
 - **既知の限界**: 貪欲デコードの経路がビームサーチで必ず生き残る保証は一般には無い（弱い競合を持つ他ビームの累積スコアが上回れば刈られ得る）。実測 4 文では一致したが、理論的な不変条件としては扱わない。early stopping（十分良い確定仮説が出た時点で打ち切る最適化）は未実装で、常に `max_new_tokens` まで回す（`width` が小さく生成長も短いため実害は小さい）
-- **未実装**（次段）: `server::Pipeline` への統合（各仮説を `Dictionary::align_with` で強制アライメントし `BackendSentence` にする。表記が重複する仮説の除去は Pipeline 側で行う）、`engine` の文全体候補ウィンドウ（`conversion.initial_view = sentence`。`←/→` で注目文節を動かすと通常の文節候補に切り替わる）、`Effective`/`Tunables` への `beam_width` の追加、profile ごとの実際の値（`quality`/`balanced`=3, `light`/`minimal`=1）との連動
+- **未実装（次段）は G-15 で実装済み**
+
+### G-15. LLM のビームサーチ（Stage 2: server / engine への統合、2026-09-27）
+
+実装: `core/server/src/{runtime,pipeline,setup}.rs`（`Effective::beam_width`・`Pipeline::sentence_candidates`・`llm_beam_convert`）、`core/engine/src/{backend,engine}.rs`（`ConversionBackend::sentence_candidates` 既定実装・`InitialView`・`Conv::{whole,sentence}`）。
+
+- **`Effective::beam_width`**: `Tunables::beam_width_override`（`conversion.beam_width`。未指定なら `None`）でプロファイルの既定値（`quality`/`balanced`=3, `light`/`minimal`=1）を上書きする。既存の `max_context_override` と同じパターン
+- **`Pipeline::sentence_candidates`**: `eff.beam_width <= 1` または辞書/モデル無し・長文（`MAX_LLM_CHARS` 超）なら `convert_sentence` の結果 1 件に縮退する。それ以外は `llm_beam_convert`（新設。`ConvertRequest::beam_width` を渡して `model.convert` を呼ぶだけの同期呼び出し。`segment_candidates` の再採点と同様、候補ウィンドウを開いたときだけの呼び出しなので非同期完了通知は行わない）で仮説を取り、それぞれ `Dictionary::align_with` で強制アライメントし、`apply_preferences`（学習・ユーザー辞書の優先）を個別に適用する。表記が重複する仮説は除去し、除去後 2 件未満なら 1 件に縮退する
+- **`ConversionBackend::sentence_candidates`**（engine 側 trait）: 既定実装は `convert_sentence` の結果を 1 件返す（ビームサーチ非対応のバックエンドはこれで自動的に無効化される）
+- **候補ウィンドウの sentence モード**（engine）: `Conv` に `whole: Option<(reading, left_context)>`（`start_converting` 時点で、preedit 全体がちょうど 1 回の `convert_sentence` 呼び出し由来のときだけ設定。`Session.origins` は次のキー入力で消えるため `Conv` 自身に持たせる必要があった）と `sentence: Option<SentenceCandidates>`（遅延生成）を追加。`conversion.initial_view = sentence`（既定）かつ `whole` があり、バックエンドが 2 件以上返したときだけ、候補ウィンドウを開く最初のキーで sentence モードに入る。`←/→`・文節伸縮・カタカナ化・学習削除のいずれかを行うと `whole` ごと消して二度と sentence モードに入らないようにする（既存の文節候補にフォールバック）。数字キー選択・Space 送りは文節候補と同じ挙動（開いた瞬間に 1 件進む）に揃えた
+- **プロトコル変更なし**: sentence モードの候補は `CandidatesView`（結合済み文字列 + `sources: [Llm]`）でそのまま表現できるため、`CandidateView`/typeshare の変更は不要だった
+- **既知の限界**: Literal との混在など、入力が複数ピースにまたがる場合は sentence モードを提供しない（`whole` が `None` のまま）。ビームサーチ仮説を `apply_preferences` で個別に上書きした結果、複数の仮説が同じ表記に収束しても再重複除去はしない（まれ・実害は小さいと判断）
+- **未実装**: キーマップでの sentence モード専用の割当（現状は既存の Space/矢印キーのみ）、`nagi-eval` でのビームサーチ込み精度計測

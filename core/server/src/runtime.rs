@@ -45,6 +45,8 @@ pub struct Tunables {
     pub sync_budget: Duration,
     /// `conversion.max_context_length`（未指定ならプロファイルに従う）
     pub max_context_override: Option<usize>,
+    /// `conversion.beam_width`（未指定ならプロファイルに従う）
+    pub beam_width_override: Option<usize>,
     /// `conversion.use_context`
     pub use_context: bool,
     /// `profile.persona`（空なら注入しない）
@@ -94,6 +96,7 @@ impl Tunables {
             },
             sync_budget: Duration::from_millis(config.conversion.sync_budget_ms),
             max_context_override: config.conversion.max_context_length,
+            beam_width_override: config.conversion.beam_width,
             use_context: config.conversion.use_context,
             persona: config.profile.persona.clone(),
             learning_enabled: config.learning.enabled,
@@ -123,6 +126,8 @@ pub struct Effective {
     pub sync_budget: Duration,
     /// 候補の出所の優先順
     pub ranking: Vec<CandidateSource>,
+    /// 文全体の N-best（ビームサーチ）の幅。1 なら貪欲デコードと同じ
+    pub beam_width: usize,
 }
 
 /// 実行時の共有状態
@@ -382,6 +387,7 @@ impl Runtime {
             persona: (!t.persona.is_empty()).then_some(t.persona),
             sync_budget: t.sync_budget,
             ranking: t.ranking,
+            beam_width: t.beam_width_override.unwrap_or(params.beam_width).max(1),
         }
     }
 
