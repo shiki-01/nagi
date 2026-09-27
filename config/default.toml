@@ -1,0 +1,136 @@
+# Nagi デフォルト設定ファイル
+# すべての項目を日本語コメント付きで記載
+# 設計書 §6 参照
+
+[profile]
+# 環境プロファイルモード: "auto" / "quality" / "balanced" / "light" / "minimal"
+# 既定: auto（実行環境に応じて自動判定）
+mode = "auto"
+
+# 環境の変化で自動的にプロファイルを切り替えるかどうか
+# 既定: true
+auto_switch = true
+
+# ユーザーのペルソナ。スタイル変換等で使用される（v2 以降）
+# 既定: ""（未指定）
+persona = ""
+
+[conversion]
+# ライブ変換（Space キー不要のリアルタイム変換）を有効にするかどうか
+# 既定: true
+live_conversion = true
+
+# 変換の初期表示形式
+# "sentence": 文全体の N-best を表示（既定）
+# "segment": 先頭文節の候補を表示
+initial_view = "sentence"
+
+# ライブ変換時のチャンク長（文字数）
+# 1-200 の範囲で指定。小さいほど反応が速いが CPU 負荷が増える
+# 既定: 30
+composing_chunk_len = 30
+
+# LLM ビームサーチの幅（上位何案を保持するか）
+# 1-16 の範囲。未指定の場合はプロファイルに従う
+# 既定: 未指定（プロファイル自動判定）
+# beam_width = 3
+
+# 候補ウィンドウ 1 ページの候補数
+# 1-50 の範囲で指定
+# 既定: 9
+num_candidates = 9
+
+# LLM 推論スレッド数
+# 0 = CPU コア数で自動判定、1 以上 = 指定値
+# 既定: 0（自動）
+n_threads = 0
+
+# 使用する LLM モデル
+# GGUF ファイルのパスまたはモデル ID を指定
+# 未指定の場合はプロファイルに従う
+# 既定: 未指定（プロファイル自動判定）
+# model = "zenz-v3.1-small"
+
+# 文脈を考慮するかどうか
+# true = Surrounding Text を使用して文脈を推論に含める
+# 既定: true
+use_context = true
+
+# 文脈の最大文字数（Unicode スカラー値）
+# 1-200 の範囲。未指定の場合はプロファイルに従う
+# 既定: 未指定（プロファイル自動判定）
+# max_context_length = 100
+
+# 推論の最大レイテンシ（ミリ秒）
+# 10-10000 の範囲で指定。タイムアウト判定用
+# 既定: 100
+max_latency_ms = 100
+
+# 同期応答の最大予算（ミリ秒）
+# 10-5000 の範囲で指定
+# Space キー入力に対する応答待ち時間。超過するとひらがなのまま応答
+# 既定: 150
+sync_budget_ms = 150
+
+[input]
+# Shift + 英字の動作
+# "literal_continue": 大文字を Literal で挿入し、後続も英字で続ける（既定）
+#                    例: "Nagi" と入力できる
+# "single_upper": 大文字 1 文字だけを Literal で挿入する
+shift_letter = "literal_continue"
+
+# 句読点の種類（全角記号）
+# "、。" = 句点「。」読点「、」（既定）
+# "，．" = 句点「．」読点「，」
+# "，。" = 句点「。」読点「，」
+punctuation = "、。"
+
+[ranking]
+# 候補の優先順序（候補の出所）
+# 設定された順序で候補を並べ替える
+# 既知の出所: learned / user_dict / llm / system_dict / kana / rewriter
+# 既定: 学習キャッシュ → ユーザー辞書 → LLM → システム辞書 → ひらがな → Rewriter
+source_order = [
+    "learned",
+    "user_dict",
+    "llm",
+    "system_dict",
+    "kana",
+    "rewriter",
+]
+
+[learning]
+# 学習を有効にするかどうか
+# true = 確定候補を自動的に記録
+# 既定: true
+enabled = true
+
+# 学習データの最大エントリ数
+# 100-1000000 の範囲で指定
+# 既定: 10000
+max_entries = 10000
+
+# 学習を無効にするアプリのリスト
+# パスワードマネージャ等、入力内容が機密のアプリを指定
+# アプリ識別子（bundle id など）を含める
+# 既定: パスワードマネージャの標準的な ID リスト
+disabled_apps = [
+    "com.1password.1password",
+    "com.agilebits.onepassword7",
+    "com.bitwarden.desktop",
+    "org.keepassxc.keepassxc",
+    "com.lastpass.LastPass",
+]
+
+[keymap]
+# キーマップのプリセット
+# "default" = 標準的な日本語入力キー配置（既定）
+# カスタムキーマップは Phase 3 以降で対応予定
+preset = "default"
+
+[update]
+# アップデートの自動確認
+# true = 起動時と設定から任意のタイミングで新バージョンを確認
+# false = 手動でのみ確認
+# 既定: true
+auto_check = true

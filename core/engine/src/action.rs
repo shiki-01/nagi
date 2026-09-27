@@ -47,6 +47,8 @@ pub enum Action {
     ResizeSegment(Direction),
     /// 複数文節を選択（Ctrl+Shift+Left/Right）
     ExtendSelection(Direction),
+    /// 注目文節の学習を削除（Ctrl+Delete。誤学習の削除）
+    DeleteLearning,
     /// カタカナに変換（Ctrl+K / F7）
     ToKatakana,
     /// ひらがなに変換（F6）
@@ -84,6 +86,7 @@ impl fmt::Display for Action {
             Action::ResizeSegment(Direction::Right) => write!(f, "ResizeSegment(Right)"),
             Action::ExtendSelection(Direction::Left) => write!(f, "ExtendSelection(Left)"),
             Action::ExtendSelection(Direction::Right) => write!(f, "ExtendSelection(Right)"),
+            Action::DeleteLearning => write!(f, "DeleteLearning"),
             Action::ToKatakana => write!(f, "ToKatakana"),
             Action::ToHiragana => write!(f, "ToHiragana"),
             Action::SetMode(mode) => write!(f, "SetMode({:?})", mode),

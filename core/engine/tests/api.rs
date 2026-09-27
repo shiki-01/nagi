@@ -145,3 +145,183 @@ fn engine_is_send() {
     fn assert_send<T: Send>() {}
     assert_send::<Engine>();
 }
+
+// ---- 確定の通知（学習）と設定の差し替え ----
+
+use nagi_engine::{CommitContext, CommitObserver, CommittedSegment, MockBackend};
+use nagi_protocol::view::SegmentKind;
+use std::sync::Mutex;
+
+/// (セッション ID, アプリ ID, secure input, 確定した文節)
+type CommitRecord = (String, Option<String>, bool, Vec<CommittedSegment>);
+
+#[derive(Default)]
+struct Recorder {
+    commits: Mutex<Vec<CommitRecord>>,
+    forgets: Mutex<Vec<(String, String)>>,
+    forget_result: Mutex<bool>,
+}
+
+impl CommitObserver for Recorder {
+    fn on_commit(&self, ctx: &CommitContext<'_>, segments: &[CommittedSegment]) {
+        self.commits.lock().unwrap().push((
+            ctx.session_id.to_string(),
+            ctx.app_id.map(str::to_string),
+            ctx.secure_input,
+            segments.to_vec(),
+        ));
+    }
+
+    fn on_forget(&self, _ctx: &CommitContext<'_>, reading: &str, surface: &str) -> bool {
+        self.forgets
+            .lock()
+            .unwrap()
+            .push((reading.to_string(), surface.to_string()));
+        *self.forget_result.lock().unwrap()
+    }
+}
+
+fn mock_engine() -> (Engine, Arc<Recorder>) {
+    let backend = MockBackend::new().with_sentence(
+        "きょうはいい",
+        vec![
+            ("きょうは", vec!["今日は", "京は"]),
+            ("いい", vec!["いい", "良い"]),
+        ],
+    );
+    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
+    let rec = Arc::new(Recorder::default());
+    e.set_commit_observer(rec.clone());
+    (e, rec)
+}
+
+fn type_str(e: &mut Engine, session: &str, keys: &str) {
+    for c in keys.chars() {
+        press(e, session, &c.to_string());
+    }
+}
+
+#[test]
+fn observer_receives_converted_segments_with_left_context() {
+    let (mut e, rec) = mock_engine();
+    e.set_context(
+        "s",
+        &SetContextParams {
+            session_id: "s".into(),
+            surrounding_text: Some(SurroundingText {
+                text: "私は".into(),
+                cursor: 2,
+            }),
+            app_id: Some("com.example.editor".into()),
+            secure_input: None,
+        },
+    );
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Space"); // 候補窓で「京は」を選ぶ
+    assert_eq!(e.snapshot("s").unwrap().preedit.segments[0].surface, "京は");
+    press(&mut e, "s", "Enter");
+    let commits = rec.commits.lock().unwrap();
+    assert_eq!(commits.len(), 1);
+    let (session, app, secure, segs) = &commits[0];
+    assert_eq!(
+        (session.as_str(), app.as_deref(), *secure),
+        ("s", Some("com.example.editor"), false)
+    );
+    assert_eq!(segs.len(), 2);
+    assert_eq!(
+        (segs[0].reading.as_str(), segs[0].surface.as_str()),
+        ("きょうは", "京は")
+    );
+    assert_eq!(segs[0].left_context, "私は");
+    assert_eq!(
+        segs[1].left_context, "私は京は",
+        "前の文節の確定表記が文脈に入る"
+    );
+    assert_eq!(segs[0].kind, SegmentKind::Japanese);
+}
+
+#[test]
+fn observer_is_not_called_without_conversion() {
+    let (mut e, rec) = mock_engine();
+    type_str(&mut e, "s", "ka");
+    press(&mut e, "s", "Enter"); // 変換せずに確定
+    type_str(&mut e, "s", "ka");
+    e.focus_out("s");
+    type_str(&mut e, "s", "ka");
+    press(&mut e, "s", "Escape");
+    assert!(rec.commits.lock().unwrap().is_empty());
+}
+
+#[test]
+fn observer_sees_secure_input_flag() {
+    let (mut e, rec) = mock_engine();
+    e.set_context(
+        "s",
+        &SetContextParams {
+            session_id: "s".into(),
+            surrounding_text: None,
+            app_id: None,
+            secure_input: Some(true),
+        },
+    );
+    type_str(&mut e, "s", "ka");
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Enter");
+    let commits = rec.commits.lock().unwrap();
+    assert_eq!(commits.len(), 1);
+    assert!(
+        commits[0].2,
+        "secure input 中であることが observer に伝わる"
+    );
+}
+
+#[test]
+fn ctrl_delete_asks_observer_to_forget_and_rebuilds_candidates() {
+    let (mut e, rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Space"); // 候補窓を出す（選択は「京は」）
+    // 忘れられなければ候補は変わらない
+    let before = e.snapshot("s").unwrap().candidates;
+    press(&mut e, "s", "Ctrl+Delete");
+    assert_eq!(
+        *rec.forgets.lock().unwrap(),
+        [("きょうは".to_string(), "京は".to_string())]
+    );
+    assert_eq!(e.snapshot("s").unwrap().candidates, before);
+    // 忘れられたら候補一覧を作り直し、窓は開いたまま・選択表記は維持
+    *rec.forget_result.lock().unwrap() = true;
+    let r = press(&mut e, "s", "Ctrl+Delete");
+    assert!(r.consumed);
+    let snap = e.snapshot("s").unwrap();
+    assert!(snap.candidates.visible);
+    assert_eq!(snap.candidates.items[0].surface, "京は");
+    assert_eq!(snap.candidates.selected, 0);
+    // Composing / Direct では何も起きない
+    press(&mut e, "s", "Escape");
+    let n = rec.forgets.lock().unwrap().len();
+    press(&mut e, "s", "Ctrl+Delete");
+    assert_eq!(rec.forgets.lock().unwrap().len(), n);
+}
+
+#[test]
+fn update_config_applies_to_existing_sessions() {
+    use nagi_romaji::{PunctuationStyle, ShiftLetterMode};
+    let mut e = engine();
+    press(&mut e, "s", "k");
+    press(&mut e, "s", "a");
+    assert_eq!(press(&mut e, "s", ",").preedit.unwrap().text, "か、");
+    let config = EngineConfig {
+        punctuation: PunctuationStyle::Western,
+        shift_letter: ShiftLetterMode::SingleUpper,
+        page_size: 5,
+        ..EngineConfig::default()
+    };
+    e.update_config(config);
+    assert_eq!(e.config().page_size, 5);
+    assert_eq!(press(&mut e, "s", ",").preedit.unwrap().text, "か、，");
+    // 新しいセッションでも新設定
+    assert_eq!(press(&mut e, "t", ",").preedit.unwrap().text, "，");
+    assert_eq!(e.snapshot("t").unwrap().candidates.page_size, 5);
+}

@@ -18,6 +18,12 @@ pub mod method {
     pub const FOCUS_OUT: &str = "focus_out";
     /// `set_context` 通知
     pub const SET_CONTEXT: &str = "set_context";
+    /// `set_environment` 通知（電源・サーマル・メモリの状態）
+    pub const SET_ENVIRONMENT: &str = "set_environment";
+    /// `get_status` メソッド
+    pub const GET_STATUS: &str = "get_status";
+    /// `clear_learning` メソッド（学習データの全削除）
+    pub const CLEAR_LEARNING: &str = "clear_learning";
     /// `select_candidate` メソッド
     pub const SELECT_CANDIDATE: &str = "select_candidate";
     /// `reconvert` メソッド
@@ -310,4 +316,76 @@ pub struct UpdateCandidatesParams {
     pub revision: u32,
     /// 新しい候補
     pub candidates: CandidatesView,
+}
+
+/// サーマル状態（OS が報告するもの）
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThermalState {
+    /// 通常
+    Nominal,
+    /// やや高い
+    Fair,
+    /// 高い
+    Serious,
+    /// 危険
+    Critical,
+}
+
+/// メモリ逼迫の状態（OS が報告するもの）
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryPressureState {
+    /// 通常
+    Normal,
+    /// 警告
+    Warning,
+    /// 危険
+    Critical,
+}
+
+/// `set_environment` 通知のパラメータ（応答なし）。実行環境の状態を報告し、コアはこれに応じて
+/// 環境プロファイルを自動で切り替える（設計書 §4.7）。省略した項目は「前回の値を維持」
+#[typeshare]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetEnvironmentParams {
+    /// バッテリー駆動か
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_battery: Option<bool>,
+    /// OS の低電力モードか
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub low_power_mode: Option<bool>,
+    /// サーマル状態
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thermal: Option<ThermalState>,
+    /// メモリ逼迫
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub memory_pressure: Option<MemoryPressureState>,
+}
+
+/// `get_status` の結果: メニューなどで「今どういう状態か・なぜか」を表示するための情報
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusResult {
+    /// 現在の環境プロファイル（`quality` / `balanced` / `light` / `minimal`）
+    pub profile: String,
+    /// そのプロファイルになった理由（日本語）
+    pub profile_reason: String,
+    /// 変換バックエンド名（診断用）
+    pub backend: String,
+    /// LLM を使っているか
+    pub llm: bool,
+    /// 学習が有効か（secure input 中などで一時停止していても、設定として有効なら true）
+    pub learning: bool,
+    /// 学習データの件数
+    pub learned_entries: u32,
+    /// ユーザー辞書の語数
+    pub user_dict_entries: u32,
+    /// 設定ファイルのパス（未解決なら None）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub config_path: Option<String>,
+    /// 直近の設定読み込みに失敗して旧設定で動いているか
+    pub config_error: bool,
 }

@@ -332,6 +332,15 @@ impl Composer {
         }
     }
 
+    /// 設定の再読み込み用: Shift+英字の扱いと、ローマ字テーブルを差し替える。
+    ///
+    /// 保留中のローマ字は先に確定し、以降の入力から新しい設定を使う
+    pub fn reconfigure(&mut self, table: Arc<RomajiTable>, shift_letter: ShiftLetterMode) {
+        self.flush_pending();
+        self.converter = RomajiConverter::new(table);
+        self.shift_letter = shift_letter;
+    }
+
     /// 1 文字を挿入する
     ///
     /// ASCII 大文字は Shift 押下で打たれたものとして Literal になる。
@@ -1140,5 +1149,23 @@ mod tests {
         composer.load_pieces(&[], 9);
         assert_eq!(composer.cursor(), 0);
         assert!(composer.is_empty());
+    }
+
+    #[test]
+    fn test_reconfigure_flushes_pending_and_applies_new_settings() {
+        let (mut composer, table) = setup_composer();
+        insert_string(&mut composer, "kan");
+        // 保留中の n は ん として確定してから差し替える
+        composer.reconfigure(
+            Arc::new(table.with_punctuation(PunctuationStyle::Western)),
+            ShiftLetterMode::SingleUpper,
+        );
+        assert_eq!(composer.text(), "かん");
+        assert_eq!(composer.pending(), "");
+        insert_string(&mut composer, ",");
+        assert_eq!(composer.text(), "かん，");
+        // SingleUpper: 大文字の直後の小文字は日本語のまま
+        insert_string(&mut composer, "Na");
+        assert_eq!(composer.text(), "かん，Nあ");
     }
 }

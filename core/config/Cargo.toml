@@ -1,0 +1,17 @@
+[package]
+name = "nagi-config"
+description = "Nagi 設定: config.toml の読み込み・検証・行番号付きエラー。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+toml = "0.8"
+thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true

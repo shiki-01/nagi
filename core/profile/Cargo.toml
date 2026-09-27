@@ -1,0 +1,15 @@
+[package]
+name = "nagi-profile"
+description = "Nagi 環境プロファイル: ハードウェア検出・キャリブレーション・自動切替の判定。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+sysinfo = "0.38.4"
+
+[lints]
+workspace = true

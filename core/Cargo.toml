@@ -2,6 +2,9 @@
 resolver = "3"
 members = [
     "engine",
+    "config",
+    "learn",
+    "profile",
     "romaji",
     "dict",
     "infer",
@@ -23,6 +26,9 @@ nagi-engine = { path = "engine" }
 nagi-romaji = { path = "romaji" }
 nagi-dict = { path = "dict" }
 nagi-infer = { path = "infer" }
+nagi-config = { path = "config" }
+nagi-learn = { path = "learn" }
+nagi-profile = { path = "profile" }
 nagi-protocol = { path = "protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

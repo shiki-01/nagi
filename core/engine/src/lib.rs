@@ -10,6 +10,7 @@ pub mod ir;
 pub mod kana;
 pub mod keymap;
 pub mod keys;
+pub mod observer;
 
 pub use action::{Action, Direction};
 pub use backend::{BackendCandidate, BackendSegment, ConversionBackend, KanaBackend, MockBackend};
@@ -17,3 +18,4 @@ pub use engine::{Engine, EngineConfig, SessionSnapshot, StateKind};
 pub use ir::{Candidate, CandidateSet, CursorPos, Preedit, Segment};
 pub use keymap::{KeyContext, KeyMap};
 pub use keys::{KeyParseError, key_from_text, parse_key};
+pub use observer::{CommitContext, CommitObserver, CommittedSegment};

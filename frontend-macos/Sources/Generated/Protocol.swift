@@ -454,6 +454,82 @@ public struct SetContextParams: Codable {
 	}
 }
 
+/// サーマル状態（OS が報告するもの）
+public enum ThermalState: String, Codable {
+	/// 通常
+	case nominal
+	/// やや高い
+	case fair
+	/// 高い
+	case serious
+	/// 危険
+	case critical
+}
+
+/// メモリ逼迫の状態（OS が報告するもの）
+public enum MemoryPressureState: String, Codable {
+	/// 通常
+	case normal
+	/// 警告
+	case warning
+	/// 危険
+	case critical
+}
+
+/// `set_environment` 通知のパラメータ（応答なし）。実行環境の状態を報告し、コアはこれに応じて
+/// 環境プロファイルを自動で切り替える（設計書 §4.7）。省略した項目は「前回の値を維持」
+public struct SetEnvironmentParams: Codable {
+	/// バッテリー駆動か
+	public let on_battery: Bool?
+	/// OS の低電力モードか
+	public let low_power_mode: Bool?
+	/// サーマル状態
+	public let thermal: ThermalState?
+	/// メモリ逼迫
+	public let memory_pressure: MemoryPressureState?
+
+	public init(on_battery: Bool?, low_power_mode: Bool?, thermal: ThermalState?, memory_pressure: MemoryPressureState?) {
+		self.on_battery = on_battery
+		self.low_power_mode = low_power_mode
+		self.thermal = thermal
+		self.memory_pressure = memory_pressure
+	}
+}
+
+/// `get_status` の結果: メニューなどで「今どういう状態か・なぜか」を表示するための情報
+public struct StatusResult: Codable {
+	/// 現在の環境プロファイル（`quality` / `balanced` / `light` / `minimal`）
+	public let profile: String
+	/// そのプロファイルになった理由（日本語）
+	public let profile_reason: String
+	/// 変換バックエンド名（診断用）
+	public let backend: String
+	/// LLM を使っているか
+	public let llm: Bool
+	/// 学習が有効か（secure input 中などで一時停止していても、設定として有効なら true）
+	public let learning: Bool
+	/// 学習データの件数
+	public let learned_entries: UInt32
+	/// ユーザー辞書の語数
+	public let user_dict_entries: UInt32
+	/// 設定ファイルのパス（未解決なら None）
+	public let config_path: String?
+	/// 直近の設定読み込みに失敗して旧設定で動いているか
+	public let config_error: Bool
+
+	public init(profile: String, profile_reason: String, backend: String, llm: Bool, learning: Bool, learned_entries: UInt32, user_dict_entries: UInt32, config_path: String?, config_error: Bool) {
+		self.profile = profile
+		self.profile_reason = profile_reason
+		self.backend = backend
+		self.llm = llm
+		self.learning = learning
+		self.learned_entries = learned_entries
+		self.user_dict_entries = user_dict_entries
+		self.config_path = config_path
+		self.config_error = config_error
+	}
+}
+
 /// `update_candidates` 通知のパラメータ（C→F、ライブ変換結果など）
 public struct UpdateCandidatesParams: Codable {
 	/// セッション ID

@@ -13,6 +13,7 @@ use crate::ir::{
 };
 use crate::kana::to_katakana;
 use crate::keymap::{KeyContext, KeyMap};
+use crate::observer::{CommitContext, CommitObserver, CommittedSegment};
 use nagi_protocol::key::{KeyEvent, KeyKind};
 use nagi_protocol::methods::{ProcessKeyResult, RestoreSessionParams, SetContextParams};
 use nagi_protocol::utf16;
@@ -100,11 +101,14 @@ struct Sent {
 }
 
 struct Session {
+    id: String,
     mode: InputMode,
     state: State,
     composer: Composer,
     /// 直前のテキスト（`set_context` の Surrounding Text のカーソル手前）
     left_context: String,
+    /// フロントが報告したアプリケーション識別子
+    app_id: Option<String>,
     secure_input: bool,
     revision: u64,
     sent: Sent,
@@ -125,6 +129,7 @@ pub struct Engine {
     keymap: KeyMap,
     table: Arc<RomajiTable>,
     sessions: HashMap<String, Session>,
+    observer: Option<Arc<dyn CommitObserver>>,
 }
 
 fn tail_chars(s: &str, n: usize) -> String {
@@ -157,7 +162,29 @@ impl Engine {
             keymap: KeyMap::default_preset(),
             table,
             sessions: HashMap::new(),
+            observer: None,
         }
+    }
+
+    /// 確定・学習削除の通知先を設定する（学習など）
+    pub fn set_commit_observer(&mut self, observer: Arc<dyn CommitObserver>) {
+        self.observer = Some(observer);
+    }
+
+    /// 設定を差し替える（設定ファイルの再読み込み）。既存のセッションにも、次の入力から反映される
+    pub fn update_config(&mut self, config: EngineConfig) {
+        self.table = Arc::new(RomajiTable::standard().with_punctuation(config.punctuation));
+        for sess in self.sessions.values_mut() {
+            sess.composer
+                .reconfigure(self.table.clone(), config.shift_letter);
+            sess.sent.candidates.page_size = config.page_size as u32;
+        }
+        self.config = config;
+    }
+
+    /// 現在の設定
+    pub fn config(&self) -> &EngineConfig {
+        &self.config
     }
 
     /// 使用中のバックエンド名（診断用）
@@ -167,10 +194,12 @@ impl Engine {
 
     fn new_session(&self) -> Session {
         Session {
+            id: String::new(),
             mode: self.config.initial_mode,
             state: State::Direct,
             composer: Composer::new(self.table.clone(), self.config.shift_letter),
             left_context: String::new(),
+            app_id: None,
             secure_input: false,
             revision: 0,
             sent: Sent {
@@ -187,7 +216,11 @@ impl Engine {
     fn take_session(&mut self, id: &str) -> Session {
         match self.sessions.remove(id) {
             Some(s) => s,
-            None => self.new_session(),
+            None => {
+                let mut s = self.new_session();
+                s.id = id.to_string();
+                s
+            }
         }
     }
 
@@ -282,6 +315,9 @@ impl Engine {
     /// Surrounding Text・secure input などの文脈を保存する（secure input 中は文脈を持たない）
     pub fn set_context(&mut self, session_id: &str, ctx: &SetContextParams) {
         let mut sess = self.take_session(session_id);
+        if let Some(app) = &ctx.app_id {
+            sess.app_id = Some(app.clone());
+        }
         if let Some(secure) = ctx.secure_input {
             sess.secure_input = secure;
             if secure {
@@ -440,6 +476,7 @@ impl Engine {
             Action::ToKatakana => self.set_focus_kana(sess, true),
             Action::ToHiragana => self.set_focus_kana(sess, false),
             Action::SelectCand(n) => self.select_candidate(sess, n, commit),
+            Action::DeleteLearning => self.delete_learning(sess),
             // ExtendSelection（範囲選択）は Phase 3
             _ => {}
         }
@@ -456,12 +493,72 @@ impl Engine {
                 commit.push_str(&sess.composer.text());
             }
             State::Converting(conv) => {
+                self.notify_commit(sess, &conv);
                 for s in &conv.segments {
                     commit.push_str(&s.surface);
                 }
             }
         }
         sess.composer.clear();
+    }
+
+    /// 変換を経て確定した文節を observer（学習など）へ通知する
+    fn notify_commit(&self, sess: &Session, conv: &Conv) {
+        let Some(observer) = &self.observer else {
+            return;
+        };
+        let mut left = sess.left_context.clone();
+        let mut segments = Vec::with_capacity(conv.segments.len());
+        for seg in &conv.segments {
+            segments.push(CommittedSegment {
+                reading: seg.reading.clone(),
+                surface: seg.surface.clone(),
+                kind: seg.kind,
+                left_context: tail_chars(&left, LEFT_CONTEXT_CHARS),
+            });
+            left.push_str(&seg.surface);
+        }
+        let ctx = CommitContext {
+            session_id: &sess.id,
+            app_id: sess.app_id.as_deref(),
+            secure_input: sess.secure_input,
+        };
+        observer.on_commit(&ctx, &segments);
+    }
+
+    /// 注目文節の現在の表記の学習を忘れさせ、候補一覧を作り直す
+    fn delete_learning(&self, sess: &mut Session) {
+        let Some(observer) = self.observer.clone() else {
+            return;
+        };
+        let Session {
+            state,
+            id,
+            app_id,
+            secure_input,
+            left_context,
+            ..
+        } = sess;
+        let State::Converting(conv) = state else {
+            return;
+        };
+        let f = conv.focus;
+        if conv.segments[f].kind != SegmentKind::Japanese {
+            return;
+        }
+        let ctx = CommitContext {
+            session_id: id,
+            app_id: app_id.as_deref(),
+            secure_input: *secure_input,
+        };
+        let (reading, surface) = (
+            conv.segments[f].reading.clone(),
+            conv.segments[f].surface.clone(),
+        );
+        if observer.on_forget(&ctx, &reading, &surface) {
+            conv.segments[f].candidates = None;
+            self.ensure_candidates(left_context, conv, f);
+        }
     }
 
     fn start_converting(&self, sess: &mut Session, how: Start) {
