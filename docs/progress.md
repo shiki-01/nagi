@@ -79,7 +79,7 @@
 
 ## 実機で確認してほしいこと
 
-このセッションで実装した機能は、実データ（Mozc辞書・zenzモデル）もフロントエンドも無い環境で開発したため、以下は実機（`cargo xtask fetch-dict && cargo xtask build-dict`、必要なら `fetch-model` の後）でしか確認できない。詳細な経緯は各Gエントリを参照。
+このセッションで実装した機能は、実データ（Mozc辞書・zenzモデル）もフロントエンドも無い環境で開発したため、以下は実機（`cargo xtask fetch-dict && cargo xtask build-dict`、必要なら `fetch-model` の後）でしか確認できない。詳細な経緯は各Gエントリを参照。**具体的な手順・コマンド付きのチェックリストは `docs/real-hardware-checklist.md` を参照。**
 
 1. **ライブ変換の基本動作**（G-25・G-26）: 2文字以上のかな入力後、キー入力を止めて約228ms（既定の `live_conversion_delay_ms`）待つと `update_preedit` 通知が届くこと。1文字だけの入力では届かないこと。
 2. **ライブ変換の変換品質**: 実データでの変換結果が Space 変換と比べて違和感が無いか。
