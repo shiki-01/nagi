@@ -524,3 +524,14 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **Converting からの確定取消は reading に戻る**: 変換結果（surface）は失われ、ひらがな（reading）の Composing に戻る。既存の Escape での変換取消（`back_to_composing`）と同じ扱いで、一貫性がある
 - **プロトコル拡張**: `ProcessKeyResult.delete_before: Option<u32>`（UTF-16長）を追加した。ホストアプリのテキストから確定済み文字列を実際に削除するのはフロントエンド（未実装）の仕事であり、今回実装したのはエンジン側の記憶・復元機構とこの通知のみ。フロント側の対応（Surrounding Text APIでの削除）は別途必要
 - **`typeshare-cli` をこの実行環境にインストールして検証した**（`cargo install typeshare-cli --locked`。crates.io は到達可能）。これにより `cargo xtask check-types`/`gen-types` をこのサンドボックス内で実行・検証できることを確認した（以前はモデル・辞書取得（huggingface.co）が到達不可という制約はあったが、typeshare-cli の取得先である crates.io は無関係で問題なく到達できた）。生成された Swift 型（`frontend-macos/Sources/Generated/Protocol.swift`）も本コミットに含めてコミット済み
+
+### G-29. reconvert（確定済みテキストの再変換）の実装（2026-09-27）
+
+`reconvert` JSON-RPC メソッド（`ReconvertParams{session_id, text}`。それまで `NOT_IMPLEMENTED` だった）を実装した。設計書「読みは辞書の逆引きで推定し、不能区間はLLMで補う」のうち、辞書による推定部分を実装した（LLM補完は今回のスコープ外。設計書自体が将来の拡張として記述しているため問題ないと判断）。
+
+- **アルゴリズム**: `nagi-dict` に既存の順方向 Viterbi（読み→表記。`convert.rs`）と対になる逆方向 Viterbi（表記→読み。新規 `reverse.rs`）を実装した。辞書全体を1回舐めて「表記→[(読み, 語 index)]」の逆引き索引を構築し（`HashMap`。fst の2本目のトリエは作らず、前方一致探索は表記の最大文字数までの全長を試す単純な方法にした。速度上の実害は無いと判断: reconvert はユーザー操作起点でキー入力毎ではない）、あとは連接コスト表・文節区切りルール（`starts_bunsetsu`）を順方向と共有する
+- **未知語の扱い**: 辞書に登録の無い表記区間（例: 辞書にない漢字）は、既存の順方向 Viterbi の「1文字素通しノード」（`unknown_ids`。どの位置からでも経路が保証される）と同じ仕組みをそのまま流用し、`reading = その文字自身` として通す。正しい読みではないが、クラッシュせず、ユーザーがすぐに打ち直せる状態にはなる
+- **遅延構築・メモリコスト**: 逆引き索引は `OnceLock` で初回 `reconvert` 呼び出し時にだけ構築する。実データ（辞書語数約120万）ではこの索引が数十MB程度のメモリを追加消費すると見積もっている（読み文字列を表記ごとに複製して保持するため）。`reconvert` を一度も呼ばなければコストはゼロ。実際のメモリ増加量は実機での計測が必要（未実施。実機確認事項に追加する）
+- **バックエンドが対応できない場合の扱い**: `ConversionBackend::reconvert` の既定実装は空を返す（`KanaBackend` 等、辞書を持たないバックエンドはそのまま非対応）。`Engine::reconvert` はこれを受けて、表記全体を1つの `Literal` セグメント（`reading = surface`）として扱う。読みの再変換はできないが、確定済みテキストを一旦編集可能な状態に戻せる（クラッシュや無反応にはならない）
+- **ユーザー辞書（Overlay）は今回の逆引き対象に含めていない**（システム辞書のみ）。将来の拡張余地として残す
+- テストは合成辞書（`DictionaryBuilder`）による単体テスト（`nagi-dict`）が中心。実データでの実際の精度・メモリ計測は未実施（本環境に `data/dict/nagi-dict.bin` が無いため）
