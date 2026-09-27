@@ -170,6 +170,12 @@ pub struct ProcessKeyResult {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mode: Option<InputMode>,
 
+    /// 確定取消（Ctrl+Backspace）が成功した場合、フロントがホストアプリのテキストから
+    /// 削除すべき直前の確定文字列の長さ（UTF-16 コード単位）。挿入ではなく削除なので
+    /// `commit` とは意味が異なる（両方が同時に Some になることは無い）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub delete_before: Option<u32>,
+
     /// リビジョン番号（古い非同期通知を破棄するため）
     pub revision: u32,
 }

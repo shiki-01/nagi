@@ -91,6 +91,12 @@ fn ctrl_letter(key: &KeyEvent) -> Option<char> {
     c.is_ascii_alphabetic().then(|| c.to_ascii_lowercase())
 }
 
+/// Ctrl+Backspace（確定取消。設計書 §4 状態遷移表の既定キー。Direct 文脈でのみ意味を持つ）
+fn is_undo_commit(key: &KeyEvent) -> bool {
+    let m = key.modifiers;
+    m.ctrl && !m.alt && !m.meta && key.keysym == keysym::BACKSPACE
+}
+
 /// Ctrl / Alt / Meta が押されている
 fn has_command_modifier(key: &KeyEvent) -> bool {
     let m = key.modifiers;
@@ -161,9 +167,15 @@ impl KeyMap {
             return Some(action.clone());
         }
         match context {
-            KeyContext::Direct => printable(key)
-                .map(Action::Insert)
-                .or_else(|| multi_text(key)),
+            KeyContext::Direct => {
+                if is_undo_commit(key) {
+                    Some(Action::UndoCommit)
+                } else {
+                    printable(key)
+                        .map(Action::Insert)
+                        .or_else(|| multi_text(key))
+                }
+            }
             KeyContext::Composing => self.resolve_composing(key),
             KeyContext::Converting => self.resolve_converting(key),
         }

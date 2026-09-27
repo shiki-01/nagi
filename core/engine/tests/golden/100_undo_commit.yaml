@@ -1,0 +1,78 @@
+- name: undo-commit-restores-composing-after-enter
+  steps:
+    - key: "k"
+    - key: "a"
+      expect:
+        preedit: "か"
+        state: composing
+    - key: "Return"
+      expect:
+        commit: "か"
+        preedit: ""
+        state: direct
+    - key: "Ctrl+BackSpace"
+      expect:
+        consumed: true
+        commit: null
+        delete_before: 1
+        preedit: "か"
+        state: composing
+
+- name: undo-commit-restores-reading-after-space-convert
+  backend: mock
+  mock:
+    sentences:
+      "きょうはいい":
+        - {reading: "きょうは", candidates: ["今日は"]}
+        - {reading: "いい", candidates: ["いい"]}
+  steps:
+    - key: "k"
+    - key: "y"
+    - key: "o"
+    - key: "u"
+    - key: "h"
+    - key: "a"
+    - key: "i"
+    - key: "i"
+      expect:
+        preedit: "きょうはいい"
+        state: composing
+    - key: "Space"
+      expect:
+        state: converting
+        segments: ["今日は", "いい"]
+    - key: "Return"
+      expect:
+        commit: "今日はいい"
+        state: direct
+    - key: "Ctrl+BackSpace"
+      expect:
+        consumed: true
+        delete_before: 5
+        preedit: "きょうはいい"
+        state: composing
+
+- name: undo-commit-only-works-immediately-after-commit
+  steps:
+    - key: "k"
+    - key: "a"
+    - key: "Return"
+      expect:
+        commit: "か"
+        state: direct
+    - key: "j"
+      expect:
+        # 別の入力（"j"）を挟むと、確定直後の記憶は破棄される
+        state: composing
+        preedit: "j"
+    - key: "BackSpace"
+      expect:
+        preedit: ""
+        state: direct
+    - key: "Ctrl+BackSpace"
+      expect:
+        # 直前の確定（"か"）の記憶はもう無いので、何も起きず素通しになる
+        consumed: false
+        commit: null
+        delete_before: null
+        state: direct

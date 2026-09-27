@@ -133,6 +133,10 @@ struct Session {
     /// ライブ変換の結果（Composing 中のみ使う）。`source_reading` が現在の入力全体の reading と
     /// 一致する間だけ表示に使う。一致しなくなったら（次の入力があった等）自然に無視される
     live_conversion: Option<LiveConversion>,
+    /// 直前の確定の記憶（`Action::UndoCommit` 用）
+    last_commit: Option<LastCommit>,
+    /// このキー処理で確定取消が成功した場合の `delete_before`（`finish` が読んで消費する）
+    pending_delete_before: Option<u32>,
 }
 
 /// ライブ変換のキャッシュ
@@ -142,6 +146,18 @@ struct LiveConversion {
     source_reading: String,
     /// 変換結果のセグメント列（reading を連結すると `source_reading` に一致する）
     segments: Vec<Segment>,
+}
+
+/// 直前の確定の記憶（Ctrl+Backspace での確定取消に使う。確定のたびに置き換わり、
+/// 確定取消以外の操作が来ると `handle_key` が破棄する。1回分だけ保持する）
+#[derive(Clone)]
+struct LastCommit {
+    /// 確定前の入力（Composer に復元するための Piece 列。Converting だった場合は
+    /// 各文節の reading から作る。変換結果は失われ、ひらがなに戻る（Escape での
+    /// 変換取消と同じ扱い）
+    pieces: Vec<Piece>,
+    /// 確定した文字列の UTF-16 コード単位での長さ（`ProcessKeyResult.delete_before` に使う）
+    committed_len_utf16: u32,
 }
 
 /// 変換の始め方
@@ -243,6 +259,8 @@ impl Engine {
                 mode: self.config.initial_mode,
             },
             live_conversion: None,
+            last_commit: None,
+            pending_delete_before: None,
         }
     }
 
@@ -539,7 +557,13 @@ impl Engine {
             State::Composing => KeyContext::Composing,
             State::Converting(_) => KeyContext::Converting,
         };
-        match self.keymap.resolve(ctx, sess.mode, key) {
+        let action = self.keymap.resolve(ctx, sess.mode, key);
+        // 確定取消（Ctrl+Backspace）以外の操作が来たら、確定直後の記憶を捨てる。
+        // 未割当キー（素通し）でも捨てる（「確定直後のみ有効」という制約はここで実現する）
+        if !matches!(action, Some(Action::UndoCommit)) {
+            sess.last_commit = None;
+        }
+        match action {
             Some(action) => self.apply(sess, action, commit),
             // 割当なし: 未入力なら素通し、入力中はキーを消費して何もしない
             None => !matches!(sess.state, State::Direct),
@@ -566,6 +590,7 @@ impl Engine {
                 self.commit_all(sess, commit);
                 false
             }
+            Action::UndoCommit => self.try_undo_commit(sess),
             Action::NoOp => true,
             Action::Insert(c) => {
                 self.insert_char(sess, c, commit);
@@ -753,20 +778,53 @@ impl Engine {
 
     /// 表示中の内容をすべて確定文字列へ移し、Direct に戻す
     fn commit_all(&self, sess: &mut Session, commit: &mut String) {
-        match std::mem::replace(&mut sess.state, State::Direct) {
-            State::Direct => {}
+        let before_len = commit.len();
+        let pieces = match std::mem::replace(&mut sess.state, State::Direct) {
+            State::Direct => None,
             State::Composing => {
                 sess.composer.flush_pending();
+                let pieces = sess.composer.pieces();
                 commit.push_str(&sess.composer.text());
+                (!pieces.is_empty()).then_some(pieces)
             }
             State::Converting(conv) => {
                 self.notify_commit(sess, &conv);
+                let pieces: Vec<Piece> = conv
+                    .segments
+                    .iter()
+                    .map(|s| Piece {
+                        kind: match s.kind {
+                            SegmentKind::Literal => PieceKind::Literal,
+                            _ => PieceKind::Japanese,
+                        },
+                        text: s.reading.clone(),
+                    })
+                    .collect();
                 for s in &conv.segments {
                     commit.push_str(&s.surface);
                 }
+                (!pieces.is_empty()).then_some(pieces)
             }
-        }
+        };
         sess.composer.clear();
+        sess.last_commit = pieces.map(|pieces| LastCommit {
+            pieces,
+            committed_len_utf16: utf16::utf16_len(&commit[before_len..]),
+        });
+    }
+
+    /// `Action::UndoCommit`（Ctrl+Backspace）の処理。確定直後で `last_commit` が残っている
+    /// 場合だけ、確定前の入力状態（Composing）に戻す。戻り値は「キーを消費したか」
+    /// （何も戻すものが無ければ消費せず素通しする。ホスト側の Ctrl+Backspace の既定動作に譲る）
+    fn try_undo_commit(&self, sess: &mut Session) -> bool {
+        let Some(last) = sess.last_commit.take() else {
+            return false;
+        };
+        let len = last.pieces.iter().map(|p| p.text.chars().count()).sum();
+        sess.composer.load_pieces(&last.pieces, len);
+        sess.state = State::Composing;
+        sess.pending_delete_before = Some(last.committed_len_utf16);
+        true
     }
 
     /// 変換を経て確定した文節を observer（学習など）へ通知する
@@ -1348,9 +1406,10 @@ impl Engine {
         let mut result = ProcessKeyResult {
             consumed,
             commit: (!commit.is_empty()).then_some(commit),
+            delete_before: sess.pending_delete_before.take(),
             ..Default::default()
         };
-        let mut changed = result.commit.is_some();
+        let mut changed = result.commit.is_some() || result.delete_before.is_some();
         if preedit != sess.sent.preedit {
             sess.sent.preedit = preedit.clone();
             result.preedit = Some(preedit);

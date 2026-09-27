@@ -64,6 +64,8 @@ pub enum Action {
     ToggleMode,
     /// 確定して キーを素通し（Ctrl/Alt/Meta 付き文字キー）
     CommitAndPassThrough,
+    /// 直前の確定を取り消し、確定前の状態に戻す（Ctrl+Backspace。確定直後のみ有効）
+    UndoCommit,
     /// キーを消費するだけで何もしない
     NoOp,
 }
@@ -99,6 +101,7 @@ impl fmt::Display for Action {
             Action::SetMode(mode) => write!(f, "SetMode({:?})", mode),
             Action::ToggleMode => write!(f, "ToggleMode"),
             Action::CommitAndPassThrough => write!(f, "CommitAndPassThrough"),
+            Action::UndoCommit => write!(f, "UndoCommit"),
             Action::NoOp => write!(f, "NoOp"),
         }
     }

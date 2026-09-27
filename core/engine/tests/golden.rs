@@ -107,6 +107,10 @@ struct Expect {
     consumed: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     commit: Option<Option<String>>,
+    /// このステップの応答に `delete_before` が含まれるか、その値。
+    /// `null` は「含まれないこと」を期待、キー自体を省略すれば検査しない
+    #[serde(default, deserialize_with = "double_option")]
+    delete_before: Option<Option<u32>>,
     preedit: Option<String>,
     pending: Option<String>,
     segments: Option<Vec<String>>,
@@ -250,6 +254,9 @@ fn check(
     }
     if let Some(v) = &expect.commit {
         eq!("commit", &result.commit, v);
+    }
+    if let Some(v) = &expect.delete_before {
+        eq!("delete_before", &result.delete_before, v);
     }
     if let Some(v) = &expect.preedit {
         eq!("preedit", &snap.preedit.text, v);
