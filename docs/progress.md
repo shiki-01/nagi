@@ -74,7 +74,7 @@
 
 ## 既知の問題
 
-- CI の `types` ジョブは `typeshare-cli` を毎回 `cargo install` する（時間がかかる。キャッシュ化の余地あり）
+- ~~CI の `types` ジョブは `typeshare-cli` を毎回 `cargo install` する~~ → `actions/cache` でバイナリをキャッシュするよう修正（`~/.cargo/bin/typeshare`。キー `typeshare-cli-<os>-v1`。バージョンを上げたい場合はキーの `v1` を変える）
 - 途中のコミットには、後続コミットの変更に依存してビルドできないものがある（最終状態は通る）
 - 文節区切りは暫定ヒューリスティック（サ変名詞 + する、形容詞 + 名詞など）。誤変換の例: 感じ変換の\|テスト、機能病院に（LLM で改善する領域）
 - `Preedit` の Composing 表示では、非 ASCII 文字（絵文字など）も japanese 種別の 1 セグメントにまとまる
