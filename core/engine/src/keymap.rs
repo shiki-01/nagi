@@ -1,14 +1,16 @@
 //! キーマップ: キー入力 → [`Action`] の解決。
 //!
-//! Phase 1 は内蔵の既定テーブルのみ（TOML・カスタム定義は Phase 3）。解決結果が `None` の
+//! 内蔵の既定テーブルに加えて、`composing` / `converting` の 2 文脈に限り TOML（`[keymap]`）
+//! での個別キーの上書きに対応する（[`KeyMap::with_overrides`]）。解決結果が `None` の
 //! ときの扱い（素通し / 消費のみ）は状態機械側が文脈で決める。
 
 use crate::action::{Action, Direction};
+use crate::keys::parse_key;
 use nagi_protocol::key::{KeyEvent, KeyKind, keysym};
 use nagi_protocol::view::InputMode;
 
 /// キー入力の文脈（状態機械の状態に対応）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyContext {
     /// 未入力（英数モードもここ）
     Direct,
@@ -18,9 +20,33 @@ pub enum KeyContext {
     Converting,
 }
 
-/// キーマップ
+/// キー入力の識別（上書きテーブルのキー）。テキストは無視し、キーそのものと修飾だけを見る
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct KeySpec {
+    keysym: u32,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    meta: bool,
+}
+
+impl KeySpec {
+    fn from_event(key: &KeyEvent) -> Self {
+        KeySpec {
+            keysym: key.keysym,
+            ctrl: key.modifiers.ctrl,
+            shift: key.modifiers.shift,
+            alt: key.modifiers.alt,
+            meta: key.modifiers.meta,
+        }
+    }
+}
+
+/// キーマップ。`composing` / `converting` 文脈のキー上書き（[`KeyMap::with_overrides`]）を持つ
 #[derive(Debug, Clone, Default)]
-pub struct KeyMap;
+pub struct KeyMap {
+    overrides: std::collections::HashMap<(KeyContext, KeySpec), Action>,
+}
 
 /// 印字可能文字（Ctrl/Alt/Meta なし、Space 除く）。`text`（OS の配列が生成した文字）を優先する
 fn printable(key: &KeyEvent) -> Option<char> {
@@ -77,9 +103,39 @@ fn is_command_chord(key: &KeyEvent) -> bool {
 }
 
 impl KeyMap {
-    /// 既定プリセット
+    /// 既定プリセット（上書きなし）
     pub fn default_preset() -> Self {
-        KeyMap
+        KeyMap::default()
+    }
+
+    /// `composing` / `converting` のキー上書きを持つキーマップを作る。
+    ///
+    /// `bindings` は `(文脈, キー仕様文字列, Action 仕様文字列)` の組。解析できないキー・
+    /// Action はスキップし、その理由を人間向けの文言として 2 番目の戻り値に集める
+    /// （呼び出し側が `notify` などで知らせるため）。有効なものだけで上書きテーブルを作る
+    pub fn with_overrides(bindings: &[(KeyContext, String, String)]) -> (KeyMap, Vec<String>) {
+        let mut overrides = std::collections::HashMap::new();
+        let mut warnings = Vec::new();
+        for (context, key_spec, action_spec) in bindings {
+            let key_event = match parse_key(key_spec) {
+                Ok(k) => k,
+                Err(e) => {
+                    warnings.push(format!("キーマップ: 不明なキー '{key_spec}'（{e}）"));
+                    continue;
+                }
+            };
+            let action = match parse_action(action_spec) {
+                Ok(a) => a,
+                Err(e) => {
+                    warnings.push(format!(
+                        "キーマップ: 不明なアクション '{action_spec}'（{e}）"
+                    ));
+                    continue;
+                }
+            };
+            overrides.insert((*context, KeySpec::from_event(&key_event)), action);
+        }
+        (KeyMap { overrides }, warnings)
     }
 
     /// キーを Action に解決する
@@ -100,6 +156,9 @@ impl KeyMap {
         }
         if mode == InputMode::Alphanumeric {
             return None;
+        }
+        if let Some(action) = self.overrides.get(&(context, KeySpec::from_event(key))) {
+            return Some(action.clone());
         }
         match context {
             KeyContext::Direct => printable(key)
@@ -194,6 +253,55 @@ impl KeyMap {
             }
             _ => None,
         }
+    }
+}
+
+/// キーマップの上書き設定で使う Action 名のパース。
+///
+/// 引数を持たない Action はそのままの名前、`Direction` を持つものは `名前:Left` / `名前:Right`、
+/// `SelectCand` は `SelectCand:1`〜`SelectCand:9`。
+/// `Insert` / `InsertText` / `SetMode` は対象外（挿入・モード切替は上書きの対象外。設計上の判断）
+pub fn parse_action(spec: &str) -> Result<Action, String> {
+    let (name, arg) = match spec.split_once(':') {
+        Some((n, a)) => (n, Some(a)),
+        None => (spec, None),
+    };
+    let direction = |a: Option<&str>| -> Result<Direction, String> {
+        match a {
+            Some("Left") => Ok(Direction::Left),
+            Some("Right") => Ok(Direction::Right),
+            other => Err(format!("Direction が必要です（Left/Right）: {other:?}")),
+        }
+    };
+    match (name, arg) {
+        ("StartConvert", None) => Ok(Action::StartConvert),
+        ("NextCand", None) => Ok(Action::NextCand),
+        ("PrevCand", None) => Ok(Action::PrevCand),
+        ("Commit", None) => Ok(Action::Commit),
+        ("Cancel", None) => Ok(Action::Cancel),
+        ("Backspace", None) => Ok(Action::Backspace),
+        ("DeleteForward", None) => Ok(Action::DeleteForward),
+        ("MoveCursorHome", None) => Ok(Action::MoveCursorHome),
+        ("MoveCursorEnd", None) => Ok(Action::MoveCursorEnd),
+        ("DeleteLearning", None) => Ok(Action::DeleteLearning),
+        ("ToKatakana", None) => Ok(Action::ToKatakana),
+        ("ToHiragana", None) => Ok(Action::ToHiragana),
+        ("ToggleMode", None) => Ok(Action::ToggleMode),
+        ("CommitAndPassThrough", None) => Ok(Action::CommitAndPassThrough),
+        ("NoOp", None) => Ok(Action::NoOp),
+        ("MoveCursor", a) => Ok(Action::MoveCursor(direction(a)?)),
+        ("MoveFocus", a) => Ok(Action::MoveFocus(direction(a)?)),
+        ("ResizeSegment", a) => Ok(Action::ResizeSegment(direction(a)?)),
+        ("ExtendSelection", a) => Ok(Action::ExtendSelection(direction(a)?)),
+        ("SelectCand", Some(n)) => n
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=9).contains(n))
+            .map(Action::SelectCand)
+            .ok_or_else(|| format!("SelectCand は 1〜9 の数字が必要です: {n}")),
+        _ => Err(format!(
+            "不明な Action 名、または引数の付け方が不正です: {spec}"
+        )),
     }
 }
 
@@ -365,5 +473,67 @@ mod tests {
             KeyMap::default_preset().resolve(Direct, Hiragana, &key),
             None
         );
+    }
+
+    #[test]
+    fn overrides_replace_composing_key() {
+        let (km, warnings) =
+            KeyMap::with_overrides(&[(Composing, "Ctrl+j".to_string(), "ToKatakana".to_string())]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            km.resolve(Composing, Hiragana, &parse_key("Ctrl+j").unwrap()),
+            Some(Action::ToKatakana)
+        );
+    }
+
+    #[test]
+    fn overrides_leave_unmapped_keys_at_default() {
+        let (km, warnings) =
+            KeyMap::with_overrides(&[(Composing, "Ctrl+j".to_string(), "ToKatakana".to_string())]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            km.resolve(Composing, Hiragana, &parse_key("a").unwrap()),
+            Some(Action::Insert('a'))
+        );
+    }
+
+    #[test]
+    fn overrides_report_unknown_key_and_action() {
+        let (km, warnings) = KeyMap::with_overrides(&[
+            (Composing, "NotAKey".to_string(), "ToKatakana".to_string()),
+            (Composing, "Ctrl+j".to_string(), "NotAnAction".to_string()),
+        ]);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        // どちらも上書きテーブルには入らず、既定の挙動のまま
+        assert_eq!(
+            km.resolve(Composing, Hiragana, &parse_key("Ctrl+j").unwrap()),
+            Some(Action::CommitAndPassThrough)
+        );
+    }
+
+    #[test]
+    fn parse_action_no_arg() {
+        assert_eq!(parse_action("NextCand"), Ok(Action::NextCand));
+    }
+
+    #[test]
+    fn parse_action_direction() {
+        assert_eq!(
+            parse_action("MoveCursor:Left"),
+            Ok(Action::MoveCursor(Direction::Left))
+        );
+    }
+
+    #[test]
+    fn parse_action_select_cand() {
+        assert_eq!(parse_action("SelectCand:3"), Ok(Action::SelectCand(3)));
+        assert!(parse_action("SelectCand:0").is_err());
+        assert!(parse_action("SelectCand:10").is_err());
+    }
+
+    #[test]
+    fn parse_action_rejects_insert_and_unknown() {
+        assert!(parse_action("Insert").is_err());
+        assert!(parse_action("NotAnAction").is_err());
     }
 }

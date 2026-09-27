@@ -38,6 +38,8 @@ pub struct EngineConfig {
     pub page_size: usize,
     /// セッション開始時の入力モード
     pub initial_mode: InputMode,
+    /// キーマップ（`[keymap]`。既定は内蔵の既定テーブルのみで上書きなし）
+    pub keymap: KeyMap,
 }
 
 impl Default for EngineConfig {
@@ -47,6 +49,7 @@ impl Default for EngineConfig {
             punctuation: PunctuationStyle::Japanese,
             page_size: 9,
             initial_mode: InputMode::Hiragana,
+            keymap: KeyMap::default_preset(),
         }
     }
 }
@@ -156,10 +159,11 @@ impl Engine {
     /// エンジンを作る
     pub fn new(backend: Arc<dyn ConversionBackend>, config: EngineConfig) -> Self {
         let table = Arc::new(RomajiTable::standard().with_punctuation(config.punctuation));
+        let keymap = config.keymap.clone();
         Engine {
             backend,
             config,
-            keymap: KeyMap::default_preset(),
+            keymap,
             table,
             sessions: HashMap::new(),
             observer: None,
@@ -179,6 +183,7 @@ impl Engine {
                 .reconfigure(self.table.clone(), config.shift_letter);
             sess.sent.candidates.page_size = config.page_size as u32;
         }
+        self.keymap = config.keymap.clone();
         self.config = config;
     }
 

@@ -9,6 +9,7 @@ use crate::runtime::{Event, Runtime, Tunables};
 use nagi_config::{Config, Issue, Severity, ShiftLetter};
 use nagi_dict::{Dictionary, UserDictionary};
 use nagi_engine::EngineConfig;
+use nagi_engine::KeyContext;
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_protocol::methods::NotifyLevel;
@@ -79,19 +80,49 @@ pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<ServerOptio
     Ok(options)
 }
 
-/// 設定から engine の設定を作る
-pub fn engine_config_from(config: &Config) -> EngineConfig {
+/// 設定から engine の設定を作る。キーマップの上書きに解析できないものがあれば、その警告を
+/// 通知イベントとして合わせて返す
+pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
     let punct = &config.input.punctuation;
-    EngineConfig {
-        shift_letter: match config.input.shift_letter {
-            ShiftLetter::LiteralContinue => ShiftLetterMode::LiteralContinue,
-            ShiftLetter::SingleUpper => ShiftLetterMode::SingleUpper,
-        },
-        punctuation: PunctuationStyle::from_config_str(&format!("{}{}", punct.comma, punct.period))
+    let bindings: Vec<(KeyContext, String, String)> = config
+        .keymap
+        .composing
+        .iter()
+        .map(|(k, v)| (KeyContext::Composing, k.clone(), v.clone()))
+        .chain(
+            config
+                .keymap
+                .converting
+                .iter()
+                .map(|(k, v)| (KeyContext::Converting, k.clone(), v.clone())),
+        )
+        .collect();
+    let (keymap, warnings) = nagi_engine::KeyMap::with_overrides(&bindings);
+    let events = warnings
+        .into_iter()
+        .map(|message| Event {
+            level: NotifyLevel::Warning,
+            code: "keymap_warning",
+            message,
+        })
+        .collect();
+    (
+        EngineConfig {
+            shift_letter: match config.input.shift_letter {
+                ShiftLetter::LiteralContinue => ShiftLetterMode::LiteralContinue,
+                ShiftLetter::SingleUpper => ShiftLetterMode::SingleUpper,
+            },
+            punctuation: PunctuationStyle::from_config_str(&format!(
+                "{}{}",
+                punct.comma, punct.period
+            ))
             .unwrap_or(PunctuationStyle::Japanese),
-        page_size: config.conversion.num_candidates,
-        initial_mode: InputMode::Hiragana,
-    }
+            page_size: config.conversion.num_candidates,
+            initial_mode: InputMode::Hiragana,
+            keymap,
+        },
+        events,
+    )
 }
 
 /// 設定ファイルの問題を通知（`notify`）に直す
@@ -418,4 +449,50 @@ pub fn user_dict_events(issues: &[nagi_dict::UserDictIssue]) -> Vec<Event> {
             },
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nagi_engine::{Action, parse_key};
+
+    #[test]
+    fn engine_config_from_applies_keymap_overrides_and_reports_warnings() {
+        let mut config = Config::default();
+        config
+            .keymap
+            .composing
+            .insert("Ctrl+j".to_string(), "ToKatakana".to_string());
+        config
+            .keymap
+            .converting
+            .insert("Tab".to_string(), "NextCand".to_string());
+        // 不正な上書き: 存在しないキー
+        config
+            .keymap
+            .composing
+            .insert("NotAKey".to_string(), "ToKatakana".to_string());
+
+        let (engine_config, events) = engine_config_from(&config);
+
+        assert_eq!(
+            engine_config.keymap.resolve(
+                KeyContext::Composing,
+                InputMode::Hiragana,
+                &parse_key("Ctrl+j").unwrap()
+            ),
+            Some(Action::ToKatakana)
+        );
+        assert_eq!(
+            engine_config.keymap.resolve(
+                KeyContext::Converting,
+                InputMode::Hiragana,
+                &parse_key("Tab").unwrap()
+            ),
+            Some(Action::NextCand)
+        );
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].code, "keymap_warning");
+        assert_eq!(events[0].level, NotifyLevel::Warning);
+    }
 }

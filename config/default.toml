@@ -125,8 +125,22 @@ disabled_apps = [
 [keymap]
 # キーマップのプリセット
 # "default" = 標準的な日本語入力キー配置（既定）
-# カスタムキーマップは Phase 3 以降で対応予定
 preset = "default"
+
+# ローマ字入力中（Composing）のキー上書き。キー仕様文字列 → Action 名
+# キー仕様: "Ctrl+j" のような "修飾+キー名" 形式（修飾: Ctrl/Shift/Alt/Meta、順不同）
+# Action 名: StartConvert / NextCand / PrevCand / Commit / Cancel / Backspace /
+#   DeleteForward / MoveCursor:Left / MoveCursor:Right / MoveCursorHome / MoveCursorEnd /
+#   ToKatakana / ToHiragana / ToggleMode / NoOp
+# 既定: 空（上書きなし）
+# [keymap.composing]
+# "Ctrl+j" = "ToKatakana"
+
+# 変換中（Converting）のキー上書き。上記に加えて MoveFocus:Left/Right、
+# ResizeSegment:Left/Right、ExtendSelection:Left/Right、SelectCand:1〜9、DeleteLearning が使える
+# 既定: 空（上書きなし）
+# [keymap.converting]
+# "Tab" = "NextCand"
 
 [update]
 # アップデートの自動確認

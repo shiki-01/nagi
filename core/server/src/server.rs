@@ -68,7 +68,10 @@ impl Server {
 
     /// [`crate::setup::build`] の結果から作る（学習・環境プロファイル・設定の再読み込みを含む）
     pub fn from_built(built: Built) -> Self {
-        let config = engine_config_from(&built.config);
+        let (config, keymap_events) = engine_config_from(&built.config);
+        for e in keymap_events {
+            built.runtime.push_event(e);
+        }
         let mut engine = Engine::new(built.pipeline.clone(), config.clone());
         engine.set_commit_observer(Arc::new(LearningObserver::new(built.runtime.clone())));
         Server {
@@ -169,7 +172,11 @@ impl Server {
                     if let Some(ms) = self.reload.cli_sync_budget_ms {
                         config.conversion.sync_budget_ms = ms;
                     }
-                    self.engine.update_config(engine_config_from(&config));
+                    let (new_config, keymap_events) = engine_config_from(&config);
+                    self.engine.update_config(new_config);
+                    for e in keymap_events {
+                        self.runtime.push_event(e);
+                    }
                     self.runtime.apply_config(&config);
                     self.runtime.set_config_state(Some(path.clone()), false);
                     if config.conversion.model != self.reload.applied_model {

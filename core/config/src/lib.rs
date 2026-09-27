@@ -359,12 +359,19 @@ impl Default for LearningSection {
 pub struct KeymapSection {
     /// キーマップのプリセット名。既定: "default"。
     pub preset: String,
+    /// ローマ字入力中（Composing）のキー上書き。キー: キー仕様文字列（"Ctrl+j" 等）、
+    /// 値: Action 仕様文字列。既定: 空。
+    pub composing: std::collections::HashMap<String, String>,
+    /// 変換中（Converting）のキー上書き。既定: 空。
+    pub converting: std::collections::HashMap<String, String>,
 }
 
 impl Default for KeymapSection {
     fn default() -> Self {
         KeymapSection {
             preset: "default".to_string(),
+            composing: Default::default(),
+            converting: Default::default(),
         }
     }
 }
@@ -577,7 +584,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         "input" => &["shift_letter", "punctuation"],
         "ranking" => &["source_order"],
         "learning" => &["enabled", "max_entries", "disabled_apps"],
-        "keymap" => &["preset"],
+        "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check"],
         _ => &[],
     }
@@ -1171,6 +1178,36 @@ punctuation = "invalid"
         if let Some(path) = config_path() {
             assert!(path.ends_with("config.toml"));
         }
+    }
+
+    #[test]
+    fn test_keymap_overrides_parse() {
+        let source = r#"
+[keymap]
+preset = "default"
+
+[keymap.composing]
+"Ctrl+j" = "ToKatakana"
+
+[keymap.converting]
+"Tab" = "NextCand"
+"#;
+        let (config, warnings) = parse(source).expect("should parse keymap overrides");
+        assert_eq!(
+            config.keymap.composing.get("Ctrl+j").map(String::as_str),
+            Some("ToKatakana")
+        );
+        assert_eq!(
+            config.keymap.converting.get("Tab").map(String::as_str),
+            Some("NextCand")
+        );
+        // [keymap.composing] / [keymap.converting] 自体は既知のサブセクションなので警告は出ない
+        assert!(
+            warnings
+                .iter()
+                .all(|i| !i.message.contains("composing") && !i.message.contains("converting")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
