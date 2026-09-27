@@ -18,6 +18,7 @@ use nagi_protocol::key::{KeyEvent, KeyKind};
 use nagi_protocol::methods::{ProcessKeyResult, RestoreSessionParams, SetContextParams};
 use nagi_protocol::utf16;
 use nagi_protocol::view::{CandidateView, CandidatesView, InputMode, PreeditView};
+use nagi_rewriter::Rewriter;
 use nagi_romaji::{Composer, Piece, PieceKind, PunctuationStyle, RomajiTable, ShiftLetterMode};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -503,7 +504,12 @@ impl Engine {
     }
 
     fn apply_converting(&self, sess: &mut Session, action: Action, commit: &mut String) {
+        let selecting =
+            matches!(&sess.state, State::Converting(conv) if conv.range_anchor.is_some());
         match action {
+            Action::NextCand | Action::StartConvert | Action::PrevCand if selecting => {
+                self.reconvert_selection(sess);
+            }
             Action::NextCand | Action::StartConvert => self.step_candidate(sess, 1),
             Action::PrevCand => self.step_candidate(sess, -1),
             Action::MoveFocus(dir) => self.move_focus(sess, dir),
@@ -513,6 +519,7 @@ impl Engine {
             Action::Cancel => self.cancel_converting(sess),
             Action::ToKatakana => self.set_focus_kana(sess, true),
             Action::ToHiragana => self.set_focus_kana(sess, false),
+            Action::ToHankaku => self.set_focus_hankaku(sess),
             Action::SelectCand(n) => self.select_candidate_page_relative(sess, n, commit),
             Action::DeleteLearning => self.delete_learning(sess),
             _ => {}
@@ -556,6 +563,54 @@ impl Engine {
         let lo = anchor.min(conv.focus);
         let hi = anchor.max(conv.focus);
         Some(lo..hi + 1)
+    }
+
+    /// 複数文節選択中に Space（`NextCand`/`PrevCand`/`StartConvert`）が来たら、選択範囲全体を
+    /// 1つの読みとして再変換する（設計書 §4.10「範囲のみ再変換（候補は範囲の reading に対して
+    /// 生成）」）。結果は1つの文節に置き換わり、候補ウィンドウを開いた状態にする
+    /// （そのまま Space で候補をめくれる。「選択状態の維持」の意図を、選択そのものではなく
+    /// 再変換結果への候補アクセスの継続として実現する）
+    fn reconvert_selection(&self, sess: &mut Session) {
+        let State::Converting(conv) = &mut sess.state else {
+            return;
+        };
+        let Some(range) = Self::selection_range(conv) else {
+            return;
+        };
+        let merged_reading: String = conv.segments[range.clone()]
+            .iter()
+            .map(|s| s.reading.as_str())
+            .collect();
+        let left = Self::left_context_for(&sess.left_context, conv, range.start);
+        let backend_candidates =
+            self.backend
+                .segment_candidates(&merged_reading, &left, CANDIDATE_LIMIT);
+        let katakana = to_katakana(&merged_reading);
+        let mut items: Vec<Candidate> = Vec::new();
+        for c in &backend_candidates {
+            push_candidate(&mut items, &c.surface, &c.sources);
+        }
+        push_candidate(&mut items, &merged_reading, &[CandidateSource::Kana]);
+        push_candidate(&mut items, &katakana, &[CandidateSource::Kana]);
+        let surface = items
+            .first()
+            .map(|c| c.surface.clone())
+            .unwrap_or_else(|| merged_reading.clone());
+        let new_focus = range.start;
+        let new_segment = Segment {
+            reading: merged_reading,
+            surface,
+            kind: SegmentKind::Japanese,
+            candidates: Some(CandidateSet { items, selected: 0 }),
+            chunk_id: range.start as u32,
+        };
+        conv.segments.splice(range, [new_segment]);
+        for (i, s) in conv.segments.iter_mut().enumerate() {
+            s.chunk_id = i as u32;
+        }
+        conv.focus = new_focus;
+        conv.range_anchor = None;
+        conv.visible = true;
     }
 
     // ---- 確定・遷移 ----
@@ -834,6 +889,10 @@ impl Engine {
         let State::Converting(conv) = &mut sess.state else {
             return;
         };
+        if let Some(range) = Self::selection_range(conv) {
+            self.set_range_kana(conv, range, katakana);
+            return;
+        }
         let f = conv.focus;
         if conv.segments[f].kind != SegmentKind::Japanese {
             return;
@@ -851,6 +910,88 @@ impl Engine {
             set.selected = pos;
         }
         conv.segments[f].surface = target;
+        conv.visible = false;
+    }
+
+    /// 複数文節選択中の `ToKatakana`/`ToHiragana`: 選択範囲全体の reading をまとめてかな化し、
+    /// 1つの文節に置き換える（選択は解除する。混在する非日本語文節があれば何もしない）
+    fn set_range_kana(&self, conv: &mut Conv, range: Range<usize>, katakana: bool) {
+        if conv.segments[range.clone()]
+            .iter()
+            .any(|s| s.kind != SegmentKind::Japanese)
+        {
+            return;
+        }
+        let merged_reading: String = conv.segments[range.clone()]
+            .iter()
+            .map(|s| s.reading.as_str())
+            .collect();
+        let surface = if katakana {
+            to_katakana(&merged_reading)
+        } else {
+            merged_reading.clone()
+        };
+        let new_focus = range.start;
+        let new_segment = Segment {
+            reading: merged_reading,
+            surface,
+            kind: SegmentKind::Japanese,
+            candidates: None,
+            chunk_id: range.start as u32,
+        };
+        conv.segments.splice(range, [new_segment]);
+        for (i, s) in conv.segments.iter_mut().enumerate() {
+            s.chunk_id = i as u32;
+        }
+        conv.focus = new_focus;
+        conv.range_anchor = None;
+        conv.visible = false;
+    }
+
+    /// `ToHankaku`: 注目文節（複数文節選択中はその範囲）の表記を半角化する
+    /// （カタカナ→半角カナ、または半角化可能な英数記号→半角。`nagi_rewriter` 経由）。
+    /// どちらの変換も適用できなければ何もしない
+    fn set_focus_hankaku(&self, sess: &mut Session) {
+        let State::Converting(conv) = &mut sess.state else {
+            return;
+        };
+        let range = Self::selection_range(conv).unwrap_or(conv.focus..conv.focus + 1);
+        let merged_surface: String = conv.segments[range.clone()]
+            .iter()
+            .map(|s| s.surface.as_str())
+            .collect();
+        let merged_reading: String = conv.segments[range.clone()]
+            .iter()
+            .map(|s| s.reading.as_str())
+            .collect();
+        let hankaku = nagi_rewriter::HankakuKatakana
+            .rewrite(&merged_surface)
+            .into_iter()
+            .next()
+            .or_else(|| {
+                nagi_rewriter::HankakuAlnum
+                    .rewrite(&merged_surface)
+                    .into_iter()
+                    .next()
+            });
+        let Some(surface) = hankaku else {
+            return;
+        };
+        let new_focus = range.start;
+        let kind = conv.segments[range.start].kind;
+        let new_segment = Segment {
+            reading: merged_reading,
+            surface,
+            kind,
+            candidates: None,
+            chunk_id: range.start as u32,
+        };
+        conv.segments.splice(range, [new_segment]);
+        for (i, s) in conv.segments.iter_mut().enumerate() {
+            s.chunk_id = i as u32;
+        }
+        conv.focus = new_focus;
+        conv.range_anchor = None;
         conv.visible = false;
     }
 

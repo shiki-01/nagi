@@ -53,6 +53,9 @@ pub enum Action {
     ToKatakana,
     /// ひらがなに変換（F6）
     ToHiragana,
+    /// 半角化（カタカナ→半角カナ、または半角化可能な英数記号→半角。`nagi_rewriter` 経由）。
+    /// 既定のキー割当は無く、キーマップ（`[keymap.converting]`）で明示的に割り当てる
+    ToHankaku,
     /// 入力モードを設定
     SetMode(InputMode),
     /// 入力モードをトグル
@@ -89,6 +92,7 @@ impl fmt::Display for Action {
             Action::DeleteLearning => write!(f, "DeleteLearning"),
             Action::ToKatakana => write!(f, "ToKatakana"),
             Action::ToHiragana => write!(f, "ToHiragana"),
+            Action::ToHankaku => write!(f, "ToHankaku"),
             Action::SetMode(mode) => write!(f, "SetMode({:?})", mode),
             Action::ToggleMode => write!(f, "ToggleMode"),
             Action::CommitAndPassThrough => write!(f, "CommitAndPassThrough"),

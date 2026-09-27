@@ -286,6 +286,7 @@ pub fn parse_action(spec: &str) -> Result<Action, String> {
         ("DeleteLearning", None) => Ok(Action::DeleteLearning),
         ("ToKatakana", None) => Ok(Action::ToKatakana),
         ("ToHiragana", None) => Ok(Action::ToHiragana),
+        ("ToHankaku", None) => Ok(Action::ToHankaku),
         ("ToggleMode", None) => Ok(Action::ToggleMode),
         ("CommitAndPassThrough", None) => Ok(Action::CommitAndPassThrough),
         ("NoOp", None) => Ok(Action::NoOp),
@@ -514,6 +515,11 @@ mod tests {
     #[test]
     fn parse_action_no_arg() {
         assert_eq!(parse_action("NextCand"), Ok(Action::NextCand));
+    }
+
+    #[test]
+    fn parse_action_to_hankaku() {
+        assert_eq!(parse_action("ToHankaku"), Ok(Action::ToHankaku));
     }
 
     #[test]

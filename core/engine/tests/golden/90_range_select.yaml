@@ -85,3 +85,45 @@
       expect: {state: range_selecting, focus: 1, selection: [0, 3]}
     - key: "Right"
       expect: {state: converting, focus: 2, selection: null}
+
+- name: range-select-space-reconverts-merged-reading
+  backend: mock
+  mock:
+    sentences:
+      "きょうはてんき":
+        - {reading: "きょう", candidates: ["今日"]}
+        - {reading: "は", candidates: ["は"]}
+        - {reading: "てんき", candidates: ["天気"]}
+    segments:
+      "きょうは": ["今日は", "京は"]
+  steps:
+    - key: "k"
+      expect: {state: composing}
+    - key: "y"
+      expect: {state: composing}
+    - key: "o"
+      expect: {state: composing}
+    - key: "u"
+      expect: {state: composing}
+    - key: "h"
+      expect: {state: composing}
+    - key: "a"
+      expect: {state: composing}
+    - key: "t"
+      expect: {state: composing}
+    - key: "e"
+      expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
+    - key: "k"
+      expect: {state: composing}
+    - key: "i"
+      expect: {state: composing}
+    - key: "Space"
+      expect: {state: converting, focus: 0, segments: ["今日", "は", "天気"]}
+    - key: "Ctrl+Shift+Right"
+      expect: {state: range_selecting, focus: 1, selection: [0, 3]}
+    - key: "Space"
+      expect: {state: converting, focus: 0, segments: ["今日は", "天気"], candidates_visible: true, selection: null}
+    - key: "Space"
+      expect: {state: converting, focus: 0, segments: ["京は", "天気"], candidates_visible: true}

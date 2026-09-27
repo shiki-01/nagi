@@ -635,6 +635,7 @@ name = "nagi-engine"
 version = "0.0.1"
 dependencies = [
  "nagi-protocol",
+ "nagi-rewriter",
  "nagi-romaji",
  "serde",
  "serde_json",

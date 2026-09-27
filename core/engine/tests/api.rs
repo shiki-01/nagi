@@ -359,3 +359,51 @@ fn select_candidate_does_nothing_outside_converting() {
     assert!(r.consumed);
     assert!(e.snapshot("s").unwrap().preedit.segments.is_empty());
 }
+
+// ---- ToHankaku ----
+
+/// `ToHankaku` に既定のキー割当は無いため、`KeyMap::with_overrides` で
+/// `[keymap.converting]` に一時的に `Ctrl+j` を割り当てて使う
+fn engine_with_hankaku_override() -> Engine {
+    let (keymap, warnings) = nagi_engine::KeyMap::with_overrides(&[(
+        nagi_engine::KeyContext::Converting,
+        "Ctrl+j".to_string(),
+        "ToHankaku".to_string(),
+    )]);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    Engine::new(
+        Arc::new(KanaBackend),
+        EngineConfig {
+            keymap,
+            ..EngineConfig::default()
+        },
+    )
+}
+
+#[test]
+fn to_hankaku_converts_katakana_segment_to_halfwidth_kana() {
+    let mut e = engine_with_hankaku_override();
+    type_str(&mut e, "s", "aiu");
+    // Composing 中の F7（ToKatakana）で Converting へ移り、カタカナ表記になる
+    press(&mut e, "s", "F7");
+    assert_eq!(
+        e.snapshot("s").unwrap().preedit.segments[0].surface,
+        "アイウ"
+    );
+    let r = press(&mut e, "s", "Ctrl+j");
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().preedit.segments[0].surface, "ｱｲｳ");
+}
+
+#[test]
+fn to_hankaku_is_a_no_op_when_not_convertible() {
+    let mut e = engine_with_hankaku_override();
+    type_str(&mut e, "s", "aiu");
+    // Space（StartConvert）: KanaBackend はひらがなのまま返す
+    press(&mut e, "s", "Space");
+    let before = e.snapshot("s").unwrap().preedit.segments[0].surface.clone();
+    assert_eq!(before, "あいう");
+    let r = press(&mut e, "s", "Ctrl+j");
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().preedit.segments[0].surface, before);
+}

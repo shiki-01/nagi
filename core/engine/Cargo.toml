@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 nagi-protocol.workspace = true
 nagi-romaji.workspace = true
+nagi-rewriter.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 
