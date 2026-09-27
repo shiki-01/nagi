@@ -507,3 +507,11 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **`Server.engine` を `Arc<Mutex<Engine>>` 化**: デバウンススレッドとメインスレッドが同じ `Engine` を安全に共有するための変更。ロックはポイズン時も中身を使って継続する（`unwrap_or_else(PoisonError::into_inner)`）方針にした。IME サーバーは一部の処理でパニックが起きても全体を落とさず動き続けることを優先する
 - **`update_candidates` の非同期配信は対象外**（今回のスコープ外）: ライブ変換は候補ウィンドウを開かない（Mozkey の挙動を参照）ため不要
 - テスト: `core/server/tests/rpc.rs` に `MockBackend` を使った統合テストを追加（`KanaBackend` は reading=surface のため差分が出ずテストにならない）。3回連続実行でフレーキーでないことを確認済み
+
+### G-27. ライブ変換: composing_chunk_len によるチャンク処理（2026-09-27）
+
+設計書 §4.6「`composing_chunk_len`（既定30文字）でreadingをチャンク分割し、編集されたチャンクのみ再変換」に対応した。今回実装したのは「チャンク分割して変換する」部分のみ（下記スコープ参照）。
+
+- **「数字の直後で分割しない」制約は自動的に満たされる**: `nagi-romaji` の `Composer::insert_char` は ASCII 数字・大文字・記号を常に `PieceKind::Literal`、それ以外（ひらがな等の非ASCII）を常に `PieceKind::Japanese` として扱い、`Composer::pieces()` は同種の連続文字だけを1つの `Piece` にまとめる。そのため `PieceKind::Japanese` の `Piece.text` に数字が混ざることは構造上あり得ず、単純な固定長チャンク分割（`composing_chunk_len` 文字ごと）で設計書の意図（数字と直後のかなを分断しない）を自動的に満たす。「記号の連続」「Fixed境界」も同じ理由でJapanese Piece内部には出現しない（Fixed はComposing状態にはまだ無い。Phase 3の部分確定機能）
+- **スコープ**: 今回実装したのはチャンク分割による変換の「正しさ」のみ。設計書が言う「編集されたチャンクのみ再変換」（前回のチャンク境界を記憶し、編集位置を含むチャンクだけを再変換してレイテンシを下げる）という**キャッシュ最適化は今回のスコープ外**。現時点では毎回のキー入力でチャンク全体を再変換する（既存のデバウンス設計（G-25・G-26）により、キー入力ごとにLLM/辞書を叩くわけではないため実害は限定的と判断したが、実機での長文入力時のレイテンシ計測は未実施）。実機確認後、必要であれば追加する
+- `composing_chunk_len` は元々 `config.toml`/`nagi-profile` には存在したが `EngineConfig` に橋渡しされていなかった（未使用のまま放置されていた設定値）。今回 `EngineConfig::composing_chunk_len`（既定30）を追加し `engine_config_from` で接続した。プロファイル別の値（`quality`=40 / `balanced`=30 / `light`=20 / `minimal`=20）への動的追従は他の類似パラメータ（`predict_min_chars` 等）と同様、現時点では未対応（設定ファイルの値を静的に使う。プロファイル自動切替時に反映されない）

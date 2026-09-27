@@ -22,7 +22,7 @@
 
 優先順:
 
-1. **LLM 接続の残り**: ~~非同期通知（`update_preedit`）でのライブ変換結果差し替え~~ → 実装済み（G-25・G-26）。ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用（見送り、G-21）、`update_candidates` の非同期送出（未着手）、ライブ変換のチャンク処理（`composing_chunk_len` を使った長文分割。Phase 2、未着手）。数詞の表記ゆれは Rewriter（Phase 4）
+1. **LLM 接続の残り**: ~~非同期通知（`update_preedit`）でのライブ変換結果差し替え~~ → 実装済み（G-25・G-26）。ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用（見送り、G-21）、`update_candidates` の非同期送出（未着手）。~~ライブ変換のチャンク処理~~ → 実装済み（G-27。`composing_chunk_len` による固定長分割。「編集されたチャンクのみ再変換」というキャッシュ最適化は未着手）。数詞の表記ゆれは Rewriter（Phase 4）
 2. ~~**予測変換**（Phase 2）~~ → 実装済み（G-23）
 3. ~~**環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化~~ → 実装済み（G-13）。残るは `quality` で使う大きいモデル・reranker（Laya 評価。Phase 0 の比較が必要）
 4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。~~`update.auto_check` の実装~~ → 実装済み（G-19。起動時の自動確認・notify のみ。実サーバー（`nagi.shiki-01.com/updates/latest.json`）は未整備なので機能するにはサーバー側の用意が必要）。**設定の残り**: 設定 GUI（Phase 4）
@@ -59,6 +59,7 @@
 - G-24 非同期通知の配信基盤（`Server::run` の非同期化。`StdinLock` が `Send` でない問題の対処を含む）
 - G-25 ライブ変換: engine側（`Session.live_conversion` / `Engine::live_convert`。タイマーキャンセル不要のデバウンス設計）
 - G-26 ライブ変換: server側（デバウンススレッド・`Arc<Mutex<Engine>>` 化・`update_preedit` 配信。Mozkey の実測既定値を採用）
+- G-27 ライブ変換: `composing_chunk_len` によるチャンク処理（数字直後の分割を避ける制約が Composer の Piece 構造上自動的に満たされる理由を記載。「編集されたチャンクのみ再変換」の最適化は対象外）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
 
