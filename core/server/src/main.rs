@@ -28,7 +28,7 @@ fn main() -> ExitCode {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut output = BufWriter::new(stdout.lock());
-    match server.run(BufReader::new(stdin.lock()), &mut output) {
+    match server.run_threaded(BufReader::new(stdin), &mut output) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("imserver: 入出力エラー: {e}");

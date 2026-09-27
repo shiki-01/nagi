@@ -15,7 +15,7 @@
 
 use crate::runtime::{Effective, Runtime};
 use nagi_dict::{Dictionary, Overlay};
-use nagi_engine::{BackendCandidate, BackendSegment, ConversionBackend};
+use nagi_engine::{BackendCandidate, BackendSegment, Completion, ConversionBackend};
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
 use nagi_protocol::view::CandidateSource;
@@ -45,11 +45,38 @@ struct Llm {
     cache: Cache,
 }
 
+/// LLM の非同期完了通知の置き場
+struct Completions {
+    queue: Mutex<Vec<Completion>>,
+    waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl Completions {
+    fn new() -> Self {
+        Completions {
+            queue: Mutex::new(Vec::new()),
+            waker: Mutex::new(None),
+        }
+    }
+
+    fn push(&self, completion: Completion) {
+        if let Ok(mut q) = self.queue.lock() {
+            q.push(completion);
+        }
+        // waker はロックの外で呼ぶ
+        let waker = self.waker.lock().ok().and_then(|w| w.clone());
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+}
+
 /// 変換パイプライン
 pub struct Pipeline {
     dict: Option<Arc<Dictionary>>,
     llm: Option<Llm>,
     runtime: Arc<Runtime>,
+    completions: Arc<Completions>,
 }
 
 /// LLM の出力として受け入れられるか（空・極端な長さ・私用領域文字・置換文字を弾く）
@@ -93,7 +120,12 @@ impl Pipeline {
             _ => "kana",
         };
         runtime.set_backend_name(name);
-        Pipeline { dict, llm, runtime }
+        Pipeline {
+            dict,
+            llm,
+            runtime,
+            completions: Arc::new(Completions::new()),
+        }
     }
 
     /// 起動直後の最初の推論が遅くならないよう、別スレッドでモデルを温め、続けてキャリブレーション
@@ -135,7 +167,14 @@ impl Pipeline {
     }
 
     /// LLM の最良変換（貪欲デコード）。予算内に終わらない・失敗・不正な出力なら `None`
-    fn llm_convert(&self, reading: &str, left: &str, eff: &Effective) -> Option<String> {
+    /// outer が Some ならバックグラウンド完了時に通知を積む
+    fn llm_convert(
+        &self,
+        reading: &str,
+        left: &str,
+        eff: &Effective,
+        outer: Option<&Completion>,
+    ) -> Option<String> {
         let llm = self.llm.as_ref()?;
         let key = (
             format!(
@@ -148,9 +187,24 @@ impl Pipeline {
         if let Some(hit) = llm.cache.lock().ok()?.get(&key) {
             return Some(hit.clone());
         }
+
+        // スロット: タイムアウト時に状態を判定して、Abandoned ならキャッシュに入れて通知を積む
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Slot {
+            Waiting,
+            Abandoned,
+            Done,
+        }
+        let slot = Arc::new(Mutex::new(Slot::Waiting));
+
         let (tx, rx) = mpsc::sync_channel::<Option<String>>(1);
         let (model, cache, runtime) = (llm.model.clone(), llm.cache.clone(), self.runtime.clone());
+        let completions = self.completions.clone();
         let req = Self::request(reading, left, eff.persona.as_deref());
+        let slot_bg = slot.clone();
+        let key_bg = key.clone();
+        let outer_bg = outer.cloned();
+
         std::thread::Builder::new()
             .name("nagi-llm-convert".into())
             .spawn(move || {
@@ -168,12 +222,47 @@ impl Pipeline {
                     if cache.len() >= CACHE_CAPACITY {
                         cache.clear();
                     }
-                    cache.insert(key, surface.clone());
+                    cache.insert(key_bg.clone(), surface.clone());
                 }
-                let _ = tx.send(result);
+
+                // 呼び出し側が待ちをやめていたら、完了を通知として積む。そうでなければ結果を渡す
+                let abandoned = slot_bg.lock().is_ok_and(|mut s| {
+                    let abandoned = *s == Slot::Abandoned;
+                    if !abandoned {
+                        *s = Slot::Done;
+                    }
+                    abandoned
+                });
+                if abandoned {
+                    if let Some(c) = outer_bg
+                        && result.is_some()
+                    {
+                        completions.push(c);
+                    }
+                } else {
+                    let _ = tx.send(result);
+                }
             })
             .ok()?;
-        rx.recv_timeout(eff.sync_budget).ok().flatten()
+
+        match rx.recv_timeout(eff.sync_budget) {
+            Ok(result) => result,
+            Err(_) => {
+                // タイムアウト。ただし直前に結果が届いていれば（Done）それを使う
+                let done = slot.lock().is_ok_and(|mut s| {
+                    let done = *s == Slot::Done;
+                    if !done {
+                        *s = Slot::Abandoned;
+                    }
+                    done
+                });
+                if done {
+                    rx.try_recv().ok().flatten()
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     /// 候補の対数確率スコア（予算内に終わらなければ `None`）
@@ -225,8 +314,9 @@ impl Pipeline {
         left: &str,
         eff: &Effective,
         overlay: &Overlay,
+        outer: Option<&Completion>,
     ) -> Vec<BackendSegment> {
-        let Some(surface) = self.llm_convert(reading, left, eff) else {
+        let Some(surface) = self.llm_convert(reading, left, eff, outer) else {
             return self.dict_segments(dict, reading, overlay);
         };
         match dict.align_with(reading, &surface, Some(overlay)) {
@@ -253,9 +343,10 @@ impl Pipeline {
         left: &str,
         eff: &Effective,
         overlay: &Overlay,
+        outer: Option<&Completion>,
     ) -> Vec<BackendSegment> {
         if reading.chars().count() <= MAX_LLM_CHARS {
-            return self.convert_chunk(dict, reading, left, eff, overlay);
+            return self.convert_chunk(dict, reading, left, eff, overlay, outer);
         }
         // 長い入力: 辞書の文節境界で 30 文字前後のチャンクに分け、前のチャンクの結果を左文脈にして順に変換する
         let mut out: Vec<BackendSegment> = Vec::new();
@@ -265,7 +356,7 @@ impl Pipeline {
             if chunk.is_empty() {
                 return;
             }
-            for seg in self.convert_chunk(dict, chunk, context, eff, overlay) {
+            for seg in self.convert_chunk(dict, chunk, context, eff, overlay, outer) {
                 context.push_str(&seg.surface);
                 out.push(seg);
             }
@@ -363,11 +454,39 @@ impl ConversionBackend for Pipeline {
         }
     }
 
+    fn take_completions(&self) -> Vec<Completion> {
+        if let Ok(mut q) = self.completions.queue.lock() {
+            let mut out = std::mem::take(&mut *q);
+            // 重複を除く
+            out.sort_by(|a, b| {
+                (a.reading.as_str(), a.left_context.as_str())
+                    .cmp(&(b.reading.as_str(), b.left_context.as_str()))
+            });
+            out.dedup();
+            out
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn set_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut w) = self.completions.waker.lock() {
+            *w = Some(waker);
+        }
+    }
+
     fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {
         self.runtime.tick();
         let eff = self.runtime.effective();
         let overlay = self.runtime.overlay();
         let left_llm = tail(left_context, eff.max_context_chars);
+
+        // 予算超過で LLM の結果を待てなかったとき、完了後に engine へ知らせるためのキー
+        let outer = Completion {
+            reading: reading.to_string(),
+            left_context: left_context.to_string(),
+        };
+
         let mut segments = match &self.dict {
             None => vec![BackendSegment {
                 reading: reading.to_string(),
@@ -375,7 +494,7 @@ impl ConversionBackend for Pipeline {
                 sources: vec![CandidateSource::Kana],
             }],
             Some(dict) if eff.use_llm && self.llm.is_some() => {
-                self.convert_with_llm(dict, reading, &left_llm, &eff, &overlay)
+                self.convert_with_llm(dict, reading, &left_llm, &eff, &overlay, Some(&outer))
             }
             Some(dict) => self.dict_segments(dict, reading, &overlay),
         };
@@ -422,7 +541,7 @@ impl ConversionBackend for Pipeline {
                 .map(|c| c.surface)
                 .collect();
             let llm_top = if eff.use_llm && reading.chars().count() <= MAX_LLM_CHARS {
-                self.llm_convert(reading, &left_llm, &eff)
+                self.llm_convert(reading, &left_llm, &eff, None)
             } else {
                 None
             };

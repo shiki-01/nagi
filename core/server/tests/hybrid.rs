@@ -186,3 +186,105 @@ fn long_input_is_converted_in_chunks() {
         "2 つ目以降のチャンクには文脈が渡る"
     );
 }
+
+#[test]
+fn slow_model_queues_completion_after_timeout() {
+    use std::sync::atomic::Ordering;
+
+    let mut model = FakeModel::new(&[("こうえん", "講演")]);
+    model.delay = Duration::from_millis(300);
+    let converts = model.converts.clone();
+    let b = backend(model, 30);
+
+    // 最初の convert_sentence: 予算超過で辞書の結果
+    let started = Instant::now();
+    let segs = b.convert_sentence("こうえん", "");
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "予算内に返る"
+    );
+    assert_eq!(joined(&segs)[0].1, "公園", "予算超過時は辞書の結果");
+
+    // バックグラウンド推論が完了するまで待つ
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while converts.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // 完了通知が積まれている
+    let completions = b.take_completions();
+    assert!(!completions.is_empty(), "完了通知が積まれる");
+    assert_eq!(completions[0].reading, "こうえん");
+    assert_eq!(completions[0].left_context, "");
+
+    // 次回は キャッシュから即座に LLM の結果が返る
+    let started = Instant::now();
+    let segs = b.convert_sentence("こうえん", "");
+    assert_eq!(
+        joined(&segs)[0].1,
+        "講演",
+        "キャッシュから LLM の結果が即座に返る"
+    );
+    assert!(started.elapsed() < Duration::from_millis(30));
+    assert_eq!(converts.load(Ordering::SeqCst), 1, "再推論しない");
+}
+
+/// 予算超過で辞書の結果を返した後、LLM の完了で `update_preedit` 通知が出て表示が差し替わる
+#[test]
+fn late_llm_result_is_pushed_as_update_preedit() {
+    use nagi_engine::EngineConfig;
+    use nagi_server::Server;
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+
+    let mut model = FakeModel::new(&[("こうえん", "講演")]);
+    model.delay = Duration::from_millis(300);
+    let mut server = Server::new(
+        Arc::new(backend(model, 30)),
+        "balanced",
+        EngineConfig::default(),
+    );
+    let mut send = |request: Value| -> Vec<Value> {
+        server
+            .handle_line(&request.to_string())
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("JSON"))
+            .collect()
+    };
+    send(
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocol_version":1,"client_name":"t","client_version":"0","os":"test"}}),
+    );
+    let mut key = |id: i64, c: char| {
+        send(
+            json!({"jsonrpc":"2.0","id":id,"method":"process_key","params":{
+            "session_id":"s","keysym":c as u32,"keycode":0,"text":c.to_string(),
+            "modifiers":{},"kind":"down"}}),
+        )
+    };
+    for (i, c) in "kouenn".chars().enumerate() {
+        key(10 + i as i64, c);
+    }
+    let space = key(99, ' ');
+    let response = &space[0]["result"];
+    assert_eq!(
+        response["preedit"]["text"], "公園",
+        "予算超過時は辞書の結果"
+    );
+    let space_revision = response["revision"].as_u64().unwrap();
+
+    // LLM の完了を待つ（ping の応答のあとに通知が続く）。固定 sleep ではなく上限付きで待つ
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let update = loop {
+        let lines = send(json!({"jsonrpc":"2.0","id":2,"method":"ping"}));
+        if let Some(n) = lines.into_iter().find(|l| l["method"] == "update_preedit") {
+            break n;
+        }
+        assert!(Instant::now() < deadline, "update_preedit が届かない");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let params = &update["params"];
+    assert_eq!(params["session_id"], "s");
+    assert_eq!(params["preedit"]["text"], "講演");
+    assert!(params["revision"].as_u64().unwrap() > space_revision);
+}

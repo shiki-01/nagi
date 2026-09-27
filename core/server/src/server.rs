@@ -121,6 +121,7 @@ impl Server {
         // 初期化前は通知を出さない（フロントが受け取れる状態になってから）
         if self.initialized {
             lines.extend(self.notifications());
+            lines.extend(self.async_notifications());
         }
         lines
     }
@@ -130,6 +131,49 @@ impl Server {
             r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"内部エラー"}}"#
                 .to_string()
         })
+    }
+
+    /// バックエンドの非同期完了をプリエディット差し替え通知に変換
+    fn async_notifications(&mut self) -> Vec<String> {
+        use nagi_protocol::methods::{UpdateCandidatesParams, UpdatePreeditParams};
+        // 初期化前は通知を出さない（完了通知は取り出さずに残す）
+        if !self.initialized {
+            return Vec::new();
+        }
+        let done = self.engine.backend_completions();
+        if done.is_empty() {
+            return Vec::new();
+        }
+        let encode = |n: Notification| serde_json::to_string(&n).ok();
+        let mut lines = Vec::new();
+        for (session_id, result) in self.engine.apply_completions(&done) {
+            let revision = result.revision;
+            if let Some(preedit) = result.preedit {
+                let params = UpdatePreeditParams {
+                    session_id: session_id.clone(),
+                    revision,
+                    preedit,
+                };
+                lines.extend(
+                    Notification::new(method::UPDATE_PREEDIT, params)
+                        .ok()
+                        .and_then(encode),
+                );
+            }
+            if let Some(candidates) = result.candidates {
+                let params = UpdateCandidatesParams {
+                    session_id,
+                    revision,
+                    candidates,
+                };
+                lines.extend(
+                    Notification::new(method::UPDATE_CANDIDATES, params)
+                        .ok()
+                        .and_then(encode),
+                );
+            }
+        }
+        lines
     }
 
     /// 共有状態に積まれた出来事を `notify` 通知の行にする
@@ -348,5 +392,87 @@ impl Server {
         };
         self.runtime.flush_learning(true);
         result
+    }
+
+    /// 入力を別スレッドで読み、非同期の LLM 完了通知に対応する run_threaded
+    pub fn run_threaded<R: BufRead + Send + 'static, W: Write>(
+        &mut self,
+        input: R,
+        output: &mut W,
+    ) -> std::io::Result<()> {
+        use std::sync::mpsc;
+        use std::thread;
+
+        enum Msg {
+            Line(String),
+            Wake,
+            Eof(Option<std::io::Error>),
+        }
+
+        let (tx, rx) = mpsc::channel();
+
+        // 入力スレッド
+        let tx_input = tx.clone();
+        thread::Builder::new()
+            .name("nagi-input".into())
+            .spawn(move || {
+                let mut input = input;
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match input.read_line(&mut line) {
+                        Ok(0) => {
+                            let _ = tx_input.send(Msg::Eof(None));
+                            break;
+                        }
+                        Ok(_) => {
+                            let _ = tx_input.send(Msg::Line(line.clone()));
+                        }
+                        Err(e) => {
+                            let _ = tx_input.send(Msg::Eof(Some(e)));
+                            break;
+                        }
+                    }
+                }
+            })
+            .ok();
+
+        // waker の登録
+        let tx_wake = tx.clone();
+        self.engine.set_backend_waker(Arc::new(move || {
+            let _ = tx_wake.send(Msg::Wake);
+        }));
+
+        // メインループ
+        loop {
+            match rx.recv() {
+                Ok(Msg::Line(line)) => {
+                    for out in self.handle_line(&line) {
+                        output.write_all(out.as_bytes())?;
+                        output.write_all(b"\n")?;
+                    }
+                    output.flush()?;
+                }
+                Ok(Msg::Wake) => {
+                    for out in self.async_notifications() {
+                        output.write_all(out.as_bytes())?;
+                        output.write_all(b"\n")?;
+                    }
+                    output.flush()?;
+                }
+                Ok(Msg::Eof(err)) => {
+                    if let Some(e) = err {
+                        return Err(e);
+                    }
+                    break;
+                }
+                Err(_) => break,
+            }
+            if self.shutdown {
+                break;
+            }
+        }
+        self.runtime.flush_learning(true);
+        Ok(())
     }
 }

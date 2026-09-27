@@ -1,9 +1,14 @@
 //! `Engine` の公開 API（差分・revision・セッション・文脈）のテスト
 
-use nagi_engine::{Engine, EngineConfig, KanaBackend, StateKind, parse_key};
+use nagi_engine::{
+    BackendCandidate, BackendSegment, Completion, ConversionBackend, Engine, EngineConfig,
+    KanaBackend, StateKind, parse_key,
+};
 use nagi_protocol::methods::{SetContextParams, SurroundingText};
+use nagi_protocol::view::CandidateSource;
 use nagi_protocol::view::InputMode;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn engine() -> Engine {
     Engine::new(Arc::new(KanaBackend), EngineConfig::default())
@@ -324,4 +329,107 @@ fn update_config_applies_to_existing_sessions() {
     // 新しいセッションでも新設定
     assert_eq!(press(&mut e, "t", ",").preedit.unwrap().text, "，");
     assert_eq!(e.snapshot("t").unwrap().candidates.page_size, 5);
+}
+
+// ---- 非同期の変換結果の差し替え ----
+
+/// `ready` になるまでは読みそのまま、なったあとは「きょう → 今日」を返す
+#[derive(Default)]
+struct Deferred {
+    ready: AtomicBool,
+}
+
+impl ConversionBackend for Deferred {
+    fn name(&self) -> &str {
+        "deferred"
+    }
+
+    fn convert_sentence(&self, reading: &str, _left_context: &str) -> Vec<BackendSegment> {
+        let surface = if self.ready.load(Ordering::SeqCst) && reading == "きょう" {
+            "今日"
+        } else {
+            reading
+        };
+        vec![BackendSegment {
+            reading: reading.to_string(),
+            surface: surface.to_string(),
+            sources: vec![CandidateSource::SystemDict],
+        }]
+    }
+
+    fn segment_candidates(&self, _: &str, _: &str, _: usize) -> Vec<BackendCandidate> {
+        Vec::new()
+    }
+}
+
+fn done(reading: &str, left: &str) -> [Completion; 1] {
+    [Completion {
+        reading: reading.to_string(),
+        left_context: left.to_string(),
+    }]
+}
+
+fn deferred_engine() -> (Engine, Arc<Deferred>) {
+    let backend = Arc::new(Deferred::default());
+    (
+        Engine::new(backend.clone(), EngineConfig::default()),
+        backend,
+    )
+}
+
+fn type_and_convert(e: &mut Engine) -> nagi_protocol::ProcessKeyResult {
+    for k in ["k", "y", "o", "u"] {
+        press(e, "s", k);
+    }
+    press(e, "s", "Space")
+}
+
+#[test]
+fn completion_replaces_untouched_converting_preedit() {
+    let (mut e, backend) = deferred_engine();
+    let space = type_and_convert(&mut e);
+    assert_eq!(space.preedit.as_ref().unwrap().text, "きょう");
+
+    backend.ready.store(true, Ordering::SeqCst);
+    let updates = e.apply_completions(&done("きょう", ""));
+    assert_eq!(updates.len(), 1);
+    let (id, result) = &updates[0];
+    assert_eq!(id, "s");
+    assert_eq!(result.preedit.as_ref().unwrap().text, "今日");
+    assert!(result.revision > space.revision, "revision が進む");
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "今日");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+
+    // 同じ結果の再通知は何もしない（revision も進まない）
+    assert!(e.apply_completions(&done("きょう", "")).is_empty());
+    assert_eq!(e.snapshot("s").unwrap().revision, result.revision);
+}
+
+#[test]
+fn completion_is_ignored_after_user_operation() {
+    let (mut e, backend) = deferred_engine();
+    type_and_convert(&mut e);
+    press(&mut e, "s", "Space"); // 候補送り（ユーザー操作）
+    backend.ready.store(true, Ordering::SeqCst);
+    assert!(e.apply_completions(&done("きょう", "")).is_empty());
+}
+
+#[test]
+fn completion_with_other_key_is_ignored() {
+    let (mut e, backend) = deferred_engine();
+    type_and_convert(&mut e);
+    backend.ready.store(true, Ordering::SeqCst);
+    assert!(e.apply_completions(&done("きょうは", "")).is_empty());
+    assert!(e.apply_completions(&done("きょう", "別の文脈")).is_empty());
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょう");
+}
+
+#[test]
+fn completion_is_ignored_while_composing() {
+    let (mut e, backend) = deferred_engine();
+    for k in ["k", "y", "o", "u"] {
+        press(&mut e, "s", k);
+    }
+    backend.ready.store(true, Ordering::SeqCst);
+    assert!(e.apply_completions(&done("きょう", "")).is_empty());
 }

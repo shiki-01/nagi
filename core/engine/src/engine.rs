@@ -7,7 +7,7 @@
 //! `preedit` / `candidates` / `mode` と、確定文字列）をまとめて返す。
 
 use crate::action::{Action, Direction};
-use crate::backend::{BackendSegment, ConversionBackend};
+use crate::backend::{BackendSegment, Completion, ConversionBackend};
 use crate::ir::{
     Candidate, CandidateSet, CandidateSource, CursorPos, Preedit, Segment, SegmentKind,
 };
@@ -100,6 +100,19 @@ struct Sent {
     mode: InputMode,
 }
 
+/// 非同期完了の差し替え対象。`convert_sentence` に渡された引数と同じ値を持つ
+#[derive(Debug, Clone)]
+struct Origin {
+    /// Conv.segments 内の先頭位置
+    start: usize,
+    /// 文節数
+    count: usize,
+    /// `convert_sentence` に渡した reading
+    reading: String,
+    /// `convert_sentence` に渡した left_context
+    left: String,
+}
+
 struct Session {
     id: String,
     mode: InputMode,
@@ -112,6 +125,8 @@ struct Session {
     secure_input: bool,
     revision: u64,
     sent: Sent,
+    /// 非同期の LLM 完了に対応する差し替え対象。未操作なら差し替える
+    origins: Vec<Origin>,
 }
 
 /// 変換の始め方
@@ -192,6 +207,16 @@ impl Engine {
         self.backend.name()
     }
 
+    /// バックエンドの完了通知を取り出す
+    pub fn backend_completions(&self) -> Vec<Completion> {
+        self.backend.take_completions()
+    }
+
+    /// バックエンドの完了通知の waker を登録する
+    pub fn set_backend_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
+        self.backend.set_waker(waker);
+    }
+
     fn new_session(&self) -> Session {
         Session {
             id: String::new(),
@@ -210,6 +235,7 @@ impl Engine {
                 },
                 mode: self.config.initial_mode,
             },
+            origins: Vec::new(),
         }
     }
 
@@ -227,6 +253,7 @@ impl Engine {
     /// キー 1 つを処理する
     pub fn process_key(&mut self, session_id: &str, key: &KeyEvent) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
+        sess.origins.clear();
         let mut commit = String::new();
         let consumed = self.handle_key(&mut sess, key, &mut commit);
         let result = self.finish(&mut sess, consumed, commit);
@@ -245,6 +272,7 @@ impl Engine {
     /// フォーカスを失った: 表示中の surface を確定して Direct へ戻る
     pub fn focus_out(&mut self, session_id: &str) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
+        sess.origins.clear();
         let mut commit = String::new();
         self.commit_all(&mut sess, &mut commit);
         let result = self.finish(&mut sess, true, commit);
@@ -255,6 +283,7 @@ impl Engine {
     /// 未確定状態を破棄して Direct へ戻る（確定はしない）
     pub fn reset(&mut self, session_id: &str) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
+        sess.origins.clear();
         sess.state = State::Direct;
         sess.composer.clear();
         let result = self.finish(&mut sess, true, String::new());
@@ -269,6 +298,7 @@ impl Engine {
         params: &RestoreSessionParams,
     ) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
+        sess.origins.clear();
         sess.composer.clear();
         sess.state = State::Direct;
         if !params.segments.is_empty() {
@@ -337,6 +367,68 @@ impl Engine {
     /// セッションを破棄する
     pub fn end_session(&mut self, session_id: &str) {
         self.sessions.remove(session_id);
+    }
+
+    /// 完了通知に対応する変換中セッションの未操作のプリエディットを、最新の変換結果に差し替える。
+    /// 返り値は差分（`finish` の結果）があったセッションだけ
+    pub fn apply_completions(&mut self, done: &[Completion]) -> Vec<(String, ProcessKeyResult)> {
+        let ids: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| !s.origins.is_empty() && matches!(s.state, State::Converting(_)))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut out = Vec::new();
+        for id in ids {
+            let mut sess = self.take_session(&id);
+            if self.replace_origins(&mut sess, done) {
+                let result = self.finish(&mut sess, false, String::new());
+                if result.preedit.is_some() || result.candidates.is_some() {
+                    out.push((id.clone(), result));
+                }
+            }
+            self.sessions.insert(id, sess);
+        }
+        out
+    }
+
+    /// `done` に一致する `Origin` の範囲を最新の変換結果で置き換える。変更したら `true`
+    fn replace_origins(&self, sess: &mut Session, done: &[Completion]) -> bool {
+        let State::Converting(conv) = &mut sess.state else {
+            return false;
+        };
+        let mut changed = false;
+        // 前の差し替えによる文節数の増減
+        let mut delta: isize = 0;
+        for origin in sess.origins.iter_mut() {
+            origin.start = (origin.start as isize + delta) as usize;
+            let matched = done
+                .iter()
+                .any(|c| c.reading == origin.reading && c.left_context == origin.left);
+            let range = origin.start..origin.start + origin.count;
+            if !matched || range.end > conv.segments.len() {
+                continue;
+            }
+            let (fresh, valid) = self.convert_piece(&origin.reading, &origin.left);
+            let same = conv.segments[range.clone()]
+                .iter()
+                .map(|s| (&s.reading, &s.surface))
+                .eq(fresh.iter().map(|s| (&s.reading, &s.surface)));
+            if !valid || same {
+                continue;
+            }
+            delta += fresh.len() as isize - origin.count as isize;
+            origin.count = fresh.len();
+            conv.segments.splice(range, fresh);
+            changed = true;
+        }
+        if changed {
+            for (i, s) in conv.segments.iter_mut().enumerate() {
+                s.chunk_id = i as u32;
+            }
+            conv.focus = conv.focus.min(conv.segments.len() - 1);
+        }
+        changed
     }
 
     /// セッションの現在状態（未作成なら None）
@@ -465,6 +557,38 @@ impl Engine {
         }
     }
 
+    /// 読みを `convert_sentence` で変換し、(文節列, バックエンドの結果が妥当か) を返す。
+    /// 妥当でなければ読みそのままの 1 文節にする（`chunk_id` は呼び出し側で振る）
+    fn convert_piece(&self, reading: &str, left: &str) -> (Vec<Segment>, bool) {
+        let converted = self.backend.convert_sentence(reading, left);
+        let valid = !converted.is_empty()
+            && converted
+                .iter()
+                .map(|s| s.reading.as_str())
+                .collect::<String>()
+                == reading;
+        let converted = if valid {
+            converted
+        } else {
+            vec![BackendSegment {
+                reading: reading.to_string(),
+                surface: reading.to_string(),
+                sources: vec![CandidateSource::Kana],
+            }]
+        };
+        let segments: Vec<Segment> = converted
+            .into_iter()
+            .map(|bs| Segment {
+                reading: bs.reading,
+                surface: bs.surface,
+                kind: SegmentKind::Japanese,
+                candidates: None,
+                chunk_id: 0, // あとで振り直す
+            })
+            .collect();
+        (segments, valid)
+    }
+
     fn apply_converting(&self, sess: &mut Session, action: Action, commit: &mut String) {
         match action {
             Action::NextCand | Action::StartConvert => self.step_candidate(sess, 1),
@@ -570,38 +694,28 @@ impl Engine {
             sess.state = State::Direct;
             return;
         }
+        sess.origins.clear();
         let mut segments: Vec<Segment> = Vec::new();
         let mut context = sess.left_context.clone();
         for piece in pieces {
             match (piece.kind, how) {
                 (PieceKind::Japanese, Start::Convert) => {
-                    let converted = self
-                        .backend
-                        .convert_sentence(&piece.text, &tail_chars(&context, LEFT_CONTEXT_CHARS));
-                    let valid = !converted.is_empty()
-                        && converted
-                            .iter()
-                            .map(|s| s.reading.as_str())
-                            .collect::<String>()
-                            == piece.text;
-                    let converted = if valid {
-                        converted
-                    } else {
-                        vec![BackendSegment {
+                    let left_tail = tail_chars(&context, LEFT_CONTEXT_CHARS);
+                    let (converted, valid) = self.convert_piece(&piece.text, &left_tail);
+                    let start = segments.len();
+                    let count = converted.len();
+                    if valid {
+                        sess.origins.push(Origin {
+                            start,
+                            count,
                             reading: piece.text.clone(),
-                            surface: piece.text.clone(),
-                            sources: vec![CandidateSource::Kana],
-                        }]
-                    };
-                    for bs in converted {
-                        context.push_str(&bs.surface);
-                        segments.push(Segment {
-                            reading: bs.reading,
-                            surface: bs.surface,
-                            kind: SegmentKind::Japanese,
-                            candidates: None,
-                            chunk_id: segments.len() as u32,
+                            left: left_tail,
                         });
+                    }
+                    for mut seg in converted {
+                        context.push_str(&seg.surface);
+                        seg.chunk_id = segments.len() as u32;
+                        segments.push(seg);
                     }
                 }
                 (PieceKind::Japanese, Start::Katakana) => {

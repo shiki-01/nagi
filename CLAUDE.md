@@ -61,7 +61,7 @@ Frontend (OS組み込み層)  ◀── JSON-RPC 2.0 (改行区切り, stdin/std
 ### プロトコル
 
 - 正のスキーマは Rust 側（`core/protocol/`）。Swift の型は `typeshare` で生成してコミットし、CI で差分検査
-- `process_key` は同期要求で、応答に描画差分 `{consumed, commit?, preedit?, candidates?, mode?, revision}` をまとめて返す。非同期通知はライブ変換・スタイル変換結果等のみ（`revision` で古いものを破棄）
+- `process_key` は同期要求で、応答に描画差分 `{consumed, commit?, preedit?, candidates?, mode?, revision}` をまとめて返す。非同期通知はライブ変換・スタイル変換結果・Space 変換の遅延した LLM 結果の差し替え等のみ（`revision` で古いものを破棄）
 - 文字位置は UTF-16 コード単位。キーは `{keysym(XKB), keycode, text, modifiers, kind}`
 - メソッド一覧は設計書 §3.2
 

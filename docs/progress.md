@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-09-27（設定・環境プロファイル・学習・ユーザー辞書の実装後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-09-27（非同期の結果差し替えの実装後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -17,12 +17,13 @@
 | 7 | infer | `ConversionModel` / `PromptAdapter` trait、zenz-v3.1 アダプタ、`MockModel`、`llama-cpp-2 =0.1.157`（feature `llama`）による実推論、`cargo xtask fetch-model`（SHA-256 検証）。zenz-v3.1-small で 7 文すべて正しく変換（28〜47ms/文）。自前の GGUF 語彙リーダーとトークナイザを実装（G-3）。既定 feature では llama.cpp をビルドしない |
 | 8 | LLM の変換パイプラインへの接続 | `HybridBackend`（server）: LLM で文全体を変換 → 辞書の格子で強制アライメントして文節に分ける（`Dictionary::align`）、文節候補は LLM の最良変換 + 辞書候補の LLM 再採点（`ConversionModel::score`）、`sync_budget` 超過時は辞書の結果 + 結果キャッシュ、縮退（LLM → 辞書 → 読み）、`--no-llm` / `--sync-budget-ms`。`nagi-eval`（Mozc `evaluation.tsv` での精度・レイテンシ計測）。評価データ 609 件で辞書のみ 66.0% → 辞書 + LLM 76.4%、`convert_sentence` p50 32ms / p95 56ms。詳細は G-11。LLM を使うには server を `--features llama` でビルドする |
 | 9 | 設定・環境プロファイル・学習・ユーザー辞書 | `nagi-config`（行番号付きエラー・`default.toml`・再読み込み）、`nagi-profile`（初回判定・キャリブレーション・自動切替）、`nagi-learn`（学習の記録・削除・原子的保存）、ユーザー辞書（Mozc TSV・スニペット・オーバーレイ）、`Pipeline` の優先順統合、`set_environment` / `get_status` / `clear_learning`、`Ctrl+Delete`。詳細は G-12 |
+| 10 | 予算超過した LLM 結果の非同期差し替え | Space 変換で LLM が `sync_budget` を超えたとき、辞書の結果で応答したあと、完了時に `update_preedit` / `update_candidates` で表示を差し替える（未操作のときだけ）。`Engine::apply_completions`、`Pipeline` の `Completion` 通知、`Server::run_threaded`（入力読み取りスレッド + waker）。詳細は G-11 |
 
 ## 未完了の項目と次の一手
 
 優先順:
 
-1. **LLM 接続の残り**: 非同期通知（`update_preedit` / `update_candidates`）での結果差し替え、ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
+1. **LLM 接続の残り**: ビームサーチによる文全体の N-best（`conversion.initial_view = sentence`）、KV キャッシュの再利用、ライブ変換のチャンク処理（Phase 2）。数詞の表記ゆれは Rewriter（Phase 4）
 2. **予測変換**（Phase 2）: 学習・ユーザー辞書の前方一致（`Learner::lookup_prefix` は用意済み）、候補ウィンドウの Tab / ↓ 選択
 3. **環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化、`quality` で使う大きいモデル・reranker（Laya 評価）
 4. **設定の残り**: キーマップ TOML（Phase 3。`[keymap]` は `preset` だけ）、設定 GUI（Phase 4）、`update.auto_check` の実装

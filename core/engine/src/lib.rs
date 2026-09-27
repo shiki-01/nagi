@@ -13,7 +13,9 @@ pub mod keys;
 pub mod observer;
 
 pub use action::{Action, Direction};
-pub use backend::{BackendCandidate, BackendSegment, ConversionBackend, KanaBackend, MockBackend};
+pub use backend::{
+    BackendCandidate, BackendSegment, Completion, ConversionBackend, KanaBackend, MockBackend,
+};
 pub use engine::{Engine, EngineConfig, SessionSnapshot, StateKind};
 pub use ir::{Candidate, CandidateSet, CursorPos, Preedit, Segment};
 pub use keymap::{KeyContext, KeyMap};

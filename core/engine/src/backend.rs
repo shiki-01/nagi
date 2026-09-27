@@ -5,6 +5,7 @@
 
 use nagi_protocol::view::CandidateSource;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// [`ConversionBackend::convert_sentence`] が返す 1 文節
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +27,15 @@ pub struct BackendCandidate {
     pub sources: Vec<CandidateSource>,
 }
 
+/// バックエンドの非同期処理が完了したことの通知。`convert_sentence` に渡された引数と同じ値を持つ
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Completion {
+    /// ひらがなの読み
+    pub reading: String,
+    /// 左文脈
+    pub left_context: String,
+}
+
 /// 変換バックエンド
 pub trait ConversionBackend: Send + Sync {
     /// バックエンド名（診断用。入力内容は含めない）
@@ -44,6 +54,14 @@ pub trait ConversionBackend: Send + Sync {
         left_context: &str,
         limit: usize,
     ) -> Vec<BackendCandidate>;
+
+    /// 溜まった完了通知を取り出す（取り出すと空になる）
+    fn take_completions(&self) -> Vec<Completion> {
+        Vec::new()
+    }
+
+    /// 完了通知が積まれたときに呼ぶ関数を登録する
+    fn set_waker(&self, _waker: Arc<dyn Fn() + Send + Sync>) {}
 }
 
 /// 辞書もモデルも使わないバックエンド（読みをそのまま返す）
