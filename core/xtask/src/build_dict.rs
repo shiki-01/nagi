@@ -1,8 +1,15 @@
-//! `cargo xtask build-dict` — Mozc 辞書から Nagi バイナリ辞書を生成。
+//! `cargo xtask build-dict` — Mozc / SudachiDict 辞書から Nagi バイナリ辞書を生成。
 
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
+
+/// `build-dict` で選択できる辞書ソース。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DictSource {
+    Mozc,
+    Sudachi,
+}
 
 /// リポジトリルートを求める。
 fn find_repo_root() -> Result<PathBuf, String> {
@@ -31,28 +38,84 @@ fn mozc_dict_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// 出力ファイルのパスを取得。
-fn output_path() -> Result<PathBuf, String> {
+/// SudachiDict 辞書のディレクトリを取得。
+fn sudachi_dict_dir() -> Result<PathBuf, String> {
     let repo_root = find_repo_root()?;
-    Ok(repo_root.join("data").join("dict").join("nagi-dict.bin"))
+    let dir = repo_root.join("data").join("dict").join("sudachi");
+    if !dir.exists() {
+        return Err(format!(
+            "SudachiDict 辞書ディレクトリが見つかりません: {}。\n\
+            {} に SudachiDict の語彙 CSV（*.csv）と matrix.def を配置してください。",
+            dir.display(),
+            dir.display()
+        ));
+    }
+    Ok(dir)
+}
+
+/// 出力ファイルのパスを取得。
+fn output_path(source: DictSource) -> Result<PathBuf, String> {
+    let repo_root = find_repo_root()?;
+    let filename = match source {
+        DictSource::Mozc => "nagi-dict.bin",
+        DictSource::Sudachi => "nagi-dict-sudachi.bin",
+    };
+    Ok(repo_root.join("data").join("dict").join(filename))
+}
+
+/// SudachiDict 辞書ディレクトリ内の語彙 CSV（ファイル名順）と matrix.def のパスを求める。
+fn sudachi_inputs(dir: &std::path::Path) -> Result<(Vec<PathBuf>, PathBuf), String> {
+    let mut lex_paths: Vec<PathBuf> = fs::read_dir(dir)
+        .map_err(|e| format!("ディレクトリ読み込み失敗 {}: {}", dir.display(), e))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
+        })
+        .collect();
+    lex_paths.sort();
+    if lex_paths.is_empty() {
+        return Err(format!("{} に *.csv がありません", dir.display()));
+    }
+    let matrix_def_path = dir.join("matrix.def");
+    if !matrix_def_path.exists() {
+        return Err(format!("{} が見つかりません", matrix_def_path.display()));
+    }
+    Ok((lex_paths, matrix_def_path))
 }
 
 /// タスク実行。
-pub fn run() -> Result<(), String> {
-    let mozc_dir = mozc_dict_dir()?;
-    let output_file = output_path()?;
+pub fn run(source: DictSource) -> Result<(), String> {
+    let output_file = output_path(source)?;
 
-    eprintln!("Mozc 辞書ディレクトリ: {}", mozc_dir.display());
     eprintln!("出力ファイル: {}", output_file.display());
     eprintln!();
 
     eprintln!("Nagi バイナリ辞書を構築中...");
     let start = Instant::now();
 
-    // Mozc の連接コストは「前の語の右 ID × 次の語の左 ID」の順（RidMajor。実データの変換結果で検証済み）
-    let dictionary =
-        nagi_dict::build_from_mozc_dir(&mozc_dir, nagi_dict::ConnectionLayout::RidMajor)
-            .map_err(|e| format!("辞書ビルド失敗: {e}"))?;
+    let dictionary = match source {
+        DictSource::Mozc => {
+            let mozc_dir = mozc_dict_dir()?;
+            eprintln!("Mozc 辞書ディレクトリ: {}", mozc_dir.display());
+            // Mozc の連接コストは「前の語の右 ID × 次の語の左 ID」の順（RidMajor。実データの変換結果で検証済み）
+            nagi_dict::build_from_mozc_dir(&mozc_dir, nagi_dict::ConnectionLayout::RidMajor)
+                .map_err(|e| format!("辞書ビルド失敗: {e}"))?
+        }
+        DictSource::Sudachi => {
+            let sudachi_dir = sudachi_dict_dir()?;
+            eprintln!("SudachiDict 辞書ディレクトリ: {}", sudachi_dir.display());
+            let (lex_paths, matrix_def_path) = sudachi_inputs(&sudachi_dir)?;
+            for p in &lex_paths {
+                eprintln!("  語彙CSV: {}", p.display());
+            }
+            eprintln!("  連接コスト表: {}", matrix_def_path.display());
+            nagi_dict::build_from_sudachi_files(&lex_paths, &matrix_def_path)
+                .map_err(|e| format!("辞書ビルド失敗: {e}"))?
+        }
+    };
     let binary_data = dictionary.to_bytes();
 
     let build_time = start.elapsed();
