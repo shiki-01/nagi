@@ -9,10 +9,27 @@ use crate::convert::ConvertedSegment;
 use crate::dictionary::Dictionary;
 use crate::pos::Pos;
 use std::collections::HashMap;
+use std::sync::Arc;
 
-/// 表記 → [(読み, 語 index)] の逆引き索引
+/// 表記 → [(読み, 語 index)] の逆引きマップ本体（`ReverseIndex::by_surface` の型）
+type ReadingsBySurface = HashMap<Box<str>, Box<[(Arc<str>, u32)]>>;
+
+/// 表記 → [(読み, 語 index)] の逆引き索引。
+///
+/// 実データ（辞書語数 約120万）では素朴な `HashMap<String, Vec<(String, usize)>>` は
+/// 実測で約300MBに達した（見積もりの「数十MB」から大きく外れていた。docs/decisions.md
+/// G-29 追記参照）。内訳は主に3つ:
+/// - `Vec` は最初の push で容量4を確保する（`RawVec::MIN_NON_ZERO_CAP`）。表記の大半は
+///   候補（同表記の読み違い）が1件だけなので、3件ぶんの未使用領域が毎エントリ無駄になる
+/// - 同じ読みが複数の表記（同音異義語）にまたがって現れるたびに、読み文字列がまるごと
+///   複製されていた
+/// - `String`（24バイト）・`Vec`（24バイト）は `Box<str>`（16バイト）・`Box<[_]>`（16バイト）
+///   より構造体自体が大きく、`usize`（8バイト）は `u32`（4バイト、辞書語数的に十分）より大きい
+///
+/// これらを避けるため、構築後に容量ぴったりの `Box<[_]>` へ詰め直し、同じ読みは `Arc<str>`
+/// で共有する。索引自体（読み→表記のグループ）は変えていない
 pub(crate) struct ReverseIndex {
-    by_surface: HashMap<String, Vec<(String, usize)>>,
+    by_surface: ReadingsBySurface,
     /// 索引に登録されている表記の最大文字数（前方一致探索の上限に使う）
     max_surface_chars: usize,
 }
@@ -25,29 +42,54 @@ struct RNode {
 }
 
 impl Dictionary {
-    /// 逆引き索引を返す（初回だけ辞書全体を舐めて構築し、以降はキャッシュを返す）
-    fn reverse_index(&self) -> &ReverseIndex {
-        self.reverse_index_cell().get_or_init(|| {
-            use fst::Streamer;
-            let mut by_surface: HashMap<String, Vec<(String, usize)>> = HashMap::new();
-            let mut max_surface_chars = 1usize;
-            let mut stream = self.trie_stream();
-            while let Some((reading_bytes, group)) = stream.next() {
-                let reading = String::from_utf8_lossy(reading_bytes).into_owned();
-                for idx in self.group_range(group as u32) {
-                    let surface = self.surface(idx);
-                    max_surface_chars = max_surface_chars.max(surface.chars().count());
-                    by_surface
-                        .entry(surface.to_string())
-                        .or_default()
-                        .push((reading.clone(), idx));
-                }
+    /// 逆引き索引を返す（無ければ辞書全体を舐めて構築し、以降はキャッシュを返す）。
+    /// `release_reverse_index` で解放されていれば、次回呼び出し時に作り直す
+    fn reverse_index(&self) -> Arc<ReverseIndex> {
+        if let Ok(cached) = self.reverse_index_cell().lock()
+            && let Some(index) = &*cached
+        {
+            return Arc::clone(index);
+        }
+        use fst::Streamer;
+        let mut by_surface: HashMap<String, Vec<(Arc<str>, u32)>> = HashMap::new();
+        let mut max_surface_chars = 1usize;
+        let mut stream = self.trie_stream();
+        while let Some((reading_bytes, group)) = stream.next() {
+            // このグループ（同じ読み）に属する全表記で共有する。読みの重複コピーを避ける
+            let reading: Arc<str> = Arc::from(String::from_utf8_lossy(reading_bytes).as_ref());
+            for idx in self.group_range(group as u32) {
+                let surface = self.surface(idx);
+                max_surface_chars = max_surface_chars.max(surface.chars().count());
+                by_surface
+                    .entry(surface.to_string())
+                    .or_default()
+                    .push((Arc::clone(&reading), idx as u32));
             }
-            ReverseIndex {
-                by_surface,
-                max_surface_chars,
-            }
-        })
+        }
+        // 容量ぴったりの Box<[_]> へ詰め直す（Vec の初期容量4による無駄・String/Vecの
+        // 構造体サイズを削る。一度きりの構築コストなので許容する）
+        let by_surface: ReadingsBySurface = by_surface
+            .into_iter()
+            .map(|(k, v)| (k.into_boxed_str(), v.into_boxed_slice()))
+            .collect();
+        let index = Arc::new(ReverseIndex {
+            by_surface,
+            max_surface_chars,
+        });
+        if let Ok(mut cached) = self.reverse_index_cell().lock() {
+            // 別スレッドが並行して構築を終えていたら、先に入っていた方（同じ内容）を使う
+            *cached = Some(Arc::clone(cached.get_or_insert_with(|| Arc::clone(&index))));
+        }
+        index
+    }
+
+    /// 逆引き索引を解放する（`minimal` プロファイル・メモリ逼迫時）。実測で約300MB規模になる
+    /// ため（G-29 追記）、`reconvert` を使い終えたら手放せるようにする。次回 `reconvert` 呼び出し
+    /// 時に自動で作り直される（辞書全体を舐め直すコストがかかる）
+    pub fn release_reverse_index(&self) {
+        if let Ok(mut cached) = self.reverse_index_cell().lock() {
+            *cached = None;
+        }
     }
 
     /// 確定済みの表記（surface）から読みを推定し、文節に区切って返す（`reconvert` 用）。
@@ -85,14 +127,15 @@ impl Dictionary {
             let max_len = index.max_surface_chars.min(n - p);
             for len in 1..=max_len {
                 let span: String = chars[p..p + len].iter().collect();
-                let Some(candidates) = index.by_surface.get(&span) else {
+                let Some(candidates) = index.by_surface.get(span.as_str()) else {
                     continue;
                 };
                 let end = p + len;
-                for (reading, idx) in candidates {
-                    let lid = self.lid_of(*idx);
-                    let rid = self.rid_of(*idx);
-                    let word_cost = i32::from(self.cost_of(*idx));
+                for (reading, idx) in candidates.iter() {
+                    let idx = *idx as usize;
+                    let lid = self.lid_of(idx);
+                    let rid = self.rid_of(idx);
+                    let word_cost = i32::from(self.cost_of(idx));
                     let (pc, prev) = best_pred(lid);
                     let node_idx = nodes.len();
                     let total = pc + word_cost;
@@ -100,7 +143,7 @@ impl Dictionary {
                         end,
                         lid,
                         prev,
-                        reading: reading.clone(),
+                        reading: reading.to_string(),
                     });
                     let slot = best_at[end].entry(rid).or_insert((i32::MAX, usize::MAX));
                     if total < slot.0 {

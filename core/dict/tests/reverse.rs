@@ -100,3 +100,13 @@ fn reverse_convert_is_cached_and_repeatable() {
     let b = dict.reverse_convert("今日は");
     assert_eq!(a, b);
 }
+
+#[test]
+fn release_reverse_index_forces_rebuild_with_same_result() {
+    let dict = dict();
+    let before = dict.reverse_convert("今日はいい天気");
+    dict.release_reverse_index();
+    // 解放後の呼び出しでも（索引を作り直して）同じ結果になる
+    let after = dict.reverse_convert("今日はいい天気");
+    assert_eq!(before, after);
+}

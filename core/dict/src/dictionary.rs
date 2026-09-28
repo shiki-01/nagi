@@ -19,7 +19,7 @@
 use crate::error::DictError;
 use crate::pos::{Pos, PosClass, PosSub};
 use fst::Map;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 
 const MAGIC: &[u8; 8] = b"NAGIDICT";
 const VERSION: u32 = 1;
@@ -63,9 +63,11 @@ pub struct Dictionary {
     conn: Vec<u16>,
     conn_n: usize,
     fallback: FallbackIds,
-    /// 逆引き索引（表記 → 読み）。`reverse_convert` で最初に使われた時に一度だけ構築する
-    /// （辞書全体を毎回舐めるコストがあるため遅延構築。使わない限りコストは無い）
-    reverse: OnceLock<crate::reverse::ReverseIndex>,
+    /// 逆引き索引（表記 → 読み）。`reverse_convert` で最初に使われた時に構築し、以降キャッシュする
+    /// （辞書全体を毎回舐めるコストがあるため遅延構築。使わない限りコストは無い）。実データでは
+    /// 約300MB規模になるため（G-29 追記）、`release_reverse_index` で明示的に解放できるように
+    /// `OnceLock` ではなく `Mutex<Option<_>>` にしている
+    reverse: Mutex<Option<Arc<crate::reverse::ReverseIndex>>>,
 }
 
 impl std::fmt::Debug for Dictionary {
@@ -181,7 +183,7 @@ impl Dictionary {
             conn: p.conn,
             conn_n: p.conn_n,
             fallback,
-            reverse: OnceLock::new(),
+            reverse: Mutex::new(None),
         })
     }
 
@@ -331,8 +333,8 @@ impl Dictionary {
         self.fallback
     }
 
-    /// `reverse` フィールドへの参照（逆引き索引を初回構築・キャッシュするための `OnceLock`）
-    pub(crate) fn reverse_index_cell(&self) -> &OnceLock<crate::reverse::ReverseIndex> {
+    /// `reverse` フィールドへの参照（逆引き索引を構築・キャッシュ・解放するためのロック）
+    pub(crate) fn reverse_index_cell(&self) -> &Mutex<Option<Arc<crate::reverse::ReverseIndex>>> {
         &self.reverse
     }
 

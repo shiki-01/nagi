@@ -142,28 +142,37 @@ impl Pipeline {
         }
     }
 
-    /// プロファイルの変化を見て、LLM をアクティブ / 非アクティブに切り替える
-    /// （`Minimal` になったら解放、そこから戻ったら再読み込み）。別スレッドで行うので待たせない
+    /// プロファイルの変化を見て、LLM をアクティブ / 非アクティブに切り替え、辞書の逆引き索引
+    /// （`reconvert` 用。実データで約300MB規模。G-29 追記）を解放する（`Minimal` になったら
+    /// 解放、そこから戻ったら次回使うときに再構築・再読み込み）。LLM の切り替えは別スレッドで
+    /// 行うので待たせない
     fn reconcile_active(&self) {
-        let Some(llm) = &self.llm else { return };
         let current = self.runtime.profile();
-        let Ok(mut last) = llm.last_profile.lock() else {
-            return;
-        };
-        if *last == current {
-            return;
+
+        if let Some(llm) = &self.llm
+            && let Ok(mut last) = llm.last_profile.lock()
+            && *last != current
+        {
+            *last = current;
+            drop(last);
+            let should_be_active = current != nagi_profile::Profile::Minimal;
+            let model = llm.model.clone();
+            let _ = std::thread::Builder::new()
+                .name("nagi-llm-active".into())
+                .spawn(move || {
+                    if let Ok(mut m) = model.lock() {
+                        let _ = m.set_active(should_be_active);
+                    }
+                });
         }
-        *last = current;
-        drop(last);
-        let should_be_active = current != nagi_profile::Profile::Minimal;
-        let model = llm.model.clone();
-        let _ = std::thread::Builder::new()
-            .name("nagi-llm-active".into())
-            .spawn(move || {
-                if let Ok(mut m) = model.lock() {
-                    let _ = m.set_active(should_be_active);
-                }
-            });
+
+        if matches!(
+            current,
+            nagi_profile::Profile::Minimal | nagi_profile::Profile::Light
+        ) && let Some(dict) = &self.dict
+        {
+            dict.release_reverse_index();
+        }
     }
 
     /// 起動直後の最初の推論が遅くならないよう、別スレッドでモデルを温め、続けてキャリブレーション
@@ -696,18 +705,29 @@ impl ConversionBackend for Pipeline {
     }
 
     fn reconvert(&self, surface: &str) -> Vec<BackendSegment> {
-        match &self.dict {
-            Some(dict) => dict
-                .reverse_convert(surface)
-                .into_iter()
-                .map(|s| BackendSegment {
-                    reading: s.reading,
-                    surface: s.surface,
-                    sources: vec![CandidateSource::SystemDict],
-                })
-                .collect(),
-            None => Vec::new(),
+        self.reconcile_active();
+        let Some(dict) = &self.dict else {
+            return Vec::new();
+        };
+        let result = dict
+            .reverse_convert(surface)
+            .into_iter()
+            .map(|s| BackendSegment {
+                reading: s.reading,
+                surface: s.surface,
+                sources: vec![CandidateSource::SystemDict],
+            })
+            .collect();
+        // `minimal`/`light` では速度よりメモリを優先する方針（G-13）に合わせ、使い終えたら
+        // 都度手放す（実データで約270MB規模になる。次回 reconvert 時に作り直すコストを払う。
+        // G-29 追記。圧縮しても大きく減らなかった経緯も参照）
+        if matches!(
+            self.runtime.profile(),
+            nagi_profile::Profile::Minimal | nagi_profile::Profile::Light
+        ) {
+            dict.release_reverse_index();
         }
+        result
     }
 
     /// 文全体の N-best（`conversion.initial_view = "sentence"` 用）。
