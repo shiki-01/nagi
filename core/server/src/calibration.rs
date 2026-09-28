@@ -36,6 +36,9 @@ pub fn load(path: &Path) -> Option<CalibrationRecord> {
 pub fn save(path: &Path, record: &CalibrationRecord) -> std::io::Result<()> {
     let json =
         serde_json::to_string_pretty(record).map_err(|e| std::io::Error::other(e.to_string()))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut temp = path.to_path_buf();
     temp.set_extension("tmp");
     std::fs::write(&temp, json)?;
@@ -74,6 +77,19 @@ mod tests {
         assert_eq!(loaded.total_memory_mb, record.total_memory_mb);
         assert_eq!(loaded.backend, record.backend);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_creates_missing_parent_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "nagi-calibration-test-missing-parent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("calibration.json");
+        save(&path, &record()).expect("親ディレクトリが無くても保存できる");
+        assert!(path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
