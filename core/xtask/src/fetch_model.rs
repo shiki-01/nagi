@@ -34,10 +34,7 @@ impl ModelVariant {
                 url: "https://huggingface.co/Miwa-Keita/zenz-v3.1-xsmall-gguf/resolve/5c0c4db8c8cc66a6ef01520475bebd56b41f6236/ggml-model-Q5_K_M.gguf",
                 filename: "zenz-v3.1-xsmall-Q5_K_M.gguf",
                 size: 20_970_304,
-                // 取得元ホスト (Hugging Face Xet CDN) が開発環境からブロックされており
-                // まだ実ファイルをダウンロード・SHA-256計算できていない (docs/decisions.md G節参照)。
-                // ネットワーク到達性確認後に実ファイルを取得し、SHA-256を計算してここに埋めること。
-                sha256: None,
+                sha256: Some("189638370c43292fd54ba5e83854b24887ddd57e8914e19095514e663f60c7f5"),
             },
         }
     }
