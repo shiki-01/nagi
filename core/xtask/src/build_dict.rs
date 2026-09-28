@@ -38,7 +38,7 @@ fn output_path() -> Result<PathBuf, String> {
 }
 
 /// タスク実行。
-pub fn run(_args: &[String]) -> Result<(), String> {
+pub fn run() -> Result<(), String> {
     let mozc_dir = mozc_dict_dir()?;
     let output_file = output_path()?;
 

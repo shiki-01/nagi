@@ -19,7 +19,7 @@ fn repo_root() -> PathBuf {
 ///
 /// typeshare を実行して protocol crate から Swift の型を生成し、
 /// `frontend-macos/Sources/Generated/Protocol.swift` に出力します。
-pub fn generate(_args: &[String]) -> Result<(), String> {
+pub fn generate() -> Result<(), String> {
     let repo = repo_root();
     let protocol_src = repo.join("core/protocol");
     let output_file = repo.join("frontend-macos/Sources/Generated/Protocol.swift");
@@ -59,9 +59,9 @@ pub fn generate(_args: &[String]) -> Result<(), String> {
 ///
 /// 1. generate を実行して Swift の型を生成
 /// 2. git diff で差分がないことを確認（未追跡ファイルも含む）
-pub fn check(_args: &[String]) -> Result<(), String> {
+pub fn check() -> Result<(), String> {
     // まず generate を実行
-    generate(&[])?;
+    generate()?;
 
     let repo = repo_root();
     let output_file = repo.join("frontend-macos/Sources/Generated/Protocol.swift");

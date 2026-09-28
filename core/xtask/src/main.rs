@@ -9,35 +9,42 @@ mod types;
 
 use std::process::ExitCode;
 
-const USAGE: &str = "\
-使い方: cargo xtask <task> [args...]
+use clap::{Parser, Subcommand};
 
-タスク:
-  fetch-dict     Mozc OSS 辞書を取得し SHA-256 検証する（data/dict/mozc/ へ）
-  build-dict     取得済みの Mozc 辞書から Nagi 辞書バイナリを生成する（data/dict/nagi-dict.bin）
-  fetch-model    変換モデル（zenz GGUF）を取得し SHA-256 検証する（data/models/ へ）
-  gen-types      protocol の型から Swift の型を生成する（typeshare-cli が必要）
-  check-types    gen-types を実行し、生成物に差分がないことを検査する
-";
+use fetch_model::ModelVariant;
+
+#[derive(Parser)]
+#[command(name = "xtask", about = "Nagi 開発用タスク（OS 非依存）")]
+struct Cli {
+    #[command(subcommand)]
+    task: Task,
+}
+
+#[derive(Subcommand)]
+enum Task {
+    /// Mozc OSS 辞書を取得し SHA-256 検証する（data/dict/mozc/ へ）
+    FetchDict,
+    /// 取得済みの Mozc 辞書から Nagi 辞書バイナリを生成する（data/dict/nagi-dict.bin）
+    BuildDict,
+    /// 変換モデル（zenz GGUF）を取得し SHA-256 検証する（data/models/ へ）
+    FetchModel {
+        #[arg(long, value_enum, default_value_t = ModelVariant::Small)]
+        variant: ModelVariant,
+    },
+    /// protocol の型から Swift の型を生成する（typeshare-cli が必要）
+    GenTypes,
+    /// gen-types を実行し、生成物に差分がないことを検査する
+    CheckTypes,
+}
 
 fn main() -> ExitCode {
-    let mut args = std::env::args().skip(1);
-    let Some(task) = args.next() else {
-        eprint!("{USAGE}");
-        return ExitCode::FAILURE;
-    };
-    let rest: Vec<String> = args.collect();
-    let result = match task.as_str() {
-        "fetch-dict" => fetch_dict::run(&rest),
-        "build-dict" => build_dict::run(&rest),
-        "fetch-model" => fetch_model::run(&rest),
-        "gen-types" => types::generate(&rest),
-        "check-types" => types::check(&rest),
-        "-h" | "--help" | "help" => {
-            print!("{USAGE}");
-            Ok(())
-        }
-        other => Err(format!("不明なタスク: {other}\n\n{USAGE}")),
+    let cli = Cli::parse();
+    let result = match cli.task {
+        Task::FetchDict => fetch_dict::run(),
+        Task::BuildDict => build_dict::run(),
+        Task::FetchModel { variant } => fetch_model::run(variant),
+        Task::GenTypes => types::generate(),
+        Task::CheckTypes => types::check(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

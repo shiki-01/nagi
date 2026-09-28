@@ -1,14 +1,47 @@
-//! `cargo xtask fetch-model` — zenz-v3.1-small GGUF モデルを取得し SHA-256 検証。
+//! `cargo xtask fetch-model` — zenz GGUF モデルを取得し SHA-256 検証。
 
 use std::fs;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
-/// Hugging Face から取得するモデルの情報
-const MODEL_URL: &str = "https://huggingface.co/Miwa-Keita/zenz-v3.1-small-gguf/resolve/ddf6e44b2e05ab7ea9a3e31559c5e7948761365c/ggml-model-Q5_K_M.gguf";
-const MODEL_FILENAME: &str = "zenz-v3.1-small-Q5_K_M.gguf";
-const MODEL_SIZE: u64 = 73_871_968; // バイト
-const MODEL_SHA256: &str = "4de930c06bef8c263aa1aa40684af206db4ce1b96375b3b8ed0ea508e0b14f6c";
+/// `fetch-model` で選択できるモデルのバリアント。
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ModelVariant {
+    Small,
+    Xsmall,
+}
+
+/// Hugging Face から取得するモデルの情報。
+struct ModelInfo {
+    url: &'static str,
+    filename: &'static str,
+    size: u64,
+    /// SHA-256 期待値。`None` は「配布元から未取得のため未検証」を意味し、
+    /// `fetch_model` はこの場合エラーを返して処理を止める。
+    sha256: Option<&'static str>,
+}
+
+impl ModelVariant {
+    fn info(self) -> ModelInfo {
+        match self {
+            ModelVariant::Small => ModelInfo {
+                url: "https://huggingface.co/Miwa-Keita/zenz-v3.1-small-gguf/resolve/ddf6e44b2e05ab7ea9a3e31559c5e7948761365c/ggml-model-Q5_K_M.gguf",
+                filename: "zenz-v3.1-small-Q5_K_M.gguf",
+                size: 73_871_968,
+                sha256: Some("4de930c06bef8c263aa1aa40684af206db4ce1b96375b3b8ed0ea508e0b14f6c"),
+            },
+            ModelVariant::Xsmall => ModelInfo {
+                url: "https://huggingface.co/Miwa-Keita/zenz-v3.1-xsmall-gguf/resolve/5c0c4db8c8cc66a6ef01520475bebd56b41f6236/ggml-model-Q5_K_M.gguf",
+                filename: "zenz-v3.1-xsmall-Q5_K_M.gguf",
+                size: 20_970_304,
+                // 取得元ホスト (Hugging Face Xet CDN) が開発環境からブロックされており
+                // まだ実ファイルをダウンロード・SHA-256計算できていない (docs/decisions.md G節参照)。
+                // ネットワーク到達性確認後に実ファイルを取得し、SHA-256を計算してここに埋めること。
+                sha256: None,
+            },
+        }
+    }
+}
 
 /// リポジトリルートを求める。manifest dir の 3 階層上（core/ の上）。
 fn find_repo_root() -> Result<PathBuf, String> {
@@ -66,35 +99,42 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// モデルをダウンロード・検証する。既に存在して SHA-256 が一致したらスキップ。
-fn fetch_model(output_dir: &Path) -> Result<(), String> {
-    let dest_path = output_dir.join(MODEL_FILENAME);
+fn fetch_model(info: &ModelInfo, output_dir: &Path) -> Result<(), String> {
+    let Some(expected_sha256) = info.sha256 else {
+        return Err(format!(
+            "{} の SHA-256 が未確定のため取得できません。ネットワーク到達性確認後に SHA-256 を計算し fetch_model.rs に反映してください",
+            info.filename
+        ));
+    };
+
+    let dest_path = output_dir.join(info.filename);
 
     // 既に存在して SHA-256 が一致したらスキップ
     if let Ok(data) = fs::read(&dest_path) {
         let hash = sha256_hex(&data);
-        if hash == MODEL_SHA256 {
-            eprintln!("スキップ: {} (SHA-256 一致)", MODEL_FILENAME);
+        if hash == expected_sha256 {
+            eprintln!("スキップ: {} (SHA-256 一致)", info.filename);
             return Ok(());
         } else {
             eprintln!(
                 "警告: {} は存在しますが SHA-256 が不一致です。再ダウンロードします",
-                MODEL_FILENAME
+                info.filename
             );
         }
     }
 
-    eprintln!("ダウンロード中: {} ...", MODEL_FILENAME);
-    eprintln!("  URL: {}", MODEL_URL);
-    eprintln!("  サイズ: {} バイト", MODEL_SIZE);
+    eprintln!("ダウンロード中: {} ...", info.filename);
+    eprintln!("  URL: {}", info.url);
+    eprintln!("  サイズ: {} バイト", info.size);
 
-    let response = ureq::get(MODEL_URL)
+    let response = ureq::get(info.url)
         .call()
         .map_err(|e| format!("HTTP リクエスト失敗: {}", e))?;
 
     if response.status() != 200 {
         return Err(format!(
             "{} ダウンロード失敗 (HTTP {})",
-            MODEL_FILENAME,
+            info.filename,
             response.status()
         ));
     }
@@ -108,10 +148,10 @@ fn fetch_model(output_dir: &Path) -> Result<(), String> {
     let actual_hash = sha256_hex(&bytes);
     eprintln!("  取得: {} バイト, SHA-256: {}", bytes.len(), actual_hash);
 
-    if actual_hash != MODEL_SHA256 {
+    if actual_hash != expected_sha256 {
         return Err(format!(
             "{} の SHA-256 が不一致\n  期待: {}\n  実際: {}",
-            MODEL_FILENAME, MODEL_SHA256, actual_hash
+            info.filename, expected_sha256, actual_hash
         ));
     }
 
@@ -121,13 +161,14 @@ fn fetch_model(output_dir: &Path) -> Result<(), String> {
 }
 
 /// タスク実行。
-pub fn run(_args: &[String]) -> Result<(), String> {
+pub fn run(variant: ModelVariant) -> Result<(), String> {
+    let info = variant.info();
     let out_dir = model_dir()?;
     eprintln!("出力先: {}", out_dir.display());
-    eprintln!("モデル: {}", MODEL_FILENAME);
+    eprintln!("モデル: {}", info.filename);
     eprintln!();
 
-    fetch_model(&out_dir)?;
+    fetch_model(&info, &out_dir)?;
 
     eprintln!("\n完了。モデルは {} に保存されました", out_dir.display());
     Ok(())

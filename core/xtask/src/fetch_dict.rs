@@ -181,7 +181,7 @@ fn fetch_file(suffix: &str, expected_hash: Option<&str>, output_dir: &Path) -> R
 }
 
 /// タスク実行。
-pub fn run(_args: &[String]) -> Result<(), String> {
+pub fn run() -> Result<(), String> {
     let out_dir = output_dir()?;
     eprintln!("出力先: {}", out_dir.display());
     eprintln!("Mozc コミット: {}", MOZC_COMMIT);
