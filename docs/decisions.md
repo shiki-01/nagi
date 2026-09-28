@@ -600,3 +600,15 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **プロトコル変更なし**: sentence モードの候補は `CandidatesView`（結合済み文字列 + `sources: [Llm]`）でそのまま表現できるため、`CandidateView`/typeshare の変更は不要だった
 - **既知の限界**: Literal との混在など、入力が複数ピースにまたがる場合は sentence モードを提供しない（`whole` が `None` のまま）。ビームサーチ仮説を `apply_preferences` で個別に上書きした結果、複数の仮説が同じ表記に収束しても再重複除去はしない（まれ・実害は小さいと判断）
 - **未実装**: キーマップでの sentence モード専用の割当（現状は既存の Space/矢印キーのみ）、`nagi-eval` でのビームサーチ込み精度計測
+
+### G-35. Phase 0: SudachiDict 対応（辞書内部の pos_id 分離・CSV/matrix.def パーサー、2026-09-28）
+
+実装: `core/dict/src/dictionary.rs`（`Entry.pos_id` / `RawParts.pos_ids`、バイナリ形式 v2）、`core/dict/src/builder.rs`（`add_sudachi_csv` / `set_connection_matrix_def_text` / `build_from_sudachi_files`）、`core/dict/src/pos.rs`（`sudachi_pos_to_mozc_like`）、`core/xtask/src/build_dict.rs`（`--source mozc|sudachi`）。
+
+- **前提が崩れていた設計を修正**: 従来の `Dictionary` は「連接コストID（lid/rid）＝品詞ID」という前提（Mozc/IPADIC系の単純化）で設計されていた。SudachiDict では同一の連接コストIDに平均2600種類以上の異なる品詞文字列が対応しており、この前提が成り立たない。`Entry`/`RawParts`/バイナリ形式に `pos_id` を独立フィールドとして追加し（`pos_defs.len()` と連接コスト表の次元 `conn_n` も分離）、Viterbi・アライメント・逆引きの品詞判定を `pos_id` 経由に統一した。Mozc 辞書では `pos_id = lid` として構築するため挙動は変わらない（既存テストは全て無変更で通過）
+- **品詞マッピング**: SudachiのPOS体系（名詞/代名詞/動詞/形容詞/形状詞/助動詞/助詞/接続詞/接頭辞/接尾辞/連体詞/副詞/感動詞/補助記号/記号/空白の16分類）を `sudachi_pos_to_mozc_like()` で Mozc `id.def` 互換の文字列に変換してから `pos_defs` に登録し、既存の `Pos::parse` をそのまま再利用する設計にした（`Dictionary` 側のロジックは無変更）
+- **ネットワーク到達性**: 当初 `sudachi.s3-website-ap-northeast-1.amazonaws.com`（CSV原本）・`d2ej7fkh96fzlu.cloudfront.net`（matrix.def、CloudFront配信）ともにブロックされていたが、環境のネットワーク許可リストにドメインを追加してもらい解決（S3側は静的サイトホスティングのため HTTP のみ、HTTPS は SSL エラーになる点に注意）。取得したファイルはユーザーがダウンロードして本セッションに提供
+- **実データでのビルド確認**: SudachiDict small_lex.csv（226MB）+ core_lex.csv（410MB）+ matrix.def（514MB、5981×5981密行列）から `cargo run --release -p xtask -- build-dict --source sudachi` でバイナリ辞書を構築できることを確認（構築時間 6.6秒、出力 126.69MB、entries=1,573,640、pos_id_count 相当のconn_n=5981 と matrix.def の次元が一致）
+- **CSVパースの実装判断**（実データを見て決定）: (1) Headword（col4）が空の行はIndexForm（col0）を表記として使う（実データの約96%でHeadwordが空。SudachiDictの慣例）。(2) LeftId/RightIdが`-1`の行（実データの約4.5%）は複合語のA/B unit分割専用エントリで単独では格子に出現しないため読み飛ばす。(3) フィールド内の `\uXXXX` Unicodeエスケープ（例 `,` = `,`）はデコードせず生のまま格納（実データで該当は約0.05%、主に数字の桁区切り表記のみで通常の日本語文には出現しにくいため精度への影響は小さいと判断。未対応）
+- **重要な発見: SudachiDictはIME変換用途に最適化されていない**。実データで検証したところ、同一読みの表記間で明らかに不自然なコスト順位になっている（例: 読み「ほん」でカタカナ表記「ホン」がコスト2456、漢字表記「本」がコスト6561——カタカナの方が低コスト＝優先される。読み「わたし」でも「ワタシ」がカタカナ表記なのに漢字の「私」より低コスト）。生CSVの時点でこの順位になっており、CSVパーサーやコスト計算の実装バグではない。SudachiDictのコストは「既存テキストを最も自然に分割する」形態素解析（分かち書き）用途に調整されたものであり、「読みから最適な表記を選ぶ」かな漢字変換用途の順位付けは想定されていないと考えられる。この結果、Mozc辞書との `nagi-eval` 精度比較では SudachiDict が構造的に不利になる可能性が高い
+- **未実施**（次段）: `nagi-eval` での実測比較（辞書2種 × モデル2種）、比較結果の本セクションへの追記、上記の発見を踏まえた上での最終的な採用判断
