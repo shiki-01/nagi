@@ -12,7 +12,8 @@
 //!   5. costs         u16 × 語数
 //!   6. surf_offsets  u32 × (語数 + 1)         表記文字列プール上のバイト位置
 //!   7. surf_pool     UTF-8
-//!   8. pos_defs      UTF-8（`id.def` の品詞文字列を '\n' 区切り。行番号 = 品詞 ID）
+//!   8. pos_defs      UTF-8（品詞文字列を '\n' 区切り。行番号 = 品詞 ID。行数は連接コスト表の
+//!                    次元 N とは独立。conn_n は 9. の長さから復元する）
 //!   9. conn          u16 × (N × N)            conn[rid_prev * N + lid_next]
 //!  10. pos_ids       u16 × 語数                品詞 ID（`pos_defs` の行番号への参照。連接コスト
 //!                                              ID（lid/rid）とは独立。Mozc 辞書では pos_id = lid）
@@ -154,7 +155,6 @@ impl Dictionary {
             || p.surf_offsets.len() != n_entries + 1
             || p.group_offsets.last().copied().unwrap_or(0) as usize != n_entries
             || p.conn.len() != p.conn_n * p.conn_n
-            || p.pos_defs.len() != p.conn_n
             || p.pos_ids.len() != n_entries
         {
             return Err(DictError::Format("セクションの長さが整合しません".into()));
@@ -172,7 +172,7 @@ impl Dictionary {
         {
             return Err(DictError::Format("品詞 ID が範囲外です".into()));
         }
-        if p.pos_ids.iter().any(|&id| id as usize >= p.conn_n) {
+        if p.pos_ids.iter().any(|&id| id as usize >= p.pos_defs.len()) {
             return Err(DictError::Format("品詞 ID が範囲外です".into()));
         }
         let _ = n_groups;
@@ -238,7 +238,10 @@ impl Dictionary {
             pos_defs_text.split('\n').map(str::to_string).collect()
         };
         let conn = bytes_to_u16s(sections[8])?;
-        let conn_n = pos_defs.len();
+        // pos_defs の行数（品詞の種類数）と conn_n（連接コストIDの数）は独立しているため、
+        // conn_n は conn 配列の長さ（N×N）から復元する。conn.len() が完全平方数でなければ
+        // 後続の RawParts バリデーション（conn.len() != conn_n * conn_n）で不正データとして弾かれる
+        let conn_n = conn.len().isqrt();
         let pos_ids = bytes_to_u16s(sections[9])?;
         Dictionary::from_parts(RawParts {
             trie_bytes: sections[0].to_vec(),
