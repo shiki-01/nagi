@@ -28,7 +28,7 @@ enum NSource {
 struct NNode {
     start: usize,
     end: usize,
-    lid: u16,
+    pos_id: u16,
     prev: usize,
     source: NSource,
 }
@@ -83,6 +83,7 @@ impl Dictionary {
                         &preds,
                         lid,
                         rid,
+                        self.pos_id_of(idx),
                         word_cost,
                         p,
                         end,
@@ -104,6 +105,7 @@ impl Dictionary {
                             &preds,
                             e.lid,
                             e.rid,
+                            e.lid,
                             i32::from(e.cost),
                             p,
                             p + len,
@@ -120,6 +122,7 @@ impl Dictionary {
             let (id, cost) = self.unknown_ids(chars[p]);
             push_n_best_edge(
                 &preds,
+                id,
                 id,
                 id,
                 cost,
@@ -161,7 +164,7 @@ impl Dictionary {
             let mut prev_pos: Option<Pos> = None;
             for &idx in &order {
                 let node = &nodes[idx];
-                let pos = self.pos_of(node.lid);
+                let pos = self.pos_of(node.pos_id);
                 let text: String = chars[node.start..node.end].iter().collect();
                 let surface = match node.source {
                     NSource::Entry(i) => self.surface(i).to_string(),
@@ -196,6 +199,7 @@ fn push_n_best_edge(
     preds: &[(u16, i32, usize)],
     lid: u16,
     rid: u16,
+    pos_id: u16,
     word_cost: i32,
     start: usize,
     end: usize,
@@ -216,7 +220,7 @@ fn push_n_best_edge(
         nodes.push(NNode {
             start,
             end,
-            lid,
+            pos_id,
             prev,
             source,
         });

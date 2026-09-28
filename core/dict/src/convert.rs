@@ -44,8 +44,8 @@ enum Source {
 struct Node {
     start: usize,
     end: usize,
-    lid: u16,
     rid: u16,
+    pos_id: u16,
     word_cost: i32,
     total: i32,
     prev: usize,
@@ -56,7 +56,7 @@ struct Node {
 struct PathWord {
     start: usize,
     end: usize,
-    lid: u16,
+    pos_id: u16,
     word_cost: i32,
     source: Source,
 }
@@ -84,7 +84,7 @@ impl Dictionary {
         let mut segments: Vec<ConvertedSegment> = Vec::new();
         let mut prev_pos: Option<Pos> = None;
         for w in &path.words {
-            let pos = self.pos_of(w.lid);
+            let pos = self.pos_of(w.pos_id);
             let text: String = chars[w.start..w.end].iter().collect();
             let surface = self.word_surface(w, &text, &path.extras);
             if starts_bunsetsu(prev_pos, pos) || segments.is_empty() {
@@ -141,7 +141,7 @@ impl Dictionary {
         let mut extras: Vec<SegmentCandidate> = Vec::new();
         let head_is_content = path.words.first().is_some_and(|w| {
             matches!(
-                self.pos_of(w.lid).class,
+                self.pos_of(w.pos_id).class,
                 PosClass::Noun | PosClass::Verb | PosClass::Adjective | PosClass::Adverb
             )
         });
@@ -252,8 +252,8 @@ impl Dictionary {
                     new_nodes.push(Node {
                         start: p,
                         end,
-                        lid,
                         rid: self.rid_of(idx),
+                        pos_id: self.pos_id_of(idx),
                         word_cost,
                         total: pc + word_cost,
                         prev,
@@ -271,8 +271,8 @@ impl Dictionary {
                         new_nodes.push(Node {
                             start: p,
                             end: p + len,
-                            lid: e.lid,
                             rid: e.rid,
+                            pos_id: e.lid,
                             word_cost: i32::from(e.cost),
                             total: pc + i32::from(e.cost),
                             prev,
@@ -287,8 +287,8 @@ impl Dictionary {
             new_nodes.push(Node {
                 start: p,
                 end: p + 1,
-                lid: id,
                 rid: id,
+                pos_id: id,
                 word_cost: cost,
                 total: pc + cost,
                 prev,
@@ -320,7 +320,7 @@ impl Dictionary {
             words.push(PathWord {
                 start: node.start,
                 end: node.end,
-                lid: node.lid,
+                pos_id: node.pos_id,
                 word_cost: node.word_cost,
                 source: node.source,
             });

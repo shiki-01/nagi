@@ -21,6 +21,7 @@ struct RawEntry {
     surface: String,
     lid: u16,
     rid: u16,
+    pos_id: u16,
     cost: u16,
 }
 
@@ -40,12 +41,21 @@ impl DictionaryBuilder {
     }
 
     /// 語を 1 つ追加する
-    pub fn add_entry(&mut self, reading: &str, surface: &str, lid: u16, rid: u16, cost: u16) {
+    pub fn add_entry(
+        &mut self,
+        reading: &str,
+        surface: &str,
+        lid: u16,
+        rid: u16,
+        pos_id: u16,
+        cost: u16,
+    ) {
         self.entries.push(RawEntry {
             reading: reading.to_string(),
             surface: surface.to_string(),
             lid,
             rid,
+            pos_id,
             cost,
         });
     }
@@ -72,11 +82,13 @@ impl DictionaryBuilder {
                     DictError::parse(name, i + 1, format!("{what} が数値でありません: {s:?}"))
                 })
             };
+            let lid = num(cols[1], "左ID")?;
             self.add_entry(
                 cols[0],
                 cols[4],
-                num(cols[1], "左ID")?,
+                lid,
                 num(cols[2], "右ID")?,
+                lid,
                 num(cols[3], "コスト")?,
             );
         }
@@ -210,6 +222,7 @@ impl DictionaryBuilder {
         let mut lids = Vec::with_capacity(n_entries);
         let mut rids = Vec::with_capacity(n_entries);
         let mut costs = Vec::with_capacity(n_entries);
+        let mut pos_ids = Vec::with_capacity(n_entries);
         let mut surf_offsets: Vec<u32> = Vec::with_capacity(n_entries + 1);
         let mut surf_pool = String::new();
         for (i, e) in self.entries.iter().enumerate() {
@@ -220,6 +233,7 @@ impl DictionaryBuilder {
             lids.push(e.lid);
             rids.push(e.rid);
             costs.push(e.cost);
+            pos_ids.push(e.pos_id);
             surf_offsets.push(surf_pool.len() as u32);
             surf_pool.push_str(&e.surface);
         }
@@ -245,6 +259,7 @@ impl DictionaryBuilder {
             pos_defs: self.pos_defs,
             conn: self.conn,
             conn_n: self.conn_n,
+            pos_ids,
         })
     }
 }

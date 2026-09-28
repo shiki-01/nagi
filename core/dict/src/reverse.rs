@@ -36,7 +36,7 @@ pub(crate) struct ReverseIndex {
 
 struct RNode {
     end: usize,
-    lid: u16,
+    pos_id: u16,
     prev: usize,
     reading: String,
 }
@@ -141,7 +141,7 @@ impl Dictionary {
                     let total = pc + word_cost;
                     nodes.push(RNode {
                         end,
-                        lid,
+                        pos_id: self.pos_id_of(idx),
                         prev,
                         reading: reading.to_string(),
                     });
@@ -160,7 +160,7 @@ impl Dictionary {
             let total = pc + cost;
             nodes.push(RNode {
                 end: p + 1,
-                lid: id,
+                pos_id: id,
                 prev,
                 reading: ch,
             });
@@ -191,7 +191,7 @@ impl Dictionary {
             let node = &nodes[idx];
             let surface_text: String = chars[pos_cursor..node.end].iter().collect();
             pos_cursor = node.end;
-            let pos = self.pos_of(node.lid);
+            let pos = self.pos_of(node.pos_id);
             if starts_bunsetsu(prev_pos, pos) || segments.is_empty() {
                 segments.push(ConvertedSegment {
                     reading: node.reading.clone(),

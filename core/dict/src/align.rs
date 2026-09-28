@@ -49,7 +49,7 @@ struct Node {
     /// この語の読み（文字位置の半開区間）と表記（文字位置の半開区間）
     r: (usize, usize),
     s: (usize, usize),
-    lid: u16,
+    pos_id: u16,
     prev: usize,
 }
 
@@ -136,7 +136,7 @@ impl Dictionary {
                             .unwrap_or((i32::MAX / 2, usize::MAX))
                     })
                 };
-                let mut edges: Vec<(usize, usize, u16, u16, i32)> = Vec::new(); // (i2, j2, lid, rid, 語コスト)
+                let mut edges: Vec<(usize, usize, u16, u16, u16, i32)> = Vec::new(); // (i2, j2, lid, rid, pos_id, 語コスト)
 
                 // 1. 辞書語
                 let rest_surface = &surface[s_byte[j]..];
@@ -154,6 +154,7 @@ impl Dictionary {
                                 j2,
                                 self.lid_of(idx),
                                 self.rid_of(idx),
+                                self.pos_id_of(idx),
                                 i32::from(self.cost_of(idx)),
                             ));
                         }
@@ -167,16 +168,16 @@ impl Dictionary {
                             if rest_surface.starts_with(e.surface.as_str())
                                 && let Some(&j2) = s_char_at.get(&(s_byte[j] + e.surface.len()))
                             {
-                                edges.push((i + len, j2, e.lid, e.rid, i32::from(e.cost)));
+                                edges.push((i + len, j2, e.lid, e.rid, e.lid, i32::from(e.cost)));
                             }
                         }
                     }
                 }
                 // 2. 仮名の素通し
                 if r[i] == s[j] {
-                    edges.push((i + 1, j + 1, fb.noun, fb.noun, KANA_PASS_COST));
+                    edges.push((i + 1, j + 1, fb.noun, fb.noun, fb.noun, KANA_PASS_COST));
                 } else if to_katakana_char(r[i]) == s[j] && is_hiragana(r[i]) {
-                    edges.push((i + 1, j + 1, fb.noun, fb.noun, KATAKANA_PASS_COST));
+                    edges.push((i + 1, j + 1, fb.noun, fb.noun, fb.noun, KATAKANA_PASS_COST));
                 }
                 // 3. 未知の連続部分
                 if !is_hiragana(s[j]) {
@@ -187,19 +188,20 @@ impl Dictionary {
                             j2,
                             fb.noun,
                             fb.noun,
+                            fb.noun,
                             GAP_BASE_COST + GAP_PER_CHAR_COST * k as i32,
                         ));
                     }
                 }
 
-                for (i2, j2, lid, rid, word_cost) in edges {
+                for (i2, j2, lid, rid, pos_id, word_cost) in edges {
                     let (pc, prev) = connect(lid);
                     let total = pc + word_cost;
                     let idx = nodes.len();
                     nodes.push(Node {
                         r: (i, i2),
                         s: (j, j2),
-                        lid,
+                        pos_id,
                         prev,
                     });
                     let slot = best[i2]
@@ -231,7 +233,7 @@ impl Dictionary {
         let mut segments: Vec<ConvertedSegment> = Vec::new();
         let mut prev_pos: Option<Pos> = None;
         for node in path {
-            let pos = self.pos_of(node.lid);
+            let pos = self.pos_of(node.pos_id);
             let rd: String = r[node.r.0..node.r.1].iter().collect();
             let sf: String = s[node.s.0..node.s.1].iter().collect();
             if starts_bunsetsu(prev_pos, pos) || segments.is_empty() {

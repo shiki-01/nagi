@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! "NAGIDICT" (8B) | version u32
-//! セクション × 9（それぞれ len u64 + 本体）:
+//! セクション × 10（それぞれ len u64 + 本体）:
 //!   1. trie          fst（有限状態トランスデューサ。キー = 読みの UTF-8、値 = 語グループ番号）
 //!   2. group_offsets u32 × (グループ数 + 1)   グループ g の語 = entries[offsets[g]..offsets[g+1]]
 //!   3. lids          u16 × 語数
@@ -14,6 +14,8 @@
 //!   7. surf_pool     UTF-8
 //!   8. pos_defs      UTF-8（`id.def` の品詞文字列を '\n' 区切り。行番号 = 品詞 ID）
 //!   9. conn          u16 × (N × N)            conn[rid_prev * N + lid_next]
+//!  10. pos_ids       u16 × 語数                品詞 ID（`pos_defs` の行番号への参照。連接コスト
+//!                                              ID（lid/rid）とは独立。Mozc 辞書では pos_id = lid）
 //! ```
 
 use crate::error::DictError;
@@ -22,7 +24,7 @@ use fst::Map;
 use std::sync::{Arc, Mutex};
 
 const MAGIC: &[u8; 8] = b"NAGIDICT";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 /// 辞書の 1 語
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +35,8 @@ pub struct Entry {
     pub lid: u16,
     /// 右文脈 ID
     pub rid: u16,
+    /// 品詞 ID（`pos_defs` の行番号への参照。連接コスト ID（lid/rid）とは独立）
+    pub pos_id: u16,
     /// 語コスト（小さいほど出やすい）
     pub cost: u16,
 }
@@ -61,6 +65,7 @@ pub struct Dictionary {
     pos_defs: Vec<String>,
     pos: Vec<Pos>,
     conn: Vec<u16>,
+    pos_ids: Vec<u16>,
     conn_n: usize,
     fallback: FallbackIds,
     /// 逆引き索引（表記 → 読み）。`reverse_convert` で最初に使われた時に構築し、以降キャッシュする
@@ -92,6 +97,7 @@ pub(crate) struct RawParts {
     pub pos_defs: Vec<String>,
     pub conn: Vec<u16>,
     pub conn_n: usize,
+    pub pos_ids: Vec<u16>,
 }
 
 fn find_fallback(pos_defs: &[String]) -> FallbackIds {
@@ -149,6 +155,7 @@ impl Dictionary {
             || p.group_offsets.last().copied().unwrap_or(0) as usize != n_entries
             || p.conn.len() != p.conn_n * p.conn_n
             || p.pos_defs.len() != p.conn_n
+            || p.pos_ids.len() != n_entries
         {
             return Err(DictError::Format("セクションの長さが整合しません".into()));
         }
@@ -163,6 +170,9 @@ impl Dictionary {
             .chain(p.rids.iter())
             .any(|&id| id as usize >= p.conn_n)
         {
+            return Err(DictError::Format("品詞 ID が範囲外です".into()));
+        }
+        if p.pos_ids.iter().any(|&id| id as usize >= p.conn_n) {
             return Err(DictError::Format("品詞 ID が範囲外です".into()));
         }
         let _ = n_groups;
@@ -182,6 +192,7 @@ impl Dictionary {
             pos,
             conn: p.conn,
             conn_n: p.conn_n,
+            pos_ids: p.pos_ids,
             fallback,
             reverse: Mutex::new(None),
         })
@@ -210,8 +221,8 @@ impl Dictionary {
         if version != VERSION {
             return Err(DictError::Format(format!("未対応のバージョン {version}")));
         }
-        let mut sections: Vec<&[u8]> = Vec::with_capacity(9);
-        for _ in 0..9 {
+        let mut sections: Vec<&[u8]> = Vec::with_capacity(10);
+        for _ in 0..10 {
             let len = u64::from_le_bytes(take(8)?.try_into().expect("8 バイト"));
             let len = usize::try_from(len)
                 .map_err(|_| DictError::Format("セクションが大きすぎます".into()))?;
@@ -228,6 +239,7 @@ impl Dictionary {
         };
         let conn = bytes_to_u16s(sections[8])?;
         let conn_n = pos_defs.len();
+        let pos_ids = bytes_to_u16s(sections[9])?;
         Dictionary::from_parts(RawParts {
             trie_bytes: sections[0].to_vec(),
             group_offsets: bytes_to_u32s(sections[1])?,
@@ -239,12 +251,13 @@ impl Dictionary {
             pos_defs,
             conn,
             conn_n,
+            pos_ids,
         })
     }
 
     /// バイナリ辞書にシリアライズする
     pub fn to_bytes(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 9] = [
+        let sections: [Vec<u8>; 10] = [
             self.trie_bytes.clone(),
             u32s_to_bytes(&self.group_offsets),
             u16s_to_bytes(&self.lids),
@@ -254,6 +267,7 @@ impl Dictionary {
             self.surf_pool.clone().into_bytes(),
             self.pos_defs.join("\n").into_bytes(),
             u16s_to_bytes(&self.conn),
+            u16s_to_bytes(&self.pos_ids),
         ];
         let mut out = Vec::with_capacity(sections.iter().map(|s| s.len() + 8).sum::<usize>() + 12);
         out.extend_from_slice(MAGIC);
@@ -287,6 +301,7 @@ impl Dictionary {
             surface: self.surf_pool[a..b].to_string(),
             lid: self.lids[index],
             rid: self.rids[index],
+            pos_id: self.pos_ids[index],
             cost: self.costs[index],
         }
     }
@@ -311,6 +326,10 @@ impl Dictionary {
 
     pub(crate) fn cost_of(&self, index: usize) -> u16 {
         self.costs[index]
+    }
+
+    pub(crate) fn pos_id_of(&self, index: usize) -> u16 {
+        self.pos_ids[index]
     }
 
     /// 連接コスト（前の語の右 ID, 次の語の左 ID）
