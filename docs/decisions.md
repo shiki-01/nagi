@@ -652,8 +652,14 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 
 ### H-3. 未決事項（モバイル着手前に決める）
 
-- iOS の配布: Apple Developer Program に加入するか（非加入なら自己ビルドのみ）
-- Android の配布経路: APK 直接配布 / F-Droid / Play ストアのどれを主導線にするか
 - タッチ入力のプロトコル表現: `insert_reading` / `perform_action` を新設するか、`process_key` の `kind` 拡張で表すか
 - 辞書形式の mmap 対応の時期（デスクトップの辞書形式変更時に前倒しするか、Phase M0 で行うか）
 - iOS 拡張で LLM を使うか（Phase M0 のメモリ実測で判断）
+
+### H-4. 配布・更新・アプリ仕様（2026-09-29 ユーザー決定）
+
+- iOS は SideStore によるサイドロードで配布する（Apple Developer Program 非加入の方針を維持）。更新は AltStore 互換のソース JSON を `shiki-01.com` に置いて配信する
+- Android は署名済み APK の直接配布とする（公式ストアは使わない）
+- 両 OS とも本体アプリに更新確認を入れる。データ資産（辞書・モデル・プリセット）は再インストールなしで更新できるようにする。アプリ本体は Android が `PackageInstaller` で上書き、iOS は SideStore の更新へ誘導する（iOS は署名済みでないコードを実行できないため）
+- アプリ仕様（キーボード UI・本体アプリの構成・設定項目）は azooKey を参考にする。変換エンジン本体は参考にしない（F の方針どおり）
+- 詳細は `mobile-design.md` §5.0・§6
