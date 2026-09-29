@@ -395,6 +395,7 @@ G-12 で「未実装」としていた4項目を実装した。ユーザー不�
 - **minimal・メモリ逼迫時のモデル解放**: `ConversionModel::set_active(bool)`（既定 no-op）を追加。`LlamaModel` は `model: Option<LlamaModelCore>` として保持し、`false` で解放・`true` で（未読み込みなら）再読み込みする。`Pipeline` がプロファイルの変化を検出して（`Minimal` か否かで）別スレッドで切り替える。再読み込み中に変換要求が来ても既存の `sync_budget` の仕組みで辞書結果にフォールバックするため待たせない。メモリ逼迫（critical）は既存の `Controller` のペナルティ計算で `Minimal` まで下がるため、同じ経路で解放される
 - **キャリブレーション結果の永続化**: `<user_dir>/calibration.json`（`core/server/src/calibration.rs`、JSON）に中央値・CPU コア数・メモリ量・バックエンド名を保存する。起動時に一致すれば即座に使い、直後の `warm_up()` が新しい実測値で上書き・再保存する。ハードウェアやバックエンドが変わったら使わない（`CalibrationRecord::matches`）
 - 副次的な整理: `Pipeline::new` と `ConversionBackend::name()` に重複していたバックエンド名の判定を `pipeline::backend_name()` に統合した
+- **レビュー完了（2026-09-29）**: 4項目とも実装がこの記述通りであることをコード上で確認した（GPU検出: `core/profile/src/lib.rs:136,151-166`。スレッド数削減: `core/infer/src/lib.rs:863-868`・`core/server/src/runtime.rs:472-507`。モデル解放: `core/infer/src/lib.rs:377-393,872-883`・`core/server/src/pipeline.rs:149-176`（`reconcile_active`）。キャリブレーション永続化: `core/server/src/calibration.rs:8-46`）。各項目にテストもある（`detect_gpu_returns_a_bool`、`test_llama_model_set_active_reloads`、`calibration.rs` の round-trip テスト等）
 
 ### G-14. キーマップ TOML 上書き（2026-09-27）
 
