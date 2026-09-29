@@ -6,7 +6,7 @@
 - 設計書: `docs/ime-design-doc.md`（v0.2 draft）。本ファイルはその要約であり、詳細・根拠は設計書を参照すること
 - 決定事項ログ: `docs/decisions.md`（決定の経緯・理由。設計書と食い違う場合はこちらが新しい）
 - bundle id: `com.shiki.nagi` / リポジトリ名: `nagi` / 配布・DL元ドメイン: `shiki-01.com`
-- 対象: macOS（先行）/ Windows（後続）/ Linux（将来検討）
+- 対象: macOS（先行）/ Windows（後続）/ Linux（将来検討）/ iOS・Android（将来。設計のみ `docs/mobile-design.md`）
 
 ## 現状
 
@@ -153,7 +153,9 @@ nagi/
 
 ## 非目標
 
-かな入力レイアウト / 手書き・音声入力 / クラウド変換 / iOS・Android / 候補ウィンドウのマウス操作（v1）。
+かな入力レイアウト / 手書き・音声入力 / クラウド変換 / 候補ウィンドウのマウス操作（v1）。
+
+iOS・Android は v1 では実装しないが、将来対応する前提で設計する（`docs/mobile-design.md`）。コアの実装・レビューでは同文書 §3 の制約（コアをライブラリとして完結させる・パスとプラットフォーム情報は注入・stdio/`std::process` に依存しない・モバイルでビルドできる依存に留める）を守る。
 
 ## 参考実装
 
