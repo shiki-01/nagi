@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use build_dict::DictSource;
 use fetch_model::ModelVariant;
 
 #[derive(Parser)]
@@ -24,8 +25,12 @@ struct Cli {
 enum Task {
     /// Mozc OSS 辞書を取得し SHA-256 検証する（data/dict/mozc/ へ）
     FetchDict,
-    /// 取得済みの Mozc 辞書から Nagi 辞書バイナリを生成する（data/dict/nagi-dict.bin）
-    BuildDict,
+    /// 取得済みの辞書（Mozc / SudachiDict）から Nagi 辞書バイナリを生成する
+    /// （data/dict/nagi-dict.bin または data/dict/nagi-dict-sudachi.bin）
+    BuildDict {
+        #[arg(long, value_enum, default_value_t = DictSource::Mozc)]
+        source: DictSource,
+    },
     /// 変換モデル（zenz GGUF）を取得し SHA-256 検証する（data/models/ へ）
     FetchModel {
         #[arg(long, value_enum, default_value_t = ModelVariant::Small)]
@@ -41,7 +46,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.task {
         Task::FetchDict => fetch_dict::run(),
-        Task::BuildDict => build_dict::run(),
+        Task::BuildDict { source } => build_dict::run(source),
         Task::FetchModel { variant } => fetch_model::run(variant),
         Task::GenTypes => types::generate(),
         Task::CheckTypes => types::check(),

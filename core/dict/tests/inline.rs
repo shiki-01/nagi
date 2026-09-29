@@ -240,10 +240,10 @@ fn corrupt_binaries_are_rejected() {
 #[test]
 fn duplicate_entries_keep_lowest_cost() {
     let mut b = DictionaryBuilder::new();
-    b.add_entry("あ", "亜", 1, 1, 5000);
-    b.add_entry("あ", "亜", 1, 1, 3000);
-    b.add_entry("あ", "亜", 1, 1, 4000);
-    b.add_entry("あ", "亜", 2, 2, 4000);
+    b.add_entry("あ", "亜", 1, 1, 1, 5000);
+    b.add_entry("あ", "亜", 1, 1, 1, 3000);
+    b.add_entry("あ", "亜", 1, 1, 1, 4000);
+    b.add_entry("あ", "亜", 2, 2, 2, 4000);
     b.set_pos_defs_text(POS_DEFS).unwrap();
     b.set_connection_text(
         &connection_text(ConnectionLayout::RidMajor),

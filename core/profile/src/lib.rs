@@ -5,7 +5,9 @@
 //! - [`Profile`] — `quality` / `balanced` / `light` / `minimal`
 //! - [`initial_profile`] — 初回起動時の判定（メモリ・コア数・キャリブレーション推論の実測）
 //! - [`Controller`] — 実行時の自動切替（バッテリー・低電力モード・サーマル・メモリ逼迫・
-//!   直近のレイテンシ）。**下げるのは即座に、戻すのはヒステリシス付き**
+//!   直近のレイテンシ）。**下げるのは即座に、戻すのはヒステリシス付き**。レイテンシ由来で
+//!   `Minimal` まで落ちた場合は LLM 呼び出し自体が止まるため、`tick` が保持時間ごとに
+//!   1 段ずつ試しに戻して再評価する（定期プロービング）
 //!
 //! 時刻は呼び出し側が `now_ms`（単調増加のミリ秒）で渡す。テストが決定的になり、OS 依存の
 //! 時計を持ち込まない。OS からの電源・サーマル情報はフロントエンドが [`Environment`] として送る
@@ -434,7 +436,9 @@ impl Controller {
         self.recompute(now_ms, false)
     }
 
-    /// LLM 変換 1 回のレイテンシ（ミリ秒）を報告する。目標を超え続けていれば 1 段軽くする
+    /// LLM 変換 1 回のレイテンシ（ミリ秒）を報告する。目標を超え続けていれば 1 段軽くする。
+    /// `Minimal` まで落ちた場合はここでは何もしない（`Minimal` は LLM を使わないため、
+    /// このメソッド自体が呼ばれなくなる）。回復は `tick` の定期プロービングに任せる
     pub fn observe_latency(&mut self, ms: f64, now_ms: u64) -> Option<Change> {
         if self.fixed || !self.config.enabled || self.current == Profile::Minimal {
             return None;
@@ -516,8 +520,22 @@ impl Controller {
         Some(change)
     }
 
-    /// 時間経過だけで戻せるか確認する（環境の変化が無くても、ヒステリシス経過後に呼ぶ）
+    /// 時間経過だけで戻せるか確認する（環境の変化が無くても、ヒステリシス経過後に呼ぶ）。
+    ///
+    /// レイテンシ由来で軽くなっている場合、軽くなった結果 LLM 呼び出し自体が起きなくなり
+    /// `observe_latency` が二度と呼ばれない可能性がある（`Minimal` は LLM を使わないため、
+    /// これは必ず起きる）。それを防ぐため、保持時間（`upgrade_dwell_ms`）が経過するたびに
+    /// `latency_steps` を 1 段だけ減らして再評価する。実際にまだ遅ければ、次の
+    /// `observe_latency` の呼び出しで速やかに再び下がる（実質的な定期プロービングになる）
     pub fn tick(&mut self, now_ms: u64) -> Option<Change> {
+        if self.latency_steps > 0
+            && !self.fixed
+            && self.config.enabled
+            && now_ms.saturating_sub(self.last_change_ms) >= self.config.upgrade_dwell_ms
+        {
+            self.latency_steps -= 1;
+            self.samples.clear();
+        }
         self.recompute(now_ms, false)
     }
 }
@@ -758,6 +776,35 @@ mod tests {
             }
         }
         assert_eq!(back.expect("戻る").to, Profile::Balanced);
+    }
+
+    #[test]
+    fn minimal_from_latency_recovers_via_tick_probing() {
+        let mut c = controller(Profile::Balanced);
+        let mut now = 0u64;
+        // 遅い推論を繰り返して Light まで落とす
+        for _ in 0..20 {
+            now += 100;
+            c.observe_latency(500.0, now);
+        }
+        assert_eq!(c.current(), Profile::Light);
+        // さらに遅い推論を繰り返して Minimal まで落とす
+        for _ in 0..20 {
+            now += 100;
+            c.observe_latency(500.0, now);
+        }
+        assert_eq!(c.current(), Profile::Minimal);
+        // Minimal では LLM を使わないため observe_latency はもう呼ばれない。
+        // tick だけで時間経過を報告すると、保持時間ごとに 1 段ずつ戻ることを確認する
+        now += 60_000;
+        let back1 = c.tick(now).expect("1段目、Light へ戻るはず");
+        assert_eq!(back1.to, Profile::Light);
+        now += 60_000;
+        let back2 = c.tick(now).expect("2段目、Balanced へ戻るはず");
+        assert_eq!(back2.to, Profile::Balanced);
+        // それ以上は latency_steps が 0 になっているので変化しない
+        now += 60_000;
+        assert_eq!(c.tick(now), None);
     }
 
     #[test]

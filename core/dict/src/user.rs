@@ -48,7 +48,7 @@ pub struct UserDictionary {
 }
 
 /// ひらがな化（カタカナ → ひらがな。長音などはそのまま）
-fn to_hiragana(s: &str) -> String {
+pub(crate) fn to_hiragana(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '\u{30a1}'..='\u{30f6}' => char::from_u32(c as u32 - 0x60).unwrap_or(c),
