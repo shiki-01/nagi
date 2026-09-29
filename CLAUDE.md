@@ -117,6 +117,7 @@ nagi/
 - ログに入力内容を残さない（デバッグビルドのみopt-inで許可）
 - 学習データはワンコマンドで全削除可能にする
 - macOS 配布は Apple Developer Program 非加入: ad-hoc 署名 + インストールスクリプト（`shiki-01.com`）+ ed25519 署名検証付きアップデート
+- モバイル（将来）: iOS は SideStore、Android は APK 直接配布。どちらも本体アプリで更新確認し、データ資産は再インストールなしで更新（`docs/mobile-design.md` §6）
 
 ## テスト戦略
 
