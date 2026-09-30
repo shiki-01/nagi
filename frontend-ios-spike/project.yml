@@ -24,19 +24,25 @@ targets:
     sources:
       - path: App
       - path: Shared
-
-    resources:
       - path: Resources
         optional: true
+        buildPhase: resources
 
     dependencies:
       - target: NagiSpikeKeyboard
       - sdk: UIKit.framework
       - sdk: Foundation.framework
       - sdk: SwiftUI.framework
-      - sdk: os
       - framework: NagiCore.xcframework
         embed: false
+
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Nagi Spike
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
 
     entitlements:
       path: App/NagiSpike.entitlements
@@ -48,7 +54,7 @@ targets:
       SWIFT_VERSION: "5"
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_APP ${NAGI_LLM}"
       CODE_SIGN_STYLE: Automatic
-      BUNDLE_ID: com.shiki.inputmethod.NagiSpike
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.inputmethod.NagiSpike
 
     scheme:
       testTargets: []
@@ -64,12 +70,10 @@ targets:
       - path: Keyboard
       - path: Shared
 
-
     dependencies:
       - sdk: UIKit.framework
       - sdk: Foundation.framework
       - sdk: SwiftUI.framework
-      - sdk: os
       - framework: NagiCore.xcframework
         embed: false
 
@@ -80,17 +84,20 @@ targets:
           - group.com.shiki.nagi.spike
 
     info:
-      NSExtension:
-        NSExtensionAttributes:
-          RequestsOpenAccess: false
-        NSExtensionPointIdentifier: com.apple.keyboard-service
-        NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).KeyboardViewController"
+      path: Keyboard/Info.plist
+      properties:
+        CFBundleDisplayName: Nagi Spike Keyboard
+        NSExtension:
+          NSExtensionAttributes:
+            RequestsOpenAccess: false
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).KeyboardViewController"
 
     settings:
       SWIFT_VERSION: "5"
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_KEYBOARD ${NAGI_LLM}"
       CODE_SIGN_STYLE: Automatic
-      BUNDLE_ID: com.shiki.inputmethod.NagiSpike.Keyboard
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.inputmethod.NagiSpike.Keyboard
 
     scheme:
       testTargets: []

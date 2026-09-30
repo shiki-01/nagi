@@ -65,7 +65,7 @@ jobs:
           if [ "${{ inputs.llama }}" = "true" ]; then
             NAGI_LLM=NAGI_LLM xcodegen generate
           else
-            xcodegen generate
+            NAGI_LLM=NAGI_NO_LLM xcodegen generate
           fi
 
       - name: アーカイブ（未署名）
