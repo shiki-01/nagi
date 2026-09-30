@@ -52,6 +52,12 @@ enum Task {
         /// imserver を feature llama 付きでビルドする
         #[arg(long)]
         llama: bool,
+        /// バンドル識別子（モード ID `<id>.Japanese`・接続名 `<id>_Connection` も派生する）
+        #[arg(long, default_value = "com.shiki.nagi")]
+        bundle_id: String,
+        /// 出力先ディレクトリ（既定は target/macos-bundle）
+        #[arg(long)]
+        out_dir: Option<std::path::PathBuf>,
     },
 }
 
@@ -67,10 +73,14 @@ fn main() -> ExitCode {
             swift_target,
             executable,
             llama,
+            bundle_id,
+            out_dir,
         } => bundle_macos::run(bundle_macos::Options {
             swift_target,
             executable,
             llama,
+            bundle_id,
+            out_dir,
         }),
     };
     match result {

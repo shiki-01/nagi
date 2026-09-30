@@ -7,16 +7,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// バンドル識別子。
-const BUNDLE_ID: &str = "com.shiki.nagi";
-/// IMKServer の接続名。
-const CONNECTION_NAME: &str = "com.shiki.nagi_Connection";
+/// 既定のバンドル識別子。
+#[cfg(test)]
+const DEFAULT_BUNDLE_ID: &str = "com.shiki.nagi";
 /// 最小サポート macOS。
 const MIN_MACOS: &str = "13.0";
-/// 入力モード ID。
-const INPUT_MODE_ID: &str = "com.shiki.nagi.Japanese";
-/// アイコン画像のファイル名（Contents/Resources に置く）。
-const ICON_FILE: &str = "nagi-icon.png";
+/// アイコン画像のファイル名（Contents/Resources に置く。Info.plist が参照する）。
+const ICON_FILE: &str = "nagi-icon.tiff";
+/// PNG 版アイコンのファイル名（参考用に同梱）。
+const ICON_PNG_FILE: &str = "nagi-icon.png";
 /// アイコンの一辺（px）。
 const ICON_SIZE: u32 = 64;
 /// アイコンの色（RGB。落ち着いた青緑）。
@@ -76,10 +75,28 @@ fn zlib_stored(raw: &[u8]) -> Vec<u8> {
 
 /// 単色の角丸風正方形（RGBA 8bit, 四隅は透明）を PNG にエンコードする。
 pub fn icon_png(size: u32, rgb: [u8; 3]) -> Vec<u8> {
-    let radius = size / 5;
+    let pixels = icon_rgba(size, rgb);
     let mut raw = Vec::with_capacity(((size * 4 + 1) * size) as usize);
-    for y in 0..size {
+    for row in pixels.chunks((size * 4) as usize) {
         raw.push(0); // フィルタなし
+        raw.extend_from_slice(row);
+    }
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&size.to_be_bytes());
+    ihdr.extend_from_slice(&size.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8bit, RGBA, deflate, filter 0, interlace なし
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png_chunk(&mut out, b"IHDR", &ihdr);
+    png_chunk(&mut out, b"IDAT", &zlib_stored(&raw));
+    png_chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+/// 単色の角丸正方形の RGBA 8bit ピクセル列（PNG / TIFF 共通）。
+fn icon_rgba(size: u32, rgb: [u8; 3]) -> Vec<u8> {
+    let radius = size / 5;
+    let mut px = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
         for x in 0..size {
             // 角の円の中心からの距離で角丸を判定する
             let cx = if x < radius {
@@ -94,18 +111,64 @@ pub fn icon_png(size: u32, rgb: [u8; 3]) -> Vec<u8> {
             } as i64;
             let r = radius as i64;
             let inside = cx * cx + cy * cy <= r * r;
-            raw.extend_from_slice(&[rgb[0], rgb[1], rgb[2], if inside { 255 } else { 0 }]);
+            px.extend_from_slice(&[rgb[0], rgb[1], rgb[2], if inside { 255 } else { 0 }]);
         }
     }
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&size.to_be_bytes());
-    ihdr.extend_from_slice(&size.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8bit, RGBA, deflate, filter 0, interlace なし
-    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    png_chunk(&mut out, b"IHDR", &ihdr);
-    png_chunk(&mut out, b"IDAT", &zlib_stored(&raw));
-    png_chunk(&mut out, b"IEND", &[]);
+    px
+}
+
+/// 非圧縮 RGBA（リトルエンディアン、単一ストリップ）の最小 TIFF にエンコードする。
+///
+/// レイアウト: ヘッダ 8B / IFD（10 エントリ）/ BitsPerSample 配列 / ピクセルデータ。
+pub fn icon_tiff(size: u32, rgb: [u8; 3]) -> Vec<u8> {
+    const ENTRIES: u16 = 10;
+    const IFD_OFFSET: u32 = 8;
+    let ifd_len = 2 + ENTRIES as u32 * 12 + 4;
+    let bps_offset = IFD_OFFSET + ifd_len;
+    let data_offset = bps_offset + 8;
+    let pixels = icon_rgba(size, rgb);
+
+    let mut out = vec![b'I', b'I', 42, 0];
+    out.extend_from_slice(&IFD_OFFSET.to_le_bytes());
+    out.extend_from_slice(&ENTRIES.to_le_bytes());
+    // (tag, (type(3=SHORT,4=LONG), count, value))。タグ昇順
+    let short = |v: u32| (3u16, 1u32, v);
+    let long = |v: u32| (4u16, 1u32, v);
+    let entries: [(u16, (u16, u32, u32)); 10] = [
+        (256, long(size)),                // ImageWidth
+        (257, long(size)),                // ImageLength
+        (258, (3, 4, bps_offset)),        // BitsPerSample(8,8,8,8)
+        (259, short(1)),                  // Compression: なし
+        (262, short(2)),                  // Photometric: RGB
+        (273, long(data_offset)),         // StripOffsets
+        (277, short(4)),                  // SamplesPerPixel
+        (278, long(size)),                // RowsPerStrip
+        (279, long(pixels.len() as u32)), // StripByteCounts
+        (338, short(2)),                  // ExtraSamples: unassociated alpha
+    ];
+    for (tag, (ty, count, value)) in entries {
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&ty.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        // SHORT 値は値欄の下位 2 バイトに左詰め（LE ではそのまま u32 で書けばよい）
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out.extend_from_slice(&0u32.to_le_bytes()); // 次の IFD なし
+    for _ in 0..4 {
+        out.extend_from_slice(&8u16.to_le_bytes());
+    }
+    out.extend_from_slice(&pixels);
     out
+}
+
+/// 入力モード ID（`<bundle-id>.Japanese`）。
+pub fn input_mode_id(bundle_id: &str) -> String {
+    format!("{bundle_id}.Japanese")
+}
+
+/// IMKServer の接続名（`<bundle-id>_Connection`）。
+pub fn connection_name(bundle_id: &str) -> String {
+    format!("{bundle_id}_Connection")
 }
 
 /// `bundle-macos` のオプション。
@@ -116,6 +179,10 @@ pub struct Options {
     pub executable: Option<PathBuf>,
     /// imserver を `--features llama` でビルドする。
     pub llama: bool,
+    /// バンドル識別子（モード ID・接続名もここから派生する）。
+    pub bundle_id: String,
+    /// 出力先ディレクトリ。未指定は `<target>/macos-bundle`。
+    pub out_dir: Option<PathBuf>,
 }
 
 fn repo_root() -> PathBuf {
@@ -135,8 +202,10 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Info.plist の内容を生成する。
-pub fn info_plist(executable: &str, version: &str) -> String {
+pub fn info_plist(executable: &str, version: &str, bundle_id: &str) -> String {
     let e = xml_escape;
+    let mode_id = e(&input_mode_id(bundle_id));
+    let conn = e(&connection_name(bundle_id));
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -150,8 +219,12 @@ pub fn info_plist(executable: &str, version: &str) -> String {
 	<string>{id}</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleDisplayName</key>
+	<string>Nagi</string>
 	<key>CFBundleName</key>
 	<string>Nagi</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -168,12 +241,12 @@ pub fn info_plist(executable: &str, version: &str) -> String {
 				<key>TISIntendedLanguage</key><string>ja</string>
 				<key>tsInputModeScriptKey</key><string>smJapanese</string>
 				<key>tsInputModeIsVisibleKey</key><true/>
-				<key>tsInputModePrimaryInputModeKey</key><true/>
+				<key>tsInputModeDefaultStateKey</key><true/>
+				<key>tsInputModePrimaryInScriptKey</key><true/>
+				<key>tsInputModeJISKeyboardShortcutKey</key><integer>1</integer>
 				<key>tsInputModeDefaultsToTransparentKey</key><false/>
-				<key>TISIconIsTemplate</key><false/>
 				<key>tsInputModeMenuIconFileKey</key><string>{icon}</string>
 				<key>tsInputModePaletteIconFileKey</key><string>{icon}</string>
-				<key>tsInputModeAlternateMenuIconFileKey</key><string>{icon}</string>
 			</dict>
 		</dict>
 		<key>tsVisibleInputModeOrderedArrayKey</key>
@@ -189,25 +262,29 @@ pub fn info_plist(executable: &str, version: &str) -> String {
 	<string>{conn}</string>
 	<key>InputMethodServerControllerClass</key>
 	<string>NagiInputController</string>
-	<key>InputMethodServerDelegateClass</key>
-	<string>NagiInputController</string>
+	<key>TISIntendedLanguage</key>
+	<string>ja</string>
+	<key>TISIconIsTemplate</key>
+	<false/>
 	<key>tsInputMethodNameKey</key>
 	<string>Nagi</string>
 	<key>tsInputMethodIconFileKey</key>
 	<string>{icon}</string>
 	<key>tsInputMethodCharacterRepertoireKey</key>
 	<array>
-		<string>ja</string>
+		<string>Latn</string>
+		<string>Hira</string>
+		<string>Kana</string>
 	</array>
 </dict>
 </plist>
 "#,
         exe = e(executable),
-        id = BUNDLE_ID,
+        id = e(bundle_id),
         ver = e(version),
-        mode_id = INPUT_MODE_ID,
+        mode_id = mode_id,
         min = MIN_MACOS,
-        conn = CONNECTION_NAME,
+        conn = conn,
         icon = ICON_FILE,
     )
 }
@@ -287,7 +364,9 @@ pub fn run(opts: Options) -> Result<(), String> {
     }
 
     // 3. .app の組み立て
-    let out_dir = target_dir.join("macos-bundle");
+    let out_dir = opts
+        .out_dir
+        .unwrap_or_else(|| target_dir.join("macos-bundle"));
     let app = out_dir.join("Nagi.app");
     if app.exists() {
         fs::remove_dir_all(&app).map_err(|e| format!("既存の .app の削除に失敗しました: {e}"))?;
@@ -307,7 +386,7 @@ pub fn run(opts: Options) -> Result<(), String> {
         .map_err(|e| format!("imserver のコピーに失敗しました: {e}"))?;
     fs::write(
         app.join("Contents/Info.plist"),
-        info_plist(&exe_file_name, env!("CARGO_PKG_VERSION")),
+        info_plist(&exe_file_name, env!("CARGO_PKG_VERSION"), &opts.bundle_id),
     )
     .map_err(|e| format!("Info.plist の書き込みに失敗しました: {e}"))?;
     let resources_dir = app.join("Contents/Resources");
@@ -315,6 +394,11 @@ pub fn run(opts: Options) -> Result<(), String> {
         .map_err(|e| format!("ディレクトリの作成に失敗しました: {e}"))?;
     fs::write(
         resources_dir.join(ICON_FILE),
+        icon_tiff(ICON_SIZE, ICON_COLOR),
+    )
+    .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
+    fs::write(
+        resources_dir.join(ICON_PNG_FILE),
         icon_png(ICON_SIZE, ICON_COLOR),
     )
     .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
@@ -351,9 +435,13 @@ pub fn run(opts: Options) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn plist() -> String {
+        info_plist("NagiIMEApp", "0.0.1", DEFAULT_BUNDLE_ID)
+    }
+
     #[test]
     fn plist_has_required_keys() {
-        let p = info_plist("NagiIMEApp", "0.0.1");
+        let p = plist();
         for needle in [
             "<string>com.shiki.nagi</string>",
             "<key>ComponentInputModeDict</key>",
@@ -365,19 +453,107 @@ mod tests {
             "<key>LSUIElement</key>\n\t<true/>",
             "<key>InputMethodConnectionName</key>\n\t<string>com.shiki.nagi_Connection</string>",
             "<key>tsInputMethodNameKey</key>",
-            "<key>tsInputMethodCharacterRepertoireKey</key>\n\t<array>\n\t\t<string>ja</string>",
+            "<key>tsInputMethodCharacterRepertoireKey</key>\n\t<array>\n\t\t<string>Latn</string>\n\t\t<string>Hira</string>\n\t\t<string>Kana</string>",
             "<key>InputMethodServerControllerClass</key>\n\t<string>NagiInputController</string>",
-            "<key>InputMethodServerDelegateClass</key>",
             "<key>LSMinimumSystemVersion</key>\n\t<string>13.0</string>",
             "<key>CFBundleExecutable</key>\n\t<string>NagiIMEApp</string>",
-            "<key>tsInputMethodIconFileKey</key>\n\t<string>nagi-icon.png</string>",
-            "<key>TISIconIsTemplate</key><false/>",
-            "<key>tsInputModeMenuIconFileKey</key><string>nagi-icon.png</string>",
-            "<key>tsInputModePaletteIconFileKey</key><string>nagi-icon.png</string>",
-            "<key>tsInputModeAlternateMenuIconFileKey</key><string>nagi-icon.png</string>",
+            "<key>CFBundleDisplayName</key>\n\t<string>Nagi</string>",
+            "<key>NSPrincipalClass</key>\n\t<string>NSApplication</string>",
+            "<key>TISIntendedLanguage</key>\n\t<string>ja</string>",
+            "<key>TISIconIsTemplate</key>\n\t<false/>",
+            "<key>tsInputMethodIconFileKey</key>\n\t<string>nagi-icon.tiff</string>",
+            "<key>tsInputModeDefaultStateKey</key><true/>",
+            "<key>tsInputModePrimaryInScriptKey</key><true/>",
+            "<key>tsInputModeJISKeyboardShortcutKey</key><integer>1</integer>",
+            "<key>tsInputModeMenuIconFileKey</key><string>nagi-icon.tiff</string>",
+            "<key>tsInputModePaletteIconFileKey</key><string>nagi-icon.tiff</string>",
         ] {
             assert!(p.contains(needle), "missing: {needle}");
         }
+    }
+
+    #[test]
+    fn plist_omits_removed_keys() {
+        let p = plist();
+        for needle in [
+            "tsInputModePrimaryInputModeKey",
+            "tsInputModeAlternateMenuIconFileKey",
+            "InputMethodServerDelegateClass",
+            "<key>TISIconIsTemplate</key><false/>",
+        ] {
+            assert!(!p.contains(needle), "unexpected: {needle}");
+        }
+    }
+
+    #[test]
+    fn plist_derives_ids_from_bundle_id() {
+        let p = info_plist("X", "1", "com.shiki.inputmethod.Nagi");
+        for needle in [
+            "<key>CFBundleIdentifier</key>\n\t<string>com.shiki.inputmethod.Nagi</string>",
+            "<key>com.shiki.inputmethod.Nagi.Japanese</key>",
+            "<key>TISInputSourceID</key><string>com.shiki.inputmethod.Nagi.Japanese</string>",
+            "<string>com.shiki.inputmethod.Nagi_Connection</string>",
+        ] {
+            assert!(p.contains(needle), "missing: {needle}");
+        }
+        assert!(!p.contains("com.shiki.nagi"));
+    }
+
+    #[test]
+    fn tiff_header_and_ifd_are_valid() {
+        let t = icon_tiff(ICON_SIZE, ICON_COLOR);
+        let u16_at = |o: usize| u16::from_le_bytes(t[o..o + 2].try_into().unwrap());
+        let u32_at = |o: usize| u32::from_le_bytes(t[o..o + 4].try_into().unwrap());
+        assert_eq!(&t[..4], &[b'I', b'I', 42, 0]);
+        let ifd = u32_at(4) as usize;
+        assert_eq!(ifd, 8);
+        let n = u16_at(ifd) as usize;
+        assert_eq!(n, 10);
+        let entry = |tag: u16| {
+            (0..n)
+                .map(|i| ifd + 2 + i * 12)
+                .find(|&o| u16_at(o) == tag)
+                .unwrap_or_else(|| panic!("tag {tag} missing"))
+        };
+        let size = ICON_SIZE;
+        assert_eq!(u32_at(entry(256) + 8), size);
+        assert_eq!(u32_at(entry(257) + 8), size);
+        assert_eq!(u16_at(entry(259) + 8), 1);
+        assert_eq!(u16_at(entry(262) + 8), 2);
+        assert_eq!(u16_at(entry(277) + 8), 4);
+        assert_eq!(u32_at(entry(278) + 8), size);
+        assert_eq!(u16_at(entry(338) + 8), 2);
+        // タグ昇順
+        let tags: Vec<u16> = (0..n).map(|i| u16_at(ifd + 2 + i * 12)).collect();
+        assert!(tags.windows(2).all(|w| w[0] < w[1]));
+        // 次の IFD なし
+        assert_eq!(u32_at(ifd + 2 + n * 12), 0);
+        // BitsPerSample は外部配列 (8,8,8,8)
+        let bps = entry(258);
+        assert_eq!((u16_at(bps + 2), u32_at(bps + 4)), (3, 4));
+        let bps_off = u32_at(bps + 8) as usize;
+        assert_eq!(
+            (0..4).map(|i| u16_at(bps_off + i * 2)).collect::<Vec<_>>(),
+            vec![8; 4]
+        );
+        // ストリップがファイル末尾までを過不足なく覆う
+        let off = u32_at(entry(273) + 8) as usize;
+        let cnt = u32_at(entry(279) + 8) as usize;
+        assert_eq!(cnt, (size * size * 4) as usize);
+        assert_eq!(off + cnt, t.len());
+        // 角は透明、中心は不透明で指定色
+        assert_eq!(t[off + 3], 0);
+        let mid = off + ((size / 2 * size + size / 2) * 4) as usize;
+        assert_eq!(
+            &t[mid..mid + 4],
+            &[ICON_COLOR[0], ICON_COLOR[1], ICON_COLOR[2], 255]
+        );
+    }
+
+    #[test]
+    fn derived_ids() {
+        assert_eq!(input_mode_id("a.b"), "a.b.Japanese");
+        assert_eq!(connection_name("a.b"), "a.b_Connection");
     }
 
     #[test]
@@ -413,6 +589,6 @@ mod tests {
 
     #[test]
     fn plist_escapes_xml() {
-        assert!(info_plist("A&B", "1<2").contains("A&amp;B"));
+        assert!(info_plist("A&B", "1<2", "x").contains("A&amp;B"));
     }
 }

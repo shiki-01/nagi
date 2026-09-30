@@ -5,9 +5,13 @@ import NagiClient
 
 /// アプリ起動時の組み立て: EngineSupervisor の生成・起動、IMKServer の起動、スリープ復帰時の再起動。
 public final class NagiIMEHost {
-    /// Info.plist に `InputMethodConnectionName` が無いときの既定値（Info.plist の値と一致させること）
-    public static let defaultConnectionName = "com.shiki.nagi_Connection"
-    public static let defaultBundleIdentifier = "com.shiki.nagi"
+    /// Info.plist に `InputMethodConnectionName` が無いときの既定値（バンドル ID から派生）
+    public static var defaultConnectionName: String {
+        BundleIdentity.connectionName(bundleID: defaultBundleIdentifier)
+    }
+    public static var defaultBundleIdentifier: String {
+        BundleIdentity.resolve(Bundle.main.bundleIdentifier)
+    }
 
     public enum HostError: Error {
         case engineNotFound
@@ -66,7 +70,7 @@ public final class NagiIMEHost {
             ?? Self.defaultConnectionName
         server = IMKServer(
             name: connectionName,
-            bundleIdentifier: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier)
+            bundleIdentifier: Self.defaultBundleIdentifier)
 
         // スリープ復帰でパイプが破棄される事象への対処（設計書 §3.3）
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(

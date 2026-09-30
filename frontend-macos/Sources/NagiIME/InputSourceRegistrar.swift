@@ -49,8 +49,10 @@ import Carbon
 /// TIS（Text Input Services）への明示登録。~/Library/Input Methods に置いただけでは
 /// 入力ソース一覧に出ない場合に、インストーラから呼ぶ。
 public enum InputSourceRegistrar {
-    public static let inputSourceID = "com.shiki.nagi.Japanese"
-    public static let bundleID = "com.shiki.nagi"
+    /// 実行中バンドルの ID（Info.plist の CFBundleIdentifier）
+    public static var bundleID: String { BundleIdentity.resolve(Bundle.main.bundleIdentifier) }
+    /// 入力モード ID（`<bundle-id>.Japanese`）
+    public static var inputSourceID: String { BundleIdentity.inputSourceID(bundleID: bundleID) }
 
     // kTISProperty* の値（SDK ヘッダの文字列定数と同じ）。定数の Swift 側の型
     // （CFString! / Unmanaged）が SDK で異なりうるため、リテラルで指定する。
