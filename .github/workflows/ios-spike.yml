@@ -28,7 +28,7 @@ jobs:
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.2"
+          xcode-version: latest-stable
 
       - name: Rust ツールチェーン（core/rust-toolchain.toml に従う）
         working-directory: core
@@ -81,7 +81,6 @@ jobs:
             -scheme NagiSpike \
             -configuration Release \
             -sdk iphoneos \
-            -destination "generic/platform=iOS" \
             -archivePath build/NagiSpike.xcarchive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             | tee build/xcodebuild.log | tail -n 40
