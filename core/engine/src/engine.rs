@@ -1256,6 +1256,8 @@ impl Engine {
             return;
         }
         sess.origins.clear();
+        // Space 変換は常に新しく変換する（古いライブ変換結果を持ち越さない。G-44）
+        sess.live_conversion = None;
         if how == Start::Convert
             && self.config.initial_view == InitialView::Sentence
             && pieces.len() == 1
@@ -1408,6 +1410,9 @@ impl Engine {
             .collect();
         let len = pieces.iter().map(|p| p.text.chars().count()).sum();
         sess.composer.load_pieces(&pieces, len);
+        // 変換の取り消し。以前のライブ変換結果が残っていると Composing で変換表示に戻ってしまうので、
+        // 必ずひらがな表示にする（G-44）
+        sess.live_conversion = None;
         sess.state = State::Composing;
     }
 

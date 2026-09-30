@@ -299,3 +299,44 @@
       expect: {state: converting}
     - key: "Home"
       expect: {consumed: true, state: converting}
+
+# G-44: Converting の Backspace は変換の取り消し（文字は削除しない）。ライブ変換の表示も破棄してひらがなに戻る。
+# その後の Space はもう一度通常の変換に入り、先頭候補は変換結果
+- name: convert-backspace-cancels-then-space-converts-again
+  backend: mock
+  mock:
+    sentences:
+      "きょう":
+        - {reading: "きょう", candidates: ["今日", "京"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - action: live_convert
+      reading: "きょう"
+      expect: {preedit: "今日", state: composing}
+    - key: "Space"
+      expect: {state: converting, preedit: "今日"}
+    - key: "BackSpace"
+      expect: {state: composing, preedit: "きょう", readings: ["きょう"], consumed: true}
+    - key: "Space"
+      expect: {state: converting, preedit: "今日"}
+
+# 取り消し後の Composing の Backspace は従来どおり1文字削除
+- name: convert-backspace-cancel-then-backspace-deletes-one
+  backend: mock
+  mock:
+    sentences:
+      "きょう":
+        - {reading: "きょう", candidates: ["今日"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "Space"}
+    - key: "BackSpace"
+      expect: {state: composing, preedit: "きょう"}
+    - key: "BackSpace"
+      expect: {state: composing, preedit: "きょ"}

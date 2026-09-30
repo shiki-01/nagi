@@ -1079,3 +1079,21 @@ fn n_input_never_duplicates_nn_in_composing_reading() {
         assert_eq!(r.commit.as_deref(), Some(shown.as_str()), "入力 {input}");
     }
 }
+
+#[test]
+fn converting_backspace_cancels_and_discards_live_view() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    press(&mut e, "s", "Space");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+    let r = press(&mut e, "s", "BackSpace");
+    assert!(r.commit.is_none());
+    // 文字は削除されず、ライブ変換の表示も残らずひらがなに戻る
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert_eq!(snap.preedit.text, "きょうはいい");
+    // その後の Space はもう一度変換に入る
+    press(&mut e, "s", "Space");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+}
