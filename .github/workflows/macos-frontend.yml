@@ -1,18 +1,8 @@
 name: macOS frontend
 
 on:
+  # 当面は手動実行のみ（自動実行は停止中）
   workflow_dispatch:
-  push:
-    branches: [main, "claude/**"]
-    paths:
-      - "frontend-macos/**"
-      - "core/**"
-      - ".github/workflows/macos-frontend.yml"
-  pull_request:
-    paths:
-      - "frontend-macos/**"
-      - "core/**"
-      - ".github/workflows/macos-frontend.yml"
 
 jobs:
   swift:

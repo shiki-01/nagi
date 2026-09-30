@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # 当面は手動実行のみ（push / pull_request での自動実行は停止中）
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
