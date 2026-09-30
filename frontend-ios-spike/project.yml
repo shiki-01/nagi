@@ -1,0 +1,97 @@
+name: NagiSpike
+
+options:
+  bundleIdPrefix: com.shiki.inputmethod
+  deploymentTarget:
+    iOS: "16.0"
+  groupSortPosition: top
+
+settings:
+  PROVISIONING_PROFILE_SPECIFIER: ""
+  DEVELOPMENT_TEAM: ""
+
+attributes:
+  ORGANIZATIONNAME: Shiki
+  LastUpgradeCheck: "1500"
+  LastSwiftMigration: "1500"
+
+targets:
+  NagiSpike:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+
+    sources:
+      - path: App
+      - path: Shared
+
+    resources:
+      - path: Resources
+        optional: true
+
+    dependencies:
+      - target: NagiSpikeKeyboard
+      - sdk: UIKit.framework
+      - sdk: Foundation.framework
+      - sdk: SwiftUI.framework
+      - sdk: os
+      - framework: NagiCore.xcframework
+        embed: false
+
+    entitlements:
+      path: App/NagiSpike.entitlements
+      properties:
+        application-groups:
+          - group.com.shiki.nagi.spike
+
+    settings:
+      SWIFT_VERSION: "5"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_APP ${NAGI_LLM}"
+      CODE_SIGN_STYLE: Automatic
+      BUNDLE_ID: com.shiki.inputmethod.NagiSpike
+
+    scheme:
+      testTargets: []
+      gatherCoverageData: false
+
+  NagiSpikeKeyboard:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    productName: NagiSpikeKeyboard
+
+    sources:
+      - path: Keyboard
+      - path: Shared
+
+
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: Foundation.framework
+      - sdk: SwiftUI.framework
+      - sdk: os
+      - framework: NagiCore.xcframework
+        embed: false
+
+    entitlements:
+      path: Keyboard/NagiSpikeKeyboard.entitlements
+      properties:
+        application-groups:
+          - group.com.shiki.nagi.spike
+
+    info:
+      NSExtension:
+        NSExtensionAttributes:
+          RequestsOpenAccess: false
+        NSExtensionPointIdentifier: com.apple.keyboard-service
+        NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).KeyboardViewController"
+
+    settings:
+      SWIFT_VERSION: "5"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_KEYBOARD ${NAGI_LLM}"
+      CODE_SIGN_STYLE: Automatic
+      BUNDLE_ID: com.shiki.inputmethod.NagiSpike.Keyboard
+
+    scheme:
+      testTargets: []
+      gatherCoverageData: false

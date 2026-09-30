@@ -1,0 +1,109 @@
+name: ios-spike
+
+# iOS 実機検証アプリ（frontend-ios-spike）のビルド。未署名 IPA を artifact として出力する。
+# 署名は SideStore 等で端末側に任せる想定。
+
+on:
+  workflow_dispatch:
+    inputs:
+      llama:
+        description: "LLM 推論（llama.cpp）を有効にしてビルドする"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - "core/ffi/**"
+      - "frontend-ios-spike/**"
+      - ".github/workflows/ios-spike.yml"
+
+concurrency:
+  group: ios-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust ツールチェーン（core/rust-toolchain.toml に従う）
+        working-directory: core
+        run: |
+          rustup show
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: XcodeGen と cmake を用意
+        run: brew install xcodegen cmake
+
+      - name: XCFramework をビルド
+        working-directory: core
+        run: |
+          if [ "${{ inputs.llama }}" = "true" ]; then
+            cargo xtask build-ios-xcframework --llama
+          else
+            cargo xtask build-ios-xcframework
+          fi
+
+      - name: 辞書を取得・生成（アプリのリソースに含める）
+        working-directory: core
+        run: |
+          cargo xtask fetch-dict
+          cargo xtask build-dict
+
+      - name: 辞書をアプリのリソースへ配置
+        run: |
+          mkdir -p frontend-ios-spike/Resources
+          cp data/dict/nagi-dict.bin frontend-ios-spike/Resources/
+
+      - name: Xcode プロジェクトを生成
+        working-directory: frontend-ios-spike
+        run: |
+          if [ "${{ inputs.llama }}" = "true" ]; then
+            NAGI_LLM=NAGI_LLM xcodegen generate
+          else
+            xcodegen generate
+          fi
+
+      - name: アーカイブ（未署名）
+        working-directory: frontend-ios-spike
+        run: |
+          mkdir -p build
+          xcodebuild archive \
+            -project NagiSpike.xcodeproj \
+            -scheme NagiSpike \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath build/NagiSpike.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tee build/xcodebuild.log | tail -n 40
+        shell: bash
+
+      - name: IPA を作成
+        working-directory: frontend-ios-spike
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/NagiSpike.xcarchive/Products/Applications/NagiSpike.app build/ipa/Payload/
+          (cd build/ipa && zip -qr ../NagiSpike-unsigned.ipa Payload)
+          ls -lh build/NagiSpike-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NagiSpike-unsigned-ipa
+          path: frontend-ios-spike/build/NagiSpike-unsigned.ipa
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xcodebuild-log
+          path: frontend-ios-spike/build/xcodebuild.log
+          if-no-files-found: ignore

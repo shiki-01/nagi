@@ -15,3 +15,10 @@ Thumbs.db
 # SwiftPM
 /frontend-macos/.build/
 /frontend-macos/.swiftpm/
+
+# iOS spike app
+/frontend-ios-spike/*.xcodeproj/
+/frontend-ios-spike/NagiCore.xcframework/
+/frontend-ios-spike/build/
+/frontend-ios-spike/.build/
+frontend-ios-spike/Resources/

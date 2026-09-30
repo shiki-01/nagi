@@ -1,0 +1,48 @@
+//! C ABI の疎通テスト。iOS 検証アプリ（Swift）が送る JSON-RPC 行と同じ形で呼ぶ。
+
+use nagi_ffi::*;
+use std::ffi::{CStr, CString};
+
+const INIT: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client_name":"nagi-ios-spike","client_version":"0.1","os":"ios"}}"#;
+const KEY_A: &str = r#"{"jsonrpc":"2.0","id":2,"method":"process_key","params":{"session_id":"s","keysym":97,"keycode":0,"text":"a","modifiers":{"shift":false,"ctrl":false,"alt":false,"meta":false},"kind":"down"}}"#;
+
+fn send(handle: NagiServerHandle, line: &str) -> String {
+    let c = CString::new(line).unwrap();
+    unsafe {
+        let p = nagi_handle_line(handle, c.as_ptr());
+        let s = CStr::from_ptr(p).to_str().unwrap().to_string();
+        nagi_string_free(p);
+        s
+    }
+}
+
+#[test]
+fn handle_roundtrip() {
+    let dir = std::env::temp_dir().join("nagi-ffi-smoke");
+    let dir_c = CString::new(dir.to_str().unwrap()).unwrap();
+    unsafe {
+        let handle = nagi_server_new(dir_c.as_ptr(), dir_c.as_ptr(), 1);
+        assert!(!handle.is_null());
+
+        let init = send(handle, INIT);
+        assert!(init.contains("\"result\""), "initialize の応答: {init}");
+        let key = send(handle, KEY_A);
+        assert!(key.contains("\"result\""), "process_key の応答: {key}");
+        assert!(key.contains("あ"), "ローマ字 a がひらがなになる: {key}");
+
+        let notes = nagi_last_notes(handle);
+        assert!(!CStr::from_ptr(notes).to_str().unwrap().is_empty());
+        nagi_string_free(notes);
+        nagi_server_free(handle);
+    }
+}
+
+#[test]
+fn null_handle_is_safe() {
+    let c = CString::new(INIT).unwrap();
+    unsafe {
+        let p = nagi_handle_line(std::ptr::null_mut(), c.as_ptr());
+        assert!(CStr::from_ptr(p).to_bytes().is_empty());
+        nagi_string_free(p);
+    }
+}

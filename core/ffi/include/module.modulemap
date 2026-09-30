@@ -1,0 +1,4 @@
+module NagiCore {
+    header "nagi_ffi.h"
+    export *
+}

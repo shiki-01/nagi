@@ -3,6 +3,7 @@
 //! タスクは OS 非依存にするため、シェルスクリプトではなくこの crate に Rust で書く。
 
 mod build_dict;
+mod build_ios_xcframework;
 mod bundle_macos;
 mod fetch_dict;
 mod fetch_model;
@@ -59,6 +60,15 @@ enum Task {
         #[arg(long)]
         out_dir: Option<std::path::PathBuf>,
     },
+    /// iOS 用 XCFramework を生成する（nagi-ffi を aarch64-apple-ios/sim ターゲット向けにビルド）
+    BuildIosXcframework {
+        /// feature llama を有効化する
+        #[arg(long)]
+        llama: bool,
+        /// 出力先ディレクトリ（既定は target/ios-xcframework）
+        #[arg(long)]
+        out_dir: Option<std::path::PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -82,6 +92,9 @@ fn main() -> ExitCode {
             bundle_id,
             out_dir,
         }),
+        Task::BuildIosXcframework { llama, out_dir } => {
+            build_ios_xcframework::run(build_ios_xcframework::Options { llama, out_dir })
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
