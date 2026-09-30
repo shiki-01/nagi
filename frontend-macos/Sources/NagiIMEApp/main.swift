@@ -7,6 +7,13 @@ let options = HostOptions.parse(
     arguments: Array(CommandLine.arguments.dropFirst()),
     environment: ProcessInfo.processInfo.environment)
 
+if options.register {
+    // IMKServer・エンジンを起動せず、TIS への登録と有効化だけ行って終了する
+    let report = InputSourceRegistrar.register(appURL: Bundle.main.bundleURL)
+    print(report.text)
+    exit(report.succeeded ? 0 : 1)
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 

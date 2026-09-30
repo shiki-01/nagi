@@ -14,10 +14,13 @@ public struct HostOptions: Equatable {
     public var connectionName: String?
     /// `--no-llm`
     public var noLLM: Bool
+    /// `--register`（TIS への入力ソース登録・有効化だけ行って終了する）
+    public var register: Bool
 
     public init(
         enginePath: String? = nil, dataDir: String? = nil, userDir: String? = nil,
-        configFile: String? = nil, connectionName: String? = nil, noLLM: Bool = false
+        configFile: String? = nil, connectionName: String? = nil, noLLM: Bool = false,
+        register: Bool = false
     ) {
         self.enginePath = enginePath
         self.dataDir = dataDir
@@ -25,6 +28,7 @@ public struct HostOptions: Equatable {
         self.configFile = configFile
         self.connectionName = connectionName
         self.noLLM = noLLM
+        self.register = register
     }
 
     public static func parse(arguments: [String], environment: [String: String]) -> HostOptions {
@@ -45,6 +49,7 @@ public struct HostOptions: Equatable {
             case "--config": o.configFile = value() ?? o.configFile
             case "--connection-name": o.connectionName = value() ?? o.connectionName
             case "--no-llm": o.noLLM = true
+            case "--register": o.register = true
             default: break
             }
             i += 1

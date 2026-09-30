@@ -21,6 +21,30 @@ final class SupportTests: XCTestCase {
         XCTAssertEqual(o.engineArguments(defaultDataDir: "/d"), ["--data-dir", "/d"])
     }
 
+    func testHostOptionsRegisterFlag() {
+        XCTAssertFalse(HostOptions.parse(arguments: [], environment: [:]).register)
+        let o = HostOptions.parse(arguments: ["--register", "--no-llm"], environment: [:])
+        XCTAssertTrue(o.register)
+        XCTAssertTrue(o.noLLM)
+    }
+
+    func testRegistrationReportSuccess() {
+        let r = RegistrationReport(
+            registerStatus: 0, foundSourceCount: 2, enableStatuses: [0, 0])
+        XCTAssertTrue(r.succeeded)
+        XCTAssertTrue(r.text.contains("2"))
+    }
+
+    func testRegistrationReportFailures() {
+        XCTAssertFalse(
+            RegistrationReport(registerStatus: -50, foundSourceCount: 1, enableStatuses: [0]).succeeded)
+        XCTAssertFalse(
+            RegistrationReport(registerStatus: 0, foundSourceCount: 0, enableStatuses: []).succeeded)
+        let bad = RegistrationReport(registerStatus: 0, foundSourceCount: 1, enableStatuses: [-50])
+        XCTAssertFalse(bad.succeeded)
+        XCTAssertTrue(bad.text.contains("-50"))
+    }
+
     func testSyncBridgeReturnsValueAndTimesOut() {
         let ok = SyncBridge.wait(timeout: 2) { 42 }
         XCTAssertEqual(try? ok.get(), 42)
