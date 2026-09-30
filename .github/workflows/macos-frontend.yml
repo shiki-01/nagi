@@ -47,3 +47,79 @@ jobs:
           name: Nagi.app
           path: core/target/macos-bundle/Nagi.app.zip
           if-no-files-found: error
+
+  # LLM 有効版（llama.cpp をビルドするため重い）。失敗しても上の swift ジョブには影響しない別ジョブ
+  bundle-llama:
+    name: bundle Nagi-llama.app (macos, --llama)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (rust-toolchain.toml)
+        working-directory: core
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: llama
+      - name: Set up cmake and libclang
+        run: |
+          command -v cmake >/dev/null || brew install cmake
+          cmake --version
+          # bindgen 用。Xcode / CommandLineTools 同梱の libclang.dylib を探す
+          for d in "$(xcode-select -p)/usr/lib" \
+                   "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" \
+                   /Library/Developer/CommandLineTools/usr/lib; do
+            if [ -e "$d/libclang.dylib" ]; then
+              echo "LIBCLANG_PATH=$d" >> "$GITHUB_ENV"
+              echo "libclang: $d"
+              found=1
+              break
+            fi
+          done
+          [ -n "$found" ] || { echo "libclang.dylib が見つかりません" >&2; exit 1; }
+      - name: bundle (Nagi-llama.app, ad-hoc signed)
+        working-directory: core
+        run: cargo xtask bundle-macos --llama
+      - name: rename zip
+        run: cp core/target/macos-bundle/Nagi.app.zip Nagi-llama.app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nagi-llama.app
+          path: Nagi-llama.app.zip
+          if-no-files-found: error
+
+  # 実機用の辞書・モデル。artifact は repo メンバー限定で、公開配布ではない（retention 7 日）
+  data:
+    name: fetch dict & model (nagi-data)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (rust-toolchain.toml)
+        working-directory: core
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: data
+      - name: fetch-dict / build-dict / fetch-model
+        working-directory: core
+        run: |
+          cargo xtask fetch-dict
+          cargo xtask build-dict
+          cargo xtask fetch-model
+      - name: zip (dict/nagi-dict.bin + models/)
+        run: |
+          test -f data/dict/nagi-dict.bin
+          mkdir -p stage/dict
+          cp data/dict/nagi-dict.bin stage/dict/
+          cp -r data/models stage/models
+          (cd stage && zip -r ../nagi-data.zip .)
+          ls -lh nagi-data.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nagi-data
+          path: nagi-data.zip
+          retention-days: 7
+          if-no-files-found: error

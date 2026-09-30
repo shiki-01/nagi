@@ -109,6 +109,14 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 5. `killall TextInputMenuAgent`
 6. システム設定 > キーボード > 入力ソース で Nagi（日本語）を追加する。表示されない場合は再ログインする
 
+### 辞書・モデルと LLM 版の配置（実データで動かす場合）
+
+上記の `Nagi.app` は辞書・モデルを含まず、LLM も無効（読みがそのまま返る）。実データで動かすには以下を行う。CI（`macos-frontend.yml`）の artifact は repo メンバー限定で、公開配布ではない。
+
+1. artifact `nagi-data`（`nagi-data.zip`、保持 7 日）を展開し、中身（`dict/` と `models/`）を `~/Library/Application Support/com.shiki.nagi/data/` に置く（`data/dict/nagi-dict.bin`、`data/models/zenz-v3.1-small-Q5_K_M.gguf` になる）
+2. 辞書変換だけなら 1 で足りる。LLM 変換を使うには artifact `Nagi-llama.app`（`Nagi-llama.app.zip`）を展開し、`~/Library/Input Methods/` の `Nagi.app` と差し替える（展開物の名前は `Nagi.app`。手順 3〜5 の `xattr -cr` と `--register` をやり直し、`killall TextInputMenuAgent`。すでにプロセスが動いている場合は `killall NagiIMEApp` 相当で再起動する）
+3. 確認: 「きょうはいいてんきですね」等を入力して Space。漢字混じりの候補が出れば辞書が効いている。LLM が効いているかは、辞書のみより文脈に沿った 1 件目になるか（例: 同音語の選び分け）で判断する。読みがそのまま返る場合は data-dir のパスとファイル名を確認する
+
 ## 既知の問題
 
 - ~~CI の `types` ジョブは `typeshare-cli` を毎回 `cargo install` する~~ → `actions/cache` でバイナリをキャッシュするよう修正（`~/.cargo/bin/typeshare`。キー `typeshare-cli-<os>-v1`。バージョンを上げたい場合はキーの `v1` を変える）

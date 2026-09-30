@@ -16,150 +16,110 @@ const DEFAULT_BUNDLE_ID: &str = "com.shiki.inputmethod.Nagi";
 const MIN_MACOS: &str = "13.0";
 /// アイコン画像のファイル名（Contents/Resources に置く。Info.plist が参照する）。
 const ICON_FILE: &str = "nagi-icon.tiff";
-/// PNG 版アイコンのファイル名（参考用に同梱）。
-const ICON_PNG_FILE: &str = "nagi-icon.png";
-/// アイコンの一辺（px）。
-const ICON_SIZE: u32 = 64;
 /// アイコンの色（RGB。落ち着いた青緑）。
 const ICON_COLOR: [u8; 3] = [0x3A, 0x7C, 0x89];
 
-/// CRC32（IEEE, PNG 用）。
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0xEDB8_8320
-            } else {
-                crc >> 1
-            };
-        }
-    }
-    !crc
-}
-
-/// Adler-32（zlib 用）。
-fn adler32(data: &[u8]) -> u32 {
-    let (mut a, mut b) = (1u32, 0u32);
-    for &x in data {
-        a = (a + x as u32) % 65521;
-        b = (b + a) % 65521;
-    }
-    (b << 16) | a
-}
-
-fn png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    let mut body = kind.to_vec();
-    body.extend_from_slice(data);
-    out.extend_from_slice(&body);
-    out.extend_from_slice(&crc32(&body).to_be_bytes());
-}
-
-/// 非圧縮（stored ブロック）の zlib ストリームにする。
-fn zlib_stored(raw: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x78, 0x01];
-    let mut chunks = raw.chunks(65535).peekable();
-    if chunks.peek().is_none() {
-        out.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF]);
-    }
-    while let Some(c) = chunks.next() {
-        out.push(u8::from(chunks.peek().is_none()));
-        let len = c.len() as u16;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(c);
-    }
-    out.extend_from_slice(&adler32(raw).to_be_bytes());
-    out
-}
-
-/// 単色の角丸風正方形（RGBA 8bit, 四隅は透明）を PNG にエンコードする。
-pub fn icon_png(size: u32, rgb: [u8; 3]) -> Vec<u8> {
-    let pixels = icon_rgba(size, rgb);
-    let mut raw = Vec::with_capacity(((size * 4 + 1) * size) as usize);
-    for row in pixels.chunks((size * 4) as usize) {
-        raw.push(0); // フィルタなし
-        raw.extend_from_slice(row);
-    }
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&size.to_be_bytes());
-    ihdr.extend_from_slice(&size.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8bit, RGBA, deflate, filter 0, interlace なし
-    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    png_chunk(&mut out, b"IHDR", &ihdr);
-    png_chunk(&mut out, b"IDAT", &zlib_stored(&raw));
-    png_chunk(&mut out, b"IEND", &[]);
-    out
-}
-
-/// 単色の角丸正方形の RGBA 8bit ピクセル列（PNG / TIFF 共通）。
+/// 単色の角丸正方形の RGBA 8bit ピクセル列（四隅は透明）。
 fn icon_rgba(size: u32, rgb: [u8; 3]) -> Vec<u8> {
     let radius = size / 5;
     let mut px = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
-            // 角の円の中心からの距離で角丸を判定する
-            let cx = if x < radius {
-                radius - 1 - x
-            } else {
-                x.saturating_sub(size - radius)
-            } as i64;
-            let cy = if y < radius {
-                radius - 1 - y
-            } else {
-                y.saturating_sub(size - radius)
-            } as i64;
-            let r = radius as i64;
-            let inside = cx * cx + cy * cy <= r * r;
+            // 角の円の中心からピクセル中心までの距離で角丸を判定する（座標は 2 倍の整数）
+            let corner = |v: u32| -> i64 {
+                if v < radius {
+                    2 * radius as i64 - (2 * v as i64 + 1)
+                } else if v >= size - radius {
+                    2 * v as i64 + 1 - 2 * (size - radius) as i64
+                } else {
+                    0
+                }
+            };
+            let (dx, dy) = (corner(x), corner(y));
+            let r2 = 2 * radius as i64;
+            let inside = dx * dx + dy * dy <= r2 * r2;
             px.extend_from_slice(&[rgb[0], rgb[1], rgb[2], if inside { 255 } else { 0 }]);
         }
     }
     px
 }
 
-/// 非圧縮 RGBA（リトルエンディアン、単一ストリップ）の最小 TIFF にエンコードする。
-///
-/// レイアウト: ヘッダ 8B / IFD（10 エントリ）/ BitsPerSample 配列 / ピクセルデータ。
-pub fn icon_tiff(size: u32, rgb: [u8; 3]) -> Vec<u8> {
-    const ENTRIES: u16 = 10;
-    const IFD_OFFSET: u32 = 8;
-    let ifd_len = 2 + ENTRIES as u32 * 12 + 4;
-    let bps_offset = IFD_OFFSET + ifd_len;
-    let data_offset = bps_offset + 8;
-    let pixels = icon_rgba(size, rgb);
+/// TIFF 1 ページ分の指定（一辺 px と解像度 dpi）。
+#[derive(Clone, Copy)]
+pub struct TiffPage {
+    pub size: u32,
+    pub dpi: u32,
+}
 
+/// 16pt アイコン用のページ構成（1x = 16px @72dpi、2x = 32px @144dpi）。
+/// macOS は解像度からポイントサイズを決めるため、dpi を持たせないと px がそのまま pt 扱いになる。
+const ICON_PAGES: [TiffPage; 2] = [
+    TiffPage { size: 16, dpi: 72 },
+    TiffPage { size: 32, dpi: 144 },
+];
+
+/// 1 ページあたりの IFD エントリ数。
+const IFD_ENTRIES: u16 = 13;
+
+/// 非圧縮 RGBA（リトルエンディアン、ページごとに単一ストリップ）のマルチページ TIFF にエンコードする。
+///
+/// ページごとのレイアウト: IFD（13 エントリ）/ BitsPerSample 配列 / XResolution / YResolution / ピクセルデータ。
+/// 各 IFD の NextIFD で次ページに連結する。
+pub fn icon_tiff(pages: &[TiffPage], rgb: [u8; 3]) -> Vec<u8> {
     let mut out = vec![b'I', b'I', 42, 0];
-    out.extend_from_slice(&IFD_OFFSET.to_le_bytes());
-    out.extend_from_slice(&ENTRIES.to_le_bytes());
-    // (tag, (type(3=SHORT,4=LONG), count, value))。タグ昇順
-    let short = |v: u32| (3u16, 1u32, v);
-    let long = |v: u32| (4u16, 1u32, v);
-    let entries: [(u16, (u16, u32, u32)); 10] = [
-        (256, long(size)),                // ImageWidth
-        (257, long(size)),                // ImageLength
-        (258, (3, 4, bps_offset)),        // BitsPerSample(8,8,8,8)
-        (259, short(1)),                  // Compression: なし
-        (262, short(2)),                  // Photometric: RGB
-        (273, long(data_offset)),         // StripOffsets
-        (277, short(4)),                  // SamplesPerPixel
-        (278, long(size)),                // RowsPerStrip
-        (279, long(pixels.len() as u32)), // StripByteCounts
-        (338, short(2)),                  // ExtraSamples: unassociated alpha
-    ];
-    for (tag, (ty, count, value)) in entries {
-        out.extend_from_slice(&tag.to_le_bytes());
-        out.extend_from_slice(&ty.to_le_bytes());
-        out.extend_from_slice(&count.to_le_bytes());
-        // SHORT 値は値欄の下位 2 バイトに左詰め（LE ではそのまま u32 で書けばよい）
-        out.extend_from_slice(&value.to_le_bytes());
+    out.extend_from_slice(&8u32.to_le_bytes()); // 最初の IFD
+    for (i, page) in pages.iter().enumerate() {
+        let ifd_offset = out.len() as u32;
+        let ifd_len = 2 + IFD_ENTRIES as u32 * 12 + 4;
+        let bps_offset = ifd_offset + ifd_len;
+        let xres_offset = bps_offset + 8;
+        let yres_offset = xres_offset + 8;
+        let data_offset = yres_offset + 8;
+        let pixels = icon_rgba(page.size, rgb);
+        let next_ifd = if i + 1 < pages.len() {
+            data_offset + pixels.len() as u32
+        } else {
+            0
+        };
+        let size = page.size;
+
+        out.extend_from_slice(&IFD_ENTRIES.to_le_bytes());
+        // (tag, (type(3=SHORT,4=LONG,5=RATIONAL), count, value))。タグ昇順
+        let short = |v: u32| (3u16, 1u32, v);
+        let long = |v: u32| (4u16, 1u32, v);
+        let entries: [(u16, (u16, u32, u32)); IFD_ENTRIES as usize] = [
+            (256, long(size)),                // ImageWidth
+            (257, long(size)),                // ImageLength
+            (258, (3, 4, bps_offset)),        // BitsPerSample(8,8,8,8)
+            (259, short(1)),                  // Compression: なし
+            (262, short(2)),                  // Photometric: RGB
+            (273, long(data_offset)),         // StripOffsets
+            (277, short(4)),                  // SamplesPerPixel
+            (278, long(size)),                // RowsPerStrip
+            (279, long(pixels.len() as u32)), // StripByteCounts
+            (282, (5, 1, xres_offset)),       // XResolution
+            (283, (5, 1, yres_offset)),       // YResolution
+            (296, short(2)),                  // ResolutionUnit: inch
+            (338, short(2)),                  // ExtraSamples: unassociated alpha
+        ];
+        for (tag, (ty, count, value)) in entries {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&ty.to_le_bytes());
+            out.extend_from_slice(&count.to_le_bytes());
+            // SHORT 値は値欄の下位 2 バイトに左詰め（LE ではそのまま u32 で書けばよい）
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&next_ifd.to_le_bytes());
+        for _ in 0..4 {
+            out.extend_from_slice(&8u16.to_le_bytes());
+        }
+        for _ in 0..2 {
+            // 解像度は RATIONAL（分子 dpi / 分母 1）
+            out.extend_from_slice(&page.dpi.to_le_bytes());
+            out.extend_from_slice(&1u32.to_le_bytes());
+        }
+        out.extend_from_slice(&pixels);
     }
-    out.extend_from_slice(&0u32.to_le_bytes()); // 次の IFD なし
-    for _ in 0..4 {
-        out.extend_from_slice(&8u16.to_le_bytes());
-    }
-    out.extend_from_slice(&pixels);
     out
 }
 
@@ -396,12 +356,7 @@ pub fn run(opts: Options) -> Result<(), String> {
         .map_err(|e| format!("ディレクトリの作成に失敗しました: {e}"))?;
     fs::write(
         resources_dir.join(ICON_FILE),
-        icon_tiff(ICON_SIZE, ICON_COLOR),
-    )
-    .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
-    fs::write(
-        resources_dir.join(ICON_PNG_FILE),
-        icon_png(ICON_SIZE, ICON_COLOR),
+        icon_tiff(&ICON_PAGES, ICON_COLOR),
     )
     .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
 
@@ -501,92 +456,93 @@ mod tests {
         assert!(!p.contains("com.shiki.nagi"));
     }
 
-    #[test]
-    fn tiff_header_and_ifd_are_valid() {
-        let t = icon_tiff(ICON_SIZE, ICON_COLOR);
-        let u16_at = |o: usize| u16::from_le_bytes(t[o..o + 2].try_into().unwrap());
-        let u32_at = |o: usize| u32::from_le_bytes(t[o..o + 4].try_into().unwrap());
-        assert_eq!(&t[..4], &[b'I', b'I', 42, 0]);
-        let ifd = u32_at(4) as usize;
-        assert_eq!(ifd, 8);
-        let n = u16_at(ifd) as usize;
-        assert_eq!(n, 10);
-        let entry = |tag: u16| {
+    /// テスト用の TIFF リーダ。
+    struct Tiff<'a>(&'a [u8]);
+    impl Tiff<'_> {
+        fn u16_at(&self, o: usize) -> u16 {
+            u16::from_le_bytes(self.0[o..o + 2].try_into().unwrap())
+        }
+        fn u32_at(&self, o: usize) -> u32 {
+            u32::from_le_bytes(self.0[o..o + 4].try_into().unwrap())
+        }
+        /// IFD 内のタグのエントリ先頭オフセット。
+        fn entry(&self, ifd: usize, tag: u16) -> usize {
+            let n = self.u16_at(ifd) as usize;
             (0..n)
                 .map(|i| ifd + 2 + i * 12)
-                .find(|&o| u16_at(o) == tag)
+                .find(|&o| self.u16_at(o) == tag)
                 .unwrap_or_else(|| panic!("tag {tag} missing"))
-        };
-        let size = ICON_SIZE;
-        assert_eq!(u32_at(entry(256) + 8), size);
-        assert_eq!(u32_at(entry(257) + 8), size);
-        assert_eq!(u16_at(entry(259) + 8), 1);
-        assert_eq!(u16_at(entry(262) + 8), 2);
-        assert_eq!(u16_at(entry(277) + 8), 4);
-        assert_eq!(u32_at(entry(278) + 8), size);
-        assert_eq!(u16_at(entry(338) + 8), 2);
-        // タグ昇順
-        let tags: Vec<u16> = (0..n).map(|i| u16_at(ifd + 2 + i * 12)).collect();
-        assert!(tags.windows(2).all(|w| w[0] < w[1]));
-        // 次の IFD なし
-        assert_eq!(u32_at(ifd + 2 + n * 12), 0);
-        // BitsPerSample は外部配列 (8,8,8,8)
-        let bps = entry(258);
-        assert_eq!((u16_at(bps + 2), u32_at(bps + 4)), (3, 4));
-        let bps_off = u32_at(bps + 8) as usize;
-        assert_eq!(
-            (0..4).map(|i| u16_at(bps_off + i * 2)).collect::<Vec<_>>(),
-            vec![8; 4]
-        );
-        // ストリップがファイル末尾までを過不足なく覆う
-        let off = u32_at(entry(273) + 8) as usize;
-        let cnt = u32_at(entry(279) + 8) as usize;
-        assert_eq!(cnt, (size * size * 4) as usize);
-        assert_eq!(off + cnt, t.len());
-        // 角は透明、中心は不透明で指定色
-        assert_eq!(t[off + 3], 0);
-        let mid = off + ((size / 2 * size + size / 2) * 4) as usize;
-        assert_eq!(
-            &t[mid..mid + 4],
-            &[ICON_COLOR[0], ICON_COLOR[1], ICON_COLOR[2], 255]
-        );
+        }
+        fn rational(&self, ifd: usize, tag: u16) -> (u32, u32) {
+            let e = self.entry(ifd, tag);
+            assert_eq!((self.u16_at(e + 2), self.u32_at(e + 4)), (5, 1));
+            let o = self.u32_at(e + 8) as usize;
+            (self.u32_at(o), self.u32_at(o + 4))
+        }
+    }
+
+    #[test]
+    fn tiff_has_two_linked_pages_with_resolution() {
+        let t = icon_tiff(&ICON_PAGES, ICON_COLOR);
+        let r = Tiff(&t);
+        assert_eq!(&t[..4], &[b'I', b'I', 42, 0]);
+        let mut ifd = r.u32_at(4) as usize;
+        assert_eq!(ifd, 8);
+        let expected = [(16u32, 72u32), (32, 144)];
+        for (page, (size, dpi)) in expected.into_iter().enumerate() {
+            let n = r.u16_at(ifd) as usize;
+            assert_eq!(n, IFD_ENTRIES as usize);
+            let entry = |tag: u16| r.entry(ifd, tag);
+            assert_eq!(r.u32_at(entry(256) + 8), size);
+            assert_eq!(r.u32_at(entry(257) + 8), size);
+            assert_eq!(r.u16_at(entry(259) + 8), 1);
+            assert_eq!(r.u16_at(entry(262) + 8), 2);
+            assert_eq!(r.u16_at(entry(277) + 8), 4);
+            assert_eq!(r.u32_at(entry(278) + 8), size);
+            assert_eq!(r.u16_at(entry(338) + 8), 2);
+            // 解像度タグ
+            assert_eq!(r.rational(ifd, 282), (dpi, 1));
+            assert_eq!(r.rational(ifd, 283), (dpi, 1));
+            assert_eq!(r.u16_at(entry(296) + 8), 2);
+            // タグ昇順
+            let tags: Vec<u16> = (0..n).map(|i| r.u16_at(ifd + 2 + i * 12)).collect();
+            assert!(tags.windows(2).all(|w| w[0] < w[1]));
+            // BitsPerSample は外部配列 (8,8,8,8)
+            let bps = entry(258);
+            assert_eq!((r.u16_at(bps + 2), r.u32_at(bps + 4)), (3, 4));
+            let bps_off = r.u32_at(bps + 8) as usize;
+            assert_eq!(
+                (0..4)
+                    .map(|i| r.u16_at(bps_off + i * 2))
+                    .collect::<Vec<_>>(),
+                vec![8; 4]
+            );
+            // ストリップのサイズと、角は透明・中心は不透明で指定色
+            let off = r.u32_at(entry(273) + 8) as usize;
+            let cnt = r.u32_at(entry(279) + 8) as usize;
+            assert_eq!(cnt, (size * size * 4) as usize);
+            assert_eq!(t[off + 3], 0);
+            let mid = off + ((size / 2 * size + size / 2) * 4) as usize;
+            assert_eq!(
+                &t[mid..mid + 4],
+                &[ICON_COLOR[0], ICON_COLOR[1], ICON_COLOR[2], 255]
+            );
+            // NextIFD: 最初のページは次ページ（ピクセルデータ直後）、最後は 0
+            let next = r.u32_at(ifd + 2 + n * 12) as usize;
+            if page == 0 {
+                assert_eq!(next, off + cnt);
+                ifd = next;
+            } else {
+                assert_eq!(next, 0);
+                assert_eq!(off + cnt, t.len());
+            }
+        }
     }
 
     #[test]
     fn derived_ids() {
         assert_eq!(input_mode_id("a.b"), "a.b.Japanese");
         assert_eq!(connection_name("a.b"), "a.b_Connection");
-    }
-
-    #[test]
-    fn png_structure_is_valid() {
-        let png = icon_png(ICON_SIZE, ICON_COLOR);
-        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
-        // IHDR: 長さ 13、種別、64x64、8bit RGBA
-        assert_eq!(&png[8..12], &13u32.to_be_bytes());
-        assert_eq!(&png[12..16], b"IHDR");
-        assert_eq!(&png[16..20], &ICON_SIZE.to_be_bytes());
-        assert_eq!(&png[20..24], &ICON_SIZE.to_be_bytes());
-        assert_eq!(&png[24..29], &[8, 6, 0, 0, 0]);
-        // 全チャンクの CRC を検証し、IEND で終わること
-        let mut pos = 8;
-        let mut kinds = Vec::new();
-        while pos < png.len() {
-            let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
-            let body = &png[pos + 4..pos + 8 + len];
-            let crc = u32::from_be_bytes(png[pos + 8 + len..pos + 12 + len].try_into().unwrap());
-            assert_eq!(crc32(body), crc, "CRC mismatch");
-            kinds.push(body[..4].to_vec());
-            pos += 12 + len;
-        }
-        assert_eq!(pos, png.len());
-        assert_eq!(kinds.last().unwrap(), b"IEND");
-    }
-
-    #[test]
-    fn crc32_and_adler32_known_values() {
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        assert_eq!(adler32(b"Wikipedia"), 0x11E6_0398);
     }
 
     #[test]
