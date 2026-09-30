@@ -59,6 +59,11 @@ n_threads = 0
 # 既定: 未指定（プロファイル自動判定）
 # model = "zenz-v3.1-small"
 
+# LLM 推論を使うかどうか
+# false = 辞書（Viterbi）のみで変換する（モデルを読み込んでいても使わない）
+# 既定: true
+use_llm = true
+
 # 文脈を考慮するかどうか
 # true = Surrounding Text を使用して文脈を推論に含める
 # 既定: true

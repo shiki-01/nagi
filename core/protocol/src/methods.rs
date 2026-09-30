@@ -24,6 +24,10 @@ pub mod method {
     pub const GET_STATUS: &str = "get_status";
     /// `clear_learning` メソッド（学習データの全削除）
     pub const CLEAR_LEARNING: &str = "clear_learning";
+    /// `get_settings` メソッド（GUI 設定画面向けの設定項目と現在値）
+    pub const GET_SETTINGS: &str = "get_settings";
+    /// `update_settings` メソッド（設定の書き込み）
+    pub const UPDATE_SETTINGS: &str = "update_settings";
     /// `select_candidate` メソッド
     pub const SELECT_CANDIDATE: &str = "select_candidate";
     /// `reconvert` メソッド

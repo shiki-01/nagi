@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 toml = "0.8"
+toml_edit = "0.22"
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 

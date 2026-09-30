@@ -52,6 +52,29 @@ public struct CandidatesView: Codable {
 	}
 }
 
+/// 選択肢
+public struct SettingChoice: Codable {
+	/// 設定値（`SettingValue::Text` に入れる文字列）
+	public let value: String
+	/// 表示名（日本語）
+	public let label: String
+
+	public init(value: String, label: String) {
+		self.value = value
+		self.label = label
+	}
+}
+
+/// 選択肢の一覧
+public struct ChoiceOptions: Codable {
+	/// 選択肢（表示順）
+	public let options: [SettingChoice]
+
+	public init(options: [SettingChoice]) {
+		self.options = options
+	}
+}
+
 /// 設定読み込みエラー
 public struct ConfigError: Codable {
 	/// エラー行番号
@@ -68,6 +91,22 @@ public struct ConfigError: Codable {
 /// 空の結果（`ping` / `shutdown` / `focus_in`）
 public struct EmptyResult: Codable {
 	public init() {}
+}
+
+/// 小数項目の範囲
+public struct FloatRange: Codable {
+	/// 最小値
+	public let min: Double
+	/// 最大値
+	public let max: Double
+	/// UI の刻み
+	public let step: Double
+
+	public init(min: Double, max: Double, step: Double) {
+		self.min = min
+		self.max = max
+		self.step = step
+	}
 }
 
 /// `initialize` メソッドの要求パラメータ
@@ -135,6 +174,22 @@ public struct InitializeResult: Codable {
 		self.profile = profile
 		self.mode = mode
 		self.capabilities = capabilities
+	}
+}
+
+/// 整数項目の範囲
+public struct IntRange: Codable {
+	/// 最小値
+	public let min: Int32
+	/// 最大値
+	public let max: Int32
+	/// UI の刻み
+	public let step: Int32
+
+	public init(min: Int32, max: Int32, step: Int32) {
+		self.min = min
+		self.max = max
+		self.step = step
 	}
 }
 
@@ -501,6 +556,225 @@ public struct SetEnvironmentParams: Codable {
 	}
 }
 
+/// 設定値（`{"type":"bool","value":true}` のように型名つきで表す）
+public enum SettingValue: Codable {
+	/// 真偽値
+	case bool(Bool)
+	/// 整数
+	case int(Int32)
+	/// 小数
+	case float(Double)
+	/// 文字列（`Choice` の選択値も含む）
+	case text(String)
+
+	enum CodingKeys: String, CodingKey, Codable {
+		case bool,
+			int,
+			float,
+			text
+	}
+
+	private enum ContainerCodingKeys: String, CodingKey {
+		case type, value
+	}
+
+	public init(from decoder: Decoder) throws {
+		let container = try decoder.container(keyedBy: ContainerCodingKeys.self)
+		if let type = try? container.decode(CodingKeys.self, forKey: .type) {
+			switch type {
+			case .bool:
+				if let content = try? container.decode(Bool.self, forKey: .value) {
+					self = .bool(content)
+					return
+				}
+			case .int:
+				if let content = try? container.decode(Int32.self, forKey: .value) {
+					self = .int(content)
+					return
+				}
+			case .float:
+				if let content = try? container.decode(Double.self, forKey: .value) {
+					self = .float(content)
+					return
+				}
+			case .text:
+				if let content = try? container.decode(String.self, forKey: .value) {
+					self = .text(content)
+					return
+				}
+			}
+		}
+		throw DecodingError.typeMismatch(SettingValue.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SettingValue"))
+	}
+
+	public func encode(to encoder: Encoder) throws {
+		var container = encoder.container(keyedBy: ContainerCodingKeys.self)
+		switch self {
+		case .bool(let content):
+			try container.encode(CodingKeys.bool, forKey: .type)
+			try container.encode(content, forKey: .value)
+		case .int(let content):
+			try container.encode(CodingKeys.int, forKey: .type)
+			try container.encode(content, forKey: .value)
+		case .float(let content):
+			try container.encode(CodingKeys.float, forKey: .type)
+			try container.encode(content, forKey: .value)
+		case .text(let content):
+			try container.encode(CodingKeys.text, forKey: .type)
+			try container.encode(content, forKey: .value)
+		}
+	}
+}
+
+/// 設定の変更 1 件
+public struct SettingChange: Codable {
+	/// 設定キー
+	public let key: String
+	/// 新しい値。`null`（省略も可）なら明示指定を削除して既定（プロファイル任せ）に戻す
+	public let value: SettingValue?
+
+	public init(key: String, value: SettingValue?) {
+		self.key = key
+		self.value = value
+	}
+}
+
+/// 項目ごとのエラー
+public struct SettingError: Codable {
+	/// 設定キー
+	public let key: String
+	/// メッセージ（日本語）
+	public let message: String
+
+	public init(key: String, message: String) {
+		self.key = key
+		self.message = message
+	}
+}
+
+/// 設定項目の型（`{"type":"int","params":{"min":1,"max":200,"step":1}}`。`bool` / `text` は `params` なし）
+public enum SettingKind: Codable {
+	/// 真偽値（トグル）
+	case bool
+	/// 整数
+	case int(IntRange)
+	/// 小数
+	case float(FloatRange)
+	/// 選択肢のいずれか（値は `SettingValue::Text`）
+	case choice(ChoiceOptions)
+	/// 自由入力の文字列
+	case text
+
+	enum CodingKeys: String, CodingKey, Codable {
+		case bool,
+			int,
+			float,
+			choice,
+			text
+	}
+
+	private enum ContainerCodingKeys: String, CodingKey {
+		case type, params
+	}
+
+	public init(from decoder: Decoder) throws {
+		let container = try decoder.container(keyedBy: ContainerCodingKeys.self)
+		if let type = try? container.decode(CodingKeys.self, forKey: .type) {
+			switch type {
+			case .bool:
+				self = .bool
+				return
+			case .int:
+				if let content = try? container.decode(IntRange.self, forKey: .params) {
+					self = .int(content)
+					return
+				}
+			case .float:
+				if let content = try? container.decode(FloatRange.self, forKey: .params) {
+					self = .float(content)
+					return
+				}
+			case .choice:
+				if let content = try? container.decode(ChoiceOptions.self, forKey: .params) {
+					self = .choice(content)
+					return
+				}
+			case .text:
+				self = .text
+				return
+			}
+		}
+		throw DecodingError.typeMismatch(SettingKind.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for SettingKind"))
+	}
+
+	public func encode(to encoder: Encoder) throws {
+		var container = encoder.container(keyedBy: ContainerCodingKeys.self)
+		switch self {
+		case .bool:
+			try container.encode(CodingKeys.bool, forKey: .type)
+		case .int(let content):
+			try container.encode(CodingKeys.int, forKey: .type)
+			try container.encode(content, forKey: .params)
+		case .float(let content):
+			try container.encode(CodingKeys.float, forKey: .type)
+			try container.encode(content, forKey: .params)
+		case .choice(let content):
+			try container.encode(CodingKeys.choice, forKey: .type)
+			try container.encode(content, forKey: .params)
+		case .text:
+			try container.encode(CodingKeys.text, forKey: .type)
+		}
+	}
+}
+
+/// 設定項目 1 件
+public struct SettingItem: Codable {
+	/// ドット区切りの TOML パス（例: `conversion.sync_budget_ms`）
+	public let key: String
+	/// 表示グループ名（日本語）
+	public let group: String
+	/// 表示名（日本語）
+	public let label: String
+	/// 説明（日本語・1〜2 文）
+	public let description: String
+	/// 型
+	public let kind: SettingKind
+	/// 現在の有効値。`null` は「未指定でプロファイルが決める」項目（`conversion.beam_width` など）
+	public let value: SettingValue?
+	/// 既定値（`null` の意味は `value` と同じ）
+	public let `default`: SettingValue?
+	/// `config.toml` に明示指定があるか
+	public let explicit: Bool
+	/// 反映にエンジンの再起動が要るか
+	public let requires_restart: Bool
+
+	public init(key: String, group: String, label: String, description: String, kind: SettingKind, value: SettingValue?, default: SettingValue?, explicit: Bool, requires_restart: Bool) {
+		self.key = key
+		self.group = group
+		self.label = label
+		self.description = description
+		self.kind = kind
+		self.value = value
+		self.default = `default`
+		self.explicit = explicit
+		self.requires_restart = requires_restart
+	}
+}
+
+/// `get_settings` の結果
+public struct SettingsSnapshot: Codable {
+	/// 設定項目（表示順。同じ `group` が連続する）
+	public let items: [SettingItem]
+	/// 設定ファイルの構文が壊れている等で、値を読めなかった場合の理由（日本語）。
+	/// このとき `items` の値はすべて既定値で、`update_settings` は書き込まない
+	public let error: String?
+
+	public init(items: [SettingItem], error: String?) {
+		self.items = items
+		self.error = error
+	}
+}
+
 /// `get_status` の結果: メニューなどで「今どういう状態か・なぜか」を表示するための情報
 public struct StatusResult: Codable {
 	/// 現在の環境プロファイル（`quality` / `balanced` / `light` / `minimal`）
@@ -564,5 +838,31 @@ public struct UpdatePreeditParams: Codable {
 		self.session_id = session_id
 		self.revision = revision
 		self.preedit = preedit
+	}
+}
+
+/// `update_settings` のパラメータ
+public struct UpdateSettingsParams: Codable {
+	/// 変更のリスト（先頭から順に適用）
+	public let changes: [SettingChange]
+
+	public init(changes: [SettingChange]) {
+		self.changes = changes
+	}
+}
+
+/// `update_settings` の結果
+public struct UpdateSettingsResult: Codable {
+	/// 適用できたキー
+	public let applied: [String]
+	/// 適用できなかった項目（他の項目は適用済み）
+	public let errors: [SettingError]
+	/// 適用後の最新の状態
+	public let snapshot: SettingsSnapshot
+
+	public init(applied: [String], errors: [SettingError], snapshot: SettingsSnapshot) {
+		self.applied = applied
+		self.errors = errors
+		self.snapshot = snapshot
 	}
 }

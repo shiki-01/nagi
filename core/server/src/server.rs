@@ -16,6 +16,7 @@ use nagi_protocol::methods::{
     ServerCapabilities, SessionParams, SetContextParams, SetEnvironmentParams, UpdatePreeditParams,
     method,
 };
+use nagi_protocol::settings::{UpdateSettingsParams, UpdateSettingsResult};
 use nagi_protocol::view::InputMode;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -421,6 +422,26 @@ impl Server {
                 self.require_initialized()?;
                 self.runtime.learn_clear();
                 to_value(EmptyResult {})
+            }
+            method::GET_SETTINGS => {
+                self.require_initialized()?;
+                to_value(crate::settings::snapshot(
+                    self.reload.config_path.as_deref(),
+                ))
+            }
+            method::UPDATE_SETTINGS => {
+                self.require_initialized()?;
+                let p: UpdateSettingsParams = params(req)?;
+                let outcome = crate::settings::apply(self.reload.config_path.as_deref(), p.changes);
+                if !outcome.applied.is_empty() {
+                    // 次のポーリングを待たず、既存のホットリロード経路で即座に反映する
+                    self.reload_all();
+                }
+                to_value(UpdateSettingsResult {
+                    applied: outcome.applied,
+                    errors: outcome.errors,
+                    snapshot: crate::settings::snapshot(self.reload.config_path.as_deref()),
+                })
             }
             method::RELOAD_CONFIG => {
                 self.require_initialized()?;

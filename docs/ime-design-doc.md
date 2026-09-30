@@ -133,7 +133,12 @@
 | `reconvert` | F→C 要求 | 確定済みテキストの再変換要求（OS側の再変換APIから） |
 | `restore_session` | F→C 要求 | エンジン再起動後、フロントが保持していた preedit を復元（§3.3） |
 | `reset` | F→C 要求 | 未確定状態の破棄 |
+| `set_environment` | F→C 通知 | 電源（バッテリー・低電力モード）・サーマル・メモリ逼迫の報告。コアが環境プロファイルを自動で切り替える（§4.7）。省略した項目は前回の値を維持 |
+| `get_status` | F→C 要求 | 現在のプロファイルとその理由・LLM/学習の有効状態・学習件数・ユーザー辞書語数・設定ファイルパス・設定エラーの有無（メニュー表示用） |
+| `clear_learning` | F→C 要求 | 学習データの全削除（プライバシー要件: ワンコマンドで全削除） |
 | `reload_config` | F→C 要求 | 設定ホットリロード |
+| `get_settings` | F→C 要求 | GUI 設定画面向けの設定項目の記述子（キー・グループ・表示名・説明・型と範囲・現在値・既定値・明示指定の有無・再起動要否）を返す（スキーマ駆動。`SettingsSnapshot`） |
+| `update_settings` | F→C 要求 | `{changes: [{key, value}]}`。コアが型・範囲・選択肢を検証し、通ったものだけ `config.toml` にコメントを保って原子的に書き込み、ホットリロードで反映する。`value` が `null` なら明示指定を削除して既定に戻す。結果は `{applied, errors, snapshot}`（不正な項目だけ `errors` に入り、他は適用される） |
 | `ping` / `shutdown` | F→C 要求 | 死活監視 / 終了 |
 | `update_preedit` / `update_candidates` | C→F 通知 | 非同期推論結果の反映（revision付き） |
 | `notify` | C→F 通知 | 設定エラー・モデルDL進捗・警告等のユーザー向け通知 |

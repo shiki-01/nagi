@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+pub mod settings;
+
 /// エラー・警告の重大度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -253,6 +255,8 @@ pub struct ConversionSection {
     /// モデル ID または GGUF パス。未指定 = プロファイルに従う。既定: None。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// LLM 推論を使うかどうか。false なら辞書のみで変換する。既定: true。
+    pub use_llm: bool,
     /// 文脈を使用するかどうか。既定: true。
     pub use_context: bool,
     /// 文脈の最大文字数。未指定 = プロファイルに従う。既定: None。
@@ -278,6 +282,7 @@ impl Default for ConversionSection {
             num_candidates: 9,
             n_threads: 0,
             model: None,
+            use_llm: true,
             use_context: true,
             max_context_length: None,
             max_latency_ms: 100,
@@ -635,6 +640,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "num_candidates",
             "n_threads",
             "model",
+            "use_llm",
             "use_context",
             "max_context_length",
             "max_latency_ms",

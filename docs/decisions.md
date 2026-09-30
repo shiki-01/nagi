@@ -667,6 +667,18 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **Mozc との対応**: `nn` → ん、`n` + 子音 → ん + 子音、`n` + 母音 → な行、`n'` → ん。`nnn` は「んん」（2つ目の soft を捨て、3つ目の `n` を新規の保留として扱い、flush で「ん」）。progress.md の「`nn` の soft pending は Mozc と一致するか未確認」は、上記の範囲で解消（Mozc 実機との照合は未実施）
 - **テスト**: romaji の `test_n_sequences_do_not_duplicate_nn`、engine の `n_input_never_duplicates_nn_in_composing_reading`、golden の `10_romaji.yaml`（`romaji-nn-*`）と `110_live_conversion.yaml`（`live-soft-n-*`）
 
+### G-41. GUI 設定 RPC はスキーマ駆動、`config.toml` の書き込みは `toml_edit`（2026-09-30）
+
+- **判断**: 設定画面向けに `get_settings` / `update_settings` を追加した。コアが設定項目を「記述子」（`key` はドット区切りの TOML パス、`group` / `label` / `description`、型 `SettingKind`（`bool` / `int{min,max,step}` / `float` / `choice{options}` / `text`）、現在値・既定値・`explicit`・`requires_restart`）として返し、フロントは汎用フォームを描くだけにする。値の検証（型・範囲・選択肢）と書き込みはコアが行い、不正な項目だけエラーにして他は適用する。適用後は既存のホットリロード（`reload_all`）を即時に呼ぶ
+- **理由**: 「ロジックをフロントに持ち込まない」原則（設計書 §3.1）のとおり、項目・範囲・既定値の知識をフロントに複製しない。項目の追加・範囲の変更がコアだけで済み、Windows 版（Phase 5）の設定画面も同じ記述子を使える。検証をコアの一箇所に置くので、手編集とGUIで基準が食い違わない
+- **`toml_edit` の採用**: `config.toml` はユーザーが手で書くコメント・未知のキー・`[keymap.*]` を含むため、`toml`（0.8）の再シリアライズでは失われる。`toml_edit`（0.22。既に `toml` の依存で、純Rustなのでモバイルでもビルドできる）でキーの直前コメント・行末コメント・書式を保って値だけを書き換える。依存の追加は `nagi-config` に限定した。書き込みは同じディレクトリの一時ファイルへ書いてから rename（原子的）。ファイルが無ければ空の文書から作る（`default.toml` の全体は複製しない）
+- **値の表現**: `SettingValue` は `{"type":"bool|int|float|text","value":…}`、`SettingKind` は `{"type":"int","params":{min,max,step}}`（typeshare が Swift の enum を生成できる隣接タグ形式）。選択肢の値は `text`。「未指定でプロファイルが決める」項目（`conversion.beam_width`）は `value` / `default` が `null`（`update_settings` で `null` を送ると明示指定を削除）
+- **範囲の重複**: 記述子の範囲は `Config::validate` の範囲と同じ値を手で揃えている（二重管理。将来 `validate` 側を記述子から引く形に統合できる）。記述子の既定値は `Config::default()` から取り、`default.toml` との一致をテストで検査する
+- **`conversion.use_llm` を新設**: 「LLM 推論の有効/無効」を GUI から切り替える設定キーが無かったため追加した（既定 true。false なら辞書のみ。`Tunables.llm_enabled` → `Effective.use_llm`）。`--no-llm` は従来どおり起動時にモデルを読まない指定で別物
+- **壊れた設定ファイル**: TOML の構文が壊れているときは、書き込まず全項目をエラーにし、`get_settings` は既定値と `error` を返す（ユーザーの手書きの設定を上書きで壊さない）
+- **`requires_restart`**: 現状で真なのは `update.auto_check`（起動時にだけ確認するため）のみ。他はホットリロードで反映される
+- **未対応**: `--sync-budget-ms`（CLI）で上書きされている間、`conversion.sync_budget_ms` の実効値と設定値がずれる（GUI は設定値を表示）。`ranking.source_order`・`keymap.*`・`learning.disabled_apps`・`conversion.model` などの複雑な項目は対象外
+
 ---
 
 ## H. モバイル対応（2026-09-29）

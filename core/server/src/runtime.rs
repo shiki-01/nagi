@@ -48,6 +48,8 @@ pub struct Tunables {
     pub max_context_override: Option<usize>,
     /// `conversion.beam_width`（未指定ならプロファイルに従う）
     pub beam_width_override: Option<usize>,
+    /// `conversion.use_llm`
+    pub llm_enabled: bool,
     /// `conversion.use_context`
     pub use_context: bool,
     /// `profile.persona`（空なら注入しない）
@@ -106,6 +108,7 @@ impl Tunables {
             sync_budget: Duration::from_millis(config.conversion.sync_budget_ms),
             max_context_override: config.conversion.max_context_length,
             beam_width_override: config.conversion.beam_width,
+            llm_enabled: config.conversion.use_llm,
             use_context: config.conversion.use_context,
             persona: config.profile.persona.clone(),
             learning_enabled: config.learning.enabled,
@@ -510,7 +513,7 @@ impl Runtime {
         };
         let beam_width = t.beam_width_override.unwrap_or(params.beam_width).max(1);
         Effective {
-            use_llm: params.use_llm && self.llm_loaded.load(Ordering::Relaxed),
+            use_llm: t.llm_enabled && params.use_llm && self.llm_loaded.load(Ordering::Relaxed),
             rescore_top: params.rescore_top,
             max_context_chars: max_ctx,
             persona: (!t.persona.is_empty()).then_some(t.persona),

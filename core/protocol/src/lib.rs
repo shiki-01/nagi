@@ -8,6 +8,7 @@
 //! - [`key`]: キーイベント（KeyEvent、Modifiers、KeyKind）と XKB keysym 定数
 //! - [`view`]: 表示型（PreeditView、CandidatesView、InputMode など）
 //! - [`methods`]: メソッドの params/result 型と method 名定数
+//! - [`settings`]: 設定 RPC（`get_settings` / `update_settings`）の型
 //! - [`utf16`]: UTF-16 ユーティリティ（offset 変換）
 //! - [`jsonrpc`]: JSON-RPC エンベロープ・エラーコード（typeshare 対象外）
 
@@ -17,6 +18,7 @@
 pub mod jsonrpc;
 pub mod key;
 pub mod methods;
+pub mod settings;
 pub mod utf16;
 pub mod view;
 
@@ -28,6 +30,10 @@ pub use methods::{
     RestoreSegment, RestoreSessionParams, SelectCandidateParams, ServerCapabilities, SessionParams,
     SetContextParams, SetEnvironmentParams, StatusResult, SurroundingText, ThermalState,
     UpdateCandidatesParams, UpdatePreeditParams,
+};
+pub use settings::{
+    ChoiceOptions, FloatRange, IntRange, SettingChange, SettingChoice, SettingError, SettingItem,
+    SettingKind, SettingValue, SettingsSnapshot, UpdateSettingsParams, UpdateSettingsResult,
 };
 pub use view::{
     CandidateSource, CandidateView, CandidatesView, InputMode, PreeditView, RangeU16, SegmentKind,
