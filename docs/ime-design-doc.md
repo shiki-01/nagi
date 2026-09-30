@@ -641,7 +641,7 @@ Safari・Chrome・VS Code・ターミナル・メモ・Slack/Discord・Microsoft
 
 ## 付録A: 決定状況
 
-1. ~~プロジェクト名~~ → `Nagi`（bundle id: `com.shiki.nagi`、リポジトリ名: `nagi`）
+1. ~~プロジェクト名~~ → `Nagi`（IME の bundle id: `com.shiki.inputmethod.Nagi`（→ decisions.md G-37）、設定/データの識別子: `com.shiki.nagi`、リポジトリ名: `nagi`）
 2. 使用モデル → Phase 0 の成果物（基準: 無料・再配布制約が小さい → 品質 → 速度/サイズ）
 3. ~~ローマ字テーブル~~ → Mozc 互換 TSV、v1 は標準のみ、AZIK は後続
 4. ~~ライセンス~~ → `MIT OR Apache-2.0`、外部資産は別途取得

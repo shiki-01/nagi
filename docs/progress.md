@@ -98,6 +98,17 @@
 8. **ビームサーチ（文全体N-best）の実際の見え方**（G-30）: 実データ・実LLMで、Space変換の1回目に候補窓が開く挙動（設計書どおりの `initial_view = sentence`）が実際に使いやすいか。1件目はLLM再採点済みの結果に揃えたが、2件目以降は辞書コスト順（LLM再採点なし）なので、この並びが不自然に感じられないか確認してほしい。
 9. **アップデート署名検証の鍵**（G-31）: `UPDATE_PUBLIC_KEY_HEX` は実装確認用の使い捨て鍵。実際に配布する前に本物の鍵ペアを生成し直し、秘密鍵をビルド・署名環境にオフラインで保管する必要がある。
 
+## macOS 実機へのインストール手順（手動）
+
+bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app`（`Nagi.app.zip`）または `cargo xtask bundle-macos` の出力を使う。
+
+1. artifact を展開して `Nagi.app` を得る
+2. `~/Library/Input Methods/` に `Nagi.app` を置く
+3. `xattr -cr ~/Library/Input\ Methods/Nagi.app`（quarantine 属性の除去）
+4. `~/Library/Input\ Methods/Nagi.app/Contents/MacOS/NagiIMEApp --register`
+5. `killall TextInputMenuAgent`
+6. システム設定 > キーボード > 入力ソース で Nagi（日本語）を追加する。表示されない場合は再ログインする
+
 ## 既知の問題
 
 - ~~CI の `types` ジョブは `typeshare-cli` を毎回 `cargo install` する~~ → `actions/cache` でバイナリをキャッシュするよう修正（`~/.cargo/bin/typeshare`。キー `typeshare-cli-<os>-v1`。バージョンを上げたい場合はキーの `v1` を変える）

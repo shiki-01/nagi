@@ -36,6 +36,7 @@ public final class NagiIMEHost {
     private static func defaultDataDir() -> String {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? URL(fileURLWithPath: NSHomeDirectory())
+        // 設定/データの識別子（bundle id `com.shiki.inputmethod.Nagi` とは別。core の設定ディレクトリ名と一致させる）
         return base.appendingPathComponent("com.shiki.nagi/data").path
     }
 

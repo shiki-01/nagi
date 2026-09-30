@@ -53,7 +53,7 @@ enum Task {
         #[arg(long)]
         llama: bool,
         /// バンドル識別子（モード ID `<id>.Japanese`・接続名 `<id>_Connection` も派生する）
-        #[arg(long, default_value = "com.shiki.nagi")]
+        #[arg(long, default_value = "com.shiki.inputmethod.Nagi")]
         bundle_id: String,
         /// 出力先ディレクトリ（既定は target/macos-bundle）
         #[arg(long)]

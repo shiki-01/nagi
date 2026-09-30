@@ -9,7 +9,9 @@ use std::process::Command;
 
 /// 既定のバンドル識別子。
 #[cfg(test)]
-const DEFAULT_BUNDLE_ID: &str = "com.shiki.nagi";
+// macOS が入力メソッドとして認識する（TIS に登録される）には `.inputmethod.` を含む必要がある。
+// 設定/データの識別子（`com.shiki.nagi`）とは別物。
+const DEFAULT_BUNDLE_ID: &str = "com.shiki.inputmethod.Nagi";
 /// 最小サポート macOS。
 const MIN_MACOS: &str = "13.0";
 /// アイコン画像のファイル名（Contents/Resources に置く。Info.plist が参照する）。
@@ -443,15 +445,15 @@ mod tests {
     fn plist_has_required_keys() {
         let p = plist();
         for needle in [
-            "<string>com.shiki.nagi</string>",
+            "<string>com.shiki.inputmethod.Nagi</string>",
             "<key>ComponentInputModeDict</key>",
             "<key>tsInputModeListKey</key>",
-            "<key>com.shiki.nagi.Japanese</key>",
+            "<key>com.shiki.inputmethod.Nagi.Japanese</key>",
             "<key>tsVisibleInputModeOrderedArrayKey</key>",
-            "<string>com.shiki.nagi.Japanese</string>",
+            "<string>com.shiki.inputmethod.Nagi.Japanese</string>",
             "<key>LSBackgroundOnly</key>\n\t<true/>",
             "<key>LSUIElement</key>\n\t<true/>",
-            "<key>InputMethodConnectionName</key>\n\t<string>com.shiki.nagi_Connection</string>",
+            "<key>InputMethodConnectionName</key>\n\t<string>com.shiki.inputmethod.Nagi_Connection</string>",
             "<key>tsInputMethodNameKey</key>",
             "<key>tsInputMethodCharacterRepertoireKey</key>\n\t<array>\n\t\t<string>Latn</string>\n\t\t<string>Hira</string>\n\t\t<string>Kana</string>",
             "<key>InputMethodServerControllerClass</key>\n\t<string>NagiInputController</string>",

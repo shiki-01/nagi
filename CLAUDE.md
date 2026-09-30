@@ -5,7 +5,7 @@
 
 - 設計書: `docs/ime-design-doc.md`（v0.2 draft）。本ファイルはその要約であり、詳細・根拠は設計書を参照すること
 - 決定事項ログ: `docs/decisions.md`（決定の経緯・理由。設計書と食い違う場合はこちらが新しい）
-- bundle id: `com.shiki.nagi` / リポジトリ名: `nagi` / 配布・DL元ドメイン: `shiki-01.com`
+- IME の bundle id: `com.shiki.inputmethod.Nagi`（macOS が入力メソッドとして認識するには `.inputmethod.` を含む必要があるため。設定/データの識別子は `com.shiki.nagi` のまま） / リポジトリ名: `nagi` / 配布・DL元ドメイン: `shiki-01.com`
 - 対象: macOS（先行）/ Windows（後続）/ Linux（将来検討）/ iOS・Android（将来。設計のみ `docs/mobile-design.md`）
 
 ## 現状

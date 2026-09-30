@@ -47,11 +47,3 @@ jobs:
           name: Nagi.app
           path: core/target/macos-bundle/Nagi.app.zip
           if-no-files-found: error
-      - name: bundle (Nagi.app, bundle id com.shiki.inputmethod.Nagi, 比較検証用)
-        working-directory: core
-        run: cargo xtask bundle-macos --bundle-id com.shiki.inputmethod.Nagi --out-dir target/macos-bundle-inputmethod-id
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Nagi-inputmethod-id
-          path: core/target/macos-bundle-inputmethod-id/Nagi.app.zip
-          if-no-files-found: error

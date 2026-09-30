@@ -632,6 +632,13 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **暫定結論**: 現時点のデータでは xsmall が有力候補。ただし (1) 検証機のハードウェアがターゲット外である点、(2) `nagi-eval` が `left_context=""` で呼ぶため LLM の文脈活用効果を十分に測れていない可能性がある点、(3) 辞書のみとの差が両モデルとも小さく評価セット・評価方法自体の感度が低い可能性がある点、を踏まえ、最終的なモデル確定は Phase 0 の他の検証（ターゲットハードウェアでの実測等）と合わせて判断する
 - **未実施**: ターゲットハードウェア相当での再計測、`left_context` を使った評価、`docs/decisions.md` の変換モデル最終決定（現時点では暫定）
 
+### G-37. macOS の bundle id を `com.shiki.inputmethod.Nagi` に変更（2026-09-30）
+
+- **経緯**: 当初の `com.shiki.nagi` でバンドルを作り `~/Library/Input Methods` に置いて登録しても、TIS（Text Input Sources）が入力ソースとして認識しなかった（該当0件）。Karukan など実在の IME の bundle id は `.inputmethod.` を含んでいる
+- **実機検証**: `.inputmethod.` を含む `com.shiki.inputmethod.Nagi` で bundle を作ると、登録・有効化に成功した（CI で両 ID の bundle を作って比較）
+- **決定**: IME の bundle id は `com.shiki.inputmethod.Nagi`。モード ID は `<id>.Japanese`、IMKServer 接続名は `<id>_Connection`（`cargo xtask bundle-macos --bundle-id` の既定値）
+- **変更しないもの**: 設定/データの識別子 `com.shiki.nagi`（`~/Library/Application Support/com.shiki.nagi`、core の設定ディレクトリ名）。製品のデータ識別子であり、bundle id とは別物として維持する。フロントの内部 DispatchQueue ラベルも同様
+
 ---
 
 ## H. モバイル対応（2026-09-29）

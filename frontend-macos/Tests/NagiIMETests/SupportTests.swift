@@ -81,12 +81,13 @@ final class SupportTests: XCTestCase {
     }
 
     func testBundleIdentityDerivesIDs() {
-        XCTAssertEqual(BundleIdentity.resolve(nil), "com.shiki.nagi")
-        XCTAssertEqual(BundleIdentity.resolve(""), "com.shiki.nagi")
+        XCTAssertEqual(BundleIdentity.resolve(nil), "com.shiki.inputmethod.Nagi")
+        XCTAssertEqual(BundleIdentity.resolve(""), "com.shiki.inputmethod.Nagi")
         XCTAssertEqual(
             BundleIdentity.resolve("com.shiki.inputmethod.Nagi"), "com.shiki.inputmethod.Nagi")
         XCTAssertEqual(
-            BundleIdentity.inputSourceID(bundleID: "com.shiki.nagi"), "com.shiki.nagi.Japanese")
+            BundleIdentity.inputSourceID(bundleID: "com.shiki.inputmethod.Nagi"),
+            "com.shiki.inputmethod.Nagi.Japanese")
         XCTAssertEqual(
             BundleIdentity.connectionName(bundleID: "com.shiki.inputmethod.Nagi"),
             "com.shiki.inputmethod.Nagi_Connection")
