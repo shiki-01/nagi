@@ -18,9 +18,8 @@ struct ProbeContext {
 private func getDeviceModel() -> String {
     var systemInfo = utsname()
     uname(&systemInfo)
-    let model = withUnsafeBytes(of: &systemInfo.machine) {
-        $0.lazy.prefix(while: { $0 != 0 }).map(String.init(UnicodeScalar.init))
-            .joined()
+    let model = withUnsafeBytes(of: &systemInfo.machine) { raw in
+        String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
     }
     return model.isEmpty ? "Unknown" : model
 }

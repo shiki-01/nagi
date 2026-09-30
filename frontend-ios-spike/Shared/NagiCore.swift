@@ -3,22 +3,19 @@ import NagiCore
 
 /// NagiEngine: C ABI のラッパー
 class NagiEngine {
-    private var handle: UnsafeMutableRawPointer?
+    private var handle: OpaquePointer?
     private let queue = DispatchQueue(label: "com.shiki.nagi.engine")
 
     /// エンジンを生成。失敗時は nil を返す
     init?(dataDir: String, userDir: String? = nil, noLLM: Bool = false) {
-        let safedataDir = dataDir.utf8CString
-        let safeuserDir = (userDir ?? "").utf8CString
-
-        self.handle = safedataDir.withUnsafeBytes { dataDirBytes in
-            safeuserDir.withUnsafeBytes { userDirBytes in
-                nagi_server_new(
-                    dataDirBytes.baseAddress?.assumingMemoryBound(to: CChar.self),
-                    userDirBytes.baseAddress?.assumingMemoryBound(to: CChar.self),
-                    noLLM ? 1 : 0
-                )
+        let noLLMFlag: Int32 = noLLM ? 1 : 0
+        self.handle = dataDir.withCString { (dataDirPtr: UnsafePointer<CChar>) -> OpaquePointer? in
+            if let userDir = userDir {
+                return userDir.withCString { (userDirPtr: UnsafePointer<CChar>) -> OpaquePointer? in
+                    nagi_server_new(dataDirPtr, userDirPtr, noLLMFlag)
+                }
             }
+            return nagi_server_new(dataDirPtr, nil, noLLMFlag)
         }
 
         guard handle != nil else { return nil }
@@ -28,10 +25,8 @@ class NagiEngine {
     func send(line: String) -> [String] {
         guard let handle = handle else { return [] }
 
-        let lineC = line.utf8CString
-        return lineC.withUnsafeBytes { lineBytes in
-            let cLine = lineBytes.baseAddress?.assumingMemoryBound(to: CChar.self)
-            guard let responsePtr = nagi_handle_line(handle, cLine) else { return [] }
+        return line.withCString { (cLine: UnsafePointer<CChar>) -> [String] in
+            guard let responsePtr = nagi_handle_line(handle, cLine) else { return [String]() }
             defer { nagi_string_free(responsePtr) }
 
             let responseString = String(cString: responsePtr)
