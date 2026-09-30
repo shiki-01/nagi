@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-09-27（ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -9,7 +9,7 @@
 | # | 項目 | 内容 |
 | --- | --- | --- |
 | 1 | ワークスペースの土台 | `core/` に engine / romaji / dict / infer / protocol / server / xtask。edition 2024、Rust 1.89.0 固定、rustfmt / clippy 設定、`.gitignore`、`LICENSE-MIT` / `LICENSE-APACHE`、CI（ubuntu / windows / macos + typeshare 差分検査）。ビルド・テスト・lint コマンドは `CLAUDE.md` に追記済み |
-| 2 | romaji | Mozc 互換 TSV の標準テーブル（`config/romaji/standard.tsv`、自作）、最長一致 + 保留の変換器、`nn` の soft pending、促音、Shift+英字（`literal_continue` / `single_upper`）、数字・記号の Literal 扱い、入力バッファ `Composer`（カーソル移動・削除・`load_pieces`）。66 テスト |
+| 2 | romaji | Mozc 互換 TSV の標準テーブル（`config/romaji/standard.tsv`、自作）、最長一致 + 保留の変換器、`nn` は保留なしで「ん」（G-48。旧 soft pending は廃止）、Backspace は直前キー入力の取り消し（G-49）、促音、Shift+英字（`literal_continue` / `single_upper`）、数字・記号の Literal 扱い、入力バッファ `Composer`（カーソル移動・削除・`load_pieces`）。66 テスト |
 | 3 | protocol | 設計書 §3.2 の全メソッド・型、JSON-RPC エンベロープ、エラーコード、UTF-16 ユーティリティ、XKB keysym 定数。`#[typeshare]` 付与、`cargo xtask gen-types` / `check-types`、Swift 型を `frontend-macos/Sources/Generated/Protocol.swift` に生成・コミット済み（差分なしを確認）。24 テスト + doctest |
 | 4 | engine | IR（Preedit / Segment / SegmentKind / CandidateSet）、`Action` enum、キーマップ（内蔵既定）、Direct / Composing / Converting の状態機械（文節移動・伸縮・候補・カタカナ/ひらがな・確定取消・モード切替・focus_out・reset・restore_session）、差分応答と revision、Surrounding Text の左文脈。ゴールデンテスト基盤（YAML）と 159 ケース、API テスト 7、単体 39 |
 | 5 | server | `imserver`: 改行区切り JSON-RPC ループ。`initialize` / `process_key` / `focus_in` / `focus_out` / `reset` / `restore_session` / `set_context` / `reload_config`（no-op）/ `ping` / `shutdown`。実プロセスを起動する統合テスト（クラッシュ → `restore_session`、EOF、辞書 E2E を含む）17 件 |
@@ -71,8 +71,22 @@
 - G-32 LLM コンテキストの再利用（KV キャッシュ。自己参照構造・`unsafe_code` の局所解禁・`unsafe impl Send` の根拠・実測値。G-21 の見送りを覆した）
 - G-33 LLM のビームサーチ（infer 単体、Stage 1。アルゴリズム・`kv_unified` の必要性・実測・未実装の統合作業）
 - G-34 LLM のビームサーチ（server/engine 統合、Stage 2。`Effective::beam_width`・`Pipeline::sentence_candidates`・候補ウィンドウの sentence モード・既知の限界）
+- G-35 Phase 0: SudachiDict 対応（辞書内部の pos_id 分離・CSV/matrix.def パーサー）
+- G-36 Phase 0: モデル比較（zenz-v3.1 small/xsmall。xsmall が有力）と、環境プロファイル不可逆降格バグの発見・修正
+- G-37 macOS の bundle id を `com.shiki.inputmethod.Nagi` に変更
+- G-38 imserver のモデル読み込みを非同期化（`initialize` を即時応答）
+- G-39・G-40 ライブ変換中の Enter は表示中の変換結果を確定 / 「ん」重複（`nn` + 子音）の修正
+- G-41 GUI 設定 RPC（`get_settings` / `update_settings`）はスキーマ駆動、`config.toml` の書き込みは `toml_edit`
+- G-42 ローマ字標準テーブルの欠落 103 件を Mozc 原本との機械照合で修正
+- G-43 ライブ変換: 追記中は変換結果を固定表示し末尾のみ再変換（G-47 で全文収束に更新）
+- G-44・G-45 変換中の Backspace は変換の取り消し（ライブ変換の表示も破棄）/ Esc の状態別挙動。予測変換の扱いは現状仕様で確定
+- G-46 Backspace 等の後はライブ変換を次の文字入力まで抑制
+- G-47 ライブ変換は全文再変換に収束・LLM 遅延完了の取り込み・cursor は surface 基準に補正
+- G-48 `nn` は保留なしで「ん」を確定（Mozc 準拠。G-8 の soft pending を廃止）
+- G-49 Backspace は直前キー入力の取り消し（不一致で確定された文字を保留に戻す）
 
 > G-1〜G-10 は、ユーザーが「暫定案のままで良い」と承認済み（2026-09-27）。
+> G-11 以降（G-35〜G-49 を含む）は、ユーザーの承認記録がなく要レビューです。
 
 ## Phase 3 以降の要決定事項（UX の詳細が設計書だけでは一意に決まらない項目）
 
@@ -127,7 +141,7 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 - 途中のコミットには、後続コミットの変更に依存してビルドできないものがある（最終状態は通る）
 - 文節区切りは暫定ヒューリスティック（サ変名詞 + する、形容詞 + 名詞など）。誤変換の例: 感じ変換の\|テスト、機能病院に（LLM で改善する領域）
 - `Preedit` の Composing 表示では、非 ASCII 文字（絵文字など）も japanese 種別の 1 セグメントにまとまる
-- `nn` の soft pending は `nn` + 子音での「んん」重複を G-40 で修正済み。Mozc 実機との照合は未実施（`konnichiha` → こんにちは、`kanna` → かんな は通る。`nnn` は「んん」）
+- `nn` は G-48 で Mozc 準拠（保留なしで「ん」）に変更済み。Mozc 実機との照合は未実施（`konnichiha` → こんにちは、`kanna` → かんな は通る。`nnn` は「んん」）
 - ゴールデンテストの期待値は、テスト担当のサブエージェントが仕様から書いた後、実装の挙動と食い違う箇所を「仕様に照らして」修正したもの。仕様の根拠は `docs/decisions.md` G-7。追加のレビュー（標準 IME との挙動照合）は未実施
 - macOS / Windows 実機でのフロント接続、標準 IME との挙動照合、レイテンシベンチ（p95）は未実施
 - `infer` の `LlamaModel` はコンテキストを 1 つ使い回す（KV キャッシュ再利用・実LLMビームサーチとも server/engine まで接続済み。G-32、G-33、G-34）が、GPU オフロードは未対応
