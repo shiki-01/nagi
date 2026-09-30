@@ -92,6 +92,8 @@ fn build_xcframework(
         .arg("-create-xcframework")
         .arg("-library")
         .arg(lib_ios)
+        .arg("-headers")
+        .arg(headers_dir)
         .arg("-library")
         .arg(lib_sim)
         .arg("-headers")
