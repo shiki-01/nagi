@@ -6,16 +6,12 @@ on:
     branches: [main, "claude/**"]
     paths:
       - "frontend-macos/**"
-      - "core/protocol/**"
-      - "core/xtask/**"
-      - "core/server/**"
+      - "core/**"
       - ".github/workflows/macos-frontend.yml"
   pull_request:
     paths:
       - "frontend-macos/**"
-      - "core/protocol/**"
-      - "core/xtask/**"
-      - "core/server/**"
+      - "core/**"
       - ".github/workflows/macos-frontend.yml"
 
 jobs:
