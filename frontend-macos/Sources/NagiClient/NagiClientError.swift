@@ -45,6 +45,8 @@ public enum RpcMethod {
     public static let restoreSession = "restore_session"
     public static let reset = "reset"
     public static let reloadConfig = "reload_config"
+    public static let getSettings = "get_settings"
+    public static let updateSettings = "update_settings"
     public static let ping = "ping"
     public static let shutdown = "shutdown"
     public static let updatePreedit = "update_preedit"

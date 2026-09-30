@@ -109,6 +109,10 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 5. `killall TextInputMenuAgent`
 6. システム設定 > キーボード > 入力ソース で Nagi（日本語）を追加する。表示されない場合は再ログインする
 
+### 設定ウィンドウの開き方
+
+メニューバーの入力メニュー（Nagi を選択中に出る入力ソースのアイコン）→「設定…」で「Nagi 設定」ウィンドウが開く。項目はコアが返す記述子（`get_settings`、G-41）から描画され、変更は即時に `config.toml` へ保存・反映される。開発時は IMKServer を起動せず `NagiIMEApp --settings --engine <imserver> --user-dir <dir>` でウィンドウだけ開ける。
+
 ### 辞書・モデルと LLM 版の配置（実データで動かす場合）
 
 上記の `Nagi.app` は辞書・モデルを含まず、LLM も無効（読みがそのまま返る）。実データで動かすには以下を行う。CI（`macos-frontend.yml`）の artifact は repo メンバー限定で、公開配布ではない。

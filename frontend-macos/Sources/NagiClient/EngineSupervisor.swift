@@ -393,6 +393,20 @@ public final class EngineSupervisor: @unchecked Sendable {
             RpcMethod.reloadConfig, params: EmptyParams(), timeout: configuration.initializeTimeout)
     }
 
+    /// 設定項目の記述子と現在値を取得する（G-41）
+    public func getSettings() async throws -> SettingsSnapshot {
+        try await connectedClient().request(
+            RpcMethod.getSettings, params: EmptyParams(), timeout: configuration.initializeTimeout)
+    }
+
+    /// 設定を更新する。`value` が nil の変更は明示指定を削除して既定へ戻す。
+    /// 適用後にコアがホットリロードするため、通常要求より長いタイムアウトで待つ
+    public func updateSettings(changes: [SettingChange]) async throws -> UpdateSettingsResult {
+        try await connectedClient().request(
+            RpcMethod.updateSettings, params: UpdateSettingsParams(changes: changes),
+            timeout: configuration.initializeTimeout)
+    }
+
     public func clearLearning() async throws {
         let _: EmptyResult = try await connectedClient().request(
             RpcMethod.clearLearning, params: EmptyParams())

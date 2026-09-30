@@ -114,6 +114,22 @@ final class NagiInputController: IMKInputController {
         }
     }
 
+    // MARK: 入力メニュー
+
+    /// メニューバーの入力メニューに出る項目（「設定…」）
+    override func menu() -> NSMenu! {
+        let menu = NSMenu(title: "Nagi")
+        let item = NSMenuItem(
+            title: "設定…", action: #selector(openSettings(_:)), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc func openSettings(_ sender: Any?) {
+        context?.showSettings()
+    }
+
     // MARK: 描画差分の適用
 
     /// 応答（描画差分）を反映する。順序: 削除 → 確定 → preedit → 候補 → モード

@@ -212,4 +212,63 @@ final class EngineSupervisorTests: XCTestCase {
         XCTAssertTrue(launcher.connections[0].sentMethods().contains("shutdown"))
         XCTAssertFalse(sup.isConnected)
     }
+
+    func testGetAndUpdateSettings() async throws {
+        let launcher = MockLauncher()
+        let snapshot = """
+            {"items":[{"key":"conversion.sync_budget_ms","group":"変換","label":"待ち時間","description":"d",\
+            "kind":{"type":"int","params":{"min":0,"max":5000,"step":10}},\
+            "value":{"type":"int","value":150},"default":{"type":"int","value":150},\
+            "explicit":false,"requires_restart":false},\
+            {"key":"conversion.beam_width","group":"変換","label":"幅","description":"d",\
+            "kind":{"type":"bool"},"value":null,"default":null,"explicit":false,"requires_restart":false}]}
+            """
+        launcher.configure = { _, c in
+            c.responder = { req in
+                guard let id = req["id"], let method = req["method"] as? String else { return nil }
+                switch method {
+                case "initialize": return [response(id: id, resultJSON: initializeResultJSON)]
+                case "get_settings": return [response(id: id, resultJSON: snapshot)]
+                case "update_settings":
+                    return [
+                        response(
+                            id: id,
+                            resultJSON: "{\"applied\":[\"a\"],\"errors\":[{\"key\":\"b\",\"message\":\"m\"}],\"snapshot\":\(snapshot)}"
+                        )
+                    ]
+                default: return [response(id: id, resultJSON: "{}")]
+                }
+            }
+        }
+        let sup = EngineSupervisor(
+            launcher: launcher, configuration: .init(clientVersion: "0.0.0"), scheduler: ImmediateScheduler())
+        try await sup.start()
+
+        let snap = try await sup.getSettings()
+        XCTAssertEqual(snap.items.count, 2)
+        XCTAssertNil(snap.error)
+        XCTAssertNil(snap.items[1].value)
+        guard case .int(let range) = snap.items[0].kind else { return XCTFail("kind") }
+        XCTAssertEqual(range.max, 5000)
+        guard case .int(let current)? = snap.items[0].value else { return XCTFail("value") }
+        XCTAssertEqual(current, 150)
+
+        let result = try await sup.updateSettings(changes: [
+            SettingChange(key: "a", value: .bool(true)), SettingChange(key: "b", value: nil),
+        ])
+        XCTAssertEqual(result.applied, ["a"])
+        XCTAssertEqual(result.errors.first?.key, "b")
+        XCTAssertEqual(result.snapshot.items.count, 2)
+
+        let sent = launcher.connections[0].sent
+        XCTAssertEqual(launcher.connections[0].sentMethods(), ["initialize", "get_settings", "update_settings"])
+        let params = try XCTUnwrap(sent[2]["params"] as? [String: Any])
+        let changes = try XCTUnwrap(params["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes[0]["key"] as? String, "a")
+        let v = try XCTUnwrap(changes[0]["value"] as? [String: Any])
+        XCTAssertEqual(v["type"] as? String, "bool")
+        XCTAssertEqual(v["value"] as? Bool, true)
+        // 値なし（既定に戻す）は value を省略または null で送る
+        XCTAssertTrue(changes[1]["value"] == nil || changes[1]["value"] is NSNull)
+    }
 }

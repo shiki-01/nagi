@@ -17,6 +17,20 @@ public final class NagiIMEContext {
     /// 空なら OS 側のモード同期は行わない
     public var modeIdentifiers: [InputMode: String] = [:]
 
+    /// 設定ウィンドウ（初回表示時に生成）。メインスレッドからのみ触る
+    private var settingsWindow: SettingsWindowController?
+
+    /// 設定ウィンドウを開く（開いていれば前面化し、設定を再読み込みする）
+    public func showSettings() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.settingsWindow == nil {
+                self.settingsWindow = SettingsWindowController(supervisor: self.supervisor)
+            }
+            self.settingsWindow?.show()
+        }
+    }
+
     private final class WeakController {
         weak var value: NagiInputController?
         init(_ v: NagiInputController) { value = v }

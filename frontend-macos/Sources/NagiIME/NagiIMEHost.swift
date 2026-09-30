@@ -40,8 +40,8 @@ public final class NagiIMEHost {
         return base.appendingPathComponent("com.shiki.nagi/data").path
     }
 
-    /// メインスレッドで呼ぶこと（`NSApplication.shared` を作成済みであること）
-    public func start() throws {
+    /// エンジンの起動設定から EngineSupervisor を組み立てる（IME 本体と `--settings` で共通）
+    private func makeSupervisor() throws -> EngineSupervisor {
         let engineURL = try resolveEngineURL()
         let launcher = ProcessEngineLauncher(
             configuration: ProcessEngineConfiguration(
@@ -52,9 +52,36 @@ public final class NagiIMEHost {
         let version =
             Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "0.0.0"
-        let supervisor = EngineSupervisor(
+        return EngineSupervisor(
             launcher: launcher, configuration: EngineSupervisor.Configuration(clientVersion: version))
+    }
 
+    /// `--settings`: IMKServer を起動せず、エンジンに接続して設定ウィンドウだけ開く（開発時の確認用）。
+    /// メインスレッドで呼ぶこと（`NSApplication.shared` を作成済みであること）
+    public func startSettingsOnly() throws {
+        let supervisor = try makeSupervisor()
+        let store = SessionStore()
+        let context = NagiIMEContext(supervisor: supervisor, store: store)
+        self.context = context
+        NagiIMEContext.shared = context
+        supervisor.onEvent = { [weak context] event in
+            DispatchQueue.main.async { context?.handle(event) }
+        }
+        context.showSettings()
+        // 接続完了を待たずにウィンドウを出し（未接続の表示）、接続できたら開き直して設定を読み込む
+        Task {
+            do {
+                try await supervisor.start()
+                DispatchQueue.main.async { context.showSettings() }
+            } catch {
+                NSLog("nagi: initial engine start failed: \(error)")
+            }
+        }
+    }
+
+    /// メインスレッドで呼ぶこと（`NSApplication.shared` を作成済みであること）
+    public func start() throws {
+        let supervisor = try makeSupervisor()
         let store = SessionStore()
         let context = NagiIMEContext(supervisor: supervisor, store: store)
         self.context = context

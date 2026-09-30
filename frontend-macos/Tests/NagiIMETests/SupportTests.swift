@@ -21,6 +21,13 @@ final class SupportTests: XCTestCase {
         XCTAssertEqual(o.engineArguments(defaultDataDir: "/d"), ["--data-dir", "/d"])
     }
 
+    func testHostOptionsSettingsFlag() {
+        XCTAssertFalse(HostOptions.parse(arguments: [], environment: [:]).settings)
+        let o = HostOptions.parse(arguments: ["--settings", "--engine", "/e"], environment: [:])
+        XCTAssertTrue(o.settings)
+        XCTAssertEqual(o.enginePath, "/e")
+    }
+
     func testHostOptionsRegisterFlag() {
         XCTAssertFalse(HostOptions.parse(arguments: [], environment: [:]).register)
         let o = HostOptions.parse(arguments: ["--register", "--no-llm"], environment: [:])

@@ -15,9 +15,22 @@ if options.register {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
-
 let host = NagiIMEHost(options: options)
+
+if options.settings {
+    // 開発時の確認用: IMKServer を起動せず、設定ウィンドウだけ開く（Cmd-Q で終了できるよう通常アプリ扱い）
+    app.setActivationPolicy(.regular)
+    do {
+        try host.startSettingsOnly()
+    } catch {
+        NSLog("nagi: failed to start: \(error) (specify the engine with --engine or NAGI_ENGINE_PATH)")
+        exit(1)
+    }
+    app.run()
+    exit(0)
+}
+
+app.setActivationPolicy(.accessory)
 do {
     try host.start()
 } catch {

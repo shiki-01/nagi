@@ -16,11 +16,13 @@ public struct HostOptions: Equatable {
     public var noLLM: Bool
     /// `--register`（TIS への入力ソース登録・有効化だけ行って終了する）
     public var register: Bool
+    /// `--settings`（IMKServer を起動せず、設定ウィンドウだけ開く。開発時の確認用）
+    public var settings: Bool
 
     public init(
         enginePath: String? = nil, dataDir: String? = nil, userDir: String? = nil,
         configFile: String? = nil, connectionName: String? = nil, noLLM: Bool = false,
-        register: Bool = false
+        register: Bool = false, settings: Bool = false
     ) {
         self.enginePath = enginePath
         self.dataDir = dataDir
@@ -29,6 +31,7 @@ public struct HostOptions: Equatable {
         self.connectionName = connectionName
         self.noLLM = noLLM
         self.register = register
+        self.settings = settings
     }
 
     public static func parse(arguments: [String], environment: [String: String]) -> HostOptions {
@@ -50,6 +53,7 @@ public struct HostOptions: Equatable {
             case "--connection-name": o.connectionName = value() ?? o.connectionName
             case "--no-llm": o.noLLM = true
             case "--register": o.register = true
+            case "--settings": o.settings = true
             default: break
             }
             i += 1
