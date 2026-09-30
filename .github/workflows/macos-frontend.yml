@@ -1,0 +1,31 @@
+name: macOS frontend
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "frontend-macos/**"
+      - "core/protocol/**"
+      - ".github/workflows/macos-frontend.yml"
+  pull_request:
+    paths:
+      - "frontend-macos/**"
+      - "core/protocol/**"
+      - ".github/workflows/macos-frontend.yml"
+
+jobs:
+  swift:
+    name: swift build & test (macos)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: frontend-macos
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift version
+        run: swift --version
+      - name: build
+        run: swift build
+      - name: test
+        run: swift test

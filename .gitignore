@@ -11,3 +11,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# SwiftPM
+/frontend-macos/.build/
+/frontend-macos/.swiftpm/
