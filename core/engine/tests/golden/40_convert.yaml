@@ -50,6 +50,8 @@
       expect: {state: composing}
     - key: "n"
       expect: {state: composing}
+    - key: "n"
+      expect: {state: composing}
     - key: "i"
       expect: {state: composing}
     - key: "t"
@@ -73,6 +75,8 @@
     - key: "k"
       expect: {state: composing}
     - key: "o"
+      expect: {state: composing}
+    - key: "n"
       expect: {state: composing}
     - key: "n"
       expect: {state: composing}

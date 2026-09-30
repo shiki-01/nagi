@@ -650,23 +650,25 @@ fn live_append_keeps_fixed_part_and_appends_kana() {
 }
 
 #[test]
-fn live_append_reconverts_only_tail_with_fixed_surface_as_left_context() {
+fn live_convert_after_append_reconverts_whole_reading_and_replaces_provisional_view() {
     let backend = Arc::new(
         ChunkRecordingBackend::new()
             .with_chunk("あいう", "亜伊宇")
-            .with_chunk("えお", "絵尾"),
+            .with_chunk("あいうえお", "愛が上尾"),
     );
     let mut e = Engine::new(backend.clone(), EngineConfig::default());
     type_str(&mut e, "s", "aiu");
     e.live_convert("s", "あいう").expect("変換されるはず");
     type_str(&mut e, "s", "eo");
+    // 打鍵中（デバウンス満了前）は固定部分 + 追記のかなの暫定表示。バックエンドは呼ばれない
     assert_eq!(e.snapshot("s").unwrap().preedit.text, "亜伊宇えお");
+    assert_eq!(backend.calls().len(), 1);
+    // デバウンス満了: 全文を再変換した結果で表示が置き換わる（ひらがなには戻らない）
     let r = e.live_convert("s", "あいうえお").expect("変換されるはず");
-    assert_eq!(r.preedit.expect("preedit").text, "亜伊宇絵尾");
+    assert_eq!(r.preedit.expect("preedit").text, "愛が上尾");
     let calls = backend.calls();
-    assert_eq!(calls.len(), 2, "固定部分は再変換されない: {calls:?}");
-    assert_eq!(calls[1].0, "えお");
-    assert!(calls[1].1.ends_with("亜伊宇"), "{:?}", calls[1].1);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[1].0, "あいうえお");
     // reading が真実: 全 segment の reading の連結は入力の reading と一致する
     let readings: String = e
         .snapshot("s")
@@ -720,6 +722,205 @@ fn live_result_for_non_prefix_reading_is_discarded() {
     assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはいあい");
     // 古くなった reading での live_convert は無視される
     assert!(e.live_convert("s", "きょうはいい").is_none());
+}
+
+// ---- Esc の状態別挙動（G-45） ----
+
+#[test]
+fn esc_on_plain_reading_discards_all_input() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Escape");
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Direct);
+    assert_eq!(snap.preedit.text, "");
+}
+
+#[test]
+fn esc_on_live_conversion_returns_to_reading_without_deleting() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "今日はいい");
+    press(&mut e, "s", "Escape");
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert_eq!(snap.preedit.text, "きょうはいい");
+    // ひらがな表示になったので、もう一度 Esc で入力全体を破棄する
+    press(&mut e, "s", "Escape");
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Direct);
+    assert_eq!(snap.preedit.text, "");
+}
+
+#[test]
+fn esc_on_live_conversion_with_appended_tail_returns_to_full_reading() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    type_str(&mut e, "s", "a");
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "今日はいいあ");
+    press(&mut e, "s", "Escape");
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert_eq!(snap.preedit.text, "きょうはいいあ");
+}
+
+#[test]
+fn esc_on_converting_returns_to_composing_reading() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+    press(&mut e, "s", "Escape");
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert_eq!(snap.preedit.text, "きょうはいい");
+}
+
+#[test]
+fn esc_on_converting_after_live_conversion_returns_to_reading() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Escape");
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert_eq!(snap.preedit.text, "きょうはいい");
+}
+
+#[test]
+fn esc_on_range_selecting_clears_selection_first_then_returns_to_composing() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Ctrl+Shift+Right");
+    // 選択解除 → 変換取り消し。どちらの段階でも入力は失われない
+    press(&mut e, "s", "Escape");
+    assert_ne!(e.snapshot("s").unwrap().state, StateKind::Direct);
+    press(&mut e, "s", "Escape");
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert_eq!(snap.preedit.text, "きょうはいい");
+}
+
+// ---- ライブ変換の抑制（G-46） ----
+
+#[test]
+fn backspace_suppresses_live_convert_until_next_input() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    press(&mut e, "s", "BackSpace");
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはい");
+    // デバウンス後のライブ変換は反映されず、サーバーのスケジュール判定にも掛からない
+    assert!(e.composing_reading("s").is_none());
+    assert!(e.live_convert("s", "きょうはい").is_none());
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはい");
+    // 文字を入力すると再開する
+    type_str(&mut e, "s", "i");
+    assert_eq!(e.composing_reading("s").as_deref(), Some("きょうはいい"));
+    assert!(e.live_convert("s", "きょうはいい").is_some());
+}
+
+#[test]
+fn delete_forward_suppresses_live_convert() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Home");
+    press(&mut e, "s", "Delete");
+    assert!(e.live_convert("s", "ょうはいい").is_none());
+}
+
+#[test]
+fn esc_and_converting_cancel_suppress_live_convert() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    press(&mut e, "s", "Escape");
+    assert!(e.live_convert("s", "きょうはいい").is_none());
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはいい");
+
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "BackSpace"); // 変換の取り消し
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    assert!(e.live_convert("s", "きょうはいい").is_none());
+    // Space 変換などの明示操作は抑制の影響を受けない
+    press(&mut e, "s", "Space");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "今日はいい");
+}
+
+#[test]
+fn enter_commits_reading_while_suppressed() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    press(&mut e, "s", "BackSpace");
+    let r = press(&mut e, "s", "Return");
+    assert_eq!(r.commit.as_deref(), Some("きょうはい"));
+}
+
+// ---- ライブ変換の LLM 遅延完了（G-47） ----
+
+#[test]
+fn completion_replaces_live_conversion_with_full_result() {
+    let (mut e, backend) = deferred_engine();
+    for k in ["k", "y", "o", "u"] {
+        press(&mut e, "s", k);
+    }
+    // 予算超過で辞書寄り（読みそのまま）の結果しか得られなかったライブ変換
+    e.live_convert("s", "きょう");
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょう");
+    backend.ready.store(true, Ordering::SeqCst);
+    let updates = e.apply_completions(&done("きょう", ""));
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].1.preedit.as_ref().unwrap().text, "今日");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    // 同じ結果の再通知は何もしない
+    assert!(e.apply_completions(&done("きょう", "")).is_empty());
+}
+
+#[test]
+fn completion_is_ignored_for_live_conversion_after_more_input_or_suppression() {
+    let (mut e, backend) = deferred_engine();
+    for k in ["k", "y", "o", "u"] {
+        press(&mut e, "s", k);
+    }
+    e.live_convert("s", "きょう");
+    backend.ready.store(true, Ordering::SeqCst);
+    // 追記後は、デバウンス後の live_convert が全文を変換するので完了通知では何もしない
+    press(&mut e, "s", "a");
+    assert!(e.apply_completions(&done("きょう", "")).is_empty());
+    // 抑制中も反映しない
+    press(&mut e, "s", "BackSpace");
+    assert!(e.apply_completions(&done("きょう", "")).is_empty());
+}
+
+// ---- preedit の cursor は surface 基準（text 上の UTF-16） ----
+
+#[test]
+fn live_conversion_cursor_is_on_surface_at_end_even_when_surface_is_longer() {
+    // reading 2 文字 → surface 5 文字（reading 基準の値を surface に当てるとずれる）
+    let backend = Arc::new(ChunkRecordingBackend::new().with_chunk("きょ", "今日は晴"));
+    let mut e = Engine::new(backend, EngineConfig::default());
+    type_str(&mut e, "s", "kyo");
+    let r = e.live_convert("s", "きょ").expect("変換されるはず");
+    let p = r.preedit.expect("preedit");
+    assert_eq!(p.text, "今日は晴");
+    assert_eq!(p.cursor, 4);
+}
+
+#[test]
+fn live_append_cursor_is_at_end_of_surface_text() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    type_str(&mut e, "s", "a");
+    let p = e.snapshot("s").unwrap().preedit;
+    assert_eq!(p.text, "今日はいいあ");
+    assert_eq!(p.cursor, 6);
 }
 
 // ---- 文全体N-best（`initial_view = "sentence"`） ----
@@ -1058,9 +1259,9 @@ fn n_input_never_duplicates_nn_in_composing_reading() {
         ("nn", "ん"),
         ("nnk", "ん"),
         ("nnka", "んか"),
-        ("nna", "んな"),
+        ("nna", "んあ"),
         ("konn", "こん"),
-        ("konni", "こんに"),
+        ("konni", "こんい"),
         ("kanji", "かんじ"),
         ("kanj", "かん"),
     ];

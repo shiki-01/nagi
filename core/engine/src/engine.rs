@@ -170,6 +170,10 @@ struct Session {
     /// 一致する、または末尾への追記でその接頭辞になっている（カーソルが末尾）間だけ表示に使う
     /// （追記分は固定部分の後ろに未変換のかなとして足す。G-43）。それ以外は自然に無視される
     live_conversion: Option<LiveConversion>,
+    /// ライブ変換の抑制。Backspace / DeleteForward / 変換の取り消し（Esc 等）でひらがな表示に
+    /// 戻したあと、次に文字が入力（追記）されるまで `live_convert` の結果を反映しない（G-46）。
+    /// Space 変換・Enter 確定など明示操作には影響しない
+    live_suppressed: bool,
     /// 直前の確定の記憶（`Action::UndoCommit` 用）
     last_commit: Option<LastCommit>,
     /// このキー処理で確定取消が成功した場合の `delete_before`（`finish` が読んで消費する）
@@ -183,6 +187,10 @@ struct LiveConversion {
     source_reading: String,
     /// 変換結果のセグメント列（reading を連結すると `source_reading` に一致する）
     segments: Vec<Segment>,
+    /// 変換したチャンクのうち、バックエンドの結果が妥当だったものの `(reading, left_context)`。
+    /// 予算超過で辞書寄りの結果になっていた場合に、LLM の遅延完了（`Completion`）で
+    /// 全文を再変換して置き換えるための照合キー（G-47）
+    chunks: Vec<(String, String)>,
 }
 
 /// 表示に使うライブ変換結果（`Engine::live_view`）
@@ -191,8 +199,6 @@ struct LiveView {
     fixed: Vec<Segment>,
     /// 固定部分の後ろに追記された未変換の部分（追記が無ければ空）
     tail: Vec<Segment>,
-    /// 固定部分の reading の文字数
-    fixed_chars: usize,
 }
 
 /// 直前の確定の記憶（Ctrl+Backspace での確定取消に使う。確定のたびに置き換わり、
@@ -317,6 +323,7 @@ impl Engine {
             },
             origins: Vec::new(),
             live_conversion: None,
+            live_suppressed: false,
             last_commit: None,
             pending_delete_before: None,
         }
@@ -399,12 +406,15 @@ impl Engine {
     }
 
     /// 現在 Composing 状態なら、入力中の全体の reading（ローマ字変換済みのひらがな連結）を返す。
-    /// Composing でない・未入力なら `None`（サーバーがライブ変換のデバウンス判定に使う）
+    /// Composing でない・未入力・ライブ変換の抑制中（G-46）なら `None`（サーバーがライブ変換のデバウンス判定に使う）
     pub fn composing_reading(&self, session_id: &str) -> Option<String> {
         let sess = self.sessions.get(session_id)?;
         let State::Composing = sess.state else {
             return None;
         };
+        if sess.live_suppressed {
+            return None;
+        }
         let pieces = sess.composer.pieces();
         if pieces.is_empty() {
             return None;
@@ -438,6 +448,9 @@ impl Engine {
         let State::Composing = sess.state else {
             return false;
         };
+        if sess.live_suppressed {
+            return false;
+        }
         let pieces = sess.composer.pieces();
         if pieces.is_empty() {
             return false;
@@ -446,20 +459,30 @@ impl Engine {
         if full_reading != expected_reading {
             return false;
         }
-        // 既存の表示が固定部分として使えるなら、それを再変換せず末尾だけ変換して連結する（G-43）。
-        // 読みが完全一致（追記なし）のときは従来どおり全体を変換し直す
-        let (mut segments, skip) = match Self::live_view(sess, &pieces) {
-            Some(view) if !view.tail.is_empty() => (view.fixed, view.fixed_chars),
-            _ => (Vec::new(), 0),
-        };
-        let mut context = sess.left_context.clone();
-        for s in &segments {
-            context.push_str(&s.surface);
-        }
-        for piece in Self::pieces_after(&pieces, skip) {
+        sess.live_conversion = Some(self.convert_live(&sess.left_context, &pieces, full_reading));
+        true
+    }
+
+    /// 入力全体（`pieces`）を変換して `LiveConversion` にする。打鍵中の暫定表示（固定部分 + 追記の
+    /// かな）ではなく、reading 全体を `composing_chunk_len` で分けて変換する（G-47）
+    fn convert_live(
+        &self,
+        left_context: &str,
+        pieces: &[Piece],
+        full_reading: String,
+    ) -> LiveConversion {
+        let mut segments = Vec::new();
+        let mut chunks = Vec::new();
+        let mut context = left_context.to_string();
+        for piece in pieces {
             match piece.kind {
                 PieceKind::Japanese => {
-                    self.convert_japanese_chunked(&piece.text, &mut context, &mut segments);
+                    self.convert_japanese_chunked(
+                        &piece.text,
+                        &mut context,
+                        &mut segments,
+                        &mut chunks,
+                    );
                 }
                 PieceKind::Literal => {
                     context.push_str(&piece.text);
@@ -468,11 +491,19 @@ impl Engine {
                 }
             }
         }
-        sess.live_conversion = Some(LiveConversion {
+        LiveConversion {
             source_reading: full_reading,
             segments,
-        });
-        true
+            chunks,
+        }
+    }
+
+    /// ライブ変換の表示がひらがなの reading と異なる（変換結果が見えている）か。
+    /// Esc で「ライブ変換の破棄」と「入力全体の破棄」を分けるのに使う（G-45）
+    fn live_displays_conversion(sess: &Session) -> bool {
+        let pieces = sess.composer.pieces();
+        Self::live_view(sess, &pieces)
+            .is_some_and(|v| v.fixed.iter().any(|s| s.surface != s.reading))
     }
 
     /// 現在の Composing で表示に使えるライブ変換結果。`source_reading` が現在の reading と一致すれば
@@ -485,7 +516,6 @@ impl Engine {
             return Some(LiveView {
                 fixed: lc.segments.clone(),
                 tail: Vec::new(),
-                fixed_chars: full_reading.chars().count(),
             });
         }
         let total = full_reading.chars().count();
@@ -508,7 +538,6 @@ impl Engine {
         Some(LiveView {
             fixed: lc.segments.clone(),
             tail,
-            fixed_chars,
         })
     }
 
@@ -539,15 +568,15 @@ impl Engine {
         text: &str,
         context: &mut String,
         segments: &mut Vec<Segment>,
+        chunks: &mut Vec<(String, String)>,
     ) {
         let chunk_len = self.config.composing_chunk_len.max(1);
         let chars: Vec<char> = text.chars().collect();
         for start in (0..chars.len()).step_by(chunk_len) {
             let end = (start + chunk_len).min(chars.len());
             let chunk: String = chars[start..end].iter().collect();
-            let converted = self
-                .backend
-                .convert_sentence(&chunk, &tail_chars(context, LEFT_CONTEXT_CHARS));
+            let left = tail_chars(context, LEFT_CONTEXT_CHARS);
+            let converted = self.backend.convert_sentence(&chunk, &left);
             let valid = !converted.is_empty()
                 && converted
                     .iter()
@@ -555,6 +584,7 @@ impl Engine {
                     .collect::<String>()
                     == chunk;
             if valid {
+                chunks.push((chunk.clone(), left));
                 for bs in converted {
                     context.push_str(&bs.surface);
                     let id = segments.len() as u32;
@@ -698,13 +728,25 @@ impl Engine {
         let ids: Vec<String> = self
             .sessions
             .iter()
-            .filter(|(_, s)| !s.origins.is_empty() && matches!(s.state, State::Converting(_)))
+            .filter(|(_, s)| match s.state {
+                State::Converting(_) => !s.origins.is_empty(),
+                State::Composing => s
+                    .live_conversion
+                    .as_ref()
+                    .is_some_and(|l| !l.chunks.is_empty()),
+                State::Direct => false,
+            })
             .map(|(id, _)| id.clone())
             .collect();
         let mut out = Vec::new();
         for id in ids {
             let mut sess = self.take_session(&id);
-            if self.replace_origins(&mut sess, done) {
+            let changed = if matches!(sess.state, State::Composing) {
+                self.replace_live(&mut sess, done)
+            } else {
+                self.replace_origins(&mut sess, done)
+            };
+            if changed {
                 let result = self.finish(&mut sess, false, String::new());
                 if result.preedit.is_some() || result.candidates.is_some() {
                     out.push((id.clone(), result));
@@ -713,6 +755,42 @@ impl Engine {
             self.sessions.insert(id, sess);
         }
         out
+    }
+
+    /// ライブ変換の LLM 遅延完了の取り込み。`done` が表示中のライブ変換のチャンクと一致し、
+    /// 入力が変換時から変わっていなければ、全文を変換し直して置き換える（キャッシュに結果が
+    /// あるので LLM 込みの結果になる）。入力が変わっていれば、デバウンス後の `live_convert` が
+    /// 全文を変換するのでここでは何もしない。変更したら `true`（G-47）
+    fn replace_live(&self, sess: &mut Session, done: &[Completion]) -> bool {
+        if sess.live_suppressed {
+            return false;
+        }
+        let Some(lc) = &sess.live_conversion else {
+            return false;
+        };
+        let matched = lc
+            .chunks
+            .iter()
+            .any(|(r, l)| done.iter().any(|c| &c.reading == r && &c.left_context == l));
+        if !matched {
+            return false;
+        }
+        let pieces = sess.composer.pieces();
+        let full_reading: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        if full_reading != lc.source_reading {
+            return false;
+        }
+        let fresh = self.convert_live(&sess.left_context, &pieces, full_reading);
+        let same = lc
+            .segments
+            .iter()
+            .map(|s| (&s.reading, &s.surface))
+            .eq(fresh.segments.iter().map(|s| (&s.reading, &s.surface)));
+        if same {
+            return false;
+        }
+        sess.live_conversion = Some(fresh);
+        true
     }
 
     /// `done` に一致する `Origin` の範囲を最新の変換結果で置き換える。変更したら `true`
@@ -857,6 +935,8 @@ impl Engine {
         if sess.composer.cursor() != sess.composer.len() || matches!(sess.state, State::Direct) {
             sess.live_conversion = None;
         }
+        // 文字の入力（追記）でライブ変換の抑制を解く（G-46）
+        sess.live_suppressed = false;
         sess.composer.insert_char(c);
         sess.state = State::Composing;
     }
@@ -866,11 +946,13 @@ impl Engine {
             Action::Backspace => {
                 // 表示中の変換（固定部分を含む）はすべて破棄し、ひらがなに戻してから1文字削除する
                 sess.live_conversion = None;
+                sess.live_suppressed = true;
                 sess.composer.backspace();
                 self.leave_if_empty(sess);
             }
             Action::DeleteForward => {
                 sess.live_conversion = None;
+                sess.live_suppressed = true;
                 sess.composer.delete();
                 self.leave_if_empty(sess);
             }
@@ -883,9 +965,15 @@ impl Engine {
             Action::MoveCursorHome => sess.composer.move_home(),
             Action::MoveCursorEnd => sess.composer.move_end(),
             Action::Cancel => {
-                sess.composer.clear();
-                sess.live_conversion = None;
-                sess.state = State::Direct;
+                if Self::live_displays_conversion(sess) {
+                    // ライブ変換の表示中は、変換だけを破棄してひらがな表示に戻す（G-45）
+                    sess.live_conversion = None;
+                    sess.live_suppressed = true;
+                } else {
+                    sess.composer.clear();
+                    sess.live_conversion = None;
+                    sess.state = State::Direct;
+                }
             }
             Action::Commit => self.commit_all(sess, commit),
             Action::StartConvert | Action::NextCand => self.start_converting(sess, Start::Convert),
@@ -1413,6 +1501,7 @@ impl Engine {
         // 変換の取り消し。以前のライブ変換結果が残っていると Composing で変換表示に戻ってしまうので、
         // 必ずひらがな表示にする（G-44）
         sess.live_conversion = None;
+        sess.live_suppressed = true;
         sess.state = State::Composing;
     }
 

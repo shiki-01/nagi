@@ -288,20 +288,20 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Direct（かな） | → Composing | pass | pass | pass | pass | pass | pass | pass | モード更新 | - | pass |
 | Direct（英数） | pass | pass | pass | pass | pass | pass | pass | pass | モード更新 | - | pass |
-| Composing | 挿入 | → Converting（候補窓なし、focus 0） | - | 確定 → Direct | 破棄 → Direct | 削除、空なら Direct | カーソル移動 | → Converting（カタカナ/ひらがなを選択） | 確定 → Direct、モード更新 | 確定 → Direct、consumed=false | 消費のみ |
-| Converting | 確定して Composing で新規入力 | 次候補（窓表示）| 前候補 | 確定 → Direct | → Composing（reading 復元） | → Composing（reading 復元、削除なし、ライブ変換の表示も破棄。G-44） | MoveFocus / ResizeSegment / ExtendSelection（NoOp） | 注目文節を変更 | 確定 → Direct、モード更新 | 確定 → Direct、consumed=false | 消費のみ |
+| Composing | 挿入 | → Converting（候補窓なし、focus 0） | - | 確定 → Direct | ライブ変換の表示中は変換だけ破棄してひらがな表示に戻る（G-45）、ひらがな表示なら破棄 → Direct | 削除、空なら Direct（変換表示は破棄、ライブ変換を抑制。G-46） | カーソル移動 | → Converting（カタカナ/ひらがなを選択） | 確定 → Direct、モード更新 | 確定 → Direct、consumed=false | 消費のみ |
+| Converting | 確定して Composing で新規入力 | 次候補（窓表示）| 前候補 | 確定 → Direct | → Composing（reading 復元、ライブ変換は抑制。G-45/46） | → Composing（reading 復元、削除なし、ライブ変換の表示も破棄。G-44） | MoveFocus / ResizeSegment / ExtendSelection（NoOp） | 注目文節を変更 | 確定 → Direct、モード更新 | 確定 → Direct、consumed=false | 消費のみ |
 
 - `SelectCand(n)`: 候補窓表示中のみ現在ページの n 番目を選択（確定はしない・窓を閉じる）。非表示なら「確定して数字を新規入力」。Mozc / MS-IME は選択と同時に文節を確定するが、部分確定（Fixed）は Phase 3 なので、今回は選択だけとした
 - `RangeSelecting`（Ctrl+Shift+←/→）と `StyleAction` は enum に宣言のみ。Converting での `ExtendSelection` は消費して何もしない
 - Composing の Enter は「表示中の surface」を確定する。ライブ変換の結果が反映されていればその変換結果（追記中は固定部分 + 追記のかな。G-43）、無ければ reading（G-39 で変更。当初はライブ変換 OFF 前提で reading 固定だった）
-- Composing の Backspace / DeleteForward は、表示中のライブ変換（固定部分を含む）をすべて破棄して reading 表示に戻してから削除する。文中挿入・Cancel・新規入力の開始でも破棄する（G-43）
+- Composing の Backspace / DeleteForward は、表示中のライブ変換（固定部分を含む）をすべて破棄して reading 表示に戻してから削除し、次に文字を入力するまでライブ変換を再開しない（G-46）。文中挿入・Cancel・新規入力の開始でも破棄する（G-43）
 - Converting で Left / Right は端で止まる（循環しない）。候補は先頭が現在の表記、次にバックエンド候補、末尾にひらがな・カタカナ（重複除く）
 - 入力中に未割当の Ctrl/Alt/Meta 付き文字キー（Cmd+C など）は、確定してからキーを素通しする（入力を失わない）
 - 「文全体の N-best」（`conversion.initial_view = sentence`）は未実装。候補窓は注目文節の候補のみ
 
 ### G-8. ローマ字・入力バッファの判断
 
-- `nn` は「ん」+ soft pending `n`。直後が母音・`y` なら結合する（`konnichiha`→こんにちは、`shinnyuu`→しんにゅう、`kanna`→かんな）。確定時・後続が他の文字のときは捨てる（`honn`→ほん、`nn`→ん）。soft の `n` は preedit の pending 表示に含めない。Mozc の標準テーブルの挙動との一致は未確認（`nn` を即確定する実装との差に注意）
+- **【G-48 で改訂: `nn` は保留なしの「ん」に変更。以下の soft pending の記述は旧設計】** `nn` は「ん」+ soft pending `n`。直後が母音・`y` なら結合する（`konnichiha`→こんにちは、`shinnyuu`→しんにゅう、`kanna`→かんな）。確定時・後続が他の文字のときは捨てる（`honn`→ほん、`nn`→ん）。soft の `n` は preedit の pending 表示に含めない。Mozc の標準テーブルの挙動との一致は未確認（`nn` を即確定する実装との差に注意）
 - テーブルにない ASCII 文字（`q` 単独、`kq` の `k` など）は Literal として preedit に残る。数字・ASCII 記号は Literal（surface 不変）で、数字は英字継続モードを開始しない。`,` `.` `-` `[` `]` `/` `?` `!` `~` `(` `)` は全角記号へ変換し、`input.punctuation` で `,` `.` の表記を切替える
 - Composer の内部表現は「1 文字 + 種別」の平坦な列とカーソル位置。保留は常にカーソル位置に付随し、カーソル移動・確定の前に flush する
 - `Preedit` に設計書 §4.1 に無い `pending`（未確定ローマ字）を追加した。プロトコルでは `PreeditView.text` にカーソル位置へ挟み込み、`pending` に範囲を持たせる
@@ -725,10 +725,10 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 
 - **背景**: ライブ変換の表示条件が「`source_reading` と現在の reading の完全一致」（G-25 / G-39）だったため、変換結果の表示後に1文字打つたびに preedit 全体がひらがなに戻り、デバウンス後の結果でまた変換表示に戻る、というちらつきが実機で出た
 - **方針**: 現在の reading が `source_reading` を接頭辞として持ち（末尾への追記）、かつカーソルが末尾なら、既存のライブ変換結果を「固定部分」として保ち、追記分を後ろに未変換の segment（かな・Literal は piece の種類どおり。保留ローマ字は従来どおり `pending`）として足して表示する（`Engine::live_view`）。全体をひらがなに戻さない。`reading` が真実という不変条件は、固定 segment の reading 連結 + 追記 segment の reading = 入力全体の reading で保たれる
-- **末尾のみ再変換**: `live_convert` は固定部分を再変換せず、追記分の piece だけを `convert_japanese_chunked`（`composing_chunk_len` 分割は既存どおり）で変換し、固定部分の後ろに連結する。左文脈は `left_context` + 固定部分の surface。固定部分が「確定表示済みチャンク」、末尾が「編集チャンク」に相当し、G-27 で見送った「編集チャンクのみ再変換」の最適化を追記の場合に限り実現した。読みが完全一致のとき（追記なし）は従来どおり全体を変換し直す。固定部分は Backspace 等で破棄されるまで再変換されない（長く追記し続けると固定部分の文節区切りは最初の変換時のまま。品質より表示の安定を優先）
-- **Backspace**: 表示中の変換（固定部分を含む）をすべて破棄して reading 表示に戻し、通常の Backspace として最後の1文字（保留ローマ字があればその1つ）を削除する。デバウンス後に既存動作どおりライブ変換が再開する。DeleteForward も同様
+- **末尾のみ再変換は打鍵中の暫定表示にとどめる（G-47 で更新）**: 当初は `live_convert` が固定部分を再変換せず追記分だけを変換して連結していたが、これだと固定部分の文節区切り・変換内容が最初の変換時のままになり、Space の全文変換（AI 変換）と食い違う不具合になった。現在は、打鍵中（デバウンス満了前）は「固定部分 + 追記のかな」の暫定表示を保つだけで、デバウンス満了時の `live_convert` は reading 全体を（`composing_chunk_len` 分割は既存どおり）LLM 込みで再変換し、その結果で表示を置き換える（変換→変換の入れ替えなのでひらがなには戻らない）
+- **Backspace**: 表示中の変換（固定部分を含む）をすべて破棄して reading 表示に戻し、通常の Backspace として最後の1文字（保留ローマ字があればその1つ）を削除する。デバウンス後のライブ変換の再開は G-46 で抑制するようにした（次の文字入力まで再開しない）。DeleteForward も同様
 - **文中編集のフォールバック**: カーソルが末尾でないときの挿入は変換結果を破棄する。カーソルが末尾でない状態では追記の固定表示も使わず、従来どおり reading 表示（完全一致のときのみ変換表示）。文中の部分再変換は範囲操作（Phase 3）で扱う。Cancel と新規入力の開始でも古い結果を持ち越さない
-- **古い結果の破棄**: `live_convert(expected_reading)` は現在の reading と一致しなければ何もしない（従来どおり）。表示側は `source_reading` が現在の reading の接頭辞として一致する範囲だけ固定部分に採用し、不整合なら reading 表示にする
+- **古い結果の破棄**: `live_convert(expected_reading)` は現在の reading と一致しなければ何もしない（従来どおり）。表示側は `source_reading` が現在の reading の接頭辞として一致する範囲だけ固定部分（暫定表示）に採用し、不整合なら reading 表示にする
 - **確定（G-39 との関係）**: Enter は固定部分 + 追記のかなを、表示どおりに確定する。学習通知（`notify_commit`）は変換済みの固定部分のみ。追記分は未変換のかななので学習しない。確定取消は従来どおり reading に戻る
 - **影響**: 既存 golden の2ケース（`live-enter-after-more-input-commits-what-is-displayed`、`live-soft-n-then-consonant-no-duplicate`）の期待値を、追記後もひらがなに戻らない仕様に合わせて変更。追加テストは `engine/tests/golden/110_live_conversion.yaml` と `engine/tests/api.rs`
 
@@ -740,3 +740,50 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **予測変換**: 現状、予測変換（`predict`）は Composing での Tab のみが入口で、Converting 中の Space（NextCand）は通常候補（現在の表記・バックエンド候補・ひらがな・カタカナ）を循環するだけで、予測候補には移らない。「通常候補の後に予測候補へ移る」は未実装で、`predict.min_chars` などの仕様は変えていない（実装が大きくなるため今回は見送り。要判断）
 - **状態遷移表（G-7）**: Converting × Backspace は「→ Composing（reading 復元、削除なし、ライブ変換の表示は破棄）」
 - **影響**: `engine/src/engine.rs`（`back_to_composing`・`start_converting`）。追加テストは `engine/tests/golden/40_convert.yaml`（`convert-backspace-cancels-then-space-converts-again`、`convert-backspace-cancel-then-backspace-deletes-one`）と `engine/tests/api.rs`（`converting_backspace_cancels_and_discards_live_view`）
+
+### G-45. Esc の状態別挙動（2026-09-30）
+
+- **不具合**: Composing で Esc を押すと、ライブ変換の結果が表示されていても入力全体（reading）が破棄されていた（`apply_composing` の `Cancel` が無条件に `composer.clear()`）。標準 IME / Mozc の「ひらがな表示で Esc = 破棄」を、ライブ変換の表示中にも適用してしまっていた
+- **挙動**: Composing でライブ変換の変換結果が見えている（`live_view` が有効で、固定部分に surface と reading が異なる文節がある。追記中の固定表示 + 追記も含む）→ 変換だけ破棄して reading（ひらがな）表示に戻す（削除しない）。ひらがな表示（変換なし、または変換結果が reading と同一）→ 従来どおり入力全体を破棄して Direct。Converting → Composing の reading に戻る（削除しない。既存）。RangeSelecting（Converting の `range_anchor` あり）→ まず選択だけ解除、次の Esc で Composing に戻る（既存）
+- ライブ変換を破棄した Esc の後は、G-46 のとおり次の文字入力までライブ変換を再開しない（再開すると Esc の効果が打ち消されるため）
+- **影響**: `engine/src/engine.rs`（`apply_composing`・`live_displays_conversion`）。テストは `engine/tests/api.rs`（`esc_*`）と `engine/tests/golden/110_live_conversion.yaml`（`live-esc-discards-conversion-then-clears`）。G-7 の表を更新
+
+### G-46. Backspace 等の後はライブ変換を次の文字入力まで抑制する（2026-09-30）
+
+- **不具合**: G-43/G-44 で Backspace は変換を破棄してひらがなに戻すが、Backspace 後のデバウンス満了で `live_convert` が再び走り、すぐ変換表示に戻っていた
+- **修正**: `Session.live_suppressed` を追加。Composing の Backspace / DeleteForward、ライブ変換表示中の Esc、Converting → Composing の取り消し（Esc・Backspace。`back_to_composing`）で立て、文字入力（`insert_char`）で下ろす。抑制中は (1) `composing_reading` が `None` を返す（サーバーは debounce スレッドを立てない）、(2) `live_convert`（デバウンス満了時の照合・変換）が何もしない、(3) 非同期の LLM 遅延完了（G-47 の `replace_live`）を反映しない。Space 変換・Enter 確定・Tab（予測）など明示操作には影響しない（Enter は抑制中は reading を確定する）
+- カーソル移動（←/→/Home/End）では解除しない（「次に文字を入力するまで」）
+- **影響**: `engine/src/engine.rs`。テストは `engine/tests/api.rs`（`backspace_suppresses_*` 他）、`engine/tests/golden/110_live_conversion.yaml`（`live-suppressed-after-backspace-until-next-input`）、`server/tests/rpc.rs`（`live_conversion_is_not_delivered_after_backspace_until_next_input`）
+
+### G-47. ライブ変換は全文再変換に収束させる・LLM 遅延完了の取り込み・cursor は surface 基準（2026-09-30）
+
+- **不具合**: G-43 以降、ライブ変換の表示が Space の全文変換（AI 変換）と食い違い、一度 Space を押さないと適切な変換にならなかった。原因は2つ: (1) 追記後の `live_convert` が末尾だけの変換で、固定部分の内容・区切りが最初の変換時のまま残った。(2) ライブ変換のバックエンド呼び出しが同期予算（`sync_budget_ms`）を超えると辞書寄りの結果で表示され、その後 LLM が完了しても、非同期の差し替え（`apply_completions`/`Origin`）は Converting にしか働かないため、Composing のライブ変換には最終結果が反映されなかった（Space を押すと LLM 結果のキャッシュが効いて初めて正しい結果が出る）
+- **修正 (a)**: `live_convert` は常に reading 全体を（`composing_chunk_len` 分割で）変換し直し、結果で表示を置き換える。打鍵中は G-43 の固定部分 + 追記かなの暫定表示。G-43 の記述を更新済み
+- **修正 (c)**: `LiveConversion.chunks` に変換したチャンクの `(reading, left_context)` を持ち、`apply_completions` が Composing のセッションも対象にする。完了通知が表示中のチャンクと一致し、入力が変換時から変わっていない（reading 一致・非抑制）場合に全文を変換し直して差し替える（`replace_live`）。入力が変わっていれば、デバウンス後の `live_convert` が全文を変換するので何もしない。`live_convert` 側の `expected_reading` 不一致による破棄は、古い入力への結果を捨てる正しい動作で変更なし（サーバーは打鍵ごとに debounce スレッドを立てるので、最後の入力に対する結果は必ず届く）
+- **修正 (b)**: プロトコルの `PreeditView.cursor` は `text`（surface 連結）上の UTF-16 位置。engine の `Preedit.cursor` は reading 基準（segment + reading 内の文字数）で、`to_view` が reading の文字数をそのまま surface の先頭から数えていたため、surface が reading と異なる文節（ライブ変換・変換結果。特に surface が reading より長いとき）で cursor が文節の途中にずれていた。`to_view` で、surface が reading と異なる文節では cursor を文節の先頭か末尾（reading 上の位置が半分未満なら先頭）に寄せるようにした（surface と reading が同一の文節は文字数どおり）。Swift（`NagiInputController.renderPreedit`）は `preedit.cursor` を UTF-16 の `selectionRange` にそのまま使っており、定義と一致しているので変更なし
+- **未対応**: ライブ変換表示中に ←/→ でカーソルを動かしたとき、変換済み文節の途中には止まれず端に寄る（表示上のみ。reading 上のカーソルは正しく動く）。全文再変換は毎回チャンク全体を変換するので、長文でのレイテンシは未計測（G-27 の最適化は依然として未実装）
+- **影響**: `engine/src/engine.rs`（`convert_live`・`replace_live`・`try_apply_live_conversion`）、`engine/src/ir.rs`（`to_view`）。テストは `engine/tests/api.rs`（`live_convert_after_append_*`・`completion_replaces_live_conversion_*`・`live_*cursor*`）と golden 110。既存 golden の `live-append-*` 2 ケースと `api.rs` の `live_append_reconverts_only_tail_*`（`live_convert_after_append_reconverts_whole_reading_*` に置換）は、末尾のみ再変換 → 全文再変換の仕様変更に合わせて期待値を変更
+
+### G-48. `nn` は保留なしで「ん」を確定する（Mozc 原本どおり。G-8 の soft pending を廃止）（2026-09-30）
+
+- **背景**: 実機で「nnei」が「んねい」になった。ユーザーの期待は「んえい」（`nn` で「ん」が確定し、続く `ei` が「えい」）。G-8 の設計は `nn` を「ん」+ 保留 `n`（soft pending）とし、直後の母音・`y` を保留 `n` と結合させていた（`konnichiha`→こんにちは の目的）が、これが上記の症状の原因
+- **決定**: ユーザーの明示要望を優先し、Mozc 標準（`romanji-hiragana.tsv` の `nn	ん`、保留なし。G-42 の照合で唯一の相違点だった）に揃える。`config/romaji/standard.tsv` の `nn` の保留 `n` を外し、`nagi-romaji` の soft pending の機構（`soft_pending` フラグ、feed 冒頭の捨て処理、flush・backspace の特別扱い）を削除した。単独 `n` の保留（表示は pending `n`、flush で「ん」）、`n`+子音（`nk`→ん+保留 k）、`n'`→ん、`xn`→ん は従来どおり。G-40 の「ん」重複は、`nn` が保留を残さなくなったため構造的に起こらない（`n`→n、`nn`→ん、`nnk`→んk、`konn`→こん、`konni`→こんい など、`test_n_sequences_do_not_duplicate_nn` で確認）
+- **トレードオフ**: G-8 の目的だった「`konnichiha` を素直に打てる」を失う。`nn` の直後の母音は独立した音になる。「んな」「んに」等を続けたいときは `nnn`（`n` を3つ）か `n'` を使う。Mozc・MS-IME でも同じ運用で、`konnnichiha` / `kon'nichiha` と打つのが一般的（macOS 標準 IME の `nn`+母音の挙動は実機未確認。ここでは Mozc 原本のテーブルを根拠とした）
+- **影響する典型語（変更前 → 変更後）**:
+
+  | 入力 | 変更前 | 変更後 | 変更前の結果を得る打ち方 |
+  | --- | --- | --- | --- |
+  | nnei | んねい | んえい | nnnei |
+  | nna | んな | んあ | nnna |
+  | konnichiha | こんにちは | こんいちは | konnnichiha / kon'nichiha |
+  | hannou | はんのう | はんおう | hannnou / han'nou |
+  | onna | おんな | おんあ | onnna / on'na |
+  | kannei | かんねい | かんえい | kannnei |
+  | kanna | かんな | かんあ | kannna |
+  | shinnyuu | しんにゅう | しんゆう | shinnnyuu / shin'nyuu |
+  | honn / nnk | ほん / んk | 変わらず | |
+  | n' / xn | ん | 変わらず | |
+
+  末尾の `nn`（`honn`、`kouenn` 等）や `nn`+子音は影響なし。`nn` の後に母音・`y` が続く語だけが変わる
+- **テスト**: `nagi-romaji` の `test_n_sequences_do_not_duplicate_nn`・`MOZC_CASES`（nn 行）・`test_konnichiha` 等、engine の golden `10_romaji.yaml`（`romaji-nn-*`、`romaji-multiple-segments`）と `40_convert.yaml`（打鍵列に `n` を1つ追加）、`api.rs` の `n_input_never_duplicates_nn_in_composing_reading` の期待値を新挙動に更新
+- **G-8 との関係**: G-8 の `nn` の記述は本項で改訂（G-8 側に注記済み）。soft pending に依存していた G-40 の説明（soft の `n` を捨てる修正）は履歴として残すが、現在は機構自体が無い

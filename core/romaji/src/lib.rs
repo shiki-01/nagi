@@ -158,7 +158,6 @@ pub enum Emit {
 pub struct RomajiConverter {
     table: Arc<RomajiTable>,
     buffer: String,
-    soft_pending: bool, // 保留の "n" が soft であるかどうか
 }
 
 impl RomajiConverter {
@@ -167,25 +166,12 @@ impl RomajiConverter {
         RomajiConverter {
             table,
             buffer: String::new(),
-            soft_pending: false,
         }
     }
 
     /// 1 文字入力し、変換結果を返す（出力が無ければ空 Vec）
     pub fn feed(&mut self, ch: char) -> Vec<Emit> {
-        // soft pending の `n`（`nn` の2つ目）は、母音・`y` が続くときだけ次の音に結合する。
-        // それ以外（子音・`n`・`'` 等）では捨てる。捨てないと `nk` 等が「ん」を再び emit し、
-        // `nn` + `k` が「んんk」になる（G-40）
-        if self.soft_pending && !matches!(ch, 'a' | 'i' | 'u' | 'e' | 'o' | 'y') {
-            self.buffer.clear();
-            self.soft_pending = false;
-            if ch == '\'' {
-                return Vec::new();
-            }
-        }
         self.buffer.push(ch);
-        // 結合を試みる時点で soft の役目は終わり（`ny` は通常の保留として表示する）
-        self.soft_pending = false;
 
         let mut result = Vec::new();
 
@@ -198,12 +184,7 @@ impl RomajiConverter {
 
             if let Some((output, pending)) = exact_match.as_ref().filter(|_| !has_longer) {
                 // 完全一致があり、より長い候補がない → emit
-                let is_n_mora = output.chars().eq("ん".chars());
                 result.push(Emit::Converted(output.clone()));
-
-                // soft pending の規則
-                self.soft_pending = pending == "n" && is_n_mora;
-
                 self.buffer = pending.clone();
                 break;
             }
@@ -226,13 +207,12 @@ impl RomajiConverter {
         result
     }
 
-    /// 表示用の保留ローマ字を取得（soft pending は含めない）
+    /// 表示用の保留ローマ字を取得
     pub fn pending(&self) -> &str {
-        // soft pending の場合、空文字列を返す
-        if self.soft_pending { "" } else { &self.buffer }
+        &self.buffer
     }
 
-    /// soft を含めて何かバッファにあるかを確認
+    /// 何かバッファにあるかを確認
     pub fn has_pending(&self) -> bool {
         !self.buffer.is_empty()
     }
@@ -241,22 +221,16 @@ impl RomajiConverter {
     pub fn flush(&mut self) -> Vec<Emit> {
         let mut result = Vec::new();
 
-        if self.buffer == "n" && self.soft_pending {
-            // soft の n は捨てる
-            self.buffer.clear();
-            self.soft_pending = false;
-        } else if self.buffer == "n" {
+        if self.buffer == "n" {
             // 単独の n は ん に変換
             result.push(Emit::Converted("ん".to_string()));
             self.buffer.clear();
-            self.soft_pending = false;
         } else if !self.buffer.is_empty() {
             // その他の保留は Raw で 1 文字ずつ emit
             for ch in self.buffer.chars() {
                 result.push(Emit::Raw(ch));
             }
             self.buffer.clear();
-            self.soft_pending = false;
         }
 
         result
@@ -268,27 +242,13 @@ impl RomajiConverter {
             return false;
         }
 
-        // soft pending のみの場合は soft を消す
-        if self.soft_pending && self.buffer.len() == 1 {
-            self.soft_pending = false;
-            return true;
-        }
-
-        // 通常のバックスペース
         self.buffer.pop();
-
-        // soft pending の状態を再評価（バッファが短くなった場合）
-        if self.buffer.is_empty() {
-            self.soft_pending = false;
-        }
-
         true
     }
 
     /// バッファをクリアする
     pub fn clear(&mut self) {
         self.buffer.clear();
-        self.soft_pending = false;
     }
 }
 
@@ -470,7 +430,7 @@ impl Composer {
         self.cursor = cursor.min(self.chars.len());
     }
 
-    /// 表示用の保留ローマ字（soft pending は含めない）
+    /// 表示用の保留ローマ字
     pub fn pending(&self) -> &str {
         self.converter.pending()
     }
@@ -490,12 +450,12 @@ impl Composer {
         self.chars.len()
     }
 
-    /// バッファも保留（soft を含む）も空かどうか
+    /// バッファも保留も空かどうか
     pub fn is_empty(&self) -> bool {
         self.chars.is_empty() && !self.converter.has_pending()
     }
 
-    /// 保留（soft を含む）が残っているか
+    /// 保留が残っているか
     pub fn has_pending(&self) -> bool {
         self.converter.has_pending()
     }
@@ -606,13 +566,18 @@ mod tests {
     fn test_konnichiha() {
         let (mut composer, _) = setup_composer();
         insert_string(&mut composer, "konnichiha");
-        assert_eq!(text_after_flush(&mut composer), "こんにちは");
+        // Mozc 標準どおり nn で「ん」が確定するので「こんいちは」になる（G-48）
+        assert_eq!(text_after_flush(&mut composer), "こんいちは");
     }
 
     #[test]
     fn test_shinnyuu() {
         let (mut composer, _) = setup_composer();
         insert_string(&mut composer, "shinnyuu");
+        // nn の後の y は保留のまま「ゆ」になる（G-48）。「しんにゅう」は shinnnyuu / shin'nyuu
+        assert_eq!(text_after_flush(&mut composer), "しんゆう");
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "shinnnyuu");
         assert_eq!(text_after_flush(&mut composer), "しんにゅう");
     }
 
@@ -620,6 +585,9 @@ mod tests {
     fn test_kanna() {
         let (mut composer, _) = setup_composer();
         insert_string(&mut composer, "kanna");
+        assert_eq!(text_after_flush(&mut composer), "かんあ");
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "kannna");
         assert_eq!(text_after_flush(&mut composer), "かんな");
     }
 
@@ -691,7 +659,7 @@ mod tests {
         let (mut composer, _) = setup_composer();
         composer.insert_char('n');
         composer.insert_char('n');
-        // nn は ん に変換されるので pending は空（soft n は表示しない）
+        // nn は ん に変換され、保留は残らない（Mozc 原本どおり。G-48）
         assert_eq!(composer.pending(), "");
     }
 
@@ -1012,7 +980,11 @@ mod tests {
     #[test]
     fn test_complex_shinnyuu() {
         let (mut composer, _) = setup_composer();
-        insert_string(&mut composer, "shinnyuu");
+        // n を3つ打つか n' で区切る（nn で「ん」が確定するため。G-48）
+        insert_string(&mut composer, "shinnnyuu");
+        assert_eq!(text_after_flush(&mut composer), "しんにゅう");
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "shin'nyuu");
         assert_eq!(text_after_flush(&mut composer), "しんにゅう");
     }
 
@@ -1076,7 +1048,10 @@ mod tests {
     fn test_complex_hannou() {
         let (mut composer, _) = setup_composer();
         insert_string(&mut composer, "hannou");
-        // はんのう - n+n は soft n + n で、n+o では soft が外れて「の」
+        // nn で「ん」が確定するので o は単独の「お」（G-48）
+        assert_eq!(text_after_flush(&mut composer), "はんおう");
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "hannnou");
         assert_eq!(text_after_flush(&mut composer), "はんのう");
     }
 
@@ -1084,6 +1059,9 @@ mod tests {
     fn test_complex_onnna() {
         let (mut composer, _) = setup_composer();
         insert_string(&mut composer, "onna");
+        assert_eq!(text_after_flush(&mut composer), "おんあ");
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "onnna");
         assert_eq!(text_after_flush(&mut composer), "おんな");
     }
 
@@ -1126,18 +1104,25 @@ mod tests {
             ("nka", "んか", "", "んか"),
             ("nnk", "ん", "k", "んk"),
             ("nnka", "んか", "", "んか"),
-            ("nna", "んな", "", "んな"),
-            ("nni", "んに", "", "んに"),
-            ("nnya", "んにゃ", "", "んにゃ"),
+            ("nna", "んあ", "", "んあ"),
+            ("nni", "んい", "", "んい"),
+            ("nnei", "んえい", "", "んえい"),
+            ("nnya", "んや", "", "んや"),
+            ("nnna", "んな", "", "んな"),
+            ("nnnya", "んにゃ", "", "んにゃ"),
+            ("n'", "ん", "", "ん"),
+            ("xn", "ん", "", "ん"),
             ("kon", "こ", "n", "こん"),
             ("konn", "こん", "", "こん"),
-            ("konni", "こんに", "", "こんに"),
-            ("konnichi", "こんにち", "", "こんにち"),
+            ("konni", "こんい", "", "こんい"),
+            ("konnichi", "こんいち", "", "こんいち"),
+            ("konnnichi", "こんにち", "", "こんにち"),
             ("kanji", "かんじ", "", "かんじ"),
             ("kanj", "かん", "j", "かんj"),
             ("kon'", "こん", "", "こん"),
             ("kon'a", "こんあ", "", "こんあ"),
             ("nnnk", "んん", "k", "んんk"),
+            ("nnnn", "んん", "", "んん"),
         ];
         for (input, text, pending, flushed) in cases {
             assert_eq!(
@@ -1467,7 +1452,9 @@ mod tests {
         ("n'", "ん"),
         ("xn", "ん"),
         ("kan", "かん"),
-        ("nna", "んな"),
+        ("nna", "んあ"),
+        ("nnei", "んえい"),
+        ("nnna", "んな"),
         ("nka", "んか"),
         ("nja", "んじゃ"),
         ("nsa", "んさ"),
@@ -1475,8 +1462,10 @@ mod tests {
         ("nxa", "んぁ"),
         ("na", "な"),
         ("nya", "にゃ"),
-        ("konnichiha", "こんにちは"),
-        ("kanni", "かんに"),
+        ("konnichiha", "こんいちは"),
+        ("konnnichiha", "こんにちは"),
+        ("kon'nichiha", "こんにちは"),
+        ("kanni", "かんい"),
         // 記号
         ("-", "ー"),
         (",", "、"),

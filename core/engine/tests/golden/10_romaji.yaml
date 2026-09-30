@@ -152,6 +152,9 @@
       expect: {preedit: "こn", pending: "n"}
     - key: "n"
       expect: {preedit: "こん", pending: "", segments: ["こん"]}
+    # nn で「ん」が確定するため、「こんにちは」は n を3つ打つ（G-48）
+    - key: "n"
+      expect: {preedit: "こんn", pending: "n"}
     - key: "i"
       expect: {preedit: "こんに", pending: "", segments: ["こんに"]}
     - key: "c"
@@ -184,7 +187,7 @@
     - key: "a"
       expect: {preedit: "ふりがな", pending: "", segments: ["ふりがな"]}
 
-# 「ん」の重複（G-40）: soft pending の n は子音・n の前で捨てる
+# 「ん」の重複（G-40）: nn は保留なしで「ん」を確定する（G-48。Mozc 原本どおり）
 - name: romaji-nn-then-consonant-no-duplicate
   steps:
     - key: "n"
@@ -196,11 +199,28 @@
     - key: "a"
       expect: {preedit: "んか", pending: "", segments: ["んか"]}
 
-- name: romaji-nn-then-vowel-joins-na-row
+- name: romaji-nn-then-vowel-does-not-join
   steps:
     - key: "n"
     - key: "n"
       expect: {preedit: "ん", pending: ""}
+    - key: "a"
+      expect: {preedit: "んあ", pending: ""}
+
+- name: romaji-nn-then-ei
+  steps:
+    - {key: "n"}
+    - {key: "n"}
+    - {key: "e"}
+    - key: "i"
+      expect: {preedit: "んえい", pending: ""}
+
+- name: romaji-nnn-then-vowel-joins-na-row
+  steps:
+    - {key: "n"}
+    - {key: "n"}
+    - key: "n"
+      expect: {preedit: "んn", pending: "n"}
     - key: "a"
       expect: {preedit: "んな", pending: ""}
 
@@ -223,9 +243,9 @@
     - key: "n"
       expect: {preedit: "こん", pending: ""}
     - key: "i"
-      expect: {preedit: "こんに", pending: ""}
+      expect: {preedit: "こんい", pending: ""}
     - key: "Return"
-      expect: {commit: "こんに", state: direct}
+      expect: {commit: "こんい", state: direct}
 
 - name: romaji-nn-enter-commits-single-n
   steps:

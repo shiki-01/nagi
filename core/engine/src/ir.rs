@@ -113,8 +113,19 @@ impl Preedit {
         let cursor_before = if self.focus.is_some() {
             total
         } else if let Some(seg) = self.segments.get(self.cursor.segment) {
-            let head: String = seg.surface.chars().take(self.cursor.offset).collect();
-            starts[self.cursor.segment] + utf16::utf16_len(&head)
+            // cursor.offset は reading の文字数。surface が reading と異なる（変換済み）文節では
+            // 同じ数値を surface に当てられないので、文節の端に寄せる（先頭 or 末尾）。
+            // surface == reading なら文字数どおり
+            let reading_len = seg.reading.chars().count();
+            let offset = self.cursor.offset;
+            if seg.surface == seg.reading {
+                let head: String = seg.surface.chars().take(offset).collect();
+                starts[self.cursor.segment] + utf16::utf16_len(&head)
+            } else if offset * 2 < reading_len {
+                starts[self.cursor.segment]
+            } else {
+                ends[self.cursor.segment]
+            }
         } else {
             total
         };

@@ -290,8 +290,8 @@ pp	っ	p
 ww	っ	w
 vv	っ	v
 
-# n + consonant (mora n) - except y and vowel
-nn	ん	n
+# n + consonant (mora n) - except y and vowel。nn は Mozc 原本どおり保留なし（G-48）
+nn	ん
 nk	ん	k
 ng	ん	g
 ns	ん	s

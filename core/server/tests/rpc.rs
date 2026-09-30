@@ -468,6 +468,63 @@ fn live_conversion_delivers_update_preedit_without_further_input() {
     handle.join().unwrap();
 }
 
+#[test]
+fn live_conversion_is_not_delivered_after_backspace_until_next_input() {
+    use nagi_engine::MockBackend;
+
+    let backend = MockBackend::new()
+        .with_sentence("きょ", vec![("きょ", vec!["巨"])])
+        .with_sentence("きょう", vec![("きょう", vec!["今日"])]);
+    let mut s = Server::new(Arc::new(backend), "minimal", EngineConfig::default());
+
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let reader = ChannelReader {
+        rx,
+        buf: Vec::new(),
+        pos: 0,
+    };
+    let output_store = Arc::new(Mutex::new(Vec::new()));
+    let mut output_for_thread = SharedBuf(output_store.clone());
+    let handle = std::thread::spawn(move || {
+        s.run(BufReader::new(reader), &mut output_for_thread)
+            .unwrap();
+    });
+    let send = |v: Value| tx.send(format!("{v}\n").into_bytes()).unwrap();
+
+    send(
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocol_version":1,"client_name":"t","client_version":"0","os":"test"}}),
+    );
+    wait_for(&output_store, "\"id\":1", Duration::from_secs(5));
+
+    // "kyou" → Backspace（読みは「きょ」）。デバウンス（228ms）が満了しても結果は届かない
+    for (i, c) in "kyou".chars().enumerate() {
+        send(key(10 + i as i64, "s", c as u32, &c.to_string(), false));
+    }
+    send(key(20, "s", 0xff08, "", false));
+    wait_for(&output_store, "\"id\":20", Duration::from_secs(5));
+    std::thread::sleep(Duration::from_millis(700));
+    let text = String::from_utf8(output_store.lock().unwrap().clone()).unwrap_or_default();
+    assert!(
+        !text.contains("update_preedit"),
+        "Backspace 後はライブ変換が届かないはず: {text}"
+    );
+
+    // 文字を入力すると再開する（「きょう」→ 今日）
+    send(key(21, "s", 'u' as u32, "u", false));
+    let text = wait_for(
+        &output_store,
+        "\"method\":\"update_preedit\"",
+        Duration::from_secs(5),
+    );
+    assert!(text.contains("今日"), "入力後は変換結果が届くはず: {text}");
+
+    send(json!({"jsonrpc":"2.0","id":99,"method":"shutdown"}));
+    wait_for(&output_store, "\"id\":99", Duration::from_secs(5));
+    drop(tx);
+    handle.join().unwrap();
+}
+
 // ---- 実プロセス ----
 
 struct Proc {

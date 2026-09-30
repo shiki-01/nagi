@@ -116,15 +116,16 @@
 # ---- 追記中の固定部分（G-43） ----
 
 # 追記しても preedit は reading に戻らず、追記分は固定部分の後ろにかな・保留ローマ字で出る。
-# デバウンス後の再変換は末尾だけを対象にし、結果が固定部分に連結される
+# デバウンス満了後の再変換は reading 全体が対象で、結果で表示が置き換わる（G-47）
 - name: live-append-keeps-fixed-and-reconverts-tail
   backend: mock
   mock:
     sentences:
       "きょうは":
         - {reading: "きょうは", candidates: ["今日は"]}
-      "いい":
-        - {reading: "いい", candidates: ["良い"]}
+      "きょうはいいか":
+        - {reading: "きょうは", candidates: ["今日は"]}
+        - {reading: "いいか", candidates: ["良いか"]}
   steps:
     - {key: "k"}
     - {key: "y"}
@@ -143,18 +144,19 @@
       expect: {preedit: "今日はいいk", pending: "k"}
     - key: "a"
       expect: {preedit: "今日はいいか", pending: ""}
-    # 未変換の末尾「いいか」だけが変換対象。モックに無い reading は読みのまま
+    # 打鍵が止まったら全文を再変換した結果に置き換わる
     - action: live_convert
       reading: "きょうはいいか"
-      expect: {preedit: "今日はいいか", readings: ["きょうは", "いいか"]}
+      expect: {preedit: "今日は良いか", readings: ["きょうは", "いいか"]}
 
-- name: live-append-tail-converted-and-concatenated
+- name: live-append-whole-reading-reconverted-on-debounce
   backend: mock
   mock:
     sentences:
       "きょうは":
         - {reading: "きょうは", candidates: ["今日は"]}
-      "いい":
+      "きょうはいい":
+        - {reading: "きょうは", candidates: ["今日は"]}
         - {reading: "いい", candidates: ["良い"]}
   steps:
     - {key: "k"}
@@ -236,3 +238,52 @@
     - {key: "Right"}
     - key: "u"
       expect: {preedit: "かうきう"}
+
+# Esc: ライブ変換の表示中は変換だけ破棄してひらがなに戻す（削除しない）。ひらがなでもう一度押すと全破棄（G-45）
+- name: live-esc-discards-conversion-then-clears
+  backend: mock
+  mock:
+    sentences:
+      "きょうは":
+        - {reading: "きょうは", candidates: ["今日は"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "h"}
+    - {key: "a"}
+    - action: live_convert
+      reading: "きょうは"
+      expect: {preedit: "今日は"}
+    - key: "Escape"
+      expect: {consumed: true, preedit: "きょうは", state: composing, commit: null}
+    - key: "Escape"
+      expect: {preedit: "", state: direct, commit: null}
+
+# Backspace / Esc の後は、次に文字を入力するまでライブ変換が反映されない（G-46）
+- name: live-suppressed-after-backspace-until-next-input
+  backend: mock
+  mock:
+    sentences:
+      "きょうは":
+        - {reading: "きょうは", candidates: ["今日は"]}
+      "きょう":
+        - {reading: "きょう", candidates: ["今日"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "h"}
+    - {key: "a"}
+    - action: live_convert
+      reading: "きょうは"
+      expect: {preedit: "今日は"}
+    - key: "BackSpace"
+      expect: {preedit: "きょう"}
+    - action: live_convert
+      reading: "きょう"
+      expect: {preedit: "きょう"}
+    - key: "Space"
+      expect: {state: converting, preedit: "今日"}
