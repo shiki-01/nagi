@@ -1223,4 +1223,360 @@ mod tests {
         insert_string(&mut composer, "Na");
         assert_eq!(composer.text(), "かん，Nあ");
     }
+
+    /// 標準テーブルで `input` を打って flush した結果
+    fn convert_standard(input: &str) -> String {
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, input);
+        text_after_flush(&mut composer)
+    }
+
+    /// Mozc の romanji-hiragana.tsv と同じ結果になるべき入力（系統別）
+    const MOZC_CASES: &[(&str, &str)] = &[
+        // c 系
+        ("ca", "か"),
+        ("ci", "し"),
+        ("cu", "く"),
+        ("ce", "せ"),
+        ("co", "こ"),
+        ("cya", "ちゃ"),
+        ("cyi", "ちぃ"),
+        ("cyu", "ちゅ"),
+        ("cye", "ちぇ"),
+        ("cyo", "ちょ"),
+        ("cha", "ちゃ"),
+        ("chi", "ち"),
+        ("chu", "ちゅ"),
+        ("che", "ちぇ"),
+        ("cho", "ちょ"),
+        // 拗音
+        ("kya", "きゃ"),
+        ("kyi", "きぃ"),
+        ("kyu", "きゅ"),
+        ("kye", "きぇ"),
+        ("kyo", "きょ"),
+        ("gya", "ぎゃ"),
+        ("gyi", "ぎぃ"),
+        ("gyu", "ぎゅ"),
+        ("gye", "ぎぇ"),
+        ("gyo", "ぎょ"),
+        ("sya", "しゃ"),
+        ("syi", "しぃ"),
+        ("syu", "しゅ"),
+        ("sye", "しぇ"),
+        ("syo", "しょ"),
+        ("sha", "しゃ"),
+        ("shi", "し"),
+        ("shu", "しゅ"),
+        ("she", "しぇ"),
+        ("sho", "しょ"),
+        ("ja", "じゃ"),
+        ("ji", "じ"),
+        ("ju", "じゅ"),
+        ("je", "じぇ"),
+        ("jo", "じょ"),
+        ("jya", "じゃ"),
+        ("jyi", "じぃ"),
+        ("jyu", "じゅ"),
+        ("jye", "じぇ"),
+        ("jyo", "じょ"),
+        ("zya", "じゃ"),
+        ("zyi", "じぃ"),
+        ("zyu", "じゅ"),
+        ("zye", "じぇ"),
+        ("zyo", "じょ"),
+        ("tya", "ちゃ"),
+        ("tyi", "ちぃ"),
+        ("tyu", "ちゅ"),
+        ("tye", "ちぇ"),
+        ("tyo", "ちょ"),
+        ("dya", "ぢゃ"),
+        ("dyi", "ぢぃ"),
+        ("dyu", "ぢゅ"),
+        ("dye", "ぢぇ"),
+        ("dyo", "ぢょ"),
+        ("nya", "にゃ"),
+        ("nyi", "にぃ"),
+        ("nyu", "にゅ"),
+        ("nye", "にぇ"),
+        ("nyo", "にょ"),
+        ("hya", "ひゃ"),
+        ("hyi", "ひぃ"),
+        ("hyu", "ひゅ"),
+        ("hye", "ひぇ"),
+        ("hyo", "ひょ"),
+        ("bya", "びゃ"),
+        ("byi", "びぃ"),
+        ("byu", "びゅ"),
+        ("bye", "びぇ"),
+        ("byo", "びょ"),
+        ("pya", "ぴゃ"),
+        ("pyi", "ぴぃ"),
+        ("pyu", "ぴゅ"),
+        ("pye", "ぴぇ"),
+        ("pyo", "ぴょ"),
+        ("mya", "みゃ"),
+        ("myi", "みぃ"),
+        ("myu", "みゅ"),
+        ("mye", "みぇ"),
+        ("myo", "みょ"),
+        ("rya", "りゃ"),
+        ("ryi", "りぃ"),
+        ("ryu", "りゅ"),
+        ("rye", "りぇ"),
+        ("ryo", "りょ"),
+        ("fya", "ふゃ"),
+        ("fyu", "ふゅ"),
+        ("fyo", "ふょ"),
+        // 小書き
+        ("xya", "ゃ"),
+        ("xyi", "ぃ"),
+        ("xyu", "ゅ"),
+        ("xye", "ぇ"),
+        ("xyo", "ょ"),
+        ("lya", "ゃ"),
+        ("lyi", "ぃ"),
+        ("lyu", "ゅ"),
+        ("lye", "ぇ"),
+        ("lyo", "ょ"),
+        ("xtu", "っ"),
+        ("ltu", "っ"),
+        ("xtsu", "っ"),
+        ("ltsu", "っ"),
+        ("xa", "ぁ"),
+        ("xi", "ぃ"),
+        ("xu", "ぅ"),
+        ("xe", "ぇ"),
+        ("xo", "ぉ"),
+        ("la", "ぁ"),
+        ("li", "ぃ"),
+        ("lu", "ぅ"),
+        ("le", "ぇ"),
+        ("lo", "ぉ"),
+        ("xwa", "ゎ"),
+        ("lwa", "ゎ"),
+        ("xka", "ヵ"),
+        ("xke", "ヶ"),
+        ("lka", "ヵ"),
+        ("lke", "ヶ"),
+        // 外来音
+        ("fa", "ふぁ"),
+        ("fi", "ふぃ"),
+        ("fu", "ふ"),
+        ("fe", "ふぇ"),
+        ("fo", "ふぉ"),
+        ("hwa", "ふぁ"),
+        ("hwi", "ふぃ"),
+        ("hwe", "ふぇ"),
+        ("hwo", "ふぉ"),
+        ("hwyu", "ふゅ"),
+        ("va", "ゔぁ"),
+        ("vi", "ゔぃ"),
+        ("vu", "ゔ"),
+        ("ve", "ゔぇ"),
+        ("vo", "ゔぉ"),
+        ("vya", "ゔゃ"),
+        ("vyi", "ゔぃ"),
+        ("vyu", "ゔゅ"),
+        ("vye", "ゔぇ"),
+        ("vyo", "ゔょ"),
+        ("tsa", "つぁ"),
+        ("tsi", "つぃ"),
+        ("tsu", "つ"),
+        ("tse", "つぇ"),
+        ("tso", "つぉ"),
+        ("tha", "てゃ"),
+        ("thi", "てぃ"),
+        ("thu", "てゅ"),
+        ("the", "てぇ"),
+        ("tho", "てょ"),
+        ("dha", "でゃ"),
+        ("dhi", "でぃ"),
+        ("dhu", "でゅ"),
+        ("dhe", "でぇ"),
+        ("dho", "でょ"),
+        ("twa", "とぁ"),
+        ("twi", "とぃ"),
+        ("twu", "とぅ"),
+        ("twe", "とぇ"),
+        ("two", "とぉ"),
+        ("dwa", "どぁ"),
+        ("dwi", "どぃ"),
+        ("dwu", "どぅ"),
+        ("dwe", "どぇ"),
+        ("dwo", "どぉ"),
+        ("t'i", "てぃ"),
+        ("d'i", "でぃ"),
+        ("t'u", "とぅ"),
+        ("d'u", "どぅ"),
+        ("t'yu", "てゅ"),
+        ("d'yu", "でゅ"),
+        ("wi", "うぃ"),
+        ("we", "うぇ"),
+        ("wu", "う"),
+        ("ye", "いぇ"),
+        ("wyi", "ゐ"),
+        ("wye", "ゑ"),
+        ("wha", "うぁ"),
+        ("whi", "うぃ"),
+        ("whu", "う"),
+        ("whe", "うぇ"),
+        ("who", "うぉ"),
+        ("kwa", "くぁ"),
+        ("kwi", "くぃ"),
+        ("kwu", "くぅ"),
+        ("kwe", "くぇ"),
+        ("kwo", "くぉ"),
+        ("gwa", "ぐぁ"),
+        ("gwi", "ぐぃ"),
+        ("gwu", "ぐぅ"),
+        ("gwe", "ぐぇ"),
+        ("gwo", "ぐぉ"),
+        ("swa", "すぁ"),
+        ("swi", "すぃ"),
+        ("swu", "すぅ"),
+        ("swe", "すぇ"),
+        ("swo", "すぉ"),
+        ("zwa", "ずぁ"),
+        ("zwi", "ずぃ"),
+        ("zwu", "ずぅ"),
+        ("zwe", "ずぇ"),
+        ("zwo", "ずぉ"),
+        ("qa", "くぁ"),
+        ("qi", "くぃ"),
+        ("qu", "く"),
+        ("qe", "くぇ"),
+        ("qo", "くぉ"),
+        // 促音（末尾の保留子音は flush で素通しされるので、続けて母音を打つ）
+        ("kka", "っか"),
+        ("ssa", "っさ"),
+        ("tta", "った"),
+        ("cca", "っか"),
+        ("ppa", "っぱ"),
+        ("qqa", "っくぁ"),
+        ("lla", "っぁ"),
+        ("xxa", "っぁ"),
+        ("yya", "っや"),
+        ("vva", "っゔぁ"),
+        ("tcha", "っちゃ"),
+        ("tchi", "っち"),
+        ("ttya", "っちゃ"),
+        ("ssha", "っしゃ"),
+        // 撥音
+        ("nn", "ん"),
+        ("n'", "ん"),
+        ("xn", "ん"),
+        ("kan", "かん"),
+        ("nna", "んな"),
+        ("nka", "んか"),
+        ("nja", "んじゃ"),
+        ("nsa", "んさ"),
+        ("nla", "んぁ"),
+        ("nxa", "んぁ"),
+        ("na", "な"),
+        ("nya", "にゃ"),
+        ("konnichiha", "こんにちは"),
+        ("kanni", "かんに"),
+        // 記号
+        ("-", "ー"),
+        (",", "、"),
+        (".", "。"),
+        ("[", "「"),
+        ("]", "」"),
+        ("~", "〜"),
+        ("z/", "・"),
+        ("z.", "…"),
+        ("z,", "‥"),
+        ("z-", "〜"),
+        ("z[", "『"),
+        ("z]", "』"),
+        ("zh", "←"),
+        ("zj", "↓"),
+        ("zk", "↑"),
+        ("zl", "→"),
+        // 基本（既存系統の退行防止）
+        ("za", "ざ"),
+        ("zi", "じ"),
+        ("zu", "ず"),
+        ("ze", "ぜ"),
+        ("zo", "ぞ"),
+        ("ta", "た"),
+        ("ti", "ち"),
+        ("tu", "つ"),
+        ("da", "だ"),
+        ("di", "ぢ"),
+        ("du", "づ"),
+        ("hu", "ふ"),
+        ("wa", "わ"),
+        ("wo", "を"),
+        ("ya", "や"),
+        ("yu", "ゆ"),
+        ("yo", "よ"),
+    ];
+
+    #[test]
+    fn test_mozc_compatible_table_cases() {
+        let mut failures = Vec::new();
+        for (input, expected) in MOZC_CASES {
+            let got = convert_standard(input);
+            if got != *expected {
+                failures.push(format!("{input}: expected {expected}, got {got}"));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "Mozc 互換でない入力:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_cya_row_explicit() {
+        for (input, expected) in [
+            ("cya", "ちゃ"),
+            ("cyi", "ちぃ"),
+            ("cyu", "ちゅ"),
+            ("cye", "ちぇ"),
+            ("cyo", "ちょ"),
+        ] {
+            let (mut composer, _) = setup_composer();
+            insert_string(&mut composer, input);
+            // 完成した時点で保留は残らない（flush 前に確定している）
+            assert_eq!(composer.text(), expected, "{input}");
+            assert_eq!(composer.pending(), "", "{input}");
+        }
+    }
+
+    #[test]
+    fn test_standard_table_entries_are_well_formed() {
+        let table = RomajiTable::standard();
+        for (input, (output, pending)) in &table.entries {
+            assert!(!input.is_empty(), "空の入力キー");
+            assert!(!output.is_empty(), "出力が空: {input}");
+            assert!(
+                !input.chars().any(char::is_whitespace),
+                "入力に空白: {input:?}"
+            );
+            // 保留は入力の末尾（促音・撥音）か、テーブルのいずれかの接頭辞になっている
+            if !pending.is_empty() {
+                assert!(
+                    input.ends_with(pending.as_str())
+                        || table.has_longer_prefix(pending)
+                        || table.get(pending).is_some(),
+                    "保留が不正: {input} -> {output} / {pending}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_standard_table_no_duplicate_keys_in_file() {
+        // from_tsv は重複を弾くが、ファイル内の行数とエントリ数が一致することでも確認する
+        let tsv = include_str!("../../../config/romaji/standard.tsv");
+        let lines = tsv
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+            .count();
+        assert_eq!(lines, RomajiTable::standard().entries.len());
+    }
 }

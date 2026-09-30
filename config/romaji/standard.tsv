@@ -1,4 +1,7 @@
 # Nagi standard romaji table (Mozc-compatible)
+# Entries are checked against Mozc src/data/preedit/romanji-hiragana.tsv (BSD-3-Clause, see NOTICE):
+# every Mozc entry is present except 'n' and 'www' (handled by the converter). Nagi extras:
+# n + consonant (see G-40), / ? ! ( ) and a few alternative spellings.
 # Format: input<TAB>output<TAB>pending (pending is optional)
 # Lines starting with # and empty lines are ignored
 
@@ -339,3 +342,131 @@ zl	→
 z[	『
 z]	』
 z/	・
+
+# Mozc: sokuon for q l x y (qq, ll, xx, yy) and tch
+qq	っ	q
+ll	っ	l
+xx	っ	x
+yy	っ	y
+tch	っ	ch
+
+# Mozc: n variants (xn)
+xn	ん
+
+# Mozc: c / q rows (cya, cye, qa...)
+cya	ちゃ
+cye	ちぇ
+qa	くぁ
+qi	くぃ
+qu	く
+qe	くぇ
+qo	くぉ
+
+# Mozc: yi/ye extended palatalized (kyi, kye, gyi, ...)
+vyi	ゔぃ
+vye	ゔぇ
+kyi	きぃ
+kye	きぇ
+gyi	ぎぃ
+gye	ぎぇ
+zye	じぇ
+tye	ちぇ
+dye	ぢぇ
+nyi	にぃ
+nye	にぇ
+hyi	ひぃ
+hye	ひぇ
+byi	びぃ
+bye	びぇ
+pyi	ぴぃ
+pye	ぴぇ
+myi	みぃ
+mye	みぇ
+ryi	りぃ
+rye	りぇ
+lyi	ぃ
+xyi	ぃ
+lye	ぇ
+xye	ぇ
+ye	いぇ
+jye	じぇ
+wyi	ゐ
+wye	ゑ
+
+# Mozc: small kana / ka ke (xka, xke, lka, lke)
+xka	ヵ
+xke	ヶ
+lka	ヵ
+lke	ヶ
+
+# Mozc: w / wh rows (wu, wha, whi, whu, whe, who)
+wu	う
+wha	うぁ
+whi	うぃ
+whu	う
+whe	うぇ
+who	うぉ
+
+# Mozc: ts / th / dh / tw / dw rows
+tsa	つぁ
+tsi	つぃ
+tse	つぇ
+tso	つぉ
+the	てぇ
+dhe	でぇ
+twa	とぁ
+twi	とぃ
+twe	とぇ
+two	とぉ
+dwa	どぁ
+dwi	どぃ
+dwe	どぇ
+dwo	どぉ
+
+# Mozc: apostrophe forms (t'i, d'i, t'u, d'u, t'yu, d'yu)
+t'i	てぃ
+d'i	でぃ
+t'u	とぅ
+d'u	どぅ
+t'yu	てゅ
+d'yu	でゅ
+
+# Mozc: f / hw / v rows
+fya	ふゃ
+fyu	ふゅ
+fyo	ふょ
+hwa	ふぁ
+hwi	ふぃ
+hwe	ふぇ
+hwo	ふぉ
+hwyu	ふゅ
+vya	ゔゃ
+vyu	ゔゅ
+vyo	ゔょ
+
+# Mozc: kw / gw / sw / zw rows
+kwa	くぁ
+kwi	くぃ
+kwu	くぅ
+kwe	くぇ
+kwo	くぉ
+gwa	ぐぁ
+gwi	ぐぃ
+gwu	ぐぅ
+gwe	ぐぇ
+gwo	ぐぉ
+swa	すぁ
+swi	すぃ
+swu	すぅ
+swe	すぇ
+swo	すぉ
+zwa	ずぁ
+zwi	ずぃ
+zwu	ずぅ
+zwe	ずぇ
+zwo	ずぉ
+
+# n + q/l/x (Nagi: same handling as other n + consonant)
+nq	ん	q
+nl	ん	l
+nx	ん	x
