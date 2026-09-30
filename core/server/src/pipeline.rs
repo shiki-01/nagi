@@ -24,7 +24,7 @@ use nagi_protocol::view::CandidateSource;
 use nagi_rewriter::RewriterChain;
 use std::collections::HashMap;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// 1 回の LLM 変換に渡す読みの最大文字数。超える場合は文節境界で分けて順に変換する
@@ -79,7 +79,8 @@ impl Completions {
 /// 変換パイプライン
 pub struct Pipeline {
     dict: Option<Arc<Dictionary>>,
-    llm: Option<Llm>,
+    /// 変換モデル。起動時に無くても、非同期の読み込み完了後に [`Pipeline::attach_model`] で一度だけ入る
+    llm: OnceLock<Llm>,
     runtime: Arc<Runtime>,
     completions: Arc<Completions>,
     rewriter: RewriterChain,
@@ -126,12 +127,11 @@ impl Pipeline {
         runtime: Arc<Runtime>,
     ) -> Self {
         let profile = runtime.profile();
-        let llm = model.map(|m| Llm {
-            model: Arc::new(Mutex::new(m)),
-            cache: Arc::new(Mutex::new(HashMap::new())),
-            last_profile: Mutex::new(profile),
-        });
-        let name = backend_name(dict.is_some(), llm.is_some());
+        let llm = OnceLock::new();
+        if let Some(m) = model {
+            let _ = llm.set(Self::make_llm(m, profile));
+        }
+        let name = backend_name(dict.is_some(), llm.get().is_some());
         runtime.set_backend_name(name);
         Pipeline {
             dict,
@@ -142,6 +142,33 @@ impl Pipeline {
         }
     }
 
+    fn make_llm(model: Box<dyn ConversionModel>, profile: nagi_profile::Profile) -> Llm {
+        Llm {
+            model: Arc::new(Mutex::new(model)),
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            last_profile: Mutex::new(profile),
+        }
+    }
+
+    /// 読み込みが済んだ変換モデルを後から取り付ける（起動を待たせないための非同期読み込み用）。
+    /// 取り付けたあと、実行時状態に LLM ありを伝えて環境プロファイルを判定し直し（`profile_changed`
+    /// 通知）、続けてウォームアップ / キャリブレーションを別スレッドで始める。
+    /// 取り付け前の変換は辞書だけで応答する。すでに取り付け済みなら何もしない
+    pub fn attach_model(&self, model: Box<dyn ConversionModel>) {
+        // 先に llm を入れてから runtime に知らせる（use_llm が true になった時点で llm が必ずある）
+        if self
+            .llm
+            .set(Self::make_llm(model, self.runtime.profile()))
+            .is_err()
+        {
+            return;
+        }
+        self.runtime
+            .set_backend_name(backend_name(self.dict.is_some(), true));
+        self.runtime.set_llm_loaded(true);
+        self.warm_up();
+    }
+
     /// プロファイルの変化を見て、LLM をアクティブ / 非アクティブに切り替え、辞書の逆引き索引
     /// （`reconvert` 用。実データで約300MB規模。G-29 追記）を解放する（`Minimal` になったら
     /// 解放、そこから戻ったら次回使うときに再構築・再読み込み）。LLM の切り替えは別スレッドで
@@ -149,7 +176,7 @@ impl Pipeline {
     fn reconcile_active(&self) {
         let current = self.runtime.profile();
 
-        if let Some(llm) = &self.llm
+        if let Some(llm) = self.llm.get()
             && let Ok(mut last) = llm.last_profile.lock()
             && *last != current
         {
@@ -178,7 +205,7 @@ impl Pipeline {
     /// 起動直後の最初の推論が遅くならないよう、別スレッドでモデルを温め、続けてキャリブレーション
     /// 推論（短い変換 3 回の中央値）を行って環境プロファイルの初回判定に使う
     pub fn warm_up(&self) {
-        let Some(llm) = &self.llm else {
+        let Some(llm) = self.llm.get() else {
             return;
         };
         let model = llm.model.clone();
@@ -186,6 +213,7 @@ impl Pipeline {
         let _ = std::thread::Builder::new()
             .name("nagi-llm-warmup".into())
             .spawn(move || {
+                let started_at = Instant::now();
                 let req = Self::request(CALIBRATION_READING, "", None);
                 let mut samples = Vec::new();
                 if let Ok(mut m) = model.lock() {
@@ -202,6 +230,10 @@ impl Pipeline {
                 if let Some(ms) = nagi_profile::median_ms(&samples) {
                     runtime.finish_calibration(ms);
                 }
+                eprintln!(
+                    "imserver: ウォームアップ/キャリブレーション完了 ({} ms)",
+                    started_at.elapsed().as_millis()
+                );
             });
     }
 
@@ -226,7 +258,7 @@ impl Pipeline {
         eff: &Effective,
         outer: Option<&Completion>,
     ) -> Option<String> {
-        let llm = self.llm.as_ref()?;
+        let llm = self.llm.get()?;
         let key = (
             format!(
                 "{}\u{1}{}",
@@ -327,7 +359,7 @@ impl Pipeline {
         eff: &Effective,
         width: usize,
     ) -> Vec<String> {
-        let Some(llm) = &self.llm else {
+        let Some(llm) = self.llm.get() else {
             return Vec::new();
         };
         let (tx, rx) = mpsc::sync_channel::<Vec<String>>(1);
@@ -364,7 +396,7 @@ impl Pipeline {
         candidates: Vec<String>,
         eff: &Effective,
     ) -> Option<Vec<f32>> {
-        let llm = self.llm.as_ref()?;
+        let llm = self.llm.get()?;
         let (tx, rx) = mpsc::sync_channel::<Option<Vec<f32>>>(1);
         let model = llm.model.clone();
         let req = Self::request(reading, left, eff.persona.as_deref());
@@ -539,7 +571,7 @@ fn merge_by_order(
 
 impl ConversionBackend for Pipeline {
     fn name(&self) -> &str {
-        backend_name(self.dict.is_some(), self.llm.is_some())
+        backend_name(self.dict.is_some(), self.llm.get().is_some())
     }
 
     fn take_completions(&self) -> Vec<Completion> {
@@ -582,7 +614,7 @@ impl ConversionBackend for Pipeline {
                 surface: reading.to_string(),
                 sources: vec![CandidateSource::Kana],
             }],
-            Some(dict) if eff.use_llm && self.llm.is_some() => {
+            Some(dict) if eff.use_llm && self.llm.get().is_some() => {
                 self.convert_with_llm(dict, reading, &left_llm, &eff, &overlay, Some(&outer))
             }
             Some(dict) => self.dict_segments(dict, reading, &overlay),
@@ -762,7 +794,7 @@ impl ConversionBackend for Pipeline {
         let mut seen: Vec<String> = vec![best_surface];
 
         if eff.use_llm
-            && self.llm.is_some()
+            && self.llm.get().is_some()
             && eff.beam_width > 1
             && reading.chars().count() <= MAX_LLM_CHARS
         {

@@ -22,4 +22,6 @@ pub mod update_check;
 pub use pipeline::Pipeline;
 pub use runtime::{Effective, Event, Runtime, Tunables};
 pub use server::Server;
-pub use setup::{Built, DEFAULT_MODEL_FILE, ServerOptions, build, parse_args};
+pub use setup::{
+    Built, DEFAULT_MODEL_FILE, ModelLoader, ServerOptions, build, build_with_loader, parse_args,
+};

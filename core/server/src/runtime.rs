@@ -341,6 +341,21 @@ impl Runtime {
         }
     }
 
+    /// 前回の実測値を初回判定の入力として置く（判定のやり直し・保存はしない。モデルの非同期読み込みで、
+    /// [`Self::set_llm_loaded`] より前に呼んで、プロファイルが一度で確定するようにする）
+    pub fn set_calibration_hint(&self, median_ms: f64) {
+        if let Ok(mut c) = self.calibration_ms.lock() {
+            *c = Some(median_ms);
+        }
+    }
+
+    /// 変換モデルの読み込み完了（または解放）を反映して、環境プロファイルを判定し直す。
+    /// プロファイルが変われば `profile_changed` 通知が積まれる
+    pub fn set_llm_loaded(&self, loaded: bool) {
+        self.llm_loaded.store(loaded, Ordering::Relaxed);
+        self.recompute_profile(true);
+    }
+
     /// キャリブレーション推論の実測（中央値、ミリ秒）で、初回判定をやり直す
     pub fn finish_calibration(&self, median_ms: f64) {
         if let Ok(mut c) = self.calibration_ms.lock() {

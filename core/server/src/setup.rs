@@ -37,6 +37,10 @@ pub struct ServerOptions {
     pub use_llm: bool,
     /// LLM の推論を待つ最長時間（ミリ秒、`--sync-budget-ms`）。指定すると設定ファイルより優先
     pub sync_budget_ms: Option<u64>,
+    /// モデルの読み込みをバックグラウンドで行う（`imserver` の本番経路）。`build` は読み込みを待たずに
+    /// 返り、読み込み中は辞書のみで動く。`false`（既定）なら読み込み完了まで `build` が返らない
+    /// （`nagi-eval` など、起動直後からモデルを使う利用側向け）
+    pub async_model_load: bool,
 }
 
 impl Default for ServerOptions {
@@ -47,6 +51,7 @@ impl Default for ServerOptions {
             config_path: None,
             use_llm: true,
             sync_budget_ms: None,
+            async_model_load: false,
         }
     }
 }
@@ -304,8 +309,18 @@ fn load_model(
     Err("このビルドは LLM 推論（feature `llama`）を含みません".to_string())
 }
 
+/// モデルの読み込み処理（差し替え用の継ぎ目）。バックグラウンドスレッドで 1 回だけ呼ばれる
+pub type ModelLoader = Box<dyn FnOnce() -> Result<Box<dyn ConversionModel>, String> + Send>;
+
 /// 設定・辞書・モデル・学習・ユーザー辞書を読み込んで、パイプラインと共有状態を作る
 pub fn build(options: &ServerOptions) -> Built {
+    build_with_loader(options, None)
+}
+
+/// [`build`] のモデル読み込み処理を差し替えられる版（テスト用の継ぎ目）。`loader` が `None` なら
+/// 既定（`data_dir/models/` の GGUF）。辞書が読めない・`use_llm` が偽なら `loader` は呼ばれない。
+/// `options.async_model_load` が真なら、`loader` の実行とその後のウォームアップはバックグラウンドで行う
+pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -> Built {
     let mut notes = Vec::new();
     let user_dir = options.user_dir.clone().or_else(nagi_config::config_dir);
     let config_path = options
@@ -336,19 +351,37 @@ pub fn build(options: &ServerOptions) -> Built {
     // システム辞書・変換モデル
     let mut dict = None;
     let mut model = None;
+    let mut pending_loader: Option<ModelLoader> = None;
     match &options.data_dir {
         None => notes.push("データディレクトリが未指定のため辞書なしで起動します".to_string()),
         Some(dir) => match load_dictionary(dir) {
             Ok(d) => {
                 dict = Some(d);
                 if options.use_llm {
-                    match load_model(
-                        dir,
-                        config.conversion.model.as_deref(),
-                        config.conversion.n_threads,
-                    ) {
-                        Ok(m) => model = Some(m),
-                        Err(e) => notes.push(format!("{e}（辞書のみで起動します）")),
+                    let loader = loader.unwrap_or_else(|| {
+                        let dir = dir.clone();
+                        let setting = config.conversion.model.clone();
+                        let n_threads = config.conversion.n_threads;
+                        Box::new(move || load_model(&dir, setting.as_deref(), n_threads))
+                    });
+                    if options.async_model_load {
+                        notes.push(
+                            "変換モデルはバックグラウンドで読み込みます（読み込み中は辞書のみ）"
+                                .to_string(),
+                        );
+                        pending_loader = Some(loader);
+                    } else {
+                        let started = Instant::now();
+                        match loader() {
+                            Ok(m) => {
+                                eprintln!(
+                                    "imserver: モデル読み込み完了 ({} ms)",
+                                    started.elapsed().as_millis()
+                                );
+                                model = Some(m);
+                            }
+                            Err(e) => notes.push(format!("{e}（辞書のみで起動します）")),
+                        }
                     }
                 } else {
                     notes.push("LLM は無効です（辞書のみで起動します）".to_string());
@@ -393,8 +426,10 @@ pub fn build(options: &ServerOptions) -> Built {
     };
 
     let has_llm = model.is_some();
+    // 非同期読み込みでは、読み込みに成功すれば LLM ありになる前提でキャリブレーションの記録を照合する
+    let expect_llm = has_llm || pending_loader.is_some();
     let system = nagi_profile::detect();
-    let backend = crate::pipeline::backend_name(dict.is_some(), has_llm);
+    let backend = crate::pipeline::backend_name(dict.is_some(), expect_llm);
     let calibration_path = user_dir.as_ref().map(|d| d.join("calibration.json"));
     let cached_calibration_ms = calibration_path
         .as_deref()
@@ -410,8 +445,14 @@ pub fn build(options: &ServerOptions) -> Built {
     );
     runtime.set_calibration_path(calibration_path);
     if let Some(ms) = cached_calibration_ms {
-        // 前回の実測値を即座に反映させる。直後の pipeline.warm_up() が新しい実測値で上書きする
-        runtime.finish_calibration(ms);
+        if has_llm {
+            // 前回の実測値を即座に反映させる。直後の pipeline.warm_up() が新しい実測値で上書きする
+            runtime.finish_calibration(ms);
+        } else {
+            // 非同期読み込み: モデルが入る（attach_model）まで LLM なし＝minimal のまま。
+            // 実測値は置くだけにして、読み込み完了時の判定に使う
+            runtime.set_calibration_hint(ms);
+        }
     }
     runtime.set_config_state(config_path.clone(), config_error);
 
@@ -464,6 +505,9 @@ pub fn build(options: &ServerOptions) -> Built {
     let applied_model = config.conversion.model.clone();
     let pipeline = Arc::new(Pipeline::new(dict.clone(), model, runtime.clone()));
     pipeline.warm_up();
+    if let Some(loader) = pending_loader {
+        spawn_model_loader(loader, pipeline.clone());
+    }
     let mut reload = Reloadable {
         config_path,
         user_dict_dir,
@@ -479,6 +523,31 @@ pub fn build(options: &ServerOptions) -> Built {
         config,
         reload,
         notes,
+    }
+}
+
+/// モデルをバックグラウンドで読み込み、完了したらパイプラインに取り付ける。
+/// 失敗（`Err`・パニック）しても辞書のみで動き続ける（理由は stderr。入力内容は含まない）
+fn spawn_model_loader(loader: ModelLoader, pipeline: Arc<Pipeline>) {
+    let spawned = std::thread::Builder::new()
+        .name("nagi-model-load".into())
+        .spawn(move || {
+            let started = Instant::now();
+            match loader() {
+                Ok(model) => {
+                    eprintln!(
+                        "imserver: モデル読み込み完了 ({} ms)",
+                        started.elapsed().as_millis()
+                    );
+                    pipeline.attach_model(model);
+                }
+                Err(e) => eprintln!("imserver: {e}（辞書のみで動作を続けます）"),
+            }
+        });
+    if let Err(e) = spawned {
+        eprintln!(
+            "imserver: モデル読み込みスレッドを開始できませんでした: {e}（辞書のみで動作します）"
+        );
     }
 }
 

@@ -8,13 +8,15 @@ use std::io::{BufReader, BufWriter};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let options = match parse_args(std::env::args().skip(1)) {
+    let mut options = match parse_args(std::env::args().skip(1)) {
         Ok(o) => o,
         Err(message) => {
             eprintln!("imserver: {message}");
             return ExitCode::from(2);
         }
     };
+    // 起動（initialize への応答）をモデル読み込みで待たせない。読み込みが済むまでは辞書のみで応答する
+    options.async_model_load = true;
     let built = build(&options);
     for note in &built.notes {
         eprintln!("imserver: {note}");
