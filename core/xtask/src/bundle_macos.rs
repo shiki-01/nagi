@@ -15,6 +15,98 @@ const CONNECTION_NAME: &str = "com.shiki.nagi_Connection";
 const MIN_MACOS: &str = "13.0";
 /// 入力モード ID。
 const INPUT_MODE_ID: &str = "com.shiki.nagi.Japanese";
+/// アイコン画像のファイル名（Contents/Resources に置く）。
+const ICON_FILE: &str = "nagi-icon.png";
+/// アイコンの一辺（px）。
+const ICON_SIZE: u32 = 64;
+/// アイコンの色（RGB。落ち着いた青緑）。
+const ICON_COLOR: [u8; 3] = [0x3A, 0x7C, 0x89];
+
+/// CRC32（IEEE, PNG 用）。
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// Adler-32（zlib 用）。
+fn adler32(data: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in data {
+        a = (a + x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+fn png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    let mut body = kind.to_vec();
+    body.extend_from_slice(data);
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&crc32(&body).to_be_bytes());
+}
+
+/// 非圧縮（stored ブロック）の zlib ストリームにする。
+fn zlib_stored(raw: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let mut chunks = raw.chunks(65535).peekable();
+    if chunks.peek().is_none() {
+        out.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF]);
+    }
+    while let Some(c) = chunks.next() {
+        out.push(u8::from(chunks.peek().is_none()));
+        let len = c.len() as u16;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(c);
+    }
+    out.extend_from_slice(&adler32(raw).to_be_bytes());
+    out
+}
+
+/// 単色の角丸風正方形（RGBA 8bit, 四隅は透明）を PNG にエンコードする。
+pub fn icon_png(size: u32, rgb: [u8; 3]) -> Vec<u8> {
+    let radius = size / 5;
+    let mut raw = Vec::with_capacity(((size * 4 + 1) * size) as usize);
+    for y in 0..size {
+        raw.push(0); // フィルタなし
+        for x in 0..size {
+            // 角の円の中心からの距離で角丸を判定する
+            let cx = if x < radius {
+                radius - 1 - x
+            } else {
+                x.saturating_sub(size - radius)
+            } as i64;
+            let cy = if y < radius {
+                radius - 1 - y
+            } else {
+                y.saturating_sub(size - radius)
+            } as i64;
+            let r = radius as i64;
+            let inside = cx * cx + cy * cy <= r * r;
+            raw.extend_from_slice(&[rgb[0], rgb[1], rgb[2], if inside { 255 } else { 0 }]);
+        }
+    }
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&size.to_be_bytes());
+    ihdr.extend_from_slice(&size.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8bit, RGBA, deflate, filter 0, interlace なし
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png_chunk(&mut out, b"IHDR", &ihdr);
+    png_chunk(&mut out, b"IDAT", &zlib_stored(&raw));
+    png_chunk(&mut out, b"IEND", &[]);
+    out
+}
 
 /// `bundle-macos` のオプション。
 pub struct Options {
@@ -78,6 +170,10 @@ pub fn info_plist(executable: &str, version: &str) -> String {
 				<key>tsInputModeIsVisibleKey</key><true/>
 				<key>tsInputModePrimaryInputModeKey</key><true/>
 				<key>tsInputModeDefaultsToTransparentKey</key><false/>
+				<key>TISIconIsTemplate</key><false/>
+				<key>tsInputModeMenuIconFileKey</key><string>{icon}</string>
+				<key>tsInputModePaletteIconFileKey</key><string>{icon}</string>
+				<key>tsInputModeAlternateMenuIconFileKey</key><string>{icon}</string>
 			</dict>
 		</dict>
 		<key>tsVisibleInputModeOrderedArrayKey</key>
@@ -97,6 +193,8 @@ pub fn info_plist(executable: &str, version: &str) -> String {
 	<string>NagiInputController</string>
 	<key>tsInputMethodNameKey</key>
 	<string>Nagi</string>
+	<key>tsInputMethodIconFileKey</key>
+	<string>{icon}</string>
 	<key>tsInputMethodCharacterRepertoireKey</key>
 	<array>
 		<string>ja</string>
@@ -110,6 +208,7 @@ pub fn info_plist(executable: &str, version: &str) -> String {
         mode_id = INPUT_MODE_ID,
         min = MIN_MACOS,
         conn = CONNECTION_NAME,
+        icon = ICON_FILE,
     )
 }
 
@@ -211,6 +310,14 @@ pub fn run(opts: Options) -> Result<(), String> {
         info_plist(&exe_file_name, env!("CARGO_PKG_VERSION")),
     )
     .map_err(|e| format!("Info.plist の書き込みに失敗しました: {e}"))?;
+    let resources_dir = app.join("Contents/Resources");
+    fs::create_dir_all(&resources_dir)
+        .map_err(|e| format!("ディレクトリの作成に失敗しました: {e}"))?;
+    fs::write(
+        resources_dir.join(ICON_FILE),
+        icon_png(ICON_SIZE, ICON_COLOR),
+    )
+    .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
 
     // 4. 署名・zip（macOS のみ）
     let zip = out_dir.join("Nagi.app.zip");
@@ -263,9 +370,45 @@ mod tests {
             "<key>InputMethodServerDelegateClass</key>",
             "<key>LSMinimumSystemVersion</key>\n\t<string>13.0</string>",
             "<key>CFBundleExecutable</key>\n\t<string>NagiIMEApp</string>",
+            "<key>tsInputMethodIconFileKey</key>\n\t<string>nagi-icon.png</string>",
+            "<key>TISIconIsTemplate</key><false/>",
+            "<key>tsInputModeMenuIconFileKey</key><string>nagi-icon.png</string>",
+            "<key>tsInputModePaletteIconFileKey</key><string>nagi-icon.png</string>",
+            "<key>tsInputModeAlternateMenuIconFileKey</key><string>nagi-icon.png</string>",
         ] {
             assert!(p.contains(needle), "missing: {needle}");
         }
+    }
+
+    #[test]
+    fn png_structure_is_valid() {
+        let png = icon_png(ICON_SIZE, ICON_COLOR);
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        // IHDR: 長さ 13、種別、64x64、8bit RGBA
+        assert_eq!(&png[8..12], &13u32.to_be_bytes());
+        assert_eq!(&png[12..16], b"IHDR");
+        assert_eq!(&png[16..20], &ICON_SIZE.to_be_bytes());
+        assert_eq!(&png[20..24], &ICON_SIZE.to_be_bytes());
+        assert_eq!(&png[24..29], &[8, 6, 0, 0, 0]);
+        // 全チャンクの CRC を検証し、IEND で終わること
+        let mut pos = 8;
+        let mut kinds = Vec::new();
+        while pos < png.len() {
+            let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
+            let body = &png[pos + 4..pos + 8 + len];
+            let crc = u32::from_be_bytes(png[pos + 8 + len..pos + 12 + len].try_into().unwrap());
+            assert_eq!(crc32(body), crc, "CRC mismatch");
+            kinds.push(body[..4].to_vec());
+            pos += 12 + len;
+        }
+        assert_eq!(pos, png.len());
+        assert_eq!(kinds.last().unwrap(), b"IEND");
+    }
+
+    #[test]
+    fn crc32_and_adler32_known_values() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(adler32(b"Wikipedia"), 0x11E6_0398);
     }
 
     #[test]
