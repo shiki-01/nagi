@@ -13,6 +13,8 @@ const BUNDLE_ID: &str = "com.shiki.nagi";
 const CONNECTION_NAME: &str = "com.shiki.nagi_Connection";
 /// 最小サポート macOS。
 const MIN_MACOS: &str = "13.0";
+/// 入力モード ID。
+const INPUT_MODE_ID: &str = "com.shiki.nagi.Japanese";
 
 /// `bundle-macos` のオプション。
 pub struct Options {
@@ -64,6 +66,23 @@ pub fn info_plist(executable: &str, version: &str) -> String {
 	<string>{ver}</string>
 	<key>CFBundleVersion</key>
 	<string>{ver}</string>
+	<key>ComponentInputModeDict</key>
+	<dict>
+		<key>tsInputModeListKey</key>
+		<dict>
+			<key>{mode_id}</key>
+			<dict>
+				<key>TISInputSourceID</key><string>{mode_id}</string>
+				<key>TISIntendedLanguage</key><string>ja</string>
+				<key>tsInputModeScriptKey</key><string>smJapanese</string>
+				<key>tsInputModeIsVisibleKey</key><true/>
+				<key>tsInputModePrimaryInputModeKey</key><true/>
+				<key>tsInputModeDefaultsToTransparentKey</key><false/>
+			</dict>
+		</dict>
+		<key>tsVisibleInputModeOrderedArrayKey</key>
+		<array><string>{mode_id}</string></array>
+	</dict>
 	<key>LSMinimumSystemVersion</key>
 	<string>{min}</string>
 	<key>LSBackgroundOnly</key>
@@ -88,6 +107,7 @@ pub fn info_plist(executable: &str, version: &str) -> String {
         exe = e(executable),
         id = BUNDLE_ID,
         ver = e(version),
+        mode_id = INPUT_MODE_ID,
         min = MIN_MACOS,
         conn = CONNECTION_NAME,
     )
@@ -229,6 +249,11 @@ mod tests {
         let p = info_plist("NagiIMEApp", "0.0.1");
         for needle in [
             "<string>com.shiki.nagi</string>",
+            "<key>ComponentInputModeDict</key>",
+            "<key>tsInputModeListKey</key>",
+            "<key>com.shiki.nagi.Japanese</key>",
+            "<key>tsVisibleInputModeOrderedArrayKey</key>",
+            "<string>com.shiki.nagi.Japanese</string>",
             "<key>LSBackgroundOnly</key>\n\t<true/>",
             "<key>LSUIElement</key>\n\t<true/>",
             "<key>InputMethodConnectionName</key>\n\t<string>com.shiki.nagi_Connection</string>",
