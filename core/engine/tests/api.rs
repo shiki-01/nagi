@@ -906,3 +906,86 @@ fn completion_is_ignored_while_composing() {
     backend.ready.store(true, Ordering::SeqCst);
     assert!(e.apply_completions(&done("きょう", "")).is_empty());
 }
+
+// ---- ライブ変換中の確定（G-39）と「ん」の重複（G-40） ----
+
+#[test]
+fn enter_during_live_conversion_commits_surface_and_notifies_observer() {
+    let (mut e, rec) = mock_engine();
+    e.set_context(
+        "s",
+        &SetContextParams {
+            session_id: "s".into(),
+            surrounding_text: Some(SurroundingText {
+                text: "私は".into(),
+                cursor: 2,
+            }),
+            app_id: None,
+            secure_input: None,
+        },
+    );
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("反映される");
+    let r = press(&mut e, "s", "Enter");
+    assert_eq!(r.commit.as_deref(), Some("今日はいい"));
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+    let commits = rec.commits.lock().unwrap();
+    assert_eq!(commits.len(), 1, "学習フックが呼ばれる");
+    let segs = &commits[0].3;
+    assert_eq!(
+        segs.iter()
+            .map(|s| (s.reading.as_str(), s.surface.as_str()))
+            .collect::<Vec<_>>(),
+        [("きょうは", "今日は"), ("いい", "いい")]
+    );
+    assert_eq!(segs[0].left_context, "私は");
+}
+
+#[test]
+fn enter_without_live_result_does_not_notify_observer() {
+    let (mut e, rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    let r = press(&mut e, "s", "Enter");
+    assert_eq!(r.commit.as_deref(), Some("きょうはいい"));
+    assert!(rec.commits.lock().unwrap().is_empty());
+}
+
+#[test]
+fn undo_after_live_commit_restores_reading() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("反映される");
+    press(&mut e, "s", "Enter");
+    let r = press(&mut e, "s", "Ctrl+BackSpace");
+    assert_eq!(r.delete_before, Some(5));
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはいい");
+}
+
+#[test]
+fn n_input_never_duplicates_nn_in_composing_reading() {
+    // (入力, 期待する reading)。ライブ変換 ON でも reading（= ライブ変換の入力）が二重にならない
+    let cases = [
+        ("nn", "ん"),
+        ("nnk", "ん"),
+        ("nnka", "んか"),
+        ("nna", "んな"),
+        ("konn", "こん"),
+        ("konni", "こんに"),
+        ("kanji", "かんじ"),
+        ("kanj", "かん"),
+    ];
+    for (input, reading) in cases {
+        let (mut e, _rec) = mock_engine();
+        type_str(&mut e, "s", input);
+        assert_eq!(
+            e.composing_reading("s").as_deref(),
+            Some(reading),
+            "入力 {input}"
+        );
+        // 反映後も確定内容は表示と一致する
+        e.live_convert("s", reading);
+        let shown = e.snapshot("s").unwrap().preedit.text;
+        let r = press(&mut e, "s", "Enter");
+        assert_eq!(r.commit.as_deref(), Some(shown.as_str()), "入力 {input}");
+    }
+}

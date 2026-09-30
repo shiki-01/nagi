@@ -79,7 +79,7 @@
 2026-09-27、ユーザーが回答した内容に基づき着手中・着手予定。**Mozkey**（`koyasi777/mozkey`。Mozc + ローカル Zenz 補正の fork。ユーザーが実際に使用しており「使いやすい」と評価）の実装を UX の参考にする方針（ユーザー指示）。
 
 - ~~**予測変換**~~ → 実装済み（G-23。Tab のみ（Down は Mozc でも予測選択に使われないため対象外）。`[predict]` で設定可能）
-- ~~**ライブ変換**~~ → 実装済み（G-25・G-26。既定 ON、`live_conversion_delay_ms`＝228ms・`live_conversion_min_key_length`＝2文字は Mozkey の実測既定値。デバウンス完了時に `update_preedit` で配信）。**未対応**: ふりがな（reading）のルビ風オーバーレイ表示はプロトコル上は可能（`SegmentView.reading` が既に載っている）だが、フロント（macOS/Windows）側の描画実装がまだ無い。Enter/Backspace の細かい挙動（ライブ変換結果からの部分確定・取消）は既存の Composing 用ロジックのまま（Mozkey との詳細比較は未実施）
+- ~~**ライブ変換**~~ → 実装済み（G-25・G-26。既定 ON、`live_conversion_delay_ms`＝228ms・`live_conversion_min_key_length`＝2文字は Mozkey の実測既定値。デバウンス完了時に `update_preedit` で配信）。**未対応**: ふりがな（reading）のルビ風オーバーレイ表示はプロトコル上は可能（`SegmentView.reading` が既に載っている）だが、フロント（macOS/Windows）側の描画実装がまだ無い。Enter は表示中のライブ変換結果を確定する（G-39）。Backspace の細かい挙動（ライブ変換結果からの部分確定・取消）は既存の Composing 用ロジックのまま（Mozkey との詳細比較は未実施）
 - ~~**非同期通知の配信基盤**~~ → 実装済み（G-24。`Server::run` の非同期化）。`update_preedit` の送出（ライブ変換）は実装済み（G-26）。**`update_candidates` の送出（スタイル変換等）はまだ無い**
 - ~~**ビームサーチ（文全体 N-best）**~~ → 実装済み（G-30。辞書ベースのk-best Viterbi。実LLMでの本物のビームサーチは本環境で検証不能なため未着手。候補選択時は選んだ分割へ丸ごと置き換える設計）
 - ~~**範囲選択への再変換・Ctrl+U/I/O 直接書き換え**~~ → 実装済み（G-22）
@@ -123,7 +123,7 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 - 途中のコミットには、後続コミットの変更に依存してビルドできないものがある（最終状態は通る）
 - 文節区切りは暫定ヒューリスティック（サ変名詞 + する、形容詞 + 名詞など）。誤変換の例: 感じ変換の\|テスト、機能病院に（LLM で改善する領域）
 - `Preedit` の Composing 表示では、非 ASCII 文字（絵文字など）も japanese 種別の 1 セグメントにまとまる
-- `nn` の soft pending は Mozc の実挙動と一致するか未確認（`konnichiha` → こんにちは、`kanna` → かんな は通る。`nnn` は「んん」）
+- `nn` の soft pending は `nn` + 子音での「んん」重複を G-40 で修正済み。Mozc 実機との照合は未実施（`konnichiha` → こんにちは、`kanna` → かんな は通る。`nnn` は「んん」）
 - ゴールデンテストの期待値は、テスト担当のサブエージェントが仕様から書いた後、実装の挙動と食い違う箇所を「仕様に照らして」修正したもの。仕様の根拠は `docs/decisions.md` G-7。追加のレビュー（標準 IME との挙動照合）は未実施
 - macOS / Windows 実機でのフロント接続、標準 IME との挙動照合、レイテンシベンチ（p95）は未実施
 - `infer` の `LlamaModel` はコンテキストを 1 つ使い回す（KV キャッシュ再利用・実LLMビームサーチとも server/engine まで接続済み。G-32、G-33、G-34）が、GPU オフロードは未対応

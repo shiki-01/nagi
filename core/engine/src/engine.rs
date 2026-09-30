@@ -994,13 +994,36 @@ impl Engine {
         let pieces = match std::mem::replace(&mut sess.state, State::Direct) {
             State::Direct => None,
             State::Composing => {
+                // 表示中のライブ変換結果（`build_preedit` と同じ条件）。flush 前の reading で照合する
+                let displayed_reading: String = sess
+                    .composer
+                    .pieces()
+                    .iter()
+                    .map(|p| p.text.as_str())
+                    .collect();
+                let live = sess
+                    .live_conversion
+                    .take()
+                    .filter(|lc| lc.source_reading == displayed_reading);
                 sess.composer.flush_pending();
                 let pieces = sess.composer.pieces();
-                commit.push_str(&sess.composer.text());
+                let flushed_text = sess.composer.text();
+                match live {
+                    // 保留（単独の n 等）の flush が末尾にだけ足された場合は、その分を後ろに付ける。
+                    // カーソルが途中で flush 分が途中に入った場合は対応を取れないので読みで確定する
+                    Some(lc) if flushed_text.starts_with(&displayed_reading) => {
+                        self.notify_commit(sess, &lc.segments);
+                        for s in &lc.segments {
+                            commit.push_str(&s.surface);
+                        }
+                        commit.push_str(&flushed_text[displayed_reading.len()..]);
+                    }
+                    _ => commit.push_str(&flushed_text),
+                }
                 (!pieces.is_empty()).then_some(pieces)
             }
             State::Converting(conv) => {
-                self.notify_commit(sess, &conv);
+                self.notify_commit(sess, &conv.segments);
                 let pieces: Vec<Piece> = conv
                     .segments
                     .iter()
@@ -1040,13 +1063,13 @@ impl Engine {
     }
 
     /// 変換を経て確定した文節を observer（学習など）へ通知する
-    fn notify_commit(&self, sess: &Session, conv: &Conv) {
+    fn notify_commit(&self, sess: &Session, committed: &[Segment]) {
         let Some(observer) = &self.observer else {
             return;
         };
         let mut left = sess.left_context.clone();
-        let mut segments = Vec::with_capacity(conv.segments.len());
-        for seg in &conv.segments {
+        let mut segments = Vec::with_capacity(committed.len());
+        for seg in committed {
             segments.push(CommittedSegment {
                 reading: seg.reading.clone(),
                 surface: seg.surface.clone(),

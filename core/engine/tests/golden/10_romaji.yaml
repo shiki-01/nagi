@@ -183,3 +183,55 @@
       expect: {pending: "n"}
     - key: "a"
       expect: {preedit: "ふりがな", pending: "", segments: ["ふりがな"]}
+
+# 「ん」の重複（G-40）: soft pending の n は子音・n の前で捨てる
+- name: romaji-nn-then-consonant-no-duplicate
+  steps:
+    - key: "n"
+      expect: {preedit: "n", pending: "n"}
+    - key: "n"
+      expect: {preedit: "ん", pending: "", segments: ["ん"]}
+    - key: "k"
+      expect: {preedit: "んk", pending: "k", segments: ["ん"]}
+    - key: "a"
+      expect: {preedit: "んか", pending: "", segments: ["んか"]}
+
+- name: romaji-nn-then-vowel-joins-na-row
+  steps:
+    - key: "n"
+    - key: "n"
+      expect: {preedit: "ん", pending: ""}
+    - key: "a"
+      expect: {preedit: "んな", pending: ""}
+
+- name: romaji-single-n-then-consonant
+  steps:
+    - key: "k"
+    - key: "a"
+    - key: "n"
+      expect: {preedit: "かn", pending: "n"}
+    - key: "j"
+      expect: {preedit: "かんj", pending: "j"}
+    - key: "i"
+      expect: {preedit: "かんじ", pending: ""}
+
+- name: romaji-konnichi-and-kon-nn
+  steps:
+    - key: "k"
+    - key: "o"
+    - key: "n"
+    - key: "n"
+      expect: {preedit: "こん", pending: ""}
+    - key: "i"
+      expect: {preedit: "こんに", pending: ""}
+    - key: "Return"
+      expect: {commit: "こんに", state: direct}
+
+- name: romaji-nn-enter-commits-single-n
+  steps:
+    - key: "k"
+    - key: "o"
+    - key: "n"
+    - key: "n"
+    - key: "Return"
+      expect: {commit: "こん", state: direct}

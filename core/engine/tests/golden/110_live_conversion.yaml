@@ -1,0 +1,114 @@
+# ライブ変換（Composing の preedit に変換結果が出ている状態）での確定（G-39）
+# `action: live_convert` はサーバーのデバウンス完了後の `Engine::live_convert` 呼び出しに相当する
+
+- name: live-enter-commits-displayed-surface
+  backend: mock
+  mock:
+    sentences:
+      "きょうはいい":
+        - {reading: "きょうは", candidates: ["今日は", "京は"]}
+        - {reading: "いい", candidates: ["いい", "良い"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "h"}
+    - {key: "a"}
+    - {key: "i"}
+    - {key: "i"}
+    - action: live_convert
+      reading: "きょうはいい"
+      expect:
+        preedit: "今日はいい"
+        readings: ["きょうは", "いい"]
+        state: composing
+    - key: "Return"
+      expect:
+        consumed: true
+        commit: "今日はいい"
+        preedit: ""
+        state: direct
+
+- name: live-enter-before-live-result-commits-reading
+  backend: mock
+  mock:
+    sentences:
+      "きょうはいい":
+        - {reading: "きょうは", candidates: ["今日は"]}
+        - {reading: "いい", candidates: ["いい"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "h"}
+    - {key: "a"}
+    - {key: "i"}
+    - {key: "i"}
+    - key: "Return"
+      expect:
+        commit: "きょうはいい"
+        state: direct
+
+- name: live-enter-after-more-input-commits-what-is-displayed
+  backend: mock
+  mock:
+    sentences:
+      "きょうはいい":
+        - {reading: "きょうは", candidates: ["今日は"]}
+        - {reading: "いい", candidates: ["いい"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "h"}
+    - {key: "a"}
+    - {key: "i"}
+    - {key: "i"}
+    - action: live_convert
+      reading: "きょうはいい"
+    # 変換結果の後にさらに入力すると、その結果は古くなり表示はひらがなに戻る。確定もその表示に従う
+    - key: "a"
+      expect: {preedit: "きょうはいいあ"}
+    - key: "Return"
+      expect: {commit: "きょうはいいあ", state: direct}
+
+# ライブ変換中に soft pending の「ん」があっても、次の子音で「ん」が二重にならない
+- name: live-soft-n-then-consonant-no-duplicate
+  backend: mock
+  mock:
+    sentences:
+      "かん":
+        - {reading: "かん", candidates: ["缶"]}
+  steps:
+    - {key: "k"}
+    - {key: "a"}
+    - {key: "n"}
+    - {key: "n"}
+    - action: live_convert
+      reading: "かん"
+      expect: {preedit: "缶", pending: ""}
+    - key: "k"
+      expect: {pending: "k", readings: ["かん"]}
+    - key: "a"
+      expect: {readings: ["かんか"], preedit: "かんか"}
+
+# 単独の n（ハード保留）が表示されたままの Enter: 表示中のライブ変換結果に「ん」が足される
+- name: live-enter-with-pending-n
+  backend: mock
+  mock:
+    sentences:
+      "か":
+        - {reading: "か", candidates: ["蚊"]}
+  steps:
+    - {key: "k"}
+    - {key: "a"}
+    - action: live_convert
+      reading: "か"
+      expect: {preedit: "蚊"}
+    - key: "n"
+      expect: {pending: "n"}
+    - key: "Return"
+      expect: {commit: "蚊ん", state: direct}

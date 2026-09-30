@@ -293,7 +293,7 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 
 - `SelectCand(n)`: 候補窓表示中のみ現在ページの n 番目を選択（確定はしない・窓を閉じる）。非表示なら「確定して数字を新規入力」。Mozc / MS-IME は選択と同時に文節を確定するが、部分確定（Fixed）は Phase 3 なので、今回は選択だけとした
 - `RangeSelecting`（Ctrl+Shift+←/→）と `StyleAction` は enum に宣言のみ。Converting での `ExtendSelection` は消費して何もしない
-- ライブ変換 OFF なので Composing の Enter は reading を確定する（設計書 §4.3）
+- Composing の Enter は「表示中の surface」を確定する。ライブ変換の結果が反映されていればその変換結果、無ければ reading（G-39 で変更。当初はライブ変換 OFF 前提で reading 固定だった）
 - Converting で Left / Right は端で止まる（循環しない）。候補は先頭が現在の表記、次にバックエンド候補、末尾にひらがな・カタカナ（重複除く）
 - 入力中に未割当の Ctrl/Alt/Meta 付き文字キー（Cmd+C など）は、確定してからキーを素通しする（入力を失わない）
 - 「文全体の N-best」（`conversion.initial_view = sentence`）は未実装。候補窓は注目文節の候補のみ
@@ -638,6 +638,34 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **実機検証**: `.inputmethod.` を含む `com.shiki.inputmethod.Nagi` で bundle を作ると、登録・有効化に成功した（CI で両 ID の bundle を作って比較）
 - **決定**: IME の bundle id は `com.shiki.inputmethod.Nagi`。モード ID は `<id>.Japanese`、IMKServer 接続名は `<id>_Connection`（`cargo xtask bundle-macos --bundle-id` の既定値）
 - **変更しないもの**: 設定/データの識別子 `com.shiki.nagi`（`~/Library/Application Support/com.shiki.nagi`、core の設定ディレクトリ名）。製品のデータ識別子であり、bundle id とは別物として維持する。フロントの内部 DispatchQueue ラベルも同様
+
+### G-38. imserver のモデル読み込みを非同期化（2026-09-30）
+
+- **背景**: `setup::build()` が GGUF の読み込みを同期的に行い、`initialize` の応答が読み込み完了後になっていた。macOS フロントは `initialize` を 10 秒で打ち切って再起動するため、コールド時（読み込みに約30秒以上）にキーが素通しになり、再起動ループの末に minimal で起動していた。「キー入力を待たせない」「コールドスタート < 2s」に反する
+- **方針**: `ServerOptions::async_model_load`（既定 false。`imserver` の `main` のみ true）が真なら、`build()` は辞書だけで即座に返る（LLM なし＝`minimal` 相当）。モデルの読み込みは別スレッド（`nagi-model-load`）で行い、完了後に `Pipeline::attach_model` で取り付ける。`Pipeline.llm` は `OnceLock<Llm>`（一度だけ設定）。取り付け後は `Runtime::set_llm_loaded(true)` でプロファイルを再判定し（既存の `profile_changed` 通知）、続けて既存の `warm_up()`（ウォームアップ＋キャリブレーション）を開始する。読み込み中の変換は辞書のみ（LLM を待たない）。読み込み失敗（`Err`）は辞書のみのまま動作し、理由を stderr に日本語で出す（入力内容は出さない）
+- **キャリブレーション記録**: 非同期時は、LLM ありの前提で `calibration.json` を照合し、一致すれば実測値を `set_calibration_hint`（判定・保存はしない）で置く。`attach_model` 時の判定が一度で確定し、プロファイルのちらつき（minimal → 仮判定 → 実測判定）を減らす
+- **ログ**: stderr に `imserver: モデル読み込み完了 (N ms)` と `imserver: ウォームアップ/キャリブレーション完了 (N ms)`。同期版（`nagi-eval`）にも出る
+- **テストの継ぎ目**: `ModelLoader`（`Box<dyn FnOnce() -> Result<Box<dyn ConversionModel>, String> + Send>`）と `build_with_loader(options, loader)`。`build(options)` は `loader = None`（既定の GGUF ローダー）。`server/tests/async_load.rs` が feature `llama` なしで、遅いローダーでの即時応答・完了後の LLM 経路とプロファイル通知・失敗時の辞書のみ動作を検証する
+- **影響**: `nagi-eval`・既存テストは同期版のまま（`async_model_load = false`）で挙動不変。読み込み完了までの間（コールドで数十秒）は辞書のみの変換になり、完了時にプロファイルが minimal から上がる。読み込み中のスレッドが残っている間にプロセスが終了しても、状態の破棄で問題は起きない（ファイルは書かない）
+- **未対応**: 読み込み完了を待たずに終了した場合の読み込みスレッドの中断（GGUF 読み込み中は中断できない）。読み込み失敗の `notify`（フロントへの通知）は出していない（stderr のみ）
+
+### G-39. ライブ変換中の Enter は表示中の変換結果を確定する（2026-09-30）
+
+- **不具合**: ライブ変換で変換結果が表示されていても、Composing の Enter（`commit_all`）は Composer の reading（ひらがな）を確定していたため、Space で Converting にしないと変換結果が確定できなかった。画面の表示と確定内容が食い違っていた
+- **修正**: `commit_all` の Composing 分岐で、`build_preedit` と同じ条件（`LiveConversion.source_reading` が現在の reading と一致）のときだけ、ライブ変換の segments の surface を確定する。一致しない（LLM 待ちで未反映・反映後にさらに入力した）ときは表示も reading なので reading を確定する（表示と確定が常に一致する）。`commit_all` を経由するすべての確定（Enter・モード切替・CommitAndPassThrough・focus_out・restore）に同じ規則が効く
+- **学習**: 変換結果を確定した場合は Converting 確定と同じく `notify_commit` を呼ぶ（`notify_commit` は `&[Segment]` を受ける形にした。文節ごとの reading / surface / 左文脈は既存経路と同じ）。reading の確定（未反映）では従来どおり通知しない
+- **保留ローマ字**: 単独の `n` が表示されたまま Enter した場合、flush で末尾に付く「ん」を変換結果の後ろに足す（表示 `蚊n` → 確定 `蚊ん`）。カーソルが途中で flush 分が途中に入る場合は対応を取れないので reading で確定する（未対応の端ケース）
+- **確定取消**: `last_commit.pieces` は従来どおり reading から作るので、Ctrl+Backspace は変換結果ではなく reading に戻る（Converting 確定後の取消と同じ扱い）
+- **テスト**: `engine/tests/golden/110_live_conversion.yaml`（golden に `action: live_convert` / `reading:` を追加）、`engine/tests/api.rs`（学習フック・取消）
+- **未確認**: macOS 標準のライブ変換との詳細比較（Enter 以外の Shift+Enter 等）は未実施
+
+### G-40. 「ん」の重複（`nn` + 子音）の原因と修正（2026-09-30）
+
+- **症状**: 「ん」の直後（確定前）に次の文字を打つと「んん」になる
+- **原因（コア側の `nagi-romaji`）**: `nn` は「ん」を emit して soft pending の `n` を残す（G-8）。この soft の `n` は、次が母音・`y` なら結合し（`nna` → んな）、それ以外では捨てる設計だったが、`RomajiConverter::feed` は soft の `n` に構わず次の文字を足していた。`nk`・`nj` 等はテーブルに「ん + 保留 k」のエントリがあるため、`nn` + `k` → `nk` として「ん」が再度 emit され「んんk」になった（`nn` + `t` / `kan` の後の `nn` → `j` なども同様）。engine 側（ライブ変換の reading は保留を含まない Piece 列）には二重処理は無く、Composer の出力自体が誤りだったので、フロントの marked text 再描画の問題ではない。修正前の engine でも `nnk` の preedit が「んんk」になることを確認済み
+- **修正**: `feed` の冒頭で、soft pending 中に母音・`y` 以外が来たら soft の `n` を捨ててから通常処理する。`n'` は soft の `n` を捨てて `'` を消費する（`nn'` が「んん」や `'` の Literal にならない）。soft は結合を試みる時点で解除する（`nny` の `ny` は通常の保留として表示。従来は soft のまま `ny` が表示から隠れていた）。`konnichiha`・`hannou`・`onna`・`nnn` 系は従来どおり
+- **Mozc との対応**: `nn` → ん、`n` + 子音 → ん + 子音、`n` + 母音 → な行、`n'` → ん。`nnn` は「んん」（2つ目の soft を捨て、3つ目の `n` を新規の保留として扱い、flush で「ん」）。progress.md の「`nn` の soft pending は Mozc と一致するか未確認」は、上記の範囲で解消（Mozc 実機との照合は未実施）
+- **テスト**: romaji の `test_n_sequences_do_not_duplicate_nn`、engine の `n_input_never_duplicates_nn_in_composing_reading`、golden の `10_romaji.yaml`（`romaji-nn-*`）と `110_live_conversion.yaml`（`live-soft-n-*`）
 
 ---
 

@@ -93,9 +93,12 @@ struct RestoreSegSpec {
 struct Step {
     #[serde(default)]
     key: Option<KeySpec>,
-    /// `focus_in` | `focus_out` | `reset` | `restore`
+    /// `focus_in` | `focus_out` | `reset` | `restore` | `live_convert`
     #[serde(default)]
     action: Option<String>,
+    /// `action: live_convert` の期待 reading（サーバーがデバウンス後に渡す入力全体の読み）
+    #[serde(default)]
+    reading: Option<String>,
     #[serde(default)]
     restore: Option<RestoreSpec>,
     #[serde(default)]
@@ -366,6 +369,16 @@ fn run_case(case: &Case) -> Vec<String> {
             (None, Some("focus_in")) => engine.focus_in(&case.session),
             (None, Some("focus_out")) => engine.focus_out(&case.session),
             (None, Some("reset")) => engine.reset(&case.session),
+            (None, Some("live_convert")) => {
+                let reading = step
+                    .reading
+                    .as_deref()
+                    .expect("action: live_convert には reading: が必要");
+                // 反映されなかった（読みが古い等）場合は何も返らない
+                engine
+                    .live_convert(&case.session, reading)
+                    .unwrap_or_default()
+            }
             (None, Some("restore")) => {
                 let spec = step
                     .restore

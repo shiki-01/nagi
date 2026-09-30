@@ -173,7 +173,19 @@ impl RomajiConverter {
 
     /// 1 文字入力し、変換結果を返す（出力が無ければ空 Vec）
     pub fn feed(&mut self, ch: char) -> Vec<Emit> {
+        // soft pending の `n`（`nn` の2つ目）は、母音・`y` が続くときだけ次の音に結合する。
+        // それ以外（子音・`n`・`'` 等）では捨てる。捨てないと `nk` 等が「ん」を再び emit し、
+        // `nn` + `k` が「んんk」になる（G-40）
+        if self.soft_pending && !matches!(ch, 'a' | 'i' | 'u' | 'e' | 'o' | 'y') {
+            self.buffer.clear();
+            self.soft_pending = false;
+            if ch == '\'' {
+                return Vec::new();
+            }
+        }
         self.buffer.push(ch);
+        // 結合を試みる時点で soft の役目は終わり（`ny` は通常の保留として表示する）
+        self.soft_pending = false;
 
         let mut result = Vec::new();
 
@@ -1094,6 +1106,49 @@ mod tests {
         let (mut composer, _) = setup_composer();
         insert_string(&mut composer, "cha");
         assert_eq!(text_after_flush(&mut composer), "ちゃ");
+    }
+
+    /// 入力列を流し込み、（確定前の表示テキスト, 表示用の保留）を返す
+    fn display_after(input: &str) -> (String, String) {
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, input);
+        (composer.text(), composer.pending().to_string())
+    }
+
+    #[test]
+    fn test_n_sequences_do_not_duplicate_nn() {
+        // (入力, 確定前の表示テキスト, 表示用の保留, flush 後のテキスト)
+        let cases = [
+            ("n", "", "n", "ん"),
+            ("nn", "ん", "", "ん"),
+            ("na", "な", "", "な"),
+            ("nk", "ん", "k", "んk"),
+            ("nka", "んか", "", "んか"),
+            ("nnk", "ん", "k", "んk"),
+            ("nnka", "んか", "", "んか"),
+            ("nna", "んな", "", "んな"),
+            ("nni", "んに", "", "んに"),
+            ("nnya", "んにゃ", "", "んにゃ"),
+            ("kon", "こ", "n", "こん"),
+            ("konn", "こん", "", "こん"),
+            ("konni", "こんに", "", "こんに"),
+            ("konnichi", "こんにち", "", "こんにち"),
+            ("kanji", "かんじ", "", "かんじ"),
+            ("kanj", "かん", "j", "かんj"),
+            ("kon'", "こん", "", "こん"),
+            ("kon'a", "こんあ", "", "こんあ"),
+            ("nnnk", "んん", "k", "んんk"),
+        ];
+        for (input, text, pending, flushed) in cases {
+            assert_eq!(
+                display_after(input),
+                (text.to_string(), pending.to_string()),
+                "表示: {input}"
+            );
+            let (mut composer, _) = setup_composer();
+            insert_string(&mut composer, input);
+            assert_eq!(text_after_flush(&mut composer), flushed, "flush: {input}");
+        }
     }
 
     #[test]
