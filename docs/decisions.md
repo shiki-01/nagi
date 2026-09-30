@@ -737,7 +737,7 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **背景**: 「Space で変換した後に Backspace を打つとひらがなに戻り、その後 Space でもう一度 AI 変換に入る」という要望。Converting の Backspace は既に `Cancel` にマップされ、reading を Composing に復元する（文字は削除しない）挙動だったが、直前に ライブ変換（G-43）の結果が残っていると、Composing に戻った直後に `source_reading` が一致して変換表示に戻ってしまい、「ひらがなに戻る」になっていなかった
 - **Backspace の2段階**: (1) Converting の Backspace（Ctrl+h も同じ）= 変換の取り消し。Composing のひらがな表示に戻るだけで文字は削除しない（標準 IME と同じ）。ライブ変換の固定表示も破棄する（`back_to_composing` で `live_conversion` を捨てる。Escape も同じ関数なので同様にひらがな表示に戻る）。(2) Composing の Backspace は従来どおり（G-43: 変換表示を破棄して1文字削除）
 - **再度の Space**: `start_converting` の冒頭でも `live_conversion` を捨てる。Space 変換は常に `convert_sentence` を新しく呼ぶので、AI（LLM）を含む通常の変換になる（サーバー側の LLM 結果キャッシュはキー（左文脈・読み）一致時に LLM 結果を返すだけで、辞書のみの結果には固定されない。モデル未ロード時は辞書のみ）。デバウンス後のライブ変換が再開して変換表示に戻っていても、Space は Converting に入り先頭候補は新しい変換結果になる
-- **予測変換**: 現状、予測変換（`predict`）は Composing での Tab のみが入口で、Converting 中の Space（NextCand）は通常候補（現在の表記・バックエンド候補・ひらがな・カタカナ）を循環するだけで、予測候補には移らない。「通常候補の後に予測候補へ移る」は未実装で、`predict.min_chars` などの仕様は変えていない（実装が大きくなるため今回は見送り。要判断）
+- **予測変換**: 現状、予測変換（`predict`）は Composing での Tab のみが入口で、Converting 中の Space（NextCand）は通常候補（現在の表記・バックエンド候補・ひらがな・カタカナ）を循環するだけで、予測候補には移らない。「通常候補の後に予測候補へ移る」は未実装で、`predict.min_chars` などの仕様は変えていない（当面は現状の仕様で確定。ユーザー確認済み 2026-09-30。将来必要になれば別途検討）
 - **状態遷移表（G-7）**: Converting × Backspace は「→ Composing（reading 復元、削除なし、ライブ変換の表示は破棄）」
 - **影響**: `engine/src/engine.rs`（`back_to_composing`・`start_converting`）。追加テストは `engine/tests/golden/40_convert.yaml`（`convert-backspace-cancels-then-space-converts-again`、`convert-backspace-cancel-then-backspace-deletes-one`）と `engine/tests/api.rs`（`converting_backspace_cancels_and_discards_live_view`）
 
