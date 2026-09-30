@@ -1,6 +1,31 @@
 import Foundation
 import UIKit
 
+// MARK: - Serial Execution Queue
+
+/// グローバルなシリアルキュー（全プローブの直列実行を保証）
+private let probeSerialQueue = DispatchQueue(label: "com.shiki.nagi.probe-serial")
+
+/// プローブ実行状態を管理するアクター（並行実行を防止）
+actor ProbeExecutionManager {
+    private static let shared = ProbeExecutionManager()
+    private var isRunning = false
+
+    static func getInstance() -> ProbeExecutionManager {
+        Self.shared
+    }
+
+    func acquireLock() -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        return true
+    }
+
+    func releaseLock() {
+        isRunning = false
+    }
+}
+
 // MARK: - Probe Protocol
 
 protocol ProbeRunner {
@@ -110,15 +135,18 @@ struct DictLoadProbe: ProbeRunner {
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
 
-        let baselineStats = MemoryProbe.getStats()
-        let startTime = Date()
-
         let (dataDir, _) = context.store.dataDir()
         guard let dataDir = dataDir else {
             note = "data ディレクトリが見つかりません"
             metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
+
+        // 1秒待機（余計な確保を避ける）
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+        let baselineStats = MemoryProbe.getStats()
+        let startTime = Date()
 
         guard let engine = NagiEngine(dataDir: dataDir, userDir: nil, noLLM: true) else {
             note = "NagiEngine の生成に失敗（C ABI エラー）"
@@ -139,8 +167,51 @@ struct DictLoadProbe: ProbeRunner {
             "data_dir_source": dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
         ]
 
+        // 辞書状態を notes から抽出
+        let engineNotes = engine.notes
+        var dictStatus = "不明"
+        if engineNotes.contains("辞書: OK") {
+            dictStatus = "ロード済み"
+        } else if engineNotes.contains("未指定") {
+            dictStatus = "未指定"
+        } else if engineNotes.contains("読みをそのまま") {
+            dictStatus = "ロード失敗"
+        }
+
+        // 変換テスト（"konnichiha" を1文字ずつ）
+        var conversionOk = false
+        let initReq = """
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client_name":"nagi-ios-spike","client_version":"0.1","os":"ios"}}
+        """
+        _ = engine.send(line: initReq)
+
+        let testString = "konnichiha"
+        for char in testString {
+            let charNum = UInt32(char.unicodeScalars.first?.value ?? 0)
+            let keyReq = """
+            {"jsonrpc":"2.0","id":2,"method":"process_key","params":{"session_id":"dict_test","keysym":\(charNum),"keycode":0,"text":"\(char)","modifiers":{"shift":false,"ctrl":false,"alt":false,"meta":false},"kind":"down"}}
+            """
+            _ = engine.send(line: keyReq)
+        }
+
+        // Space キーで変換候補を取得
+        let spaceReq = """
+        {"jsonrpc":"2.0","id":3,"method":"process_key","params":{"session_id":"dict_test","keysym":32,"keycode":49,"text":" ","modifiers":{"shift":false,"ctrl":false,"alt":false,"meta":false},"kind":"down"}}
+        """
+        let spaceResponse = engine.send(line: spaceReq)
+        if let response = spaceResponse.first {
+            if let surface = extractFirstCandidateSurface(from: response) {
+                if surface != "こんにちは" {  // ひらがなではなく漢字変換されているか
+                    conversionOk = true
+                    metrics["conversion_ok"] = 1
+                } else {
+                    metrics["conversion_ok"] = 0
+                }
+            }
+        }
+
         ok = true
-        note = "Profile: \(engine.notes) (source: \(dataDirSource))"
+        note = "辞書状態: \(dictStatus) | 変換: \(conversionOk ? "OK" : "未検証") | \(engineNotes.split(separator: "\n").first.map(String.init) ?? "") (source: \(dataDirSource))"
 
         return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
     }
@@ -167,6 +238,8 @@ struct LatencyProbe: ProbeRunner {
 
         var latencies: [Double] = []
         var spaceLatencies: [Double] = []
+        var dictStatus = ""
+        var conversionOk = false
 
         for i in 0..<200 {
             let sessionId = "session_\(i)"
@@ -177,7 +250,7 @@ struct LatencyProbe: ProbeRunner {
             """
             _ = engine.send(line: initReq)
 
-            let testString = "konnnichiha"
+            let testString = "konnichiha"
             for char in testString {
                 let charNum = UInt32(char.unicodeScalars.first?.value ?? 0)
                 let keyReq = """
@@ -185,9 +258,19 @@ struct LatencyProbe: ProbeRunner {
                 """
 
                 let startTime = Date()
-                _ = engine.send(line: keyReq)
+                let response = engine.send(line: keyReq)
                 let elapsed = Date().timeIntervalSince(startTime) * 1000.0
                 latencies.append(elapsed)
+
+                // 最初の1回だけ辞書状態を確認
+                if i == 0 && dictStatus.isEmpty {
+                    let engineNotes = engine.notes
+                    if engineNotes.contains("辞書: OK") {
+                        dictStatus = "loaded"
+                    } else if engineNotes.contains("読みをそのまま") {
+                        dictStatus = "failed"
+                    }
+                }
             }
 
             // Space キー
@@ -195,9 +278,18 @@ struct LatencyProbe: ProbeRunner {
             {"jsonrpc":"2.0","id":3,"method":"process_key","params":{"session_id":"\(sessionId)","keysym":32,"keycode":49,"text":" ","modifiers":{"shift":false,"ctrl":false,"alt":false,"meta":false},"kind":"down"}}
             """
             let spaceStart = Date()
-            _ = engine.send(line: spaceReq)
+            let spaceResponse = engine.send(line: spaceReq)
             let spaceElapsed = Date().timeIntervalSince(spaceStart) * 1000.0
             spaceLatencies.append(spaceElapsed)
+
+            // 最初の1回だけ変換結果を確認
+            if i == 0, let response = spaceResponse.first {
+                if let surface = extractFirstCandidateSurface(from: response) {
+                    if surface != "こんにちは" {
+                        conversionOk = true
+                    }
+                }
+            }
 
             // Enter
             let enterReq = """
@@ -229,9 +321,10 @@ struct LatencyProbe: ProbeRunner {
         }
 
         metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
+        metrics["conversion_ok"] = conversionOk ? 1 : 0
 
         ok = !latencies.isEmpty
-        note = "目標: ひらがな p95 < 16ms, Space p95 < 150ms (source: \(dataDirSource))"
+        note = "辞書: \(dictStatus.isEmpty ? "?" : dictStatus) | 変換: \(conversionOk ? "OK" : "NG?") | 目標: ひらがな p95 < 16ms, Space p95 < 150ms (source: \(dataDirSource))"
 
         return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
     }
@@ -240,11 +333,20 @@ struct LatencyProbe: ProbeRunner {
 // MARK: - 5. Memory Ramp Probe
 
 struct MemoryRampProbe: ProbeRunner {
+    let maxLimitMB: Int  // ホストアプリ: 3072, キーボード拡張: 1024
+
+    init(maxLimitMB: Int = 3072) {
+        self.maxLimitMB = maxLimitMB
+    }
+
     func run(context: ProbeContext) async -> ProbeResult {
         let id = "memory_ramp"
         let name = "Memory Ramp"
         var metrics: [String: Double] = [:]
-        var note = "メモリ段階的確保（強制終了対応テスト。再起動後に最後の記録値を確認可能）"
+        var note = "メモリ段階的確保。上限: \(maxLimitMB)MB（強制終了対応テスト。再起動後に最後の記録値を確認可能）"
+        if context.processType == "app" {
+            note = "ホストアプリで実行中。拡張の上限を測るものではありません。\n" + note
+        }
         var ok = false
 
         let (_, dataDirSource) = context.store.dataDir()
@@ -273,15 +375,18 @@ struct MemoryRampProbe: ProbeRunner {
             note += "\n進捗記録に失敗: \(error.localizedDescription)"
         }
 
-        while maxReachedMB < 500 {
+        while maxReachedMB < maxLimitMB {
             do {
+                // 進捗を記録する前にメモリ測定
+                let beforeStats = MemoryProbe.getStats()
+
                 // 進捗を同期的に記録
                 let progressReq = ProbeResult(
                     id: "memory_ramp_progress",
                     name: "Memory Ramp Progress",
                     process: context.processType,
                     ok: true,
-                    metrics: ["reached_mb": Double(maxReachedMB)],
+                    metrics: ["reached_mb": Double(maxReachedMB), "footprint_mb": beforeStats.physFootprintMB],
                     note: "到達: \(maxReachedMB) MB",
                     timestamp: Date(),
                     deviceModel: getDeviceModel(),
@@ -357,7 +462,7 @@ struct ColdstartProbe: ProbeRunner {
 
         _ = engine.send(line: initReq)
         let keyStart = Date()
-        _ = engine.send(line: keyReq)
+        let keyResponse = engine.send(line: keyReq)
         let keyElapsed = Date().timeIntervalSince(keyStart) * 1000.0
 
         let totalElapsed = Date().timeIntervalSince(startTime) * 1000.0
@@ -367,8 +472,25 @@ struct ColdstartProbe: ProbeRunner {
         metrics["total_ms"] = totalElapsed
         metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
 
+        // 辞書状態確認
+        let engineNotes = engine.notes
+        var dictStatus = "?"
+        if engineNotes.contains("辞書: OK") {
+            dictStatus = "OK"
+        } else if engineNotes.contains("読みをそのまま") {
+            dictStatus = "NG"
+        }
+
+        // 変換確認
+        var conversionOk = false
+        if let response = keyResponse.first, let surface = extractFirstCandidateSurface(from: response) {
+            if surface == "あ" {
+                conversionOk = true
+            }
+        }
+
         ok = true
-        note = "目標: < 2000ms（light は < 300ms）(source: \(dataDirSource))"
+        note = "辞書: \(dictStatus) | 変換: \(conversionOk ? "OK" : "NG?") | 目標: < 2000ms（light は < 300ms）(source: \(dataDirSource))"
 
         return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
     }
@@ -515,6 +637,20 @@ private func createEngine(context: ProbeContext) -> NagiEngine? {
     return NagiEngine(dataDir: dataDir, userDir: nil, noLLM: true)
 }
 
+/// JSON-RPC レスポンスの最初の候補の surface（表示文字列）を抽出
+private func extractFirstCandidateSurface(from jsonLine: String) -> String? {
+    guard let data = jsonLine.data(using: .utf8),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let result = json["result"] as? [String: Any],
+          let preedit = result["preedit"] as? [String: Any],
+          let candidates = preedit["candidates"] as? [[String: Any]],
+          let firstCandidate = candidates.first,
+          let surface = firstCandidate["surface"] as? String else {
+        return nil
+    }
+    return surface
+}
+
 private func makeResult(id: String, name: String, ok: Bool, metrics: [String: Double], note: String, process: String) -> ProbeResult {
     ProbeResult(
         id: id,
@@ -536,8 +672,19 @@ let allProbes: [String: (ProbeContext) async -> ProbeResult] = [
     "baseline_memory": { await BaselineMemoryProbe().run(context: $0) },
     "dict_load": { await DictLoadProbe().run(context: $0) },
     "latency": { await LatencyProbe().run(context: $0) },
-    "memory_ramp": { await MemoryRampProbe().run(context: $0) },
+    "memory_ramp": { await MemoryRampProbe(maxLimitMB: $0.processType == "keyboard" ? 1024 : 3072).run(context: $0) },
     "coldstart": { await ColdstartProbe().run(context: $0) },
     "llm_load": { await LLMLoadProbe().run(context: $0) },
     "thermal_battery": { await ThermalBatteryProbe().run(context: $0) }
+]
+
+/// 全プローブから memory_ramp を除外（単独実行のみ）
+let allProbesExcludingMemoryRamp: [String: (ProbeContext) async -> ProbeResult] = [
+    "appgroup": allProbes["appgroup"]!,
+    "baseline_memory": allProbes["baseline_memory"]!,
+    "dict_load": allProbes["dict_load"]!,
+    "latency": allProbes["latency"]!,
+    "coldstart": allProbes["coldstart"]!,
+    "llm_load": allProbes["llm_load"]!,
+    "thermal_battery": allProbes["thermal_battery"]!
 ]

@@ -356,6 +356,13 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
         None => notes.push("データディレクトリが未指定のため辞書なしで起動します".to_string()),
         Some(dir) => match load_dictionary(dir) {
             Ok(d) => {
+                let dict_path = dir.join("dict").join("nagi-dict.bin");
+                let entry_count = d.entry_count();
+                notes.push(format!(
+                    "辞書: OK ({} entries) from {}",
+                    entry_count,
+                    dict_path.display()
+                ));
                 dict = Some(d);
                 if options.use_llm {
                     let loader = loader.unwrap_or_else(|| {

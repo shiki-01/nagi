@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var allResults: [ProbeResult] = []
     @State private var showingAlert = false
     @State private var alertMessage = ""
+    @State private var probesRunning = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -96,14 +97,23 @@ struct ContentView: View {
                                     }
                                 }
                             }
+                            .disabled(probesRunning)
                         }
                     }
 
-                    Section {
-                        Button("すべての Probe を実行") {
-                            runAllProbes()
+                    Section("実行") {
+                        Button("すべての Probe を実行（memory_ramp 除外）") {
+                            runAllProbesExcludingMemoryRamp()
                         }
                         .frame(maxWidth: .infinity)
+                        .disabled(probesRunning)
+
+                        Button("Memory Ramp を実行（警告: 強制終了の可能性あり）") {
+                            runMemoryRamp()
+                        }
+                        .frame(maxWidth: .infinity)
+                        .disabled(probesRunning)
+                        .foregroundColor(.orange)
                     }
                 }
                 .navigationTitle("Probes")
@@ -303,9 +313,12 @@ struct ContentView: View {
         }
     }
 
-    private func runAllProbes() {
+    private func runAllProbesExcludingMemoryRamp() {
         Task {
-            for (probeId, probeRunner) in allProbes {
+            probesRunning = true
+            defer { probesRunning = false }
+
+            for (probeId, probeRunner) in allProbesExcludingMemoryRamp.sorted(by: { $0.key < $1.key }) {
                 let context = ProbeContext(
                     store: store,
                     processType: "app",
@@ -314,6 +327,22 @@ struct ContentView: View {
                 let result = await probeRunner(context)
                 try? store.append(result: result)
             }
+            loadResults()
+        }
+    }
+
+    private func runMemoryRamp() {
+        Task {
+            probesRunning = true
+            defer { probesRunning = false }
+
+            let context = ProbeContext(
+                store: store,
+                processType: "app",
+                engine: nil
+            )
+            let result = await MemoryRampProbe(maxLimitMB: 3072).run(context: context)
+            try? store.append(result: result)
             loadResults()
         }
     }
@@ -438,16 +467,24 @@ struct ProbeDetailView: View {
     private func runProbe() {
         isRunning = true
         Task {
-            if let probeRunner = allProbes[probeId] {
-                let context = ProbeContext(
-                    store: store,
-                    processType: "app",
-                    engine: nil
-                )
-                let newResult = await probeRunner(context)
-                try? store.append(result: newResult)
-                result = newResult
+            let context = ProbeContext(
+                store: store,
+                processType: "app",
+                engine: nil
+            )
+            let newResult: ProbeResult
+
+            if probeId == "memory_ramp" {
+                newResult = await MemoryRampProbe(maxLimitMB: 3072).run(context: context)
+            } else if let probeRunner = allProbes[probeId] {
+                newResult = await probeRunner(context)
+            } else {
+                isRunning = false
+                return
             }
+
+            try? store.append(result: newResult)
+            result = newResult
             isRunning = false
         }
     }

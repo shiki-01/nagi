@@ -68,6 +68,7 @@ struct KeyboardSwiftUIView: View {
     @State private var selectedProbe: String?
     @State private var isRunning = false
     @State private var showInsertResultsAlert = false
+    @State private var hasRunAutoProbe = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,12 +87,12 @@ struct KeyboardSwiftUIView: View {
             // Probe ボタン
             ScrollView {
                 VStack(spacing: 8) {
-                    ForEach(Array(allProbes.keys.sorted()), id: \.self) { probeId in
+                    ForEach(Array(allProbesExcludingMemoryRamp.keys.sorted()), id: \.self) { probeId in
                         Button(action: { runProbe(probeId) }) {
                             HStack {
                                 Text(probeId)
                                 Spacer()
-                                if let latest = results.first(where: { $0.id == probeId }) {
+                                if let latest = results.last(where: { $0.id == probeId }) {
                                     Image(systemName: latest.ok ? "checkmark.circle" : "xmark.circle")
                                         .foregroundColor(latest.ok ? .green : .red)
                                 }
@@ -106,10 +107,20 @@ struct KeyboardSwiftUIView: View {
                     }
 
                     Button(action: { runAllProbes() }) {
-                        Text("すべて実行")
+                        Text("すべて実行（memory_ramp 除外）")
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                    }
+                    .disabled(isRunning)
+
+                    Button(action: { runProbe("memory_ramp") }) {
+                        Text("Memory Ramp（警告: 強制終了の可能性）")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.orange)
                             .foregroundColor(.white)
                             .cornerRadius(8)
                     }
@@ -167,22 +178,33 @@ struct KeyboardSwiftUIView: View {
             }
             .padding()
         }
-        .onAppear { loadResults() }
+        .onAppear {
+            loadResults()
+            autoRunBaselineMemory()
+        }
     }
 
     private func runProbe(_ probeId: String) {
         isRunning = true
         Task {
-            if let probeRunner = allProbes[probeId] {
-                let context = ProbeContext(
-                    store: store,
-                    processType: "keyboard",
-                    engine: nil
-                )
-                let result = await probeRunner(context)
-                try? store.append(result: result)
-                loadResults()
+            let context = ProbeContext(
+                store: store,
+                processType: "keyboard",
+                engine: nil
+            )
+            let result: ProbeResult
+
+            if probeId == "memory_ramp" {
+                result = await MemoryRampProbe(maxLimitMB: 1024).run(context: context)
+            } else if let probeRunner = allProbes[probeId] {
+                result = await probeRunner(context)
+            } else {
+                isRunning = false
+                return
             }
+
+            try? store.append(result: result)
+            loadResults()
             isRunning = false
         }
     }
@@ -190,7 +212,7 @@ struct KeyboardSwiftUIView: View {
     private func runAllProbes() {
         isRunning = true
         Task {
-            for (probeId, probeRunner) in allProbes {
+            for (probeId, probeRunner) in allProbesExcludingMemoryRamp.sorted(by: { $0.key < $1.key }) {
                 let context = ProbeContext(
                     store: store,
                     processType: "keyboard",
@@ -201,6 +223,22 @@ struct KeyboardSwiftUIView: View {
             }
             loadResults()
             isRunning = false
+        }
+    }
+
+    private func autoRunBaselineMemory() {
+        guard !hasRunAutoProbe else { return }
+        hasRunAutoProbe = true
+
+        Task {
+            let context = ProbeContext(
+                store: store,
+                processType: "keyboard",
+                engine: nil
+            )
+            let result = await BaselineMemoryProbe().run(context: context)
+            try? store.append(result: result)
+            loadResults()
         }
     }
 
