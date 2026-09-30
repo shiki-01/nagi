@@ -44,6 +44,8 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        ALTAppGroups:
+          - group.com.shiki.nagi.spike
 
     entitlements:
       path: App/NagiSpike.entitlements
@@ -92,6 +94,8 @@ targets:
       path: Keyboard/Info.plist
       properties:
         CFBundleDisplayName: Nagi Spike Keyboard
+        ALTAppGroups:
+          - group.com.shiki.nagi.spike
         NSExtension:
           NSExtensionAttributes:
             RequestsOpenAccess: false

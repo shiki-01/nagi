@@ -26,10 +26,35 @@ struct ContentView: View {
 
                     Section("App Group") {
                         VStack(alignment: .leading, spacing: 8) {
-                            if let container = store.containerURL {
-                                Text("✓ 利用可能: \(container.path)").foregroundColor(.green)
+                            let resolution = store.appGroupResolution
+                            if let resolvedID = resolution.resolvedID {
+                                Text("✓ 利用可能: \(resolvedID)").foregroundColor(.green)
                             } else {
                                 Text("✗ 利用不可（無料アカウント？）").foregroundColor(.red)
+                            }
+
+                            Divider()
+
+                            Text("解決結果").font(.caption).fontWeight(.semibold)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Candidates: \(resolution.candidates.joined(separator: ", "))")
+                                    .font(.caption2)
+                                    .textSelection(.enabled)
+
+                                if !resolution.provisionGroups.isEmpty {
+                                    Text("Provision: \(resolution.provisionGroups.joined(separator: ", "))")
+                                        .font(.caption2)
+                                        .textSelection(.enabled)
+                                }
+
+                                if !resolution.altGroups.isEmpty {
+                                    Text("ALT: \(resolution.altGroups.joined(separator: ", "))")
+                                        .font(.caption2)
+                                        .textSelection(.enabled)
+                                }
+
+                                Text("Provision readable: \(resolution.provisionReadable)")
+                                    .font(.caption2)
                             }
                         }
                     }

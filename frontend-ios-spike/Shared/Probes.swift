@@ -63,8 +63,31 @@ struct AppGroupProbe: ProbeRunner {
         var note = ""
         var ok = false
 
+        let resolution = context.store.appGroupResolution
+
+        // 解決結果を note に記録
+        var noteLines: [String] = []
+        noteLines.append("Candidates: \(resolution.candidates.joined(separator: ", "))")
+        if !resolution.provisionGroups.isEmpty {
+            noteLines.append("Provision groups: \(resolution.provisionGroups.joined(separator: ", "))")
+        }
+        if !resolution.altGroups.isEmpty {
+            noteLines.append("ALT groups: \(resolution.altGroups.joined(separator: ", "))")
+        }
+        if let resolvedID = resolution.resolvedID {
+            noteLines.append("Resolved ID: \(resolvedID)")
+        } else {
+            noteLines.append("Resolved ID: (not available)")
+        }
+        noteLines.append("Provision readable: \(resolution.provisionReadable)")
+
+        // メトリクスに結果を記録
+        metrics["resolved"] = resolution.resolvedID != nil ? 1 : 0
+        metrics["candidate_count"] = Double(resolution.candidates.count)
+
         guard let container = context.store.containerURL else {
-            note = "App Group コンテナが利用不可（無料アカウント？）"
+            note = noteLines.joined(separator: "\n")
+            note += "\n\nI/O test: App Group コンテナが利用不可"
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
 
@@ -80,22 +103,23 @@ struct AppGroupProbe: ProbeRunner {
             let readContent = try String(contentsOf: testURL, encoding: .utf8)
             if readContent == testContent {
                 ok = true
-                note = "App Group コンテナが正常に動作"
+                noteLines.append("\nI/O test: OK")
 
                 // 相手プロセスの最新結果を表示
                 if let latest = context.store.latestFromOtherProcess(currentProcess: context.processType) {
-                    note += "\n相手プロセス(\(latest.process)): \(latest.timestamp.formatted())"
+                    noteLines.append("Other process (\(latest.process)): \(latest.timestamp.formatted())")
                 }
             } else {
-                note = "読み戻した内容が異なる"
+                noteLines.append("\nI/O test: Content mismatch")
             }
 
             // テストファイルを削除
             try? FileManager.default.removeItem(at: testURL)
         } catch {
-            note = "ファイル I/O エラー: \(error.localizedDescription)"
+            noteLines.append("\nI/O test: Error - \(error.localizedDescription)")
         }
 
+        note = noteLines.joined(separator: "\n")
         return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
     }
 }

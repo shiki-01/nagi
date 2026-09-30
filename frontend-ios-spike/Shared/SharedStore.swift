@@ -24,30 +24,39 @@ class SharedStore {
     static let shared = SharedStore()
 
     private let fileManager = FileManager.default
-    private let appGroupId = "group.com.shiki.nagi.spike"
     private let resultsFileName = "results.jsonl"
+    private let resolution: AppGroupResolution
+
+    init() {
+        self.resolution = AppGroupResolver.resolve()
+    }
 
     /// App Group コンテナへのパス。取得不可な場合は nil
     var containerURL: URL? {
-        fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)
+        resolution.containerURL
+    }
+
+    /// App Group ID 解決結果を取得
+    var appGroupResolution: AppGroupResolution {
+        resolution
     }
 
     /// 辞書ファイルのパス（優先順位: App Group → Bundle）
     /// - Returns: (path: String?, source: String) source は "appgroup" / "bundle" / "none"
     func dictPath() -> (path: String?, source: String) {
-        return DataPaths.dictPath(appGroupId: appGroupId)
+        return DataPaths.dictPath(appGroupId: resolution.resolvedID ?? "group.com.shiki.nagi.spike")
     }
 
     /// モデルディレクトリのパス（優先順位: App Group → Bundle）
     /// - Returns: (path: String?, source: String)
     func modelsDir() -> (path: String?, source: String) {
-        return DataPaths.modelsDir(appGroupId: appGroupId)
+        return DataPaths.modelsDir(appGroupId: resolution.resolvedID ?? "group.com.shiki.nagi.spike")
     }
 
     /// data ディレクトリのパス（優先順位: App Group → Bundle）
     /// - Returns: (path: String?, source: String)
     func dataDir() -> (path: String?, source: String) {
-        return DataPaths.resolveDataDir(appGroupId: appGroupId)
+        return DataPaths.resolveDataDir(appGroupId: resolution.resolvedID ?? "group.com.shiki.nagi.spike")
     }
 
     /// 結果を追記（同期的に fsync）

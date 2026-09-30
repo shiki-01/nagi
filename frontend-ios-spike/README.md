@@ -21,6 +21,27 @@ GitHub Actions ワークフロー `.github/workflows/ios-spike.yml` を実行：
 
 これで実機検証が可能です。
 
+#### App Group 動作確認（SideStore で App Group ID が書き換わるかテスト）
+
+SideStore は署名時に App Group ID を書き換える可能性があります。以下の手順でアプリの App Group 解決機能を検証してください：
+
+1. **Sideloadly 版があれば削除**: 異なる署名者のアプリは上書きできないため、事前に削除（設定 > 一般 > iPhone ストレージ > NagiSpike を削除）
+2. **SideStore から IPA をインストール**: IPA ファイルを「Add IPA」で追加して導入
+3. **ホストアプリで App Group 状態を確認**:
+   - ホームタブの「App Group」セクションで「Resolved ID」と「Candidates」を確認
+   - 署名者が App Group ID を書き換えた場合、複数の候補が表示されます
+4. **キーボード拡張を追加**: 設定 > 一般 > キーボード > 新しいキーボード で NagiSpike Keyboard を有効化
+5. **相互通信テスト**: ホームタブの Probes から「appgroup」を実行
+   - App Group が利用可能なら、結果に「Resolved ID」と「I/O test: OK」が表示されます
+   - 相手プロセス（キーボード拡張）の最新実行時刻も表示されます
+6. **キーボード拡張でも実行**: テキスト入力フィールドでキーボード拡張を開き、appgroup プローブを実行
+   - App Group が使えるなら、相手プロセス（ホストアプリ）の結果が見えるはずです
+
+**無料 Apple ID での制約**: 
+- アプリ上限: 3 個（SideStore のアプリ枠も含む）
+- App ID 作成上限: 週 10 個（拡張ごとに消費）
+- 有効期限: 7 日間（定期的に再署名が必要）
+
 ---
 
 ## ローカル Mac での手動ビルド
