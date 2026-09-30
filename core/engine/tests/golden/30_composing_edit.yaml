@@ -268,3 +268,62 @@
       expect: {preedit: "きょう", cursor: 3, pending: ""}
     - key: "Left"
       expect: {cursor: 2, preedit: "きょう", pending: ""}
+
+# G-49: Backspace は直前のキー入力の取り消し。不一致で確定された文字は保留ローマ字に戻る
+- name: composing-backspace-rollback-mismatch
+  steps:
+    - {key: "h"}
+    - {key: "e"}
+    - {key: "n"}
+    - {key: "n"}
+    - {key: "k"}
+    - key: "p"
+      expect: {preedit: "へんkp", pending: "p", segments: ["へん", "k"], kinds: ["japanese", "literal"]}
+    - key: "BackSpace"
+      expect: {preedit: "へんk", pending: "k", segments: ["へん"], kinds: ["japanese"]}
+    - key: "a"
+      expect: {preedit: "へんか", pending: "", segments: ["へんか"], kinds: ["japanese"]}
+
+- name: composing-backspace-rollback-sokuon
+  steps:
+    - {key: "k"}
+    - key: "k"
+      expect: {preedit: "っk", pending: "k"}
+    - key: "BackSpace"
+      expect: {preedit: "k", pending: "k"}
+    - key: "a"
+      expect: {preedit: "か", pending: ""}
+
+- name: composing-backspace-rollback-n-consonant
+  steps:
+    - {key: "n"}
+    - key: "k"
+      expect: {preedit: "んk", pending: "k"}
+    - key: "BackSpace"
+      expect: {preedit: "n", pending: "n"}
+    - key: "a"
+      expect: {preedit: "な", pending: ""}
+
+# 履歴は直前の1キー分のみ。2回目の Backspace は従来どおり
+- name: composing-backspace-rollback-only-last-key
+  steps:
+    - {key: "k"}
+    - {key: "k"}
+    - key: "BackSpace"
+      expect: {preedit: "k", pending: "k"}
+    - key: "BackSpace"
+      expect: {preedit: "", state: direct}
+
+# カーソル移動で履歴を破棄する
+- name: composing-backspace-history-discarded-by-cursor-move
+  steps:
+    - {key: "h"}
+    - {key: "e"}
+    - {key: "n"}
+    - {key: "n"}
+    - {key: "k"}
+    - {key: "p"}
+    - {key: "Left"}
+    - {key: "Right"}
+    - key: "BackSpace"
+      expect: {preedit: "へんk", pending: ""}

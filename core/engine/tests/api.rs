@@ -695,6 +695,97 @@ fn live_append_then_backspace_discards_conversion() {
     assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはい");
 }
 
+/// (preedit テキスト, 保留ローマ字, reading の連結) のスナップショット
+fn view(e: &Engine) -> (String, String, String) {
+    let p = e.snapshot("s").unwrap().preedit;
+    let reading = p.segments.iter().map(|s| s.reading.as_str()).collect();
+    // pending は text 上の UTF-16 範囲なので、該当部分の文字列に直す
+    let units: Vec<u16> = p.text.encode_utf16().collect();
+    let pending = p.pending.map_or_else(String::new, |r| {
+        String::from_utf16(&units[r.start as usize..r.end as usize]).unwrap()
+    });
+    (p.text, pending, reading)
+}
+
+#[test]
+fn backspace_rolls_back_mismatch_flush_so_next_vowel_completes_kana() {
+    let mut e = engine();
+    type_str(&mut e, "s", "hennkp");
+    let (text, pending, _) = view(&e);
+    assert_eq!((text.as_str(), pending.as_str()), ("へんkp", "p"));
+    press(&mut e, "s", "BackSpace");
+    let (text, pending, reading) = view(&e);
+    assert_eq!((text.as_str(), pending.as_str()), ("へんk", "k"));
+    // reading（保留を含まない）は k を持たない
+    assert_eq!(reading, "へん");
+    press(&mut e, "s", "a");
+    let (text, pending, reading) = view(&e);
+    assert_eq!((text.as_str(), pending.as_str()), ("へんか", ""));
+    assert_eq!(reading, "へんか");
+}
+
+#[test]
+fn backspace_rolls_back_sokuon_and_n_consonant() {
+    let mut e = engine();
+    type_str(&mut e, "s", "kk");
+    press(&mut e, "s", "BackSpace");
+    assert_eq!(view(&e), ("k".into(), "k".into(), String::new()));
+    press(&mut e, "s", "a");
+    assert_eq!(view(&e).0, "か");
+    press(&mut e, "s", "Escape");
+    // nk → ん + 保留 k。Backspace で保留 n に戻る
+    type_str(&mut e, "s", "nk");
+    assert_eq!(view(&e), ("んk".into(), "k".into(), "ん".into()));
+    press(&mut e, "s", "BackSpace");
+    assert_eq!(view(&e), ("n".into(), "n".into(), String::new()));
+    press(&mut e, "s", "a");
+    assert_eq!(view(&e).0, "な");
+}
+
+#[test]
+fn second_backspace_is_conventional() {
+    let mut e = engine();
+    type_str(&mut e, "s", "hennkp");
+    press(&mut e, "s", "BackSpace"); // へん + 保留 k
+    press(&mut e, "s", "BackSpace"); // 保留 k を消す
+    assert_eq!(view(&e), ("へん".into(), String::new(), "へん".into()));
+    press(&mut e, "s", "BackSpace"); // 確定済みの末尾
+    assert_eq!(view(&e).0, "へ");
+}
+
+#[test]
+fn cursor_move_discards_backspace_history() {
+    let mut e = engine();
+    type_str(&mut e, "s", "hennkp");
+    press(&mut e, "s", "Left");
+    press(&mut e, "s", "Right");
+    press(&mut e, "s", "BackSpace");
+    // 履歴が無いので、確定済みの p を1文字消すだけ（k は Literal のまま）
+    assert_eq!(view(&e), ("へんk".into(), String::new(), "へんk".into()));
+    press(&mut e, "s", "a");
+    assert_eq!(view(&e).0, "へんkあ");
+}
+
+#[test]
+fn backspace_rollback_with_live_conversion_discards_it_and_keeps_reading_true() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaiik");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    type_str(&mut e, "s", "p");
+    press(&mut e, "s", "BackSpace");
+    // ライブ変換は破棄されひらがな表示に戻り、k は保留に戻る
+    assert_eq!(
+        view(&e),
+        ("きょうはいいk".into(), "k".into(), "きょうはいい".into())
+    );
+    // 次の文字入力まで再開しない
+    assert!(e.live_convert("s", "きょうはいい").is_none());
+    press(&mut e, "s", "a");
+    let (text, pending, reading) = view(&e);
+    assert_eq!((text.as_str(), pending.as_str()), ("きょうはいいか", ""));
+    assert_eq!(reading, "きょうはいいか");
+}
+
 #[test]
 fn live_append_enter_commits_fixed_plus_tail_and_learns_only_fixed() {
     let (mut e, rec) = mock_engine();

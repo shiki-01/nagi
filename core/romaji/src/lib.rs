@@ -158,6 +158,32 @@ pub enum Emit {
 pub struct RomajiConverter {
     table: Arc<RomajiTable>,
     buffer: String,
+    /// 直前の `feed` の巻き戻し情報（G-49）。巻き戻せる `feed` の直後だけ Some
+    last: Option<Rollback>,
+}
+
+#[derive(Debug, Clone)]
+/// 直前の `feed` を取り消すための情報
+struct Rollback {
+    /// `feed` する前の保留
+    prev_buffer: String,
+    /// `feed` が出力した文字数（Unicode スカラー）
+    emitted_chars: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `RomajiConverter::backspace` の結果
+pub enum Backspace {
+    /// 保留が無く、直前の `feed` の巻き戻しもできない（呼び出し側が確定済みの文字を消す）
+    Nothing,
+    /// 保留の末尾 1 文字を削除した
+    Pending,
+    /// 直前の `feed` を取り消した。保留は `feed` 前に戻ったので、
+    /// 呼び出し側は直前の `feed` が出力した末尾の `retract` 文字を消すこと
+    Rollback {
+        /// 消すべき出力の文字数
+        retract: usize,
+    },
 }
 
 impl RomajiConverter {
@@ -166,11 +192,17 @@ impl RomajiConverter {
         RomajiConverter {
             table,
             buffer: String::new(),
+            last: None,
         }
     }
 
     /// 1 文字入力し、変換結果を返す（出力が無ければ空 Vec）
+    ///
+    /// 不一致で確定（Raw の素通し）が起きた場合と、確定の後に保留が残る場合
+    /// （促音 `kk`→っ+k、`nk`→ん+k など）は、直後の `backspace` で `feed` 前の状態に戻せる。
     pub fn feed(&mut self, ch: char) -> Vec<Emit> {
+        let prev_buffer = self.buffer.clone();
+        self.last = None;
         self.buffer.push(ch);
 
         let mut result = Vec::new();
@@ -204,6 +236,21 @@ impl RomajiConverter {
             self.buffer.remove(0);
         }
 
+        let any_raw = result.iter().any(|e| matches!(e, Emit::Raw(_)));
+        if any_raw || (!result.is_empty() && !self.buffer.is_empty()) {
+            let emitted_chars = result
+                .iter()
+                .map(|e| match e {
+                    Emit::Converted(t) => t.chars().count(),
+                    Emit::Raw(_) => 1,
+                })
+                .sum();
+            self.last = Some(Rollback {
+                prev_buffer,
+                emitted_chars,
+            });
+        }
+
         result
     }
 
@@ -219,6 +266,7 @@ impl RomajiConverter {
 
     /// 保留を確定させる（"n"→ん 等）
     pub fn flush(&mut self) -> Vec<Emit> {
+        self.last = None;
         let mut result = Vec::new();
 
         if self.buffer == "n" {
@@ -236,19 +284,28 @@ impl RomajiConverter {
         result
     }
 
-    /// 保留の末尾 1 文字を削除する。削除できたら true
-    pub fn backspace(&mut self) -> bool {
-        if self.buffer.is_empty() {
-            return false;
+    /// Backspace: 直前のキー入力の取り消し（G-49）
+    ///
+    /// 直前の `feed` が巻き戻せる形（不一致の確定など）なら、保留を `feed` 前に戻す。
+    /// それ以外は保留の末尾 1 文字を削除する。履歴は直前の 1 キー分のみで、使うと消える
+    pub fn backspace(&mut self) -> Backspace {
+        if let Some(last) = self.last.take() {
+            self.buffer = last.prev_buffer;
+            return Backspace::Rollback {
+                retract: last.emitted_chars,
+            };
         }
-
-        self.buffer.pop();
-        true
+        if self.buffer.pop().is_some() {
+            Backspace::Pending
+        } else {
+            Backspace::Nothing
+        }
     }
 
     /// バッファをクリアする
     pub fn clear(&mut self) {
         self.buffer.clear();
+        self.last = None;
     }
 }
 
@@ -347,17 +404,30 @@ impl Composer {
         self.literal_mode = false;
     }
 
-    /// バックスペース。保留があれば保留の末尾 1 文字、無ければカーソル直前の 1 文字を削除する
+    /// バックスペース（直前のキー入力の取り消し。G-49）
+    ///
+    /// 直前のキーで不一致の確定などが起きていれば、その出力を消して保留をキー入力前に戻す。
+    /// そうでなければ保留の末尾 1 文字、保留も無ければカーソル直前の 1 文字を削除する
     pub fn backspace(&mut self) -> bool {
-        if self.converter.backspace() {
-            return true;
+        match self.converter.backspace() {
+            Backspace::Pending => true,
+            Backspace::Rollback { retract } => {
+                // 巻き戻せるのは直前の feed 直後だけ（カーソル移動等は履歴を破棄する）ので、
+                // 出力はカーソル直前に並んでいる
+                let n = retract.min(self.cursor);
+                self.cursor -= n;
+                self.chars.drain(self.cursor..self.cursor + n);
+                true
+            }
+            Backspace::Nothing => {
+                if self.cursor == 0 {
+                    return false;
+                }
+                self.cursor -= 1;
+                self.chars.remove(self.cursor);
+                true
+            }
         }
-        if self.cursor == 0 {
-            return false;
-        }
-        self.cursor -= 1;
-        self.chars.remove(self.cursor);
-        true
     }
 
     /// カーソル直後の 1 文字を削除する（保留は先に確定する）
@@ -1134,6 +1204,169 @@ mod tests {
             insert_string(&mut composer, input);
             assert_eq!(text_after_flush(&mut composer), flushed, "flush: {input}");
         }
+    }
+
+    /// `input` を打ち、Backspace を `backspaces` 回押した後の（確定前の表示テキスト, 保留）
+    fn after_backspaces(input: &str, backspaces: usize) -> (String, String) {
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, input);
+        for _ in 0..backspaces {
+            composer.backspace();
+        }
+        (composer.text(), composer.pending().to_string())
+    }
+
+    #[test]
+    fn test_backspace_rolls_back_mismatch_flush() {
+        // hennk + p: k が不一致で確定するが、Backspace で k が保留に戻る（G-49）
+        assert_eq!(
+            after_backspaces("hennkp", 0),
+            ("へんk".to_string(), "p".to_string())
+        );
+        assert_eq!(
+            after_backspaces("hennkp", 1),
+            ("へん".to_string(), "k".to_string())
+        );
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "hennkp");
+        composer.backspace();
+        composer.insert_char('a');
+        assert_eq!(text_after_flush(&mut composer), "へんか");
+        // 巻き戻しで Literal の k は残らない
+        assert!(
+            composer
+                .pieces()
+                .iter()
+                .all(|p| p.kind == PieceKind::Japanese)
+        );
+    }
+
+    #[test]
+    fn test_backspace_rolls_back_sokuon_and_n_consonant() {
+        // kk → っ + 保留 k。Backspace で保留 k のみに戻る
+        assert_eq!(
+            after_backspaces("kk", 0),
+            ("っ".to_string(), "k".to_string())
+        );
+        assert_eq!(after_backspaces("kk", 1), (String::new(), "k".to_string()));
+        // nk → ん + 保留 k。Backspace で保留 n に戻る
+        assert_eq!(
+            after_backspaces("nk", 0),
+            ("ん".to_string(), "k".to_string())
+        );
+        assert_eq!(after_backspaces("nk", 1), (String::new(), "n".to_string()));
+        // 巻き戻し後に続けて打てる
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "nk");
+        composer.backspace();
+        composer.insert_char('a');
+        assert_eq!(text_after_flush(&mut composer), "な");
+        // kkp: っ + 保留 k に p が来て k が確定 → 「っk」+ 保留 p。Backspace で「っ」+ 保留 k
+        assert_eq!(
+            after_backspaces("kkp", 0),
+            ("っk".to_string(), "p".to_string())
+        );
+        assert_eq!(
+            after_backspaces("kkp", 1),
+            ("っ".to_string(), "k".to_string())
+        );
+        // 保留の途中（tch → っ + ch）も直前キー前（tc）に戻る
+        assert_eq!(
+            after_backspaces("tch", 1),
+            (String::new(), "tc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_backspace_history_is_last_key_only() {
+        // 2 回目以降は従来どおり（保留があれば保留を 1 文字、無ければ確定済みの末尾）
+        assert_eq!(
+            after_backspaces("hennkp", 2),
+            ("へん".to_string(), String::new())
+        );
+        assert_eq!(
+            after_backspaces("hennkp", 3),
+            ("へ".to_string(), String::new())
+        );
+        // kk の 2 連続: 保留 k を消す（っ は戻らず消えたまま）
+        assert_eq!(after_backspaces("kk", 2), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn test_backspace_without_flush_keeps_conventional_behavior() {
+        // 確定が起きなかった（保留に足しただけ）: 保留を 1 文字戻す
+        assert_eq!(after_backspaces("ky", 1), (String::new(), "k".to_string()));
+        // 確定して保留が残らない: 確定済みの文字を消す
+        assert_eq!(after_backspaces("ka", 1), (String::new(), String::new()));
+        assert_eq!(after_backspaces("nn", 1), (String::new(), String::new()));
+        // 履歴が無い（保留も直前の確定も無い）: 確定済みの末尾を消す
+        assert_eq!(
+            after_backspaces("kaki", 1),
+            ("か".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn test_backspace_rollback_of_raw_emit_with_empty_pending() {
+        // k + `-`: k が Raw、`-` が ー で確定して保留は空。直前キー前（保留 k）に戻る
+        assert_eq!(
+            after_backspaces("k-", 0),
+            ("kー".to_string(), String::new())
+        );
+        assert_eq!(after_backspaces("k-", 1), (String::new(), "k".to_string()));
+    }
+
+    #[test]
+    fn test_backspace_history_discarded_by_other_operations() {
+        // カーソル移動: 履歴を破棄し、保留は確定済み（Raw）になる
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "hennkp");
+        composer.move_left();
+        composer.move_right();
+        assert_eq!(composer.text(), "へんkp");
+        composer.backspace();
+        assert_eq!(composer.text(), "へんk");
+        assert_eq!(composer.pending(), "");
+        // 文字以外の入力（数字）・確定・clear
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "hennkp5");
+        composer.backspace();
+        assert_eq!(composer.text(), "へんkp");
+        assert_eq!(composer.pending(), "");
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "hennkp");
+        composer.flush_pending();
+        composer.backspace();
+        assert_eq!(composer.text(), "へんk");
+        assert_eq!(composer.pending(), "");
+        // 途中挿入でも巻き戻しはカーソル直前の出力だけを消す
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "aiu");
+        composer.move_left();
+        insert_string(&mut composer, "kk");
+        composer.backspace();
+        assert_eq!(composer.text(), "あいう");
+        assert_eq!(composer.pending(), "k");
+        assert_eq!(composer.cursor(), 2);
+    }
+
+    #[test]
+    fn test_converter_backspace_outcomes() {
+        let mut c = RomajiConverter::new(RomajiTable::standard());
+        assert_eq!(c.backspace(), Backspace::Nothing);
+        c.feed('k');
+        c.feed('p');
+        assert_eq!(c.pending(), "p");
+        assert_eq!(c.backspace(), Backspace::Rollback { retract: 1 });
+        assert_eq!(c.pending(), "k");
+        // 履歴は 1 キー分のみ
+        assert_eq!(c.backspace(), Backspace::Pending);
+        assert_eq!(c.backspace(), Backspace::Nothing);
+        // 「ん」（1 文字）+ 保留
+        c.feed('n');
+        c.feed('k');
+        assert_eq!(c.backspace(), Backspace::Rollback { retract: 1 });
+        assert_eq!(c.pending(), "n");
     }
 
     #[test]

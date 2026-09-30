@@ -787,3 +787,14 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
   末尾の `nn`（`honn`、`kouenn` 等）や `nn`+子音は影響なし。`nn` の後に母音・`y` が続く語だけが変わる
 - **テスト**: `nagi-romaji` の `test_n_sequences_do_not_duplicate_nn`・`MOZC_CASES`（nn 行）・`test_konnichiha` 等、engine の golden `10_romaji.yaml`（`romaji-nn-*`、`romaji-multiple-segments`）と `40_convert.yaml`（打鍵列に `n` を1つ追加）、`api.rs` の `n_input_never_duplicates_nn_in_composing_reading` の期待値を新挙動に更新
 - **G-8 との関係**: G-8 の `nn` の記述は本項で改訂（G-8 側に注記済み）。soft pending に依存していた G-40 の説明（soft の `n` を捨てる修正）は履歴として残すが、現在は機構自体が無い
+
+### G-49. Backspace は「直前のキー入力の取り消し」（不一致で確定された文字を保留に戻す）（2026-09-30）
+
+- **背景**: 実機で「へんかん」を打つつもりで `hennkp` と打ち、Backspace で 1 つ消して `a` を打つと「へんkあ」になった（期待は「へんか」）。`k`+`p` は変換規則に無いため `k` が確定済みの文字（Literal）として reading に出て、保留は `p` のみになる。Backspace で `p` を消しても `k` は確定済みのままで、保留に戻らなかった
+- **決定**: Backspace は「直前のキー入力の取り消し」とする。直前のキーで保留ローマ字が不一致のまま確定（Raw の素通し）された場合、その出力を消して保留を「直前のキーを打つ前の状態」に戻す。`hennkp`→BS→`へん`+保留 `k`（`a` で「へんか」）。促音（`kk`→っ+k、BS→保留 k のみ）、`n`+子音（`nk`→ん+k、BS→保留 n）、`tch`（→っ+ch、BS→保留 tc）も同様
+- **巻き戻す条件（`RomajiConverter::feed`）**: 直前の `feed` が (a) Raw を出力した、または (b) 何か確定して保留が残った、のどちらか。確定して保留が空になる通常の入力（`ka`→か、`nn`→ん）は巻き戻さず、従来どおり確定済みの文字を 1 文字消す（標準 IME と同じ）。何も確定せず保留に足しただけのキーは、巻き戻しでも従来の「保留を 1 文字戻す」でも同じ結果になる
+- **履歴の持ち方**: `RomajiConverter` が直前 1 キー分だけ `Rollback { prev_buffer（feed 前の保留）, emitted_chars（feed が出力した文字数）}` を持つ。`backspace()` は `Backspace::{Nothing, Pending, Rollback{retract}}` を返し、`Composer` は `Rollback` のときカーソル直前の `retract` 文字（種別が Literal の Raw を含む）を消す。使った時点で履歴は消えるので、2 回目以降の Backspace は従来どおり（保留があれば保留を 1 文字、無ければ reading の末尾 1 文字）。`feed` 以外の操作（`flush`・`clear`・`load_pieces`、カーソル移動・削除・確定・変換・大文字/数字/非 ASCII の入力）は履歴を破棄する。したがって巻き戻しは常にカーソル直前の出力に対して働く
+- **ライブ変換（G-43/G-46）との整合**: engine は変更なし。Backspace でライブ変換の表示が破棄されひらがなに戻り、次の文字入力まで再開しないのは従来どおり。reading（保留を含まない）は巻き戻しで「直前キー前の状態」に一致する。不一致で Literal になっていた `k` は巻き戻しで消え、保留に戻る（Segment の kind に Literal は残らない）
+- **影響**: `romaji/src/lib.rs`（`Backspace`・`RomajiConverter::{feed,backspace}`・`Composer::backspace`）。テストは romaji の `test_backspace_*`・`test_converter_backspace_outcomes`、engine の `api.rs`（`backspace_rolls_back_*`・`second_backspace_is_conventional`・`cursor_move_discards_backspace_history`・ライブ変換ケース）と golden `30_composing_edit.yaml`（`composing-backspace-rollback-*`）。既存テストの期待値変更なし
+- **未対応**: Undo（確定後の取り消し）や複数キーにわたる巻き戻しは対象外。`k`+`-`（k が Raw、`-` が「ー」で保留が空）も Raw を含むため巻き戻し対象（BS で保留 k に戻る）
+
