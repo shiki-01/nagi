@@ -632,6 +632,96 @@ fn live_convert_does_not_chunk_input_shorter_than_chunk_len() {
     assert_eq!(preedit.text, "今日はいい");
 }
 
+// ---- ライブ変換: 追記中の固定部分（G-43） ----
+
+#[test]
+fn live_append_keeps_fixed_part_and_appends_kana() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    // 結果が届いた後の追記: 全体をひらがなに戻さず、固定部分 + 追記のかな
+    let r = press(&mut e, "s", "a");
+    assert_eq!(r.preedit.expect("preedit").text, "今日はいいあ");
+    // 保留ローマ字だけの追加でも固定部分は保たれる
+    let r = press(&mut e, "s", "k");
+    let p = e.snapshot("s").unwrap().preedit;
+    assert_eq!(p.text, "今日はいいあk");
+    assert!(r.consumed);
+}
+
+#[test]
+fn live_append_reconverts_only_tail_with_fixed_surface_as_left_context() {
+    let backend = Arc::new(
+        ChunkRecordingBackend::new()
+            .with_chunk("あいう", "亜伊宇")
+            .with_chunk("えお", "絵尾"),
+    );
+    let mut e = Engine::new(backend.clone(), EngineConfig::default());
+    type_str(&mut e, "s", "aiu");
+    e.live_convert("s", "あいう").expect("変換されるはず");
+    type_str(&mut e, "s", "eo");
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "亜伊宇えお");
+    let r = e.live_convert("s", "あいうえお").expect("変換されるはず");
+    assert_eq!(r.preedit.expect("preedit").text, "亜伊宇絵尾");
+    let calls = backend.calls();
+    assert_eq!(calls.len(), 2, "固定部分は再変換されない: {calls:?}");
+    assert_eq!(calls[1].0, "えお");
+    assert!(calls[1].1.ends_with("亜伊宇"), "{:?}", calls[1].1);
+    // reading が真実: 全 segment の reading の連結は入力の reading と一致する
+    let readings: String = e
+        .snapshot("s")
+        .unwrap()
+        .preedit
+        .segments
+        .iter()
+        .map(|s| s.reading.as_str())
+        .collect();
+    assert_eq!(readings, "あいうえお");
+}
+
+#[test]
+fn live_append_then_backspace_discards_conversion() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    press(&mut e, "s", "a");
+    press(&mut e, "s", "BackSpace");
+    // 固定部分も破棄され、ひらがなで1文字削除された状態
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはいい");
+    // もう一度 Backspace でも変換は復活しない
+    press(&mut e, "s", "BackSpace");
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはい");
+}
+
+#[test]
+fn live_append_enter_commits_fixed_plus_tail_and_learns_only_fixed() {
+    let (mut e, rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    type_str(&mut e, "s", "a");
+    let r = press(&mut e, "s", "Return");
+    assert_eq!(r.commit.as_deref(), Some("今日はいいあ"));
+    let committed = rec.commits.lock().unwrap();
+    let readings: Vec<String> = committed
+        .iter()
+        .flat_map(|c| c.3.iter().map(|s| s.reading.clone()))
+        .collect();
+    assert!(!readings.contains(&"あ".to_string()), "{readings:?}");
+}
+
+#[test]
+fn live_result_for_non_prefix_reading_is_discarded() {
+    let (mut e, _rec) = mock_engine();
+    type_str(&mut e, "s", "kyouhaii");
+    e.live_convert("s", "きょうはいい").expect("変換されるはず");
+    // 文中編集（カーソルが末尾でない）は reading 表示にフォールバックする
+    press(&mut e, "s", "Left");
+    type_str(&mut e, "s", "a");
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "きょうはいあい");
+    // 古くなった reading での live_convert は無視される
+    assert!(e.live_convert("s", "きょうはいい").is_none());
+}
+
 // ---- 文全体N-best（`initial_view = "sentence"`） ----
 
 /// `sentence_candidates` に複数の文全体候補を登録できるテスト用バックエンド。

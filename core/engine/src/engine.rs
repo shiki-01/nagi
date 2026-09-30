@@ -167,7 +167,8 @@ struct Session {
     /// 非同期の LLM 完了に対応する差し替え対象。未操作なら差し替える
     origins: Vec<Origin>,
     /// ライブ変換の結果（Composing 中のみ使う）。`source_reading` が現在の入力全体の reading と
-    /// 一致する間だけ表示に使う。一致しなくなったら（次の入力があった等）自然に無視される
+    /// 一致する、または末尾への追記でその接頭辞になっている（カーソルが末尾）間だけ表示に使う
+    /// （追記分は固定部分の後ろに未変換のかなとして足す。G-43）。それ以外は自然に無視される
     live_conversion: Option<LiveConversion>,
     /// 直前の確定の記憶（`Action::UndoCommit` 用）
     last_commit: Option<LastCommit>,
@@ -182,6 +183,16 @@ struct LiveConversion {
     source_reading: String,
     /// 変換結果のセグメント列（reading を連結すると `source_reading` に一致する）
     segments: Vec<Segment>,
+}
+
+/// 表示に使うライブ変換結果（`Engine::live_view`）
+struct LiveView {
+    /// 変換済みで固定された部分
+    fixed: Vec<Segment>,
+    /// 固定部分の後ろに追記された未変換の部分（追記が無ければ空）
+    tail: Vec<Segment>,
+    /// 固定部分の reading の文字数
+    fixed_chars: usize,
 }
 
 /// 直前の確定の記憶（Ctrl+Backspace での確定取消に使う。確定のたびに置き換わり、
@@ -435,9 +446,17 @@ impl Engine {
         if full_reading != expected_reading {
             return false;
         }
-        let mut segments: Vec<Segment> = Vec::new();
+        // 既存の表示が固定部分として使えるなら、それを再変換せず末尾だけ変換して連結する（G-43）。
+        // 読みが完全一致（追記なし）のときは従来どおり全体を変換し直す
+        let (mut segments, skip) = match Self::live_view(sess, &pieces) {
+            Some(view) if !view.tail.is_empty() => (view.fixed, view.fixed_chars),
+            _ => (Vec::new(), 0),
+        };
         let mut context = sess.left_context.clone();
-        for piece in &pieces {
+        for s in &segments {
+            context.push_str(&s.surface);
+        }
+        for piece in Self::pieces_after(&pieces, skip) {
             match piece.kind {
                 PieceKind::Japanese => {
                     self.convert_japanese_chunked(&piece.text, &mut context, &mut segments);
@@ -454,6 +473,62 @@ impl Engine {
             segments,
         });
         true
+    }
+
+    /// 現在の Composing で表示に使えるライブ変換結果。`source_reading` が現在の reading と一致すれば
+    /// 全体が固定部分、末尾への追記で接頭辞になっていれば（カーソルが末尾のときだけ）固定部分 +
+    /// 追記分（未変換のかな。`SegmentKind` は piece の種類どおり）を返す。それ以外は `None`
+    fn live_view(sess: &Session, pieces: &[Piece]) -> Option<LiveView> {
+        let lc = sess.live_conversion.as_ref()?;
+        let full_reading: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        if lc.source_reading == full_reading {
+            return Some(LiveView {
+                fixed: lc.segments.clone(),
+                tail: Vec::new(),
+                fixed_chars: full_reading.chars().count(),
+            });
+        }
+        let total = full_reading.chars().count();
+        let fixed_chars = lc.source_reading.chars().count();
+        if fixed_chars == 0
+            || !full_reading.starts_with(&lc.source_reading)
+            || sess.composer.cursor() != total
+        {
+            return None;
+        }
+        let mut tail = Vec::new();
+        for piece in Self::pieces_after(pieces, fixed_chars) {
+            let kind = match piece.kind {
+                PieceKind::Japanese => SegmentKind::Japanese,
+                PieceKind::Literal => SegmentKind::Literal,
+            };
+            let id = (lc.segments.len() + tail.len()) as u32;
+            tail.push(Segment::plain(&piece.text, kind, id));
+        }
+        Some(LiveView {
+            fixed: lc.segments.clone(),
+            tail,
+            fixed_chars,
+        })
+    }
+
+    /// `pieces` の先頭 `skip` 文字を取り除いた残りの piece 列
+    fn pieces_after(pieces: &[Piece], skip: usize) -> Vec<Piece> {
+        let mut skip = skip;
+        let mut out = Vec::new();
+        for p in pieces {
+            let len = p.text.chars().count();
+            if skip >= len {
+                skip -= len;
+                continue;
+            }
+            out.push(Piece {
+                kind: p.kind,
+                text: p.text.chars().skip(skip).collect(),
+            });
+            skip = 0;
+        }
+        out
     }
 
     /// 日本語の入力（ひらがなのみ）を `composing_chunk_len` 文字ずつのチャンクに分けて変換し、
@@ -777,6 +852,11 @@ impl Engine {
             // 変換結果を確定して新しい入力を始める
             self.commit_all(sess, commit);
         }
+        // 文中編集は固定部分と対応が取れないので変換結果を捨てる（G-43）
+        // 新規入力の開始でも古い結果を持ち越さない
+        if sess.composer.cursor() != sess.composer.len() || matches!(sess.state, State::Direct) {
+            sess.live_conversion = None;
+        }
         sess.composer.insert_char(c);
         sess.state = State::Composing;
     }
@@ -784,10 +864,13 @@ impl Engine {
     fn apply_composing(&self, sess: &mut Session, action: Action, commit: &mut String) {
         match action {
             Action::Backspace => {
+                // 表示中の変換（固定部分を含む）はすべて破棄し、ひらがなに戻してから1文字削除する
+                sess.live_conversion = None;
                 sess.composer.backspace();
                 self.leave_if_empty(sess);
             }
             Action::DeleteForward => {
+                sess.live_conversion = None;
                 sess.composer.delete();
                 self.leave_if_empty(sess);
             }
@@ -801,6 +884,7 @@ impl Engine {
             Action::MoveCursorEnd => sess.composer.move_end(),
             Action::Cancel => {
                 sess.composer.clear();
+                sess.live_conversion = None;
                 sess.state = State::Direct;
             }
             Action::Commit => self.commit_all(sess, commit),
@@ -995,25 +1079,21 @@ impl Engine {
             State::Direct => None,
             State::Composing => {
                 // 表示中のライブ変換結果（`build_preedit` と同じ条件）。flush 前の reading で照合する
-                let displayed_reading: String = sess
-                    .composer
-                    .pieces()
-                    .iter()
-                    .map(|p| p.text.as_str())
-                    .collect();
-                let live = sess
-                    .live_conversion
-                    .take()
-                    .filter(|lc| lc.source_reading == displayed_reading);
+                let displayed_pieces = sess.composer.pieces();
+                let displayed_reading: String =
+                    displayed_pieces.iter().map(|p| p.text.as_str()).collect();
+                let live = Self::live_view(sess, &displayed_pieces);
+                sess.live_conversion = None;
                 sess.composer.flush_pending();
                 let pieces = sess.composer.pieces();
                 let flushed_text = sess.composer.text();
                 match live {
                     // 保留（単独の n 等）の flush が末尾にだけ足された場合は、その分を後ろに付ける。
                     // カーソルが途中で flush 分が途中に入った場合は対応を取れないので読みで確定する
-                    Some(lc) if flushed_text.starts_with(&displayed_reading) => {
-                        self.notify_commit(sess, &lc.segments);
-                        for s in &lc.segments {
+                    Some(v) if flushed_text.starts_with(&displayed_reading) => {
+                        // 学習するのは変換済みの固定部分だけ（追記分は未変換のかな）
+                        self.notify_commit(sess, &v.fixed);
+                        for s in v.fixed.iter().chain(&v.tail) {
                             commit.push_str(&s.surface);
                         }
                         commit.push_str(&flushed_text[displayed_reading.len()..]);
@@ -1631,13 +1711,12 @@ impl Engine {
             State::Direct => Preedit::default(),
             State::Composing => {
                 let pieces = sess.composer.pieces();
-                let full_reading: String = pieces.iter().map(|p| p.text.as_str()).collect();
-                let live = sess
-                    .live_conversion
-                    .as_ref()
-                    .filter(|lc| lc.source_reading == full_reading);
+                let live = Self::live_view(sess, &pieces);
                 let segments: Vec<Segment> = match live {
-                    Some(lc) => lc.segments.clone(),
+                    Some(mut v) => {
+                        v.fixed.extend(v.tail);
+                        v.fixed
+                    }
                     None => pieces
                         .iter()
                         .enumerate()

@@ -69,11 +69,11 @@
     - {key: "i"}
     - action: live_convert
       reading: "きょうはいい"
-    # 変換結果の後にさらに入力すると、その結果は古くなり表示はひらがなに戻る。確定もその表示に従う
+    # 変換結果の後にさらに入力しても固定部分は保たれ、追記分はかなで後ろに付く（G-43）。確定もその表示に従う
     - key: "a"
-      expect: {preedit: "きょうはいいあ"}
+      expect: {preedit: "今日はいいあ", readings: ["きょうは", "いい", "あ"]}
     - key: "Return"
-      expect: {commit: "きょうはいいあ", state: direct}
+      expect: {commit: "今日はいいあ", state: direct}
 
 # ライブ変換中に soft pending の「ん」があっても、次の子音で「ん」が二重にならない
 - name: live-soft-n-then-consonant-no-duplicate
@@ -93,7 +93,7 @@
     - key: "k"
       expect: {pending: "k", readings: ["かん"]}
     - key: "a"
-      expect: {readings: ["かんか"], preedit: "かんか"}
+      expect: {readings: ["かん", "か"], preedit: "缶か"}
 
 # 単独の n（ハード保留）が表示されたままの Enter: 表示中のライブ変換結果に「ん」が足される
 - name: live-enter-with-pending-n
@@ -112,3 +112,127 @@
       expect: {pending: "n"}
     - key: "Return"
       expect: {commit: "蚊ん", state: direct}
+
+# ---- 追記中の固定部分（G-43） ----
+
+# 追記しても preedit は reading に戻らず、追記分は固定部分の後ろにかな・保留ローマ字で出る。
+# デバウンス後の再変換は末尾だけを対象にし、結果が固定部分に連結される
+- name: live-append-keeps-fixed-and-reconverts-tail
+  backend: mock
+  mock:
+    sentences:
+      "きょうは":
+        - {reading: "きょうは", candidates: ["今日は"]}
+      "いい":
+        - {reading: "いい", candidates: ["良い"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "h"}
+    - {key: "a"}
+    - action: live_convert
+      reading: "きょうは"
+      expect: {preedit: "今日は"}
+    - key: "i"
+      expect: {preedit: "今日はい", readings: ["きょうは", "い"]}
+    - key: "i"
+      expect: {preedit: "今日はいい"}
+    - key: "k"
+      expect: {preedit: "今日はいいk", pending: "k"}
+    - key: "a"
+      expect: {preedit: "今日はいいか", pending: ""}
+    # 未変換の末尾「いいか」だけが変換対象。モックに無い reading は読みのまま
+    - action: live_convert
+      reading: "きょうはいいか"
+      expect: {preedit: "今日はいいか", readings: ["きょうは", "いいか"]}
+
+- name: live-append-tail-converted-and-concatenated
+  backend: mock
+  mock:
+    sentences:
+      "きょうは":
+        - {reading: "きょうは", candidates: ["今日は"]}
+      "いい":
+        - {reading: "いい", candidates: ["良い"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "h"}
+    - {key: "a"}
+    - action: live_convert
+      reading: "きょうは"
+    - {key: "i"}
+    - {key: "i"}
+    - action: live_convert
+      reading: "きょうはいい"
+      expect: {preedit: "今日は良い", readings: ["きょうは", "いい"]}
+    - key: "Return"
+      expect: {commit: "今日は良い", state: direct}
+
+# Backspace: 固定部分も含めて変換を破棄し、ひらがなに戻して1文字削除する
+- name: live-append-backspace-discards-conversion
+  backend: mock
+  mock:
+    sentences:
+      "きょうは":
+        - {reading: "きょうは", candidates: ["今日は"]}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "o"}
+    - {key: "u"}
+    - {key: "h"}
+    - {key: "a"}
+    - action: live_convert
+      reading: "きょうは"
+      expect: {preedit: "今日は"}
+    - key: "i"
+      expect: {preedit: "今日はい"}
+    - key: "BackSpace"
+      expect: {preedit: "きょうは", readings: ["きょうは"]}
+    - key: "BackSpace"
+      expect: {preedit: "きょう"}
+
+# 保留ローマ字だけの状態で Backspace しても変換は破棄される
+- name: live-backspace-on-pending-discards-conversion
+  backend: mock
+  mock:
+    sentences:
+      "か":
+        - {reading: "か", candidates: ["蚊"]}
+  steps:
+    - {key: "k"}
+    - {key: "a"}
+    - action: live_convert
+      reading: "か"
+      expect: {preedit: "蚊"}
+    - key: "k"
+      expect: {preedit: "蚊k"}
+    - key: "BackSpace"
+      expect: {preedit: "か", pending: ""}
+
+# 文中編集（カーソルが末尾でない）は従来どおり reading 表示にフォールバックする
+- name: live-mid-edit-falls-back-to-reading
+  backend: mock
+  mock:
+    sentences:
+      "かき":
+        - {reading: "かき", candidates: ["柿"]}
+  steps:
+    - {key: "k"}
+    - {key: "a"}
+    - {key: "k"}
+    - {key: "i"}
+    - action: live_convert
+      reading: "かき"
+      expect: {preedit: "柿"}
+    - key: "Left"
+    - {key: "u"}
+    - {key: "Right"}
+    - {key: "Right"}
+    - key: "u"
+      expect: {preedit: "かうきう"}

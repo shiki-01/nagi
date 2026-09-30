@@ -293,7 +293,8 @@ Mozc の `segmenter.def` が取得許可外のため、`id.def` の品詞だけ�
 
 - `SelectCand(n)`: 候補窓表示中のみ現在ページの n 番目を選択（確定はしない・窓を閉じる）。非表示なら「確定して数字を新規入力」。Mozc / MS-IME は選択と同時に文節を確定するが、部分確定（Fixed）は Phase 3 なので、今回は選択だけとした
 - `RangeSelecting`（Ctrl+Shift+←/→）と `StyleAction` は enum に宣言のみ。Converting での `ExtendSelection` は消費して何もしない
-- Composing の Enter は「表示中の surface」を確定する。ライブ変換の結果が反映されていればその変換結果、無ければ reading（G-39 で変更。当初はライブ変換 OFF 前提で reading 固定だった）
+- Composing の Enter は「表示中の surface」を確定する。ライブ変換の結果が反映されていればその変換結果（追記中は固定部分 + 追記のかな。G-43）、無ければ reading（G-39 で変更。当初はライブ変換 OFF 前提で reading 固定だった）
+- Composing の Backspace / DeleteForward は、表示中のライブ変換（固定部分を含む）をすべて破棄して reading 表示に戻してから削除する。文中挿入・Cancel・新規入力の開始でも破棄する（G-43）
 - Converting で Left / Right は端で止まる（循環しない）。候補は先頭が現在の表記、次にバックエンド候補、末尾にひらがな・カタカナ（重複除く）
 - 入力中に未割当の Ctrl/Alt/Meta 付き文字キー（Cmd+C など）は、確定してからキーを素通しする（入力を失わない）
 - 「文全体の N-best」（`conversion.initial_view = sentence`）は未実装。候補窓は注目文節の候補のみ
@@ -681,6 +682,15 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 
 ---
 
+### G-42. ローマ字標準テーブルの欠落を Mozc 原本との機械照合で修正（2026-09-30）
+
+- **症状**: 実機で `cya` が「ちゃ」にならない
+- **原因**: `config/romaji/standard.tsv` を手書きで作った際、Mozc の標準テーブルを網羅しなかった。`cya`・`cye` のほか、`kyi`/`kye` 等の `yi`/`ye` 系、`qa`〜`qo`、`kwa`/`gwa`/`swa`/`zwa` 系、`tsa` 系、`twa`/`dwa` 系、`wha` 系、`hwa` 系、`fya` 系、`vya` 系、`xka`/`xke`、`wu`/`ye`、`qq`/`ll`/`xx`/`yy`/`tch`、`xn`、`t'i` 系など計 103 エントリが欠けていた（`cyi`/`cyu`/`cyo` だけ「Ritsuryou-compatible」節に入っていて `cya` だけ漏れていた）
+- **照合方法**: Mozc の原本（`src/data/preedit/romanji-hiragana.tsv`、`cargo xtask fetch-dict` と同じ commit `b9c3fcb` の raw を curl で取得。323 行）と、キー→(出力, 保留) の辞書同士で機械的に差分を取った。取得は xtask には組み込んでいない（テーブルは同梱ソースなので、今回は一度だけ照合）。結果: 欠落 105 件、出力が異なるのは `nn` のみ（Nagi は soft pending 用に保留 `n` を持つ。G-8/G-40）
+- **対応**: 欠落のうち `n`（単独 `n` は flush で「ん」にする既存の設計）と `www`（`ww` の確定を 1 キー遅らせてしまう）を除く 103 件を追加した。Nagi 独自の `n` + 子音（`nk` 等）は維持し、Mozc の `n` 系に合わせて `nq`/`nl`/`nx` を追加した。`/ ? ! ( )` は Mozc の TSV に無く Nagi 独自（従来どおり）。Mozc の `n` と `www` は未採用
+- **ライセンス**: テーブルはリポジトリ内のソースなので、`NOTICE` に Mozc（BSD-3-Clause、Copyright Google Inc.）の帰属とライセンス全文を追記した。従来の「ローマ字テーブルは自作」（G の初期判断）は、標準テーブルは Mozc 由来（自作部分を含む）に改める
+- **テスト**: romaji の `MOZC_CASES`（c 系・拗音・小書き・外来音・促音・撥音・記号・z 系を約 300 件）、`test_cya_row_explicit`、テーブルの形式検査（出力が空でない・保留の整合・重複キー）。Mozc 実機との挙動照合は未実施（テーブル内容のみ照合）
+
 ## H. モバイル対応（2026-09-29）
 
 ユーザー指示「スマホ版の対応を視野に入れる。実装はまだ不要」に基づく。詳細は `mobile-design.md`。
@@ -710,3 +720,14 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - 両 OS とも本体アプリに更新確認を入れる。データ資産（辞書・モデル・プリセット）は再インストールなしで更新できるようにする。アプリ本体は Android が `PackageInstaller` で上書き、iOS は SideStore の更新へ誘導する（iOS は署名済みでないコードを実行できないため）
 - アプリ仕様（キーボード UI・本体アプリの構成・設定項目）は azooKey を参考にする。変換エンジン本体は参考にしない（F の方針どおり）
 - 詳細は `mobile-design.md` §5.0・§6
+
+### G-43. ライブ変換: 追記中は変換結果を固定して表示し、末尾だけ再変換する（2026-09-30）
+
+- **背景**: ライブ変換の表示条件が「`source_reading` と現在の reading の完全一致」（G-25 / G-39）だったため、変換結果の表示後に1文字打つたびに preedit 全体がひらがなに戻り、デバウンス後の結果でまた変換表示に戻る、というちらつきが実機で出た
+- **方針**: 現在の reading が `source_reading` を接頭辞として持ち（末尾への追記）、かつカーソルが末尾なら、既存のライブ変換結果を「固定部分」として保ち、追記分を後ろに未変換の segment（かな・Literal は piece の種類どおり。保留ローマ字は従来どおり `pending`）として足して表示する（`Engine::live_view`）。全体をひらがなに戻さない。`reading` が真実という不変条件は、固定 segment の reading 連結 + 追記 segment の reading = 入力全体の reading で保たれる
+- **末尾のみ再変換**: `live_convert` は固定部分を再変換せず、追記分の piece だけを `convert_japanese_chunked`（`composing_chunk_len` 分割は既存どおり）で変換し、固定部分の後ろに連結する。左文脈は `left_context` + 固定部分の surface。固定部分が「確定表示済みチャンク」、末尾が「編集チャンク」に相当し、G-27 で見送った「編集チャンクのみ再変換」の最適化を追記の場合に限り実現した。読みが完全一致のとき（追記なし）は従来どおり全体を変換し直す。固定部分は Backspace 等で破棄されるまで再変換されない（長く追記し続けると固定部分の文節区切りは最初の変換時のまま。品質より表示の安定を優先）
+- **Backspace**: 表示中の変換（固定部分を含む）をすべて破棄して reading 表示に戻し、通常の Backspace として最後の1文字（保留ローマ字があればその1つ）を削除する。デバウンス後に既存動作どおりライブ変換が再開する。DeleteForward も同様
+- **文中編集のフォールバック**: カーソルが末尾でないときの挿入は変換結果を破棄する。カーソルが末尾でない状態では追記の固定表示も使わず、従来どおり reading 表示（完全一致のときのみ変換表示）。文中の部分再変換は範囲操作（Phase 3）で扱う。Cancel と新規入力の開始でも古い結果を持ち越さない
+- **古い結果の破棄**: `live_convert(expected_reading)` は現在の reading と一致しなければ何もしない（従来どおり）。表示側は `source_reading` が現在の reading の接頭辞として一致する範囲だけ固定部分に採用し、不整合なら reading 表示にする
+- **確定（G-39 との関係）**: Enter は固定部分 + 追記のかなを、表示どおりに確定する。学習通知（`notify_commit`）は変換済みの固定部分のみ。追記分は未変換のかななので学習しない。確定取消は従来どおり reading に戻る
+- **影響**: 既存 golden の2ケース（`live-enter-after-more-input-commits-what-is-displayed`、`live-soft-n-then-consonant-no-duplicate`）の期待値を、追記後もひらがなに戻らない仕様に合わせて変更。追加テストは `engine/tests/golden/110_live_conversion.yaml` と `engine/tests/api.rs`
