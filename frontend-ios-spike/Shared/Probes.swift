@@ -188,6 +188,8 @@ struct DictLoadProbe: ProbeRunner {
             "load_time_ms": elapsedMs,
             "footprint_increase_mb": footprintDiffMB,
             "footprint_after_mb": afterStats.physFootprintMB,
+            "footprint_since_launch_mb": afterStats.physFootprintMB - LaunchBaseline.footprintMB,
+            "launch_footprint_mb": LaunchBaseline.footprintMB,
             "data_dir_source": dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
         ]
 
@@ -666,10 +668,18 @@ private func extractFirstCandidateSurface(from jsonLine: String) -> String? {
     guard let data = jsonLine.data(using: .utf8),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let result = json["result"] as? [String: Any],
-          let preedit = result["preedit"] as? [String: Any],
-          let candidates = preedit["candidates"] as? [[String: Any]],
-          let firstCandidate = candidates.first,
+          let candidates = result["candidates"] as? [String: Any],
+          let items = candidates["items"] as? [[String: Any]],
+          let firstCandidate = items.first,
           let surface = firstCandidate["surface"] as? String else {
+        // 候補が無い場合（Composing 中の応答など）は preedit.text を返す
+        if let data = jsonLine.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let result = json["result"] as? [String: Any],
+           let preedit = result["preedit"] as? [String: Any],
+           let text = preedit["text"] as? String {
+            return text
+        }
         return nil
     }
     return surface

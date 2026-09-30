@@ -7,6 +7,7 @@ class KeyboardViewController: UIInputViewController {
     private var swiftUIView: KeyboardSwiftUIView?
 
     override func viewDidLoad() {
+        LaunchBaseline.capture()
         super.viewDidLoad()
 
         setupUI()
