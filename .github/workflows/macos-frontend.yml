@@ -7,11 +7,15 @@ on:
     paths:
       - "frontend-macos/**"
       - "core/protocol/**"
+      - "core/xtask/**"
+      - "core/server/**"
       - ".github/workflows/macos-frontend.yml"
   pull_request:
     paths:
       - "frontend-macos/**"
       - "core/protocol/**"
+      - "core/xtask/**"
+      - "core/server/**"
       - ".github/workflows/macos-frontend.yml"
 
 jobs:
