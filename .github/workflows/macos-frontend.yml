@@ -29,3 +29,17 @@ jobs:
         run: swift build
       - name: test
         run: swift test
+      - name: Install Rust (rust-toolchain.toml)
+        working-directory: core
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: bundle (Nagi.app, ad-hoc signed)
+        working-directory: core
+        run: cargo xtask bundle-macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nagi.app
+          path: core/target/macos-bundle/Nagi.app.zip
+          if-no-files-found: error

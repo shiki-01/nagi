@@ -3,6 +3,7 @@
 //! タスクは OS 非依存にするため、シェルスクリプトではなくこの crate に Rust で書く。
 
 mod build_dict;
+mod bundle_macos;
 mod fetch_dict;
 mod fetch_model;
 mod types;
@@ -40,6 +41,18 @@ enum Task {
     GenTypes,
     /// gen-types を実行し、生成物に差分がないことを検査する
     CheckTypes,
+    /// Nagi.app を組み立てて ad-hoc 署名し zip 化する（target/macos-bundle/、署名・zip は macOS のみ）
+    BundleMacos {
+        /// swift build するプロダクト（実行ファイル）名
+        #[arg(long, default_value = "NagiIMEApp")]
+        swift_target: String,
+        /// 指定すると swift build せず、このファイルを実行ファイルとして使う
+        #[arg(long)]
+        executable: Option<std::path::PathBuf>,
+        /// imserver を feature llama 付きでビルドする
+        #[arg(long)]
+        llama: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -50,6 +63,15 @@ fn main() -> ExitCode {
         Task::FetchModel { variant } => fetch_model::run(variant),
         Task::GenTypes => types::generate(),
         Task::CheckTypes => types::check(),
+        Task::BundleMacos {
+            swift_target,
+            executable,
+            llama,
+        } => bundle_macos::run(bundle_macos::Options {
+            swift_target,
+            executable,
+            llama,
+        }),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
