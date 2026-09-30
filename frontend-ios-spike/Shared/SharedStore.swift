@@ -32,35 +32,43 @@ class SharedStore {
         fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)
     }
 
-    /// 辞書ファイルのパス（コンテナ内の data/dict/nagi-dict.bin）
-    func dictPath() -> String? {
-        guard let container = containerURL else { return nil }
-        let path = container.appendingPathComponent("data/dict/nagi-dict.bin").path
-        return fileManager.fileExists(atPath: path) ? path : nil
+    /// 辞書ファイルのパス（優先順位: App Group → Bundle）
+    /// - Returns: (path: String?, source: String) source は "appgroup" / "bundle" / "none"
+    func dictPath() -> (path: String?, source: String) {
+        return DataPaths.dictPath(appGroupId: appGroupId)
     }
 
-    /// モデルディレクトリのパス（コンテナ内の data/models）
-    func modelsDir() -> String? {
-        guard let container = containerURL else { return nil }
-        let path = container.appendingPathComponent("data/models").path
-        let isDir = UnsafeMutablePointer<ObjCBool>.allocate(capacity: 1)
-        defer { isDir.deallocate() }
+    /// モデルディレクトリのパス（優先順位: App Group → Bundle）
+    /// - Returns: (path: String?, source: String)
+    func modelsDir() -> (path: String?, source: String) {
+        return DataPaths.modelsDir(appGroupId: appGroupId)
+    }
 
-        guard fileManager.fileExists(atPath: path, isDirectory: isDir),
-              isDir.pointee.boolValue else { return nil }
-        return path
+    /// data ディレクトリのパス（優先順位: App Group → Bundle）
+    /// - Returns: (path: String?, source: String)
+    func dataDir() -> (path: String?, source: String) {
+        return DataPaths.resolveDataDir(appGroupId: appGroupId)
     }
 
     /// 結果を追記（同期的に fsync）
+    /// App Group が使えない場合は Application Support の per-process ディレクトリに記録
     func append(result: ProbeResult) throws {
-        guard let container = containerURL else {
-            throw NSError(domain: "SharedStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "App Group コンテナが利用不可"])
+        let resultsURL: URL
+
+        if let container = containerURL {
+            // App Group 利用可能
+            resultsURL = container.appendingPathComponent(resultsFileName)
+            try fileManager.createDirectory(at: container, withIntermediateDirectories: true)
+        } else {
+            // App Group 利用不可の場合、プロセス固有の Application Support を使用
+            // （ホストアプリとキーボード拡張は別ディレクトリになる）
+            guard let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                throw NSError(domain: "SharedStore", code: 3, userInfo: [NSLocalizedDescriptionKey: "Application Support ディレクトリが見つかりません"])
+            }
+            let resultsDirURL = appSupportURL.appendingPathComponent("com.shiki.nagi.spike")
+            try fileManager.createDirectory(at: resultsDirURL, withIntermediateDirectories: true)
+            resultsURL = resultsDirURL.appendingPathComponent(resultsFileName)
         }
-
-        let resultsURL = container.appendingPathComponent(resultsFileName)
-
-        // ディレクトリを作成（必要に応じて）
-        try fileManager.createDirectory(at: container, withIntermediateDirectories: true)
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -85,10 +93,20 @@ class SharedStore {
     }
 
     /// 結果を読込（最新 N 件）
+    /// App Group が使えない場合は per-process ディレクトリから読む
     func read(last: Int = 100) -> [ProbeResult] {
-        guard let container = containerURL else { return [] }
+        let resultsURL: URL
 
-        let resultsURL = container.appendingPathComponent(resultsFileName)
+        if let container = containerURL {
+            resultsURL = container.appendingPathComponent(resultsFileName)
+        } else {
+            guard let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                return []
+            }
+            let resultsDirURL = appSupportURL.appendingPathComponent("com.shiki.nagi.spike")
+            resultsURL = resultsDirURL.appendingPathComponent(resultsFileName)
+        }
+
         guard let content = try? String(contentsOf: resultsURL, encoding: .utf8) else { return [] }
 
         let decoder = JSONDecoder()
@@ -109,8 +127,18 @@ class SharedStore {
 
     /// すべての結果をクリア
     func clearAll() throws {
-        guard let container = containerURL else { return }
-        let resultsURL = container.appendingPathComponent(resultsFileName)
+        let resultsURL: URL
+
+        if let container = containerURL {
+            resultsURL = container.appendingPathComponent(resultsFileName)
+        } else {
+            guard let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                return
+            }
+            let resultsDirURL = appSupportURL.appendingPathComponent("com.shiki.nagi.spike")
+            resultsURL = resultsDirURL.appendingPathComponent(resultsFileName)
+        }
+
         try fileManager.removeItem(at: resultsURL)
     }
 

@@ -37,15 +37,22 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(dataStatus).font(.system(.body, design: .monospaced))
 
-                            Button("辞書をバンドルからコピー") {
-                                copyDictFromBundle()
+                            if store.containerURL == nil {
+                                Text("App Group が利用不可のため、バンドルの辞書を自動的に使用します")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            } else {
+                                Button("辞書をバンドルからコピー") {
+                                    copyDictFromBundle()
+                                }
+                                .disabled(!canCopyDict())
                             }
-                            .disabled(!canCopyDict())
 
                             if !copyingDict {
                                 Button("モデル(GGUF)をファイルから取り込む") {
                                     showingDocumentPicker = true
                                 }
+                                .disabled(store.containerURL == nil)
                             }
                         }
                         .onAppear { updateDataStatus() }
@@ -109,37 +116,70 @@ struct ContentView: View {
 
             // Tab 3: 結果
             NavigationStack {
-                List {
-                    Section("すべての結果") {
-                        ForEach(allResults.sorted { $0.timestamp > $1.timestamp }, id: \.id) { result in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text("\(result.name) (\(result.process))")
-                                        .font(.headline)
-                                    Spacer()
-                                    Image(systemName: result.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                        .foregroundColor(result.ok ? .green : .red)
-                                }
-                                Text(result.timestamp.formatted())
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                                if !result.metrics.isEmpty {
-                                    Text("メトリクス: \(result.metrics.count) 個")
-                                        .font(.caption)
-                                }
-                            }
-                        }
+                VStack(spacing: 0) {
+                    // サマリ表示（1行テキスト選択可能）
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("結果サマリ")
+                            .font(.headline)
+                            .padding()
+
+                        Text(resultsSummary())
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.systemGray6))
                     }
 
-                    Section {
-                        Button("エクスポート (JSONL)") {
-                            exportResults()
+                    Divider()
+
+                    // 詳細表示（TextEditor）
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("詳細（すべての結果）")
+                            .font(.headline)
+                            .padding()
+
+                        TextEditor(text: .constant(resultsFullText()))
+                            .font(.system(.caption, design: .monospaced))
+                            .disabled(true)
+                            .padding()
+                    }
+
+                    Divider()
+
+                    // アクション
+                    VStack(spacing: 8) {
+                        HStack(spacing: 8) {
+                            Button(action: {
+                                UIPasteboard.general.string = resultsSummary()
+                                alertMessage = "サマリをコピーしました"
+                                showingAlert = true
+                            }) {
+                                Label("コピー", systemImage: "doc.on.doc")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+
+                            ShareLink(item: resultsSummary()) {
+                                Label("共有", systemImage: "square.and.arrow.up")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
                         }
+
+                        Button(action: { exportResults() }) {
+                            Label("エクスポート (JSONL)", systemImage: "arrow.down.doc")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
 
                         Button("すべてクリア", role: .destructive) {
                             clearResults()
                         }
+                        .frame(maxWidth: .infinity)
+
                     }
+                    .padding()
                 }
                 .navigationTitle("結果")
                 .onAppear { loadResults() }
@@ -165,29 +205,34 @@ struct ContentView: View {
     private func updateDataStatus() {
         var status = ""
 
-        if let dictPath = store.dictPath() {
+        let (dictPath, dictSource) = store.dictPath()
+        if let dictPath = dictPath {
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: dictPath))?[.size] as? Int64 ?? 0
-            status += "辞書: あり (\(formatBytes(fileSize)))\n"
+            status += "辞書: あり (\(formatBytes(fileSize))) [\(dictSource)]\n"
         } else {
-            status += "辞書: なし\n"
+            status += "辞書: なし [\(dictSource)]\n"
         }
 
-        if let modelsDir = store.modelsDir() {
+        let (modelsDir, modelsSource) = store.modelsDir()
+        if let modelsDir = modelsDir {
             let files = try? FileManager.default.contentsOfDirectory(atPath: modelsDir)
             let ggufFiles = files?.filter { $0.hasSuffix(".gguf") } ?? []
             if !ggufFiles.isEmpty {
-                status += "モデル: あり (\(ggufFiles.count) 個)\n"
+                status += "モデル: あり (\(ggufFiles.count) 個) [\(modelsSource)]\n"
             } else {
-                status += "モデル: なし\n"
+                status += "モデル: なし [\(modelsSource)]\n"
             }
         } else {
-            status += "モデル: なし\n"
+            status += "モデル: なし [\(modelsSource)]\n"
         }
 
         dataStatus = status
     }
 
     private func canCopyDict() -> Bool {
+        // App Group が利用不可の場合はコピーできない
+        guard store.containerURL != nil else { return false }
+
         if let bundleDict = Bundle.main.url(forResource: "nagi-dict", withExtension: "bin") {
             return FileManager.default.fileExists(atPath: bundleDict.path)
         }
@@ -300,6 +345,40 @@ struct ContentView: View {
     private func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         return formatter.string(fromByteCount: bytes)
+    }
+
+    private func resultsSummary() -> String {
+        let sorted = allResults.sorted { $0.timestamp > $1.timestamp }
+        return sorted.map { result in
+            let status = result.ok ? "ok" : "ng"
+            let metricsStr = result.metrics
+                .sorted { $0.key < $1.key }
+                .map { "\($0.key)=\(String(format: "%.2f", $0.value))" }
+                .joined(separator: ", ")
+            return "\(result.id) | \(result.process) | \(status) | \(metricsStr)"
+        }.joined(separator: "\n")
+    }
+
+    private func resultsFullText() -> String {
+        let sorted = allResults.sorted { $0.timestamp > $1.timestamp }
+        var lines: [String] = []
+        for result in sorted {
+            lines.append("[\(result.timestamp.formatted())] \(result.id) (\(result.process))")
+            lines.append("  status: \(result.ok ? "ok" : "ng")")
+            if !result.metrics.isEmpty {
+                let metricsStr = result.metrics
+                    .sorted { $0.key < $1.key }
+                    .map { "    \($0.key): \(String(format: "%.2f", $0.value))" }
+                    .joined(separator: "\n")
+                lines.append("  metrics:")
+                lines.append(metricsStr)
+            }
+            if !result.note.isEmpty {
+                lines.append("  note: \(result.note)")
+            }
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 

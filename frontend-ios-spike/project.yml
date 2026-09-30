@@ -3,7 +3,7 @@ name: NagiSpike
 options:
   bundleIdPrefix: com.shiki.inputmethod
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "16.1"
   groupSortPosition: top
 
 settings:
@@ -19,12 +19,13 @@ targets:
   NagiSpike:
     type: application
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "16.1"
 
     sources:
       - path: App
       - path: Shared
-      - path: Resources
+      - path: Resources/data
+        type: folder
         optional: true
         buildPhase: resources
 
@@ -63,12 +64,16 @@ targets:
   NagiSpikeKeyboard:
     type: app-extension
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "16.1"
     productName: NagiSpikeKeyboard
 
     sources:
       - path: Keyboard
       - path: Shared
+      - path: Resources/data
+        type: folder
+        optional: true
+        buildPhase: resources
 
     dependencies:
       - sdk: UIKit.framework

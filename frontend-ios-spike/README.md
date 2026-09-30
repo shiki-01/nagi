@@ -125,22 +125,43 @@ Xcode の署名設定：
 
 ### 有効化手順
 
-1. 設定 → 一般 → キーボード → 新しいキーボード
-2. Nagi Spike を探して「追加」
-3. Nagi Spike を許可（Access to Full Access の確認ダイアログ）
+1. ホストアプリ（NagiSpike）を開く
+2. ホームタブで「設定 > 一般 > キーボード > 新しいキーボード で NagiSpikeKeyboard を有効化してください」と表示されているので、その指示に従う
+3. 設定 → 一般 → キーボード → 新しいキーボード で Nagi Spike Keyboard を探して「追加」
+4. Nagi Spike Keyboard を許可（「フルアクセスを許可」ダイアログで「許可」）
+
+### キーボード上でのプローブ実行
+
+1. テキスト入力フィールドを開く
+2. キーボード下部の地球儀アイコンで「Nagi Spike Keyboard」に切り替え
+3. キーボード上に表示される Probe ボタン（appgroup, baseline_memory, dict_load など）をタップして実行
+4. 各ボタン右側にチェックマーク（成功）またはエラーマーク（失敗）が表示される
 
 ### 機能
 
 - Probes をキーボード上で実行（タップボタン）
 - テスト入力ボタン（あ、か、Space、⌫、次のキーボード）
-- 実行結果をホストアプリで確認可能（App Group 共有）
+- 実行結果をホストアプリで確認可能（App Group 共有、または per-process）
+- 「結果を入力欄に挿入」ボタン: キーボード拡張で実行した Probe 結果を、入力フィールドに挿入。ホストアプリのテキストフィールドにコピーして確認可能（App Group が使えない環境向け）
 
 ## App Group が使えない場合（無料アカウント）
 
-`appgroup` Probe が失敗しますが、以下の代替案が用意されています：
+Sideloadly + 無料 Apple ID での導入など、App Group が使えない環境では以下の動作をします：
 
-- 辞書ファイルをキーボード拡張のバンドルに直接含める
-- Probe が App Group 取得失敗を記録するので、その結果自体が検証情報になります
+### 辞書・モデルの自動フォールバック
+- **辞書**: App Group コンテナが無い場合、バンドルに同梱された `Resources/data/dict/nagi-dict.bin` を自動的に使用
+- **モデル**: App Group が無いため、ファイルインポート機能は無効化（ホストアプリの「モデルをインポート」ボタンがグレイアウト）
+- 各プローブの metrics には `data_dir_source` を記録（"appgroup" / "bundle" / "none"）
+
+### 結果の記録場所
+- App Group が利用可能: `~/Library/Group Containers/group.com.shiki.nagi.spike/results.jsonl`
+- App Group が利用不可（無料アカウント）:
+  - ホストアプリ: `~/Library/Application Support/com.shiki.nagi.spike/results.jsonl`
+  - キーボード拡張: `~/Library/Application Support/com.shiki.nagi.spike/results.jsonl`（別プロセスなので別ファイル）
+
+### 結果の共有方法（App Group 無しの場合）
+- **ホストアプリ**: 結果タブに 1 行サマリを表示。「コピー」ボタンまたは ShareLink で共有可能
+- **キーボード拡張**: 「結果を入力欄に挿入」ボタンで、プローブ結果を入力フィールドに挿入。ホストアプリのテキストフィールドにコピーして確認可能
 
 ## JSON-RPC プロトコル
 

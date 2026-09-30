@@ -103,16 +103,26 @@ struct DictLoadProbe: ProbeRunner {
         var note = ""
         var ok = false
 
-        guard let dictPath = context.store.dictPath() else {
-            note = "辞書ファイルが見つかりません。コンテナの data/dict/nagi-dict.bin をチェックしてください"
+        let (dictPath, dataDirSource) = context.store.dictPath()
+        guard let dictPath = dictPath else {
+            note = "辞書ファイルが見つかりません。バンドルまたはコンテナの data/dict/nagi-dict.bin をチェックしてください（source: \(dataDirSource)）"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
 
         let baselineStats = MemoryProbe.getStats()
         let startTime = Date()
 
-        guard let engine = NagiEngine(dataDir: context.store.containerURL!.path + "/data", userDir: nil, noLLM: true) else {
+        let (dataDir, _) = context.store.dataDir()
+        guard let dataDir = dataDir else {
+            note = "data ディレクトリが見つかりません"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
+            return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
+        }
+
+        guard let engine = NagiEngine(dataDir: dataDir, userDir: nil, noLLM: true) else {
             note = "NagiEngine の生成に失敗（C ABI エラー）"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
 
@@ -125,11 +135,12 @@ struct DictLoadProbe: ProbeRunner {
         metrics = [
             "load_time_ms": elapsedMs,
             "footprint_increase_mb": footprintDiffMB,
-            "footprint_after_mb": afterStats.physFootprintMB
+            "footprint_after_mb": afterStats.physFootprintMB,
+            "data_dir_source": dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
         ]
 
         ok = true
-        note = "Profile: \(engine.notes)"
+        note = "Profile: \(engine.notes) (source: \(dataDirSource))"
 
         return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
     }
@@ -146,9 +157,13 @@ struct LatencyProbe: ProbeRunner {
         var ok = false
 
         guard let engine = createEngine(context: context) else {
+            let (_, dataDirSource) = context.store.dataDir()
             note = "エンジン生成失敗"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
+
+        let (_, dataDirSource) = context.store.dataDir()
 
         var latencies: [Double] = []
         var spaceLatencies: [Double] = []
@@ -213,8 +228,10 @@ struct LatencyProbe: ProbeRunner {
             metrics["space_max_ms"] = maxLatency
         }
 
+        metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
+
         ok = !latencies.isEmpty
-        note = "目標: ひらがな p95 < 16ms, Space p95 < 150ms"
+        note = "目標: ひらがな p95 < 16ms, Space p95 < 150ms (source: \(dataDirSource))"
 
         return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
     }
@@ -230,9 +247,11 @@ struct MemoryRampProbe: ProbeRunner {
         var note = "メモリ段階的確保（強制終了対応テスト。再起動後に最後の記録値を確認可能）"
         var ok = false
 
+        let (_, dataDirSource) = context.store.dataDir()
         let startStats = MemoryProbe.getStats()
         metrics["start_available_mb"] = startStats.availableMemoryMB
         metrics["start_footprint_mb"] = startStats.physFootprintMB
+        metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
 
         let chunkSizeMB = 8
         var allocations: [Data] = []
@@ -308,14 +327,24 @@ struct ColdstartProbe: ProbeRunner {
         var note = ""
         var ok = false
 
-        guard let dictPath = context.store.dictPath() else {
-            note = "辞書ファイルが見つかりません"
+        let (dictPath, dataDirSource) = context.store.dictPath()
+        guard let dictPath = dictPath else {
+            note = "辞書ファイルが見つかりません（source: \(dataDirSource)）"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
 
         let startTime = Date()
-        guard let engine = NagiEngine(dataDir: context.store.containerURL!.path + "/data", userDir: nil, noLLM: true) else {
+        let (dataDir, _) = context.store.dataDir()
+        guard let dataDir = dataDir else {
+            note = "data ディレクトリが見つかりません"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
+            return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
+        }
+
+        guard let engine = NagiEngine(dataDir: dataDir, userDir: nil, noLLM: true) else {
             note = "エンジン生成失敗"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
 
@@ -336,9 +365,10 @@ struct ColdstartProbe: ProbeRunner {
         metrics["engine_creation_ms"] = totalElapsed - keyElapsed
         metrics["first_key_ms"] = keyElapsed
         metrics["total_ms"] = totalElapsed
+        metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
 
         ok = true
-        note = "目標: < 2000ms（light は < 300ms）"
+        note = "目標: < 2000ms（light は < 300ms）(source: \(dataDirSource))"
 
         return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
     }
@@ -355,8 +385,10 @@ struct LLMLoadProbe: ProbeRunner {
         var ok = false
 
         #if NAGI_LLM
-        guard let modelsDir = context.store.modelsDir() else {
-            note = "モデルディレクトリが見つかりません"
+        let (modelsDir, dataDirSource) = context.store.modelsDir()
+        guard let modelsDir = modelsDir else {
+            note = "モデルディレクトリが見つかりません（source: \(dataDirSource)）"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
 
@@ -379,8 +411,16 @@ struct LLMLoadProbe: ProbeRunner {
         let baselineStats = MemoryProbe.getStats()
         let startTime = Date()
 
-        guard let engine = NagiEngine(dataDir: context.store.containerURL!.path + "/data", userDir: nil, noLLM: false) else {
+        let (dataDir, _) = context.store.dataDir()
+        guard let dataDir = dataDir else {
+            note = "data ディレクトリが見つかりません"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
+            return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
+        }
+
+        guard let engine = NagiEngine(dataDir: dataDir, userDir: nil, noLLM: false) else {
             note = "LLM エンジン生成失敗"
+            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
             return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
         }
 
@@ -402,9 +442,10 @@ struct LLMLoadProbe: ProbeRunner {
         """
         _ = engine.send(line: spaceReq)
         metrics["first_space_ms"] = Date().timeIntervalSince(spaceStart) * 1000.0
+        metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
 
         ok = true
-        note = "LLM ロード成功。推論エンジンが有効です"
+        note = "LLM ロード成功。推論エンジンが有効です（source: \(dataDirSource)）"
         #else
         note = "LLM 非対応ビルド（NAGI_LLM フラグが無い）"
         ok = false
@@ -469,8 +510,9 @@ struct ThermalBatteryProbe: ProbeRunner {
 // MARK: - Helper Functions
 
 private func createEngine(context: ProbeContext) -> NagiEngine? {
-    guard let container = context.store.containerURL else { return nil }
-    return NagiEngine(dataDir: container.path + "/data", userDir: nil, noLLM: true)
+    let (dataDir, _) = context.store.dataDir()
+    guard let dataDir = dataDir else { return nil }
+    return NagiEngine(dataDir: dataDir, userDir: nil, noLLM: true)
 }
 
 private func makeResult(id: String, name: String, ok: Bool, metrics: [String: Double], note: String, process: String) -> ProbeResult {

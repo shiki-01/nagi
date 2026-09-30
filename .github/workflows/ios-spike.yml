@@ -60,8 +60,8 @@ jobs:
 
       - name: 辞書をアプリのリソースへ配置
         run: |
-          mkdir -p frontend-ios-spike/Resources
-          cp data/dict/nagi-dict.bin frontend-ios-spike/Resources/
+          mkdir -p frontend-ios-spike/Resources/data/dict
+          cp data/dict/nagi-dict.bin frontend-ios-spike/Resources/data/dict/
 
       - name: Xcode プロジェクトを生成
         working-directory: frontend-ios-spike

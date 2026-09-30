@@ -67,6 +67,7 @@ struct KeyboardSwiftUIView: View {
     @State private var results: [ProbeResult] = []
     @State private var selectedProbe: String?
     @State private var isRunning = false
+    @State private var showInsertResultsAlert = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -119,37 +120,50 @@ struct KeyboardSwiftUIView: View {
 
             Divider()
 
-            // テスト入力ボタン
-            HStack(spacing: 4) {
-                Button("あ") { insertTextHandler("あ") }
-                    .frame(maxWidth: .infinity)
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(4)
+            Divider()
 
-                Button("か") { insertTextHandler("か") }
-                    .frame(maxWidth: .infinity)
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(4)
+            // テスト入力ボタン・結果挿入ボタン
+            VStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    Button("あ") { insertTextHandler("あ") }
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(4)
 
-                Button("Space") { insertTextHandler(" ") }
-                    .frame(maxWidth: .infinity)
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(4)
+                    Button("か") { insertTextHandler("か") }
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(4)
 
-                Button("⌫") { deleteBackwardHandler() }
-                    .frame(maxWidth: .infinity)
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(4)
+                    Button("Space") { insertTextHandler(" ") }
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(4)
 
-                Button("Next") { advanceToNextInputModeHandler() }
-                    .frame(maxWidth: .infinity)
-                    .padding(8)
-                    .background(Color(.systemGray5))
-                    .cornerRadius(4)
+                    Button("⌫") { deleteBackwardHandler() }
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(4)
+
+                    Button("Next") { advanceToNextInputModeHandler() }
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
+                        .background(Color(.systemGray5))
+                        .cornerRadius(4)
+                }
+
+                Button(action: { insertResultsToTextField() }) {
+                    Text("結果を入力欄に挿入")
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
+                        .background(Color.green)
+                        .foregroundColor(.white)
+                        .cornerRadius(4)
+                }
             }
             .padding()
         }
@@ -192,6 +206,30 @@ struct KeyboardSwiftUIView: View {
 
     private func loadResults() {
         results = store.read(last: 100).filter { $0.process == "keyboard" }
+    }
+
+    private func insertResultsToTextField() {
+        let resultLines = results.map { result in
+            let status = result.ok ? "ok" : "ng"
+            let metricsStr = result.metrics
+                .sorted { $0.key < $1.key }
+                .map { "\($0.key)=\(String(format: "%.2f", $0.value))" }
+                .joined(separator: ", ")
+            return "\(result.id) | \(result.process) | \(status) | \(metricsStr)"
+        }
+
+        let insertText = resultLines.joined(separator: "\n")
+        if !insertText.isEmpty {
+            // テキスト入力（行が長い場合は複数行に分割）
+            let lines = insertText.split(separator: "\n", omittingEmptySubsequences: true)
+            for (index, line) in lines.enumerated() {
+                if index > 0 {
+                    // 複数行の場合は前の行の後に改行を挿入（省略）
+                }
+            }
+            // 一度に全て挿入
+            insertTextHandler(insertText)
+        }
     }
 }
 
