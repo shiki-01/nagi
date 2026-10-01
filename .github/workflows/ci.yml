@@ -60,3 +60,36 @@ jobs:
         run: cargo install typeshare-cli --locked
       - name: Regenerate Swift types and check diff
         run: cargo xtask check-types
+
+  # モバイル向けクロスビルドの確認（docs/mobile-design.md §3 の制約を守れているかの検査）。
+  # check のみで、C/C++ 依存（llama 等）は含めない。NDK / Xcode は不要
+  mobile:
+    name: mobile check (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+          - target: aarch64-apple-ios
+            os: macos-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: ${{ matrix.target }}
+      # nagi-infer は feature llama 無し（既定）。dict は D-1（memmap2 導入）の影響を受ける
+      - name: check
+        run: >-
+          cargo check --target ${{ matrix.target }}
+          -p nagi-engine -p nagi-romaji -p nagi-dict
+          -p nagi-protocol -p nagi-profile -p nagi-infer
