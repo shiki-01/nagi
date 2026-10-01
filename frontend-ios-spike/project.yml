@@ -98,6 +98,8 @@ targets:
           - group.com.shiki.nagi.spike
         NSExtension:
           NSExtensionAttributes:
+            PrimaryLanguage: ja-JP
+            IsASCIICapable: false
             RequestsOpenAccess: false
           NSExtensionPointIdentifier: com.apple.keyboard-service
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).KeyboardViewController"
