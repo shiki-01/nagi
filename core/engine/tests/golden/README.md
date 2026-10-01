@@ -41,6 +41,10 @@
         result_candidates_present: false
         revision_increased: true       # 応答の revision が前のステップより増えたか
     - action: focus_out    # focus_in | focus_out | reset | restore
+    - action: insert_reading   # ローマ字を経由せずかなを挿入（タッチ入力）
+      reading: "あ"
+    - action: perform_action   # キーマップを経由せず Action を直接実行
+      perform: {type: move_cursor, content: left}   # ActionSpec（unit は {type: commit}）
     - action: restore
       restore:
         segments: [{reading: "かな", surface: "かな", kind: japanese}]

@@ -177,6 +177,21 @@ public struct InitializeResult: Codable {
 	}
 }
 
+/// `insert_reading` メソッドのパラメータ（フリック・12キー等のタッチ入力用）
+/// 
+/// `reading` をローマ字変換を経由せずカーソル位置へ挿入する。応答は `process_key` と同じ
+public struct InsertReadingParams: Codable {
+	/// セッション ID
+	public let session_id: String
+	/// 挿入するかな読み（ひらがな・カタカナ・記号など。ローマ字バッファは使われない）
+	public let reading: String
+
+	public init(session_id: String, reading: String) {
+		self.session_id = session_id
+		self.reading = reading
+	}
+}
+
 /// 整数項目の範囲
 public struct IntRange: Codable {
 	/// 最小値
@@ -268,6 +283,241 @@ public struct NotifyParams: Codable {
 		self.level = level
 		self.message = message
 		self.code = code
+	}
+}
+
+/// `perform_action` で指定できる Action（エンジンの `Action` のうちタッチ UI から直接実行できるもの）
+/// 
+/// 文字挿入は `insert_reading`、キーの素通し系（`CommitAndPassThrough`）は物理キー専用なので含まない
+public enum ActionSpec: Codable {
+	/// 変換開始（Space）
+	case startConvert
+	/// 予測変換
+	case predict
+	/// 次の候補へ
+	case nextCand
+	/// 前の候補へ
+	case prevCand
+	/// 候補を選択（1-based。ページ相対）
+	case selectCand(UInt32)
+	/// 確定
+	case commit
+	/// 取消
+	case cancel
+	/// バックスペース
+	case backspace
+	/// 削除
+	case deleteForward
+	/// カーソル移動
+	case moveCursor(ActionDirection)
+	/// カーソルを先頭へ
+	case moveCursorHome
+	/// カーソルを末尾へ
+	case moveCursorEnd
+	/// 注目文節の移動
+	case moveFocus(ActionDirection)
+	/// 文節区切りの伸縮
+	case resizeSegment(ActionDirection)
+	/// 複数文節の選択
+	case extendSelection(ActionDirection)
+	/// 注目文節の学習を削除
+	case deleteLearning
+	/// カタカナに変換
+	case toKatakana
+	/// ひらがなに変換
+	case toHiragana
+	/// 半角化
+	case toHankaku
+	/// 入力モードを設定
+	case setMode(InputMode)
+	/// 入力モードをトグル
+	case toggleMode
+	/// 直前の確定を取り消す
+	case undoCommit
+
+	enum CodingKeys: String, CodingKey, Codable {
+		case startConvert = "start_convert",
+			predict,
+			nextCand = "next_cand",
+			prevCand = "prev_cand",
+			selectCand = "select_cand",
+			commit,
+			cancel,
+			backspace,
+			deleteForward = "delete_forward",
+			moveCursor = "move_cursor",
+			moveCursorHome = "move_cursor_home",
+			moveCursorEnd = "move_cursor_end",
+			moveFocus = "move_focus",
+			resizeSegment = "resize_segment",
+			extendSelection = "extend_selection",
+			deleteLearning = "delete_learning",
+			toKatakana = "to_katakana",
+			toHiragana = "to_hiragana",
+			toHankaku = "to_hankaku",
+			setMode = "set_mode",
+			toggleMode = "toggle_mode",
+			undoCommit = "undo_commit"
+	}
+
+	private enum ContainerCodingKeys: String, CodingKey {
+		case type, content
+	}
+
+	public init(from decoder: Decoder) throws {
+		let container = try decoder.container(keyedBy: ContainerCodingKeys.self)
+		if let type = try? container.decode(CodingKeys.self, forKey: .type) {
+			switch type {
+			case .startConvert:
+				self = .startConvert
+				return
+			case .predict:
+				self = .predict
+				return
+			case .nextCand:
+				self = .nextCand
+				return
+			case .prevCand:
+				self = .prevCand
+				return
+			case .selectCand:
+				if let content = try? container.decode(UInt32.self, forKey: .content) {
+					self = .selectCand(content)
+					return
+				}
+			case .commit:
+				self = .commit
+				return
+			case .cancel:
+				self = .cancel
+				return
+			case .backspace:
+				self = .backspace
+				return
+			case .deleteForward:
+				self = .deleteForward
+				return
+			case .moveCursor:
+				if let content = try? container.decode(ActionDirection.self, forKey: .content) {
+					self = .moveCursor(content)
+					return
+				}
+			case .moveCursorHome:
+				self = .moveCursorHome
+				return
+			case .moveCursorEnd:
+				self = .moveCursorEnd
+				return
+			case .moveFocus:
+				if let content = try? container.decode(ActionDirection.self, forKey: .content) {
+					self = .moveFocus(content)
+					return
+				}
+			case .resizeSegment:
+				if let content = try? container.decode(ActionDirection.self, forKey: .content) {
+					self = .resizeSegment(content)
+					return
+				}
+			case .extendSelection:
+				if let content = try? container.decode(ActionDirection.self, forKey: .content) {
+					self = .extendSelection(content)
+					return
+				}
+			case .deleteLearning:
+				self = .deleteLearning
+				return
+			case .toKatakana:
+				self = .toKatakana
+				return
+			case .toHiragana:
+				self = .toHiragana
+				return
+			case .toHankaku:
+				self = .toHankaku
+				return
+			case .setMode:
+				if let content = try? container.decode(InputMode.self, forKey: .content) {
+					self = .setMode(content)
+					return
+				}
+			case .toggleMode:
+				self = .toggleMode
+				return
+			case .undoCommit:
+				self = .undoCommit
+				return
+			}
+		}
+		throw DecodingError.typeMismatch(ActionSpec.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for ActionSpec"))
+	}
+
+	public func encode(to encoder: Encoder) throws {
+		var container = encoder.container(keyedBy: ContainerCodingKeys.self)
+		switch self {
+		case .startConvert:
+			try container.encode(CodingKeys.startConvert, forKey: .type)
+		case .predict:
+			try container.encode(CodingKeys.predict, forKey: .type)
+		case .nextCand:
+			try container.encode(CodingKeys.nextCand, forKey: .type)
+		case .prevCand:
+			try container.encode(CodingKeys.prevCand, forKey: .type)
+		case .selectCand(let content):
+			try container.encode(CodingKeys.selectCand, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .commit:
+			try container.encode(CodingKeys.commit, forKey: .type)
+		case .cancel:
+			try container.encode(CodingKeys.cancel, forKey: .type)
+		case .backspace:
+			try container.encode(CodingKeys.backspace, forKey: .type)
+		case .deleteForward:
+			try container.encode(CodingKeys.deleteForward, forKey: .type)
+		case .moveCursor(let content):
+			try container.encode(CodingKeys.moveCursor, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .moveCursorHome:
+			try container.encode(CodingKeys.moveCursorHome, forKey: .type)
+		case .moveCursorEnd:
+			try container.encode(CodingKeys.moveCursorEnd, forKey: .type)
+		case .moveFocus(let content):
+			try container.encode(CodingKeys.moveFocus, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .resizeSegment(let content):
+			try container.encode(CodingKeys.resizeSegment, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .extendSelection(let content):
+			try container.encode(CodingKeys.extendSelection, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .deleteLearning:
+			try container.encode(CodingKeys.deleteLearning, forKey: .type)
+		case .toKatakana:
+			try container.encode(CodingKeys.toKatakana, forKey: .type)
+		case .toHiragana:
+			try container.encode(CodingKeys.toHiragana, forKey: .type)
+		case .toHankaku:
+			try container.encode(CodingKeys.toHankaku, forKey: .type)
+		case .setMode(let content):
+			try container.encode(CodingKeys.setMode, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .toggleMode:
+			try container.encode(CodingKeys.toggleMode, forKey: .type)
+		case .undoCommit:
+			try container.encode(CodingKeys.undoCommit, forKey: .type)
+		}
+	}
+}
+
+/// `perform_action` メソッドのパラメータ（キーマップ解決を経由せず状態機械を駆動する）
+public struct PerformActionParams: Codable {
+	/// セッション ID
+	public let session_id: String
+	/// 実行する Action
+	public let action: ActionSpec
+
+	public init(session_id: String, action: ActionSpec) {
+		self.session_id = session_id
+		self.action = action
 	}
 }
 
@@ -365,7 +615,7 @@ public struct ProcessKeyParams: Codable {
 	}
 }
 
-/// `process_key` / `focus_out` / `select_candidate` / `reconvert` / `restore_session` / `reset` の共通応答（描画差分）
+/// `process_key` / `insert_reading` / `perform_action` / `focus_out` / `select_candidate` / `reconvert` / `restore_session` / `reset` の共通応答（描画差分）
 public struct ProcessKeyResult: Codable {
 	/// キーが消費されたか（IME が処理を行ったか）
 	public let consumed: Bool
@@ -865,4 +1115,12 @@ public struct UpdateSettingsResult: Codable {
 		self.errors = errors
 		self.snapshot = snapshot
 	}
+}
+
+/// カーソル・文節操作の方向
+public enum ActionDirection: String, Codable {
+	/// 左
+	case left
+	/// 右
+	case right
 }

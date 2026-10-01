@@ -28,6 +28,10 @@ pub mod method {
     pub const GET_SETTINGS: &str = "get_settings";
     /// `update_settings` メソッド（設定の書き込み）
     pub const UPDATE_SETTINGS: &str = "update_settings";
+    /// `insert_reading` メソッド（ローマ字を経由しないかな読みの挿入）
+    pub const INSERT_READING: &str = "insert_reading";
+    /// `perform_action` メソッド（Action の直接実行）
+    pub const PERFORM_ACTION: &str = "perform_action";
     /// `select_candidate` メソッド
     pub const SELECT_CANDIDATE: &str = "select_candidate";
     /// `reconvert` メソッド
@@ -151,7 +155,93 @@ impl ProcessKeyParams {
     }
 }
 
-/// `process_key` / `focus_out` / `select_candidate` / `reconvert` / `restore_session` / `reset` の共通応答（描画差分）
+/// `insert_reading` メソッドのパラメータ（フリック・12キー等のタッチ入力用）
+///
+/// `reading` をローマ字変換を経由せずカーソル位置へ挿入する。応答は `process_key` と同じ
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InsertReadingParams {
+    /// セッション ID
+    pub session_id: String,
+    /// 挿入するかな読み（ひらがな・カタカナ・記号など。ローマ字バッファは使われない）
+    pub reading: String,
+}
+
+/// カーソル・文節操作の方向
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionDirection {
+    /// 左
+    Left,
+    /// 右
+    Right,
+}
+
+/// `perform_action` で指定できる Action（エンジンの `Action` のうちタッチ UI から直接実行できるもの）
+///
+/// 文字挿入は `insert_reading`、キーの素通し系（`CommitAndPassThrough`）は物理キー専用なので含まない
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content", rename_all = "snake_case")]
+pub enum ActionSpec {
+    /// 変換開始（Space）
+    StartConvert,
+    /// 予測変換
+    Predict,
+    /// 次の候補へ
+    NextCand,
+    /// 前の候補へ
+    PrevCand,
+    /// 候補を選択（1-based。ページ相対）
+    SelectCand(u32),
+    /// 確定
+    Commit,
+    /// 取消
+    Cancel,
+    /// バックスペース
+    Backspace,
+    /// 削除
+    DeleteForward,
+    /// カーソル移動
+    MoveCursor(ActionDirection),
+    /// カーソルを先頭へ
+    MoveCursorHome,
+    /// カーソルを末尾へ
+    MoveCursorEnd,
+    /// 注目文節の移動
+    MoveFocus(ActionDirection),
+    /// 文節区切りの伸縮
+    ResizeSegment(ActionDirection),
+    /// 複数文節の選択
+    ExtendSelection(ActionDirection),
+    /// 注目文節の学習を削除
+    DeleteLearning,
+    /// カタカナに変換
+    ToKatakana,
+    /// ひらがなに変換
+    ToHiragana,
+    /// 半角化
+    ToHankaku,
+    /// 入力モードを設定
+    SetMode(InputMode),
+    /// 入力モードをトグル
+    ToggleMode,
+    /// 直前の確定を取り消す
+    UndoCommit,
+}
+
+/// `perform_action` メソッドのパラメータ（キーマップ解決を経由せず状態機械を駆動する）
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerformActionParams {
+    /// セッション ID
+    pub session_id: String,
+    /// 実行する Action
+    pub action: ActionSpec,
+}
+
+/// `process_key` / `insert_reading` / `perform_action` / `focus_out` / `select_candidate` / `reconvert` / `restore_session` / `reset` の共通応答（描画差分）
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ProcessKeyResult {

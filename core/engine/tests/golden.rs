@@ -6,7 +6,7 @@ use nagi_engine::{
     Engine, EngineConfig, KanaBackend, MockBackend, SessionSnapshot, StateKind, key_from_text,
     parse_key,
 };
-use nagi_protocol::methods::{ProcessKeyResult, RestoreSegment, RestoreSessionParams};
+use nagi_protocol::methods::{ActionSpec, ProcessKeyResult, RestoreSegment, RestoreSessionParams};
 use nagi_protocol::view::{InputMode, SegmentKind};
 use nagi_romaji::{PunctuationStyle, ShiftLetterMode};
 use serde::Deserialize;
@@ -93,10 +93,13 @@ struct RestoreSegSpec {
 struct Step {
     #[serde(default)]
     key: Option<KeySpec>,
-    /// `focus_in` | `focus_out` | `reset` | `restore` | `live_convert`
+    /// `focus_in` | `focus_out` | `reset` | `restore` | `live_convert` | `insert_reading` | `perform_action`
     #[serde(default)]
     action: Option<String>,
-    /// `action: live_convert` の期待 reading（サーバーがデバウンス後に渡す入力全体の読み）
+    /// `action: perform_action` の Action（プロトコルの `ActionSpec` と同じ形: `{type: ..., content: ...}`）
+    #[serde(default)]
+    perform: Option<ActionSpec>,
+    /// `action: live_convert` / `insert_reading` の reading（サーバーがデバウンス後に渡す入力全体の読み）
     #[serde(default)]
     reading: Option<String>,
     #[serde(default)]
@@ -369,6 +372,20 @@ fn run_case(case: &Case) -> Vec<String> {
             (None, Some("focus_in")) => engine.focus_in(&case.session),
             (None, Some("focus_out")) => engine.focus_out(&case.session),
             (None, Some("reset")) => engine.reset(&case.session),
+            (None, Some("insert_reading")) => {
+                let reading = step
+                    .reading
+                    .as_deref()
+                    .expect("action: insert_reading には reading: が必要");
+                engine.insert_reading(&case.session, reading)
+            }
+            (None, Some("perform_action")) => {
+                let spec = step
+                    .perform
+                    .as_ref()
+                    .expect("action: perform_action には perform: が必要");
+                engine.perform_action(&case.session, spec)
+            }
             (None, Some("live_convert")) => {
                 let reading = step
                     .reading

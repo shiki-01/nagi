@@ -15,7 +15,9 @@ use crate::kana::to_katakana;
 use crate::keymap::{KeyContext, KeyMap};
 use crate::observer::{CommitContext, CommitObserver, CommittedSegment};
 use nagi_protocol::key::{KeyEvent, KeyKind};
-use nagi_protocol::methods::{ProcessKeyResult, RestoreSessionParams, SetContextParams};
+use nagi_protocol::methods::{
+    ActionSpec, ProcessKeyResult, RestoreSessionParams, SetContextParams,
+};
 use nagi_protocol::utf16;
 use nagi_protocol::view::{CandidateView, CandidatesView, InputMode, PreeditView};
 use nagi_rewriter::Rewriter;
@@ -346,6 +348,53 @@ impl Engine {
         sess.origins.clear();
         let mut commit = String::new();
         let consumed = self.handle_key(&mut sess, key, &mut commit);
+        let result = self.finish(&mut sess, consumed, commit);
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// `insert_reading` メソッド: かな読みをローマ字変換を経由せずカーソル位置へ挿入する。
+    /// 未確定のローマ字（`n` 等）は先に確定してから挿入する（`Composer::insert_char` の非 ASCII
+    /// 挿入と同じ扱い）。Converting 中なら変換結果を確定して新しい入力を始める。
+    /// 挿入できる文字が無ければ消費しない
+    pub fn insert_reading(&mut self, session_id: &str, reading: &str) -> ProcessKeyResult {
+        let mut sess = self.take_session(session_id);
+        sess.origins.clear();
+        sess.last_commit = None;
+        let mut commit = String::new();
+        let mut chars = reading.chars().filter(|c| !c.is_control());
+        let consumed = match chars.next() {
+            Some(first) => {
+                self.insert_char(&mut sess, first, &mut commit);
+                for c in chars {
+                    sess.composer.insert_char(c);
+                }
+                true
+            }
+            None => false,
+        };
+        let result = self.finish(&mut sess, consumed, commit);
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// `perform_action` メソッド: キーマップを経由せず Action を直接適用する。
+    /// 未入力（Direct）で意味を持たない Action は消費せず、フロントがホストへ素通しできるようにする
+    /// （物理キーの未割当と同じ。モード操作・確定取消・`NoOp` 相当を除く）
+    pub fn perform_action(&mut self, session_id: &str, spec: &ActionSpec) -> ProcessKeyResult {
+        let mut sess = self.take_session(session_id);
+        sess.origins.clear();
+        let action = Action::from(spec);
+        if !matches!(action, Action::UndoCommit) {
+            sess.last_commit = None;
+        }
+        let mut commit = String::new();
+        let passthrough = matches!(sess.state, State::Direct)
+            && !matches!(
+                action,
+                Action::SetMode(_) | Action::ToggleMode | Action::UndoCommit
+            );
+        let consumed = !passthrough && self.apply(&mut sess, action, &mut commit);
         let result = self.finish(&mut sess, consumed, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result

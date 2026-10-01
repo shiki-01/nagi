@@ -1,5 +1,6 @@
 //! キー入力から得られるアクション（Action enum）
 
+use nagi_protocol::methods::{ActionDirection, ActionSpec};
 use nagi_protocol::view::InputMode;
 use std::fmt;
 
@@ -68,6 +69,45 @@ pub enum Action {
     UndoCommit,
     /// キーを消費するだけで何もしない
     NoOp,
+}
+
+impl From<ActionDirection> for Direction {
+    fn from(d: ActionDirection) -> Self {
+        match d {
+            ActionDirection::Left => Direction::Left,
+            ActionDirection::Right => Direction::Right,
+        }
+    }
+}
+
+impl From<&ActionSpec> for Action {
+    /// `perform_action` の指定をエンジンの Action へ変換する
+    fn from(spec: &ActionSpec) -> Self {
+        match spec {
+            ActionSpec::StartConvert => Action::StartConvert,
+            ActionSpec::Predict => Action::Predict,
+            ActionSpec::NextCand => Action::NextCand,
+            ActionSpec::PrevCand => Action::PrevCand,
+            ActionSpec::SelectCand(n) => Action::SelectCand(*n as usize),
+            ActionSpec::Commit => Action::Commit,
+            ActionSpec::Cancel => Action::Cancel,
+            ActionSpec::Backspace => Action::Backspace,
+            ActionSpec::DeleteForward => Action::DeleteForward,
+            ActionSpec::MoveCursor(d) => Action::MoveCursor((*d).into()),
+            ActionSpec::MoveCursorHome => Action::MoveCursorHome,
+            ActionSpec::MoveCursorEnd => Action::MoveCursorEnd,
+            ActionSpec::MoveFocus(d) => Action::MoveFocus((*d).into()),
+            ActionSpec::ResizeSegment(d) => Action::ResizeSegment((*d).into()),
+            ActionSpec::ExtendSelection(d) => Action::ExtendSelection((*d).into()),
+            ActionSpec::DeleteLearning => Action::DeleteLearning,
+            ActionSpec::ToKatakana => Action::ToKatakana,
+            ActionSpec::ToHiragana => Action::ToHiragana,
+            ActionSpec::ToHankaku => Action::ToHankaku,
+            ActionSpec::SetMode(m) => Action::SetMode(*m),
+            ActionSpec::ToggleMode => Action::ToggleMode,
+            ActionSpec::UndoCommit => Action::UndoCommit,
+        }
+    }
 }
 
 impl fmt::Display for Action {

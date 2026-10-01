@@ -219,6 +219,66 @@ fn select_candidate_picks_absolute_index() {
 }
 
 #[test]
+fn insert_reading_and_perform_action_drive_state_machine() {
+    let mut s = server();
+    init(&mut s);
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":80,"method":"insert_reading","params":{
+            "session_id":"s","reading":"かな"}}),
+    );
+    assert_eq!(r["result"]["consumed"], true);
+    assert_eq!(r["result"]["preedit"]["text"], "かな");
+    let rev = r["result"]["revision"].as_u64().unwrap();
+    // 変換開始（KanaBackend は読みのまま）してから確定する
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":81,"method":"perform_action","params":{
+            "session_id":"s","action":{"type":"start_convert"}}}),
+    );
+    assert_eq!(r["result"]["consumed"], true);
+    assert!(r["result"]["revision"].as_u64().unwrap() > rev);
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":82,"method":"perform_action","params":{
+            "session_id":"s","action":{"type":"commit"}}}),
+    );
+    assert_eq!(r["result"]["commit"], "かな");
+    // Direct での BackSpace は消費しない（フロントがホストへ素通しする）
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":83,"method":"perform_action","params":{
+            "session_id":"s","action":{"type":"backspace"}}}),
+    );
+    assert_eq!(r["result"]["consumed"], false);
+    // 引数付きの Action
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":84,"method":"perform_action","params":{
+            "session_id":"s","action":{"type":"set_mode","content":"alphanumeric"}}}),
+    );
+    assert_eq!(r["result"]["mode"], "alphanumeric");
+}
+
+#[test]
+fn perform_action_rejects_unknown_action_and_requires_initialize() {
+    let mut s = server();
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":90,"method":"insert_reading","params":{
+            "session_id":"s","reading":"あ"}}),
+    );
+    assert!(r.get("error").is_some(), "initialize 前はエラー");
+    init(&mut s);
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":91,"method":"perform_action","params":{
+            "session_id":"s","action":{"type":"no_such_action"}}}),
+    );
+    assert_eq!(r["error"]["code"], -32602);
+}
+
+#[test]
 fn focus_out_commits_and_reset_discards() {
     let mut s = server();
     init(&mut s);

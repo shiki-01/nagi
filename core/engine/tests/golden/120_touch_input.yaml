@@ -1,0 +1,99 @@
+# insert_reading / perform_action（タッチ入力。ローマ字・キーマップを経由しない）
+- name: touch-insert-reading-starts-composing
+  steps:
+    - action: insert_reading
+      reading: "あ"
+      expect: {consumed: true, state: composing, preedit: "あ", readings: ["あ"], cursor: 1, result_preedit_present: true, revision_increased: true}
+    - action: insert_reading
+      reading: "いう"
+      expect: {preedit: "あいう", cursor: 3, pending: ""}
+
+- name: touch-insert-reading-flushes-pending-romaji
+  steps:
+    - key: "n"
+      expect: {pending: "n"}
+    - action: insert_reading
+      reading: "か"
+      expect: {preedit: "んか", pending: "", cursor: 2, state: composing}
+
+- name: touch-insert-reading-at-cursor
+  steps:
+    - action: insert_reading
+      reading: "あう"
+    - key: "Left"
+      expect: {cursor: 1}
+    - action: insert_reading
+      reading: "い"
+      expect: {preedit: "あいう", cursor: 2}
+
+- name: touch-insert-reading-empty-not-consumed
+  steps:
+    - action: insert_reading
+      reading: ""
+      expect: {consumed: false, state: direct, preedit: ""}
+
+- name: touch-insert-reading-while-converting-commits
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛"]}
+  steps:
+    - action: insert_reading
+      reading: "あ"
+    - key: "Space"
+      expect: {state: converting, segments: ["愛"]}
+    - action: insert_reading
+      reading: "い"
+      expect: {commit: "愛", state: composing, preedit: "い", consumed: true}
+
+- name: touch-perform-action-convert-and-commit
+  backend: mock
+  mock:
+    sentences:
+      "あ":
+        - {reading: "あ", candidates: ["愛"]}
+  steps:
+    - action: insert_reading
+      reading: "あ"
+    - action: perform_action
+      perform: {type: start_convert}
+      expect: {consumed: true, state: converting, segments: ["愛"]}
+    - action: perform_action
+      perform: {type: commit}
+      expect: {commit: "愛", state: direct}
+
+- name: touch-perform-action-edit-composing
+  steps:
+    - action: insert_reading
+      reading: "あいう"
+    - action: perform_action
+      perform: {type: move_cursor, content: left}
+      expect: {cursor: 2}
+    - action: perform_action
+      perform: {type: backspace}
+      expect: {preedit: "あう", cursor: 1}
+    - action: perform_action
+      perform: {type: move_cursor_end}
+      expect: {cursor: 2}
+    - action: perform_action
+      perform: {type: cancel}
+      expect: {state: direct, preedit: ""}
+
+- name: touch-perform-action-direct-passthrough
+  steps:
+    - action: perform_action
+      perform: {type: backspace}
+      expect: {consumed: false, state: direct}
+    - action: perform_action
+      perform: {type: commit}
+      expect: {consumed: false, state: direct}
+
+- name: touch-perform-action-set-mode
+  steps:
+    - action: perform_action
+      perform: {type: set_mode, content: alphanumeric}
+      expect: {consumed: true, mode: alphanumeric, result_mode: alphanumeric}
+    - action: perform_action
+      perform: {type: toggle_mode}
+      expect: {mode: hiragana}
