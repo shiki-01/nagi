@@ -41,7 +41,7 @@ jobs:
           workspaces: core
 
       - name: XcodeGen と cmake を用意
-        run: brew install xcodegen cmake
+        run: brew install xcodegen cmake ldid
 
       - name: XCFramework をビルド
         working-directory: core
@@ -85,6 +85,22 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             | tee build/xcodebuild.log | tail -n 40
         shell: bash
+
+      # CODE_SIGNING_ALLOWED=NO ではエンタイトルメントがバイナリに入らず、SideStore が
+      # App Group を付与できない。ldid の擬似署名で埋め込む（実署名は SideStore が行う）。
+      - name: エンタイトルメントを埋め込む（ldid）
+        working-directory: frontend-ios-spike
+        run: |
+          APP=build/NagiSpike.xcarchive/Products/Applications/NagiSpike.app
+          ldid -SApp/NagiSpike.entitlements "$APP/NagiSpike"
+          for appex in "$APP"/PlugIns/*.appex; do
+            name=$(basename "$appex" .appex)
+            ldid -SKeyboard/NagiSpikeKeyboard.entitlements "$appex/$name"
+          done
+          # 埋め込み結果の検証（application-groups が無ければ失敗させる）
+          for bin in "$APP/NagiSpike" "$APP"/PlugIns/*.appex/NagiSpikeKeyboard; do
+            ldid -e "$bin" | tee /dev/stderr | grep -q 'group.com.shiki.nagi.spike'
+          done
 
       - name: IPA を作成
         working-directory: frontend-ios-spike
