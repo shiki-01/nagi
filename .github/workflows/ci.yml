@@ -93,3 +93,6 @@ jobs:
           cargo check --target ${{ matrix.target }}
           -p nagi-engine -p nagi-romaji -p nagi-dict
           -p nagi-protocol -p nagi-profile -p nagi-infer
+      # profile は sysinfo 無し（OS 問い合わせをホスト注入に置き換える構成）でも通ること
+      - name: check (profile without sysinfo)
+        run: cargo check --target ${{ matrix.target }} -p nagi-profile --no-default-features

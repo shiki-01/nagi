@@ -9,7 +9,13 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-sysinfo = "0.38.4"
+# OS 問い合わせ（デスクトップ既定）。モバイルでは無効にして、ホストが initialize で渡す値を使う
+sysinfo = { version = "0.38.4", optional = true }
+
+[features]
+default = ["sysinfo"]
+# `SysinfoSource` / `detect` が sysinfo で搭載メモリを調べる。無効時は保守的な既定値
+sysinfo = ["dep:sysinfo"]
 
 [lints]
 workspace = true

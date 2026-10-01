@@ -347,6 +347,9 @@ impl Server {
                         ),
                     ));
                 }
+                if let Some(caps) = &p.client_capabilities {
+                    self.runtime.apply_client_capabilities(caps);
+                }
                 self.initialized = true;
                 to_value(InitializeResult {
                     protocol_version: PROTOCOL_VERSION,

@@ -75,6 +75,74 @@ public struct ChoiceOptions: Codable {
 	}
 }
 
+/// サーマル状態（OS が報告するもの）
+public enum ThermalState: String, Codable {
+	/// 通常
+	case nominal
+	/// やや高い
+	case fair
+	/// 高い
+	case serious
+	/// 危険
+	case critical
+}
+
+/// メモリ逼迫の状態（OS が報告するもの）
+public enum MemoryPressureState: String, Codable {
+	/// 通常
+	case normal
+	/// 警告
+	case warning
+	/// 危険
+	case critical
+}
+
+/// `set_environment` 通知のパラメータ（応答なし）。実行環境の状態を報告し、コアはこれに応じて
+/// 環境プロファイルを自動で切り替える（設計書 §4.7）。省略した項目は「前回の値を維持」
+public struct SetEnvironmentParams: Codable {
+	/// バッテリー駆動か
+	public let on_battery: Bool?
+	/// OS の低電力モードか
+	public let low_power_mode: Bool?
+	/// サーマル状態
+	public let thermal: ThermalState?
+	/// メモリ逼迫
+	public let memory_pressure: MemoryPressureState?
+
+	public init(on_battery: Bool?, low_power_mode: Bool?, thermal: ThermalState?, memory_pressure: MemoryPressureState?) {
+		self.on_battery = on_battery
+		self.low_power_mode = low_power_mode
+		self.thermal = thermal
+		self.memory_pressure = memory_pressure
+	}
+}
+
+/// 入力方式（物理キーボード / タッチ）
+public enum InputModality: String, Codable {
+	/// 物理キーボード
+	case physicalKeyboard = "physical_keyboard"
+	/// タッチ（ソフトウェアキーボード）
+	case touch
+}
+
+/// `initialize` でホストが渡す実行環境（すべて省略可）。コアは OS に問い合わせず、
+/// 指定された項目を検出値より優先して環境プロファイルの判定に使う（mobile-design §3-2）
+public struct ClientCapabilities: Codable {
+	/// このプロセスが使ってよいメモリの上限（MB）。端末の搭載量ではなく上限を渡す
+	/// （iOS のキーボード拡張など）。判定では搭載メモリの代わりに使う
+	public let memory_limit_mb: UInt32?
+	/// 電源・熱・メモリ逼迫の初期状態。実行時の変化は `set_environment` 通知で同じ形で送る
+	public let environment: SetEnvironmentParams?
+	/// 入力方式
+	public let input_modality: InputModality?
+
+	public init(memory_limit_mb: UInt32?, environment: SetEnvironmentParams?, input_modality: InputModality?) {
+		self.memory_limit_mb = memory_limit_mb
+		self.environment = environment
+		self.input_modality = input_modality
+	}
+}
+
 /// 設定読み込みエラー
 public struct ConfigError: Codable {
 	/// エラー行番号
@@ -119,12 +187,15 @@ public struct InitializeParams: Codable {
 	public let client_version: String
 	/// OS 識別子（例：`macos`、`windows`）
 	public let os: String
+	/// ホストが把握している実行環境（省略可。省略時はコアが既定の検出で補う）
+	public let client_capabilities: ClientCapabilities?
 
-	public init(protocol_version: UInt32, client_name: String, client_version: String, os: String) {
+	public init(protocol_version: UInt32, client_name: String, client_version: String, os: String, client_capabilities: ClientCapabilities?) {
 		self.protocol_version = protocol_version
 		self.client_name = client_name
 		self.client_version = client_version
 		self.os = os
+		self.client_capabilities = client_capabilities
 	}
 }
 
@@ -761,48 +832,6 @@ public struct SetContextParams: Codable {
 		self.surrounding_text = surrounding_text
 		self.app_id = app_id
 		self.secure_input = secure_input
-	}
-}
-
-/// サーマル状態（OS が報告するもの）
-public enum ThermalState: String, Codable {
-	/// 通常
-	case nominal
-	/// やや高い
-	case fair
-	/// 高い
-	case serious
-	/// 危険
-	case critical
-}
-
-/// メモリ逼迫の状態（OS が報告するもの）
-public enum MemoryPressureState: String, Codable {
-	/// 通常
-	case normal
-	/// 警告
-	case warning
-	/// 危険
-	case critical
-}
-
-/// `set_environment` 通知のパラメータ（応答なし）。実行環境の状態を報告し、コアはこれに応じて
-/// 環境プロファイルを自動で切り替える（設計書 §4.7）。省略した項目は「前回の値を維持」
-public struct SetEnvironmentParams: Codable {
-	/// バッテリー駆動か
-	public let on_battery: Bool?
-	/// OS の低電力モードか
-	public let low_power_mode: Bool?
-	/// サーマル状態
-	public let thermal: ThermalState?
-	/// メモリ逼迫
-	public let memory_pressure: MemoryPressureState?
-
-	public init(on_battery: Bool?, low_power_mode: Bool?, thermal: ThermalState?, memory_pressure: MemoryPressureState?) {
-		self.on_battery = on_battery
-		self.low_power_mode = low_power_mode
-		self.thermal = thermal
-		self.memory_pressure = memory_pressure
 	}
 }
 

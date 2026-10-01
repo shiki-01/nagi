@@ -8,12 +8,12 @@ use nagi_config::{Config, ProfileMode};
 use nagi_dict::Overlay;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_profile::{
-    AutoConfig, Change, Controller, Decision, Environment, MemoryPressure, Profile, SystemInfo,
-    Thermal, initial_profile,
+    AutoConfig, Change, Controller, Decision, Environment, HostOverrides, MemoryPressure, Profile,
+    SystemInfo, Thermal, initial_profile,
 };
 use nagi_protocol::methods::{
-    MemoryPressureState, NotifyLevel, SetEnvironmentParams, StatusResult, ThermalState,
-    UpdatePreeditParams,
+    ClientCapabilities, InputModality, MemoryPressureState, NotifyLevel, SetEnvironmentParams,
+    StatusResult, ThermalState, UpdatePreeditParams,
 };
 use nagi_protocol::view::CandidateSource;
 use std::path::PathBuf;
@@ -149,10 +149,20 @@ pub struct Effective {
     pub beam_width: usize,
 }
 
+/// ホストが `initialize` で渡した実行環境
+#[derive(Debug, Clone, Copy, Default)]
+struct HostState {
+    overrides: HostOverrides,
+    input_modality: Option<InputModality>,
+}
+
 /// 実行時の共有状態
 pub struct Runtime {
     started: Instant,
+    /// OS 等から検出したハードウェア情報（ホスト注入値を重ねる前）
     system: SystemInfo,
+    /// ホストが `initialize` で渡した値と入力方式
+    host: Mutex<HostState>,
     controller: Mutex<Controller>,
     llm_loaded: AtomicBool,
     calibration_ms: Mutex<Option<f64>>,
@@ -188,6 +198,7 @@ impl Runtime {
         Arc::new(Runtime {
             started: Instant::now(),
             system,
+            host: Mutex::new(HostState::default()),
             controller: Mutex::new(controller),
             llm_loaded: AtomicBool::new(has_llm),
             calibration_ms: Mutex::new(None),
@@ -231,6 +242,32 @@ impl Runtime {
             Some(_) => initial_profile(system, None, false),
             None => initial_profile(system, calibration, has_llm),
         }
+    }
+
+    /// ホスト注入値を重ねたハードウェア情報（判定に使う値）
+    fn effective_system(&self) -> SystemInfo {
+        let overrides = self.host.lock().map(|h| h.overrides).unwrap_or_default();
+        overrides.apply(self.system)
+    }
+
+    /// `initialize` でホストが渡した実行環境を反映し、プロファイルを判定し直す。
+    /// 注入値が指定された項目は OS の検出値より優先される。変化があれば `profile_changed` が積まれる
+    pub fn apply_client_capabilities(&self, caps: &ClientCapabilities) {
+        if let Ok(mut h) = self.host.lock() {
+            h.overrides = HostOverrides {
+                memory_limit_mb: caps.memory_limit_mb.map(u64::from),
+            };
+            h.input_modality = caps.input_modality;
+        }
+        if let Some(env) = &caps.environment {
+            self.set_environment(env);
+        }
+        self.recompute_profile(true);
+    }
+
+    /// ホストが申告した入力方式（未申告なら `None`）
+    pub fn input_modality(&self) -> Option<InputModality> {
+        self.host.lock().ok().and_then(|h| h.input_modality)
     }
 
     fn now_ms(&self) -> u64 {
@@ -382,10 +419,11 @@ impl Runtime {
             .lock()
             .map(|n| n.clone())
             .unwrap_or_default();
+        let system = self.effective_system();
         let record = crate::calibration::CalibrationRecord {
             median_ms,
-            cpu_cores: self.system.cpu_cores,
-            total_memory_mb: self.system.total_memory_mb,
+            cpu_cores: system.cpu_cores,
+            total_memory_mb: system.total_memory_mb,
             backend,
         };
         if let Err(e) = crate::calibration::save(&path, &record) {
@@ -402,7 +440,7 @@ impl Runtime {
             return;
         };
         let has_llm = self.llm_loaded.load(Ordering::Relaxed);
-        let decision = Self::decide(&t, &self.system, has_llm, *cal);
+        let decision = Self::decide(&t, &self.effective_system(), has_llm, *cal);
         let now = self.now_ms();
         let change = self.controller.lock().ok().and_then(|mut c| {
             let _ = force;

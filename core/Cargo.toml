@@ -30,7 +30,7 @@ nagi-dict = { path = "dict" }
 nagi-infer = { path = "infer" }
 nagi-config = { path = "config" }
 nagi-learn = { path = "learn" }
-nagi-profile = { path = "profile" }
+nagi-profile = { path = "profile", default-features = false }
 nagi-protocol = { path = "protocol" }
 nagi-rewriter = { path = "rewriter" }
 serde = { version = "1", features = ["derive"] }

@@ -66,6 +66,37 @@ pub struct InitializeParams {
     pub client_version: String,
     /// OS 識別子（例：`macos`、`windows`）
     pub os: String,
+    /// ホストが把握している実行環境（省略可。省略時はコアが既定の検出で補う）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub client_capabilities: Option<ClientCapabilities>,
+}
+
+/// 入力方式（物理キーボード / タッチ）
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputModality {
+    /// 物理キーボード
+    PhysicalKeyboard,
+    /// タッチ（ソフトウェアキーボード）
+    Touch,
+}
+
+/// `initialize` でホストが渡す実行環境（すべて省略可）。コアは OS に問い合わせず、
+/// 指定された項目を検出値より優先して環境プロファイルの判定に使う（mobile-design §3-2）
+#[typeshare]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientCapabilities {
+    /// このプロセスが使ってよいメモリの上限（MB）。端末の搭載量ではなく上限を渡す
+    /// （iOS のキーボード拡張など）。判定では搭載メモリの代わりに使う
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub memory_limit_mb: Option<u32>,
+    /// 電源・熱・メモリ逼迫の初期状態。実行時の変化は `set_environment` 通知で同じ形で送る
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub environment: Option<SetEnvironmentParams>,
+    /// 入力方式
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub input_modality: Option<InputModality>,
 }
 
 /// サーバーの機能

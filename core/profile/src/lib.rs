@@ -11,7 +11,9 @@
 //!
 //! 時刻は呼び出し側が `now_ms`（単調増加のミリ秒）で渡す。テストが決定的になり、OS 依存の
 //! 時計を持ち込まない。OS からの電源・サーマル情報はフロントエンドが [`Environment`] として送る
-//! （フロントの責務。コアは OS の API を直接呼ばない）。
+//! （フロントの責務。コアは OS の API を直接呼ばない）。ハードウェア情報は [`SystemSource`] が
+//! 供給し、ホストが `initialize` で渡した値（[`HostOverrides`]）が検出値より優先される。
+//! OS への問い合わせ（sysinfo）は feature `sysinfo`（既定 ON）の裏にあり、モバイルでは無効にできる。
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -136,15 +138,77 @@ pub struct SystemInfo {
     pub has_gpu: bool,
 }
 
-/// 実機のハードウェア情報を検出する
-pub fn detect() -> SystemInfo {
+/// ハードウェア情報の供給元。OS への問い合わせはこの trait の実装に閉じ込める
+pub trait SystemSource {
+    /// 現在のハードウェア情報
+    fn system_info(&self) -> SystemInfo;
+}
+
+/// OS から検出する供給元（デスクトップ既定）。feature `sysinfo` が無効なら搭載メモリは
+/// 保守的な既定値（[`FALLBACK_MEMORY_MB`]）になる
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OsSource;
+
+/// OS から搭載メモリを調べられないときの仮定値（MB）。`Light` までに制限される値
+pub const FALLBACK_MEMORY_MB: u64 = 4096;
+
+impl SystemSource for OsSource {
+    fn system_info(&self) -> SystemInfo {
+        SystemInfo {
+            total_memory_mb: os_total_memory_mb(),
+            cpu_cores: std::thread::available_parallelism().map_or(1, usize::from),
+            has_gpu: detect_gpu(),
+        }
+    }
+}
+
+#[cfg(feature = "sysinfo")]
+fn os_total_memory_mb() -> u64 {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
-    SystemInfo {
-        total_memory_mb: sys.total_memory() / (1024 * 1024),
-        cpu_cores: std::thread::available_parallelism().map_or(1, usize::from),
-        has_gpu: detect_gpu(),
+    sys.total_memory() / (1024 * 1024)
+}
+
+#[cfg(not(feature = "sysinfo"))]
+fn os_total_memory_mb() -> u64 {
+    FALLBACK_MEMORY_MB
+}
+
+/// ホストが `initialize` で渡した値。指定された項目は供給元の検出値より優先される
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HostOverrides {
+    /// 使ってよいメモリの上限（MB）。搭載メモリの代わりに使う
+    pub memory_limit_mb: Option<u64>,
+}
+
+impl HostOverrides {
+    /// `base` の項目のうち、注入値があるものを置き換える
+    pub fn apply(&self, base: SystemInfo) -> SystemInfo {
+        SystemInfo {
+            total_memory_mb: self.memory_limit_mb.unwrap_or(base.total_memory_mb),
+            ..base
+        }
     }
+}
+
+/// 供給元 `S` の上にホスト注入値を重ねた供給元
+#[derive(Debug, Clone, Copy)]
+pub struct HostSource<S> {
+    /// 下地の供給元
+    pub base: S,
+    /// ホストの注入値
+    pub overrides: HostOverrides,
+}
+
+impl<S: SystemSource> SystemSource for HostSource<S> {
+    fn system_info(&self) -> SystemInfo {
+        self.overrides.apply(self.base.system_info())
+    }
+}
+
+/// 実機のハードウェア情報を検出する（[`OsSource`] の便宜関数）
+pub fn detect() -> SystemInfo {
+    OsSource.system_info()
 }
 
 /// GPU の有無を判定する。GPU オフロード自体は未実装で、検出結果は将来の利用に備えるもの
@@ -621,6 +685,45 @@ mod tests {
         let s = detect();
         assert!(s.cpu_cores >= 1);
         assert!(s.total_memory_mb >= 256, "{s:?}");
+    }
+
+    #[test]
+    fn host_overrides_take_priority_over_source() {
+        struct Fixed;
+        impl SystemSource for Fixed {
+            fn system_info(&self) -> SystemInfo {
+                sys(32768, 16)
+            }
+        }
+        // 省略時は供給元の値のまま
+        let none = HostSource {
+            base: Fixed,
+            overrides: HostOverrides::default(),
+        };
+        assert_eq!(none.system_info(), sys(32768, 16));
+        // メモリ上限が指定されれば優先され、判定にも反映される
+        let limited = HostSource {
+            base: Fixed,
+            overrides: HostOverrides {
+                memory_limit_mb: Some(1024),
+            },
+        };
+        let info = limited.system_info();
+        assert_eq!((info.total_memory_mb, info.cpu_cores), (1024, 16));
+        assert_eq!(
+            initial_profile(&info, Some(20.0), true).profile,
+            Profile::Light
+        );
+        assert_eq!(
+            initial_profile(&none.system_info(), Some(20.0), true).profile,
+            Profile::Quality
+        );
+    }
+
+    #[cfg(not(feature = "sysinfo"))]
+    #[test]
+    fn without_sysinfo_memory_is_conservative() {
+        assert_eq!(detect().total_memory_mb, FALLBACK_MEMORY_MB);
     }
 
     #[test]

@@ -195,6 +195,46 @@ fn profile_follows_environment_reports_and_notifies() {
 }
 
 #[test]
+fn initialize_capabilities_override_detected_system_and_environment() {
+    // 省略時は従来どおり（16GB・8 コアの検出値 → balanced）
+    let dir = temp_dir("caps-none");
+    let mut s = server_in(&dir);
+    assert_eq!(initialize(&mut s).response["result"]["profile"], "balanced");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // メモリ上限 2GB が検出値（16GB）より優先され、light になる
+    let dir = temp_dir("caps-mem");
+    let mut s = server_in(&dir);
+    let r = send(
+        &mut s,
+        "initialize",
+        json!({"protocol_version":1,"client_name":"t","client_version":"0","os":"ios",
+               "client_capabilities":{"memory_limit_mb":2048,"input_modality":"touch"}}),
+    );
+    assert_eq!(r.response["result"]["profile"], "light");
+    assert_eq!(status(&mut s)["profile"], "light");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // 電源・熱の初期状態も同じ形で受け取り、判定に反映される
+    let dir = temp_dir("caps-env");
+    let mut s = server_in(&dir);
+    let r = send(
+        &mut s,
+        "initialize",
+        json!({"protocol_version":1,"client_name":"t","client_version":"0","os":"ios",
+               "client_capabilities":{"environment":{"low_power_mode":true}}}),
+    );
+    assert_eq!(r.response["result"]["profile"], "light");
+    assert!(
+        status(&mut s)["profile_reason"]
+            .as_str()
+            .unwrap()
+            .contains("低電力")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn fixed_profile_in_config_is_not_switched_automatically() {
     let dir = temp_dir("fixed");
     std::fs::write(dir.join("config.toml"), "[profile]\nmode = \"quality\"\n").unwrap();
