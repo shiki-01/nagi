@@ -3,7 +3,7 @@
 //! 学習ファイルに確定候補の履歴を記録し、スコアリングと検索機能を提供する。
 //! スコアは `ln(1+count)` に指数減衰を適用して計算される。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -127,13 +127,36 @@ pub fn context_hash(left_context: &str) -> u64 {
     fnv1a_64(suffix.as_bytes())
 }
 
+/// 行のキー `(reading, surface, context_hash)`。
+type Key = (String, String, u64);
+
+/// 前回の load / flush 以降にこのプロセスが加えた変更の差分（flush 時にディスクの最新へ適用する）。
+#[derive(Clone, Debug)]
+struct Pending {
+    /// 加算する出現回数。
+    count: u32,
+    /// このプロセスでの最終使用時刻。
+    last_used: u64,
+    /// 新規行として挿入する場合の出所。
+    source: String,
+}
+
 /// 学習データ管理。
+///
+/// 複数プロセス（キーボード拡張と本体アプリなど）が同じ学習ファイルを共有しても更新が失われないよう、
+/// `flush` は「ロック → ディスク最新を読む → 自プロセスの差分を適用 → 一時ファイル → rename」で行う。
 #[derive(Debug)]
 pub struct Learner {
     config: LearnConfig,
     // キー: (reading, surface, context_hash)、値: Row
-    rows: HashMap<(String, String, u64), Row>,
+    rows: HashMap<Key, Row>,
     dirty: bool,
+    /// 前回 load / flush 以降の確定記録（キーごとの加算分）。
+    pending: HashMap<Key, Pending>,
+    /// 前回 load / flush 以降に `forget` した `(reading, surface)`。
+    forgotten: HashSet<(String, String)>,
+    /// 前回 load / flush 以降に `clear` した。
+    cleared: bool,
 }
 
 impl Learner {
@@ -143,6 +166,9 @@ impl Learner {
             config,
             rows: HashMap::new(),
             dirty: false,
+            pending: HashMap::new(),
+            forgotten: HashSet::new(),
+            cleared: false,
         }
     }
 
@@ -187,6 +213,17 @@ impl Learner {
                 },
             );
         }
+
+        let pending = self
+            .pending
+            .entry((reading.to_string(), surface.to_string(), context_hash))
+            .or_insert_with(|| Pending {
+                count: 0,
+                last_used: now,
+                source: source.to_string(),
+            });
+        pending.count = pending.count.saturating_add(1);
+        pending.last_used = pending.last_used.max(now);
 
         self.dirty = true;
 
@@ -318,6 +355,12 @@ impl Learner {
             self.rows.remove(&key);
             self.dirty = true;
         }
+        if found {
+            self.pending
+                .retain(|(r, s, _), _| r != reading || s != surface);
+            self.forgotten
+                .insert((reading.to_string(), surface.to_string()));
+        }
 
         found
     }
@@ -325,6 +368,9 @@ impl Learner {
     /// 全行削除。
     pub fn clear(&mut self) {
         self.rows.clear();
+        self.pending.clear();
+        self.forgotten.clear();
+        self.cleared = true;
         self.dirty = true;
     }
 
@@ -357,11 +403,16 @@ impl Learner {
 
     /// ファイルへ書き出す。dirty でなければ Ok(false)。書いたら Ok(true) で dirty を解除。
     ///
-    /// 手順:
-    /// 1. 同じディレクトリに `<path>.lock` を作ってロック
-    /// 2. `<path>.tmp` に全行を書いて fsync
-    /// 3. rename で置換
-    /// 4. ロック解除
+    /// 他プロセスが同じファイルを更新していても失われないよう read-modify-write で行う。
+    ///
+    /// 1. `<path>.lock` を排他ロック（ロックファイルは削除しない。削除すると別 inode を掴んだ
+    ///    プロセスと排他できなくなるため）
+    /// 2. ディスク上の最新を読み込む（無ければ空）
+    /// 3. 前回 load / flush 以降の差分を適用する（マージ規則は `merge_pending`）
+    /// 4. `<path>.tmp` に全行を書いて fsync → rename で置換 → 親ディレクトリを fsync
+    /// 5. メモリ上の行をマージ結果に置き換える（他プロセスの更新も取り込まれる）
+    ///
+    /// ディスク上のファイルが未知のスキーマなら上書きせず `UnsupportedSchema` を返す。
     pub fn flush(&mut self, path: &Path) -> Result<bool, LearnError> {
         if !self.dirty {
             return Ok(false);
@@ -374,65 +425,129 @@ impl Learner {
             fs::create_dir_all(parent)?;
         }
 
-        // ロックファイルパス
-        let lock_path = path.with_extension("lock");
-
-        // ロックファイルを作成・ロック
-        let lock_file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&lock_path)?;
+        let lock_file = open_lock(path)?;
         lock_file.lock()?;
 
-        let result = (|| -> Result<(), LearnError> {
-            // 一時ファイルパス
-            let tmp_path = path.with_extension("tmp");
+        let result = self.flush_locked(path);
 
-            // 一時ファイルに書き出す
-            let tmp_file = fs::File::create(&tmp_path)?;
-            let mut writer = BufWriter::new(tmp_file);
-
-            // スキーマ行
-            writeln!(writer, "#nagi-learn\tv1")?;
-
-            // データ行を (reading, surface, context_hash) 昇順に出力
-            let rows = self.rows();
-            for row in rows {
-                let line = format!(
-                    "{}\t{}\t{:016x}\t{}\t{}\t{}",
-                    escape_tsv_field(&row.reading),
-                    escape_tsv_field(&row.surface),
-                    row.context_hash,
-                    row.count,
-                    row.last_used,
-                    escape_tsv_field(&row.source)
-                );
-                writeln!(writer, "{}", line)?;
-            }
-
-            writer.flush()?;
-            let file = writer.into_inner().map_err(|e| e.into_error())?;
-            file.sync_all()?;
-
-            // rename で置換（原子的）
-            fs::rename(&tmp_path, path)?;
-
-            Ok(())
-        })();
-
-        // ロック解除（明示的に drop）
+        // 明示的に解除（drop でも解除される）。ロックファイルは削除しない。
+        let _ = lock_file.unlock();
         drop(lock_file);
 
-        // ロックファイル削除（失敗してもよい）
-        let _ = fs::remove_file(&lock_path);
-
-        result?;
+        let merged = result?;
+        self.rows = merged;
+        self.pending.clear();
+        self.forgotten.clear();
+        self.cleared = false;
         self.dirty = false;
         Ok(true)
     }
 
-    /// ファイルから読み込む。ファイルが無ければ空の Learner。ロックファイル使用。
+    /// ロック取得済みの状態で、ディスクの最新とマージして書き出す。マージ結果を返す。
+    fn flush_locked(&self, path: &Path) -> Result<HashMap<Key, Row>, LearnError> {
+        let mut merged = match read_rows(path) {
+            Ok((rows, skipped)) => {
+                if skipped > 0 {
+                    // 壊れた行は書き直しで失われるので、先にバックアップを残す
+                    create_backup_file(path)?;
+                }
+                rows
+            }
+            // 空ファイルは空として扱う（スキーマ行すら無く、失われる内容がない）
+            Err(LearnError::UnsupportedSchema { found }) if found.is_empty() => HashMap::new(),
+            Err(e) => return Err(e),
+        };
+        self.merge_pending(&mut merged);
+
+        let tmp_path = path.with_extension("tmp");
+        let tmp_file = fs::File::create(&tmp_path)?;
+        let mut writer = BufWriter::new(tmp_file);
+        writeln!(writer, "#nagi-learn\tv1")?;
+
+        let mut rows: Vec<&Row> = merged.values().collect();
+        rows.sort_by(|a, b| {
+            a.reading
+                .cmp(&b.reading)
+                .then_with(|| a.surface.cmp(&b.surface))
+                .then_with(|| a.context_hash.cmp(&b.context_hash))
+        });
+        for row in rows {
+            writeln!(
+                writer,
+                "{}\t{}\t{:016x}\t{}\t{}\t{}",
+                escape_tsv_field(&row.reading),
+                escape_tsv_field(&row.surface),
+                row.context_hash,
+                row.count,
+                row.last_used,
+                escape_tsv_field(&row.source)
+            )?;
+        }
+        writer.flush()?;
+        let file = writer.into_inner().map_err(|e| e.into_error())?;
+        file.sync_all()?;
+        drop(file);
+
+        // rename で置換（原子的）。失敗時は一時ファイルを残さない
+        if let Err(e) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e.into());
+        }
+        sync_parent_dir(path);
+
+        Ok(merged)
+    }
+
+    /// 自プロセスの差分をディスク由来の行 `rows` へ適用する。
+    ///
+    /// マージ規則（適用順）:
+    /// 1. `clear` 済みならディスクの行を全て捨てる
+    /// 2. `forget` した `(reading, surface)` の行を全て捨てる（他プロセスの同キー更新も消える）
+    /// 3. 記録の差分を加算する: 既存行は `count += 差分`（飽和）・`last_used = max`、
+    ///    無ければ差分を count とする新規行（`source` は自プロセスのもの。既存行の `source` は保持）
+    /// 4. `max_entries` を超えたら、全行の最大 `last_used` を現在時刻として `evict`
+    ///
+    /// 頻度は絶対値ではなく差分で足すため、両プロセスの確定回数が合算される。
+    fn merge_pending(&self, rows: &mut HashMap<Key, Row>) {
+        if self.cleared {
+            rows.clear();
+        }
+        if !self.forgotten.is_empty() {
+            rows.retain(|(r, s, _), _| !self.forgotten.contains(&(r.clone(), s.clone())));
+        }
+        for (key, p) in &self.pending {
+            match rows.get_mut(key) {
+                Some(row) => {
+                    row.count = row.count.saturating_add(p.count);
+                    row.last_used = row.last_used.max(p.last_used);
+                }
+                None => {
+                    rows.insert(
+                        key.clone(),
+                        Row {
+                            reading: key.0.clone(),
+                            surface: key.1.clone(),
+                            context_hash: key.2,
+                            count: p.count,
+                            last_used: p.last_used,
+                            source: p.source.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        if rows.len() > self.config.max_entries {
+            let now = rows.values().map(|r| r.last_used).max().unwrap_or(0);
+            evict_rows(
+                rows,
+                self.config.max_entries,
+                self.config.half_life_days,
+                now,
+            );
+        }
+    }
+
+    /// ファイルから読み込む。ファイルが無ければ空の Learner。共有ロックを取る。
     pub fn load(path: &Path, config: LearnConfig) -> Result<(Learner, LoadReport), LearnError> {
         let mut learner = Learner::new(config);
         let mut report = LoadReport {
@@ -446,90 +561,25 @@ impl Learner {
             return Ok((learner, report));
         }
 
-        // ロックファイルパス
-        let lock_path = path.with_extension("lock");
-
-        // ロックファイルを作成しロック取得（排他制御）
-        let lock_file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&lock_path)?;
-        lock_file.lock()?;
+        // 書き込みは rename で原子的なので読み込み自体は壊れないが、
+        // 壊れた行のバックアップ作成が flush と競合しないよう共有ロックを取る
+        let lock_file = open_lock(path)?;
+        lock_file.lock_shared()?;
 
         let result = (|| -> Result<(), LearnError> {
-            let file = fs::File::open(path)?;
-            let reader = BufReader::new(file);
-            let mut lines = reader.lines();
-
-            // 1 行目がスキーマバージョンか確認
-            let first_line = lines.next();
-            match first_line {
-                Some(Ok(line)) => {
-                    if !line.starts_with("#nagi-learn\tv1") {
-                        return Err(LearnError::UnsupportedSchema {
-                            found: line.clone(),
-                        });
-                    }
-                }
-                Some(Err(e)) => return Err(LearnError::Io(e)),
-                None => {
-                    // ファイルが空の場合も UnsupportedSchema（スキーマ行がない）
-                    return Err(LearnError::UnsupportedSchema {
-                        found: String::new(),
-                    });
-                }
-            }
-
-            let mut has_error = false;
-            for _line_num in lines.by_ref().enumerate() {
-                let line = match _line_num.1 {
-                    Ok(l) => l,
-                    Err(_e) => {
-                        report.skipped_lines += 1;
-                        has_error = true;
-                        continue;
-                    }
-                };
-
-                if line.is_empty() {
-                    continue;
-                }
-
-                match parse_tsv_line(&line) {
-                    Ok((reading, surface, context_hash, count, last_used, source)) => {
-                        let key = (reading.clone(), surface.clone(), context_hash);
-                        learner.rows.insert(
-                            key,
-                            Row {
-                                reading,
-                                surface,
-                                context_hash,
-                                count,
-                                last_used,
-                                source,
-                            },
-                        );
-                        report.rows += 1;
-                    }
-                    Err(_) => {
-                        report.skipped_lines += 1;
-                        has_error = true;
-                    }
-                }
-            }
-
+            let (rows, skipped) = read_rows(path)?;
+            report.rows = rows.len();
+            report.skipped_lines = skipped;
+            learner.rows = rows;
             // 壊れた行があったらバックアップ
-            if has_error {
-                let backup_path = create_backup_file(path)?;
-                report.backed_up_to = Some(backup_path);
+            if skipped > 0 {
+                report.backed_up_to = Some(create_backup_file(path)?);
             }
-
             Ok(())
         })();
 
+        let _ = lock_file.unlock();
         drop(lock_file);
-        let _ = fs::remove_file(&lock_path);
 
         result?;
         Ok((learner, report))
@@ -537,44 +587,121 @@ impl Learner {
 
     /// eviction: スコア低い順に削除。超過分 + 全体の 10% を削除。
     fn evict(&mut self, now: u64) {
-        let target_size = (self.config.max_entries as f64 * 0.9).ceil() as usize;
-        let excess = self.rows.len().saturating_sub(target_size);
+        evict_rows(
+            &mut self.rows,
+            self.config.max_entries,
+            self.config.half_life_days,
+            now,
+        );
+    }
+}
 
-        if excess == 0 {
-            return;
-        }
+/// ロックファイル（`<path>.lock`）を開く。無ければ作る。内容は使わない。
+fn open_lock(path: &Path) -> io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path.with_extension("lock"))
+}
 
-        // スコアで並べ替え
-        let mut entries: Vec<_> = self
-            .rows
-            .iter()
-            .map(|(key, row)| {
-                let score =
-                    calculate_score(row.count, row.last_used, now, self.config.half_life_days);
-                (
-                    key.clone(),
-                    score,
-                    row.last_used,
-                    row.reading.clone(),
-                    row.surface.clone(),
-                )
-            })
-            .collect();
+/// rename の永続化のため親ディレクトリを fsync する。ディレクトリを開けない環境（Windows 等）では何もしない。
+fn sync_parent_dir(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+}
 
-        // スコア昇順、同点は last_used が古い順、最後に reading/surface の辞書順
-        entries.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.2.cmp(&b.2))
-                .then_with(|| a.3.cmp(&b.3))
-                .then_with(|| a.4.cmp(&b.4))
-        });
+/// 学習ファイルを読む。戻り値は (行, スキップした不正行数)。ファイルが無ければ空。
+fn read_rows(path: &Path) -> Result<(HashMap<Key, Row>, usize), LearnError> {
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((HashMap::new(), 0)),
+        Err(e) => return Err(e.into()),
+    };
+    let mut lines = BufReader::new(file).lines();
 
-        for i in 0..excess {
-            if i < entries.len() {
-                self.rows.remove(&entries[i].0);
+    // 1 行目がスキーマバージョンか確認
+    match lines.next() {
+        Some(Ok(line)) => {
+            if !line.starts_with("#nagi-learn\tv1") {
+                return Err(LearnError::UnsupportedSchema { found: line });
             }
         }
+        Some(Err(e)) => return Err(LearnError::Io(e)),
+        // ファイルが空の場合も UnsupportedSchema（スキーマ行がない）
+        None => {
+            return Err(LearnError::UnsupportedSchema {
+                found: String::new(),
+            });
+        }
+    }
+
+    let mut rows = HashMap::new();
+    let mut skipped = 0;
+    for line in lines {
+        let Ok(line) = line else {
+            skipped += 1;
+            continue;
+        };
+        if line.is_empty() {
+            continue;
+        }
+        match parse_tsv_line(&line) {
+            Ok((reading, surface, context_hash, count, last_used, source)) => {
+                rows.insert(
+                    (reading.clone(), surface.clone(), context_hash),
+                    Row {
+                        reading,
+                        surface,
+                        context_hash,
+                        count,
+                        last_used,
+                        source,
+                    },
+                );
+            }
+            Err(_) => skipped += 1,
+        }
+    }
+    Ok((rows, skipped))
+}
+
+/// eviction の本体: スコア低い順に、`max_entries` の 90% になるまで削除。
+fn evict_rows(rows: &mut HashMap<Key, Row>, max_entries: usize, half_life_days: f64, now: u64) {
+    let target_size = (max_entries as f64 * 0.9).ceil() as usize;
+    let excess = rows.len().saturating_sub(target_size);
+    if excess == 0 {
+        return;
+    }
+
+    let mut entries: Vec<_> = rows
+        .iter()
+        .map(|(key, row)| {
+            let score = calculate_score(row.count, row.last_used, now, half_life_days);
+            (key.clone(), score, row.last_used)
+        })
+        .collect();
+
+    // スコア昇順、同点は last_used が古い順、最後にキーの辞書順
+    entries.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    for (key, _, _) in entries.into_iter().take(excess) {
+        rows.remove(&key);
     }
 }
 
@@ -993,27 +1120,143 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrent_flush() {
+    fn test_flush_merges_other_handle_updates() {
         let temp_dir = test_temp_dir();
-        defer_cleanup(&temp_dir);
-
         let path = temp_dir.join("learn.tsv");
 
-        // 最初の Learner
-        let mut learner1 = Learner::new(LearnConfig::default());
-        learner1.record("one", "1番", 0, "learned", 1000000);
-        learner1.flush(&path).unwrap();
+        let mut a = Learner::new(LearnConfig::default());
+        a.record("one", "1番", 0, "learned", 1000000);
+        a.record("shared", "共有", 0, "learned", 1000000);
+        a.flush(&path).unwrap();
 
-        // 2 番目の Learner（同じファイルに追記）
-        let mut learner2 = Learner::new(LearnConfig::default());
-        learner2.record("two", "2番", 0, "learned", 1000001);
-        learner2.flush(&path).unwrap();
+        // 別ハンドル（別プロセス相当）。a の flush 後の状態を読まずに更新して flush する
+        let mut b = Learner::new(LearnConfig::default());
+        b.record("two", "2番", 0, "learned", 1000001);
+        b.record("shared", "共有", 0, "learned", 1000005);
+        b.flush(&path).unwrap();
 
-        // ロード後、最新のデータが保存されている
+        // b はマージ結果（a の更新を含む）を取り込んでいる
+        assert_eq!(b.len(), 3);
+
+        // a がもう一度 flush しても b の更新は残る（頻度は差分で合算、時刻は最大）
+        a.record("shared", "共有", 0, "learned", 1000003);
+        a.flush(&path).unwrap();
+
         let (loaded, report) = Learner::load(&path, LearnConfig::default()).unwrap();
-        assert_eq!(report.rows, 1); // learner2 が上書きしたので "two" だけ
+        assert_eq!(report.rows, 3);
         let rows = loaded.rows();
-        assert_eq!(rows[0].reading, "two");
+        let shared = rows.iter().find(|r| r.reading == "shared").unwrap();
+        assert_eq!(shared.count, 3);
+        assert_eq!(shared.last_used, 1000005);
+        assert!(rows.iter().any(|r| r.reading == "one"));
+        assert!(rows.iter().any(|r| r.reading == "two"));
+    }
+
+    #[test]
+    fn test_flush_forget_and_clear_apply_to_disk() {
+        let temp_dir = test_temp_dir();
+        let path = temp_dir.join("learn.tsv");
+
+        let mut a = Learner::new(LearnConfig::default());
+        a.record("きょう", "今日", 0, "learned", 1);
+        a.record("あした", "明日", 0, "learned", 1);
+        a.flush(&path).unwrap();
+
+        let mut b = Learner::new(LearnConfig::default());
+        b.record("きのう", "昨日", 0, "learned", 2);
+        b.flush(&path).unwrap(); // ディスク: 3 件
+
+        // a は b の更新をまだ知らない状態で forget
+        assert!(a.forget("きょう", "今日"));
+        a.flush(&path).unwrap();
+        let (l, _) = Learner::load(&path, LearnConfig::default()).unwrap();
+        let readings: Vec<_> = l.rows().into_iter().map(|r| r.reading).collect();
+        assert_eq!(readings, vec!["あした", "きのう"]);
+
+        // clear 後の記録だけが残る
+        a.clear();
+        a.record("あさって", "明後日", 0, "learned", 3);
+        a.flush(&path).unwrap();
+        let (l, _) = Learner::load(&path, LearnConfig::default()).unwrap();
+        assert_eq!(l.len(), 1);
+    }
+
+    #[test]
+    fn test_flush_refuses_unknown_schema() {
+        let temp_dir = test_temp_dir();
+        let path = temp_dir.join("learn.tsv");
+        fs::write(&path, "#nagi-learn\tv999\n").unwrap();
+
+        let mut l = Learner::new(LearnConfig::default());
+        l.record("a", "A", 0, "learned", 1);
+        assert!(matches!(
+            l.flush(&path),
+            Err(LearnError::UnsupportedSchema { .. })
+        ));
+        assert!(l.is_dirty());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "#nagi-learn\tv999\n");
+        assert!(!path.with_extension("tmp").exists());
+    }
+
+    const CHILD_DIR_ENV: &str = "NAGI_LEARN_TEST_CHILD_DIR";
+    const CHILD_ID_ENV: &str = "NAGI_LEARN_TEST_CHILD_ID";
+    const CHILD_ROUNDS: u32 = 25;
+
+    /// 子プロセス側の本体。環境変数が無ければ何もしない（通常のテスト実行では素通り）。
+    #[test]
+    fn child_process_flusher() {
+        let (Ok(dir), Ok(id)) = (env::var(CHILD_DIR_ENV), env::var(CHILD_ID_ENV)) else {
+            return;
+        };
+        let path = PathBuf::from(dir).join("learn.tsv");
+        let mut learner = Learner::new(LearnConfig::default());
+        for i in 0..CHILD_ROUNDS {
+            let now = 1_000_000 + u64::from(i);
+            learner.record(&format!("p{id}r{i}"), "固有", 0, "learned", now);
+            learner.record("きょう", "共有", 0, "learned", now);
+            learner.flush(&path).unwrap();
+        }
+    }
+
+    /// 2 つの子プロセスが同じディレクトリへ同時に flush を繰り返しても、両方の更新が残る。
+    #[test]
+    fn test_two_processes_concurrent_flush() {
+        if env::var(CHILD_DIR_ENV).is_ok() {
+            return; // 子プロセス内では実行しない
+        }
+        let temp_dir = test_temp_dir();
+        let exe = env::current_exe().unwrap();
+        let spawn = |id: &str| {
+            process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    "tests::child_process_flusher",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_DIR_ENV, &temp_dir)
+                .env(CHILD_ID_ENV, id)
+                .stdout(process::Stdio::null())
+                .stderr(process::Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let mut c1 = spawn("a");
+        let mut c2 = spawn("b");
+        assert!(c1.wait().unwrap().success());
+        assert!(c2.wait().unwrap().success());
+
+        let path = temp_dir.join("learn.tsv");
+        let (loaded, report) = Learner::load(&path, LearnConfig::default()).unwrap();
+        assert_eq!(report.skipped_lines, 0);
+        // 固有キー 2 × ROUNDS + 共有キー 1
+        assert_eq!(loaded.len(), (2 * CHILD_ROUNDS + 1) as usize);
+        let shared = loaded
+            .rows()
+            .into_iter()
+            .find(|r| r.reading == "きょう")
+            .unwrap();
+        assert_eq!(shared.count, 2 * CHILD_ROUNDS);
+        assert!(!path.with_extension("tmp").exists());
     }
 
     #[test]

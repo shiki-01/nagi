@@ -1,7 +1,8 @@
 //! `cargo xtask build-dict` — Mozc / SudachiDict 辞書から Nagi バイナリ辞書を生成。
 
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// `build-dict` で選択できる辞書ソース。
@@ -128,7 +129,7 @@ pub fn run(source: DictSource) -> Result<(), String> {
             .ok_or("出力ディレクトリが特定できない")?,
     )
     .map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
-    fs::write(&output_file, binary_data).map_err(|e| format!("ファイル書き込み失敗: {}", e))?;
+    write_atomic(&output_file, &binary_data)?;
 
     eprintln!();
     eprintln!("完了");
@@ -141,4 +142,29 @@ pub fn run(source: DictSource) -> Result<(), String> {
     eprintln!("  出力先: {}", output_file.display());
 
     Ok(())
+}
+
+/// 同じディレクトリの一時ファイルへ書いて fsync し、rename で置き換える。
+///
+/// 辞書は mmap で参照されるため、既存ファイルをその場で上書き（truncate）すると
+/// 読み込み中のプロセスが壊れる。rename なら古い inode は参照中のプロセスが閉じるまで残る。
+fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
+    let mut tmp_name = path
+        .file_name()
+        .ok_or("出力ファイル名が特定できない")?
+        .to_owned();
+    tmp_name.push(format!(".tmp.{}", std::process::id()));
+    let tmp = path.with_file_name(tmp_name);
+
+    let write = || -> std::io::Result<()> {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, path)
+    };
+    write().map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("ファイル書き込み失敗: {e}")
+    })
 }
