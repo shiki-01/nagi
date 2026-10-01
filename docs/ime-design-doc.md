@@ -374,6 +374,7 @@ key → romaji変換 → Preedit更新 → 候補生成 → アライメント �
 - **誤学習削除**: 候補ウィンドウで学習候補に `Ctrl+Delete`（変更可）
 - **学習停止条件**: secure input / シークレットモード / パスワードマネージャ系アプリ。停止中は Surrounding Text 取得も止める
 - 予測変換（Phase 2）: 一般的なスマホ・PC IME と同様。reading `predict.min_chars`（既定1）文字以上で表示、Tab/↓で選択。供給元は学習キャッシュ・ユーザー辞書の前方一致（LLMによる続き生成は後続）
+  - モバイル（候補バーが主要 UI）向けの要件は `docs/mobile-design.md` §5.4（暫定・要レビュー。decisions H-11）。デスクトップの Tab 方式は変更しない
 
 ### 4.12 スタイル変換プラグイン
 
