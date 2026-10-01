@@ -231,7 +231,9 @@ fn corrupt_binaries_are_rejected() {
     let mut bad_version = bytes.clone();
     bad_version[8] = 99;
     assert!(Dictionary::from_bytes(&bad_version).is_err());
-    for cut in [0, 5, 12, 100, bytes.len() / 2, bytes.len() - 1] {
+    // 末尾の 0 埋めだけを削っても有効なので、最後のセクションの終端より手前で切る
+    let (last_offset, last_len) = *section_table(&bytes).last().unwrap();
+    for cut in [0, 5, 12, 100, bytes.len() / 2, last_offset + last_len - 1] {
         assert!(Dictionary::from_bytes(&bytes[..cut]).is_err(), "cut={cut}");
     }
     assert!(Dictionary::from_bytes(&[]).is_err());
@@ -385,4 +387,71 @@ fn align_preserves_readings_and_surfaces_for_many_inputs() {
         assert_eq!(v.iter().map(|x| x.reading.as_str()).collect::<String>(), r);
         assert_eq!(v.iter().map(|x| x.surface.as_str()).collect::<String>(), s);
     }
+}
+
+fn section_table(bytes: &[u8]) -> Vec<(usize, usize)> {
+    (0..10)
+        .map(|i| {
+            let at = |o: usize| u64::from_le_bytes(bytes[o..o + 8].try_into().unwrap()) as usize;
+            (at(16 + i * 16), at(24 + i * 16))
+        })
+        .collect()
+}
+
+#[test]
+fn sections_are_8_byte_aligned_and_ordered() {
+    let bytes = build(ConnectionLayout::RidMajor).to_bytes();
+    assert_eq!(&bytes[..8], b"NAGIDICT");
+    assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 3);
+    assert_eq!(bytes.len() % 8, 0);
+    let mut cursor = 176;
+    for (offset, len) in section_table(&bytes) {
+        assert_eq!(offset % 8, 0, "offset={offset}");
+        assert!(offset >= cursor);
+        cursor = offset + len;
+    }
+    assert!(cursor <= bytes.len());
+}
+
+#[test]
+fn mapped_file_behaves_like_heap() {
+    let d = build(ConnectionLayout::RidMajor);
+    let dir = std::env::temp_dir().join(format!("nagi-dict-mmap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("nagi-dict.bin");
+    std::fs::write(&path, d.to_bytes()).unwrap();
+    let mapped = Dictionary::load(&path).unwrap();
+    let heap = Dictionary::load_to_heap(&path).unwrap();
+    for s in ["きょうはいいてんきです", "おちゃ", "ぬ"] {
+        assert_eq!(mapped.convert(s), d.convert(s));
+        assert_eq!(heap.convert(s), d.convert(s));
+        assert_eq!(mapped.lookup(s), d.lookup(s));
+    }
+    assert_eq!(mapped.to_bytes(), d.to_bytes());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn old_version_gives_rebuild_hint() {
+    let mut old = b"NAGIDICT".to_vec();
+    old.extend_from_slice(&2u32.to_le_bytes());
+    old.extend_from_slice(&[0u8; 200]);
+    let err = Dictionary::from_bytes(&old).unwrap_err().to_string();
+    assert!(
+        err.contains("旧形式") && err.contains("build-dict"),
+        "{err}"
+    );
+}
+
+#[test]
+fn bad_section_table_is_rejected() {
+    let bytes = build(ConnectionLayout::RidMajor).to_bytes();
+    // オフセットが 8 の倍数でない
+    let mut misaligned = bytes.clone();
+    misaligned[16] = misaligned[16].wrapping_add(1);
+    assert!(Dictionary::from_bytes(&misaligned).is_err());
+    // 長さがバッファを超える
+    let mut too_long = bytes.clone();
+    too_long[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert!(Dictionary::from_bytes(&too_long).is_err());
 }

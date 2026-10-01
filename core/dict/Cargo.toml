@@ -10,7 +10,14 @@ authors.workspace = true
 
 [dependencies]
 fst = "0.4.7"
+memmap2 = "0.9"
 thiserror = { workspace = true }
 
-[lints]
-workspace = true
+# ワークスペースは unsafe_code = "forbid" だが、このクレートだけ mmap のために
+# `buffer.rs` の 1 箇所で allow する（forbid は下位で緩められないため deny にしている）
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

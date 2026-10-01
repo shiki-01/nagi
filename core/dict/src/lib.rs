@@ -10,6 +10,7 @@
 //! テストでは [`DictionaryBuilder`] で小さな辞書をメモリ上に組み立てられる。
 
 mod align;
+pub mod buffer;
 pub mod builder;
 pub mod bunsetsu;
 pub mod convert;
@@ -21,6 +22,7 @@ pub mod pos;
 mod reverse;
 pub mod user;
 
+pub use buffer::DictBuffer;
 pub use builder::{
     ConnectionLayout, DictionaryBuilder, build_from_mozc_dir, build_from_sudachi_files,
 };
