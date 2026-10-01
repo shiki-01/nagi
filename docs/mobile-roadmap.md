@@ -13,16 +13,16 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 
 モバイル着手前にデスクトップ開発と並行して行う。いずれもデスクトップ単体でも価値がある変更に限る。
 
-| ID | 内容 | 完了条件 | 根拠 |
-| --- | --- | --- | --- |
-| D-1 | 辞書形式を mmap 可能にする（アラインメント・オフセット表現。読み込みの mmap 化は形式変更後） | `nagi-dict.bin` を `std::fs::read` せず参照でき、既存の精度評価（`nagi-eval --no-llm`）が変わらない | progress #6、H-3 |
-| D-2 | `insert_reading` / `perform_action` をプロトコルに追加（フリック等のかな直接挿入。Action 駆動のまま） | `core/protocol` に追加、`gen-types` / `check-types` 通過、状態機械のゴールデンテスト追加 | progress #7、H-3/H-4 |
-| D-3 | モバイル向けクロスビルドの CI 化。`cargo check --target aarch64-apple-ios` / `aarch64-linux-android` を engine / romaji / dict / protocol / profile / infer（llama 無し）に対して実行。`sysinfo` の可否を確認し、不可なら trait で注入に変更 | CI で上記ターゲットの check が通る | mobile-design §3-6 |
-| D-4 | `initialize` の capability で、メモリ上限・電源状態・熱状態・入力方式（物理キー/タッチ）をホストから受け取れるようにし、プロファイル判定をこれに従わせる（OS 問い合わせをコア内に持たない） | デスクトップでも同経路で動作。`profile` が `sysinfo` に直接依存しない | mobile-design §3-2 |
-| D-5 | 学習ファイルとユーザー辞書の複数プロセス同時アクセス対策（キーボード拡張と本体アプリが同じ App Group / アプリ領域を触る）。排他制御と原子的書き込みの再点検 | 2 プロセス同時 flush のテストが通る | mobile-design §2 |
-| D-6 | 予測変換の仕様を確定する（G-44 は現状仕様で確定済み。モバイルは予測候補バーが主要 UI のため、候補供給と件数・順位の要件を追記） | 設計書に要件を追記 | decisions G-44 |
+| ID | 内容 | 完了条件 | 根拠 | 状態 |
+| --- | --- | --- | --- | --- |
+| D-1 | 辞書形式を mmap 可能にする（アラインメント・オフセット表現。読み込みの mmap 化は形式変更後） | `nagi-dict.bin` を `std::fs::read` せず参照でき、既存の精度評価（`nagi-eval --no-llm`）が変わらない | progress #6、H-3 | 実装済み（H-6）。辞書形式 v3・mmap 読み込み。精度は不変（403/609）。mmap 時の常駐メモリ効果は未検証 |
+| D-2 | `insert_reading` / `perform_action` をプロトコルに追加（フリック等のかな直接挿入。Action 駆動のまま） | `core/protocol` に追加、`gen-types` / `check-types` 通過、状態機械のゴールデンテスト追加 | progress #7、H-3/H-4 | 実装済み（H-7）。`gen-types` / `check-types` 通過 |
+| D-3 | モバイル向けクロスビルドの CI 化。`cargo check --target aarch64-apple-ios` / `aarch64-linux-android` を engine / romaji / dict / protocol / profile / infer（llama 無し）に対して実行。`sysinfo` の可否を確認し、不可なら trait で注入に変更 | CI で上記ターゲットの check が通る | mobile-design §3-6 | `ci.yml` に `mobile` ジョブを追加（H-8）。**CI 未実行のため未検証** |
+| D-4 | `initialize` の capability で、メモリ上限・電源状態・熱状態・入力方式（物理キー/タッチ）をホストから受け取れるようにし、プロファイル判定をこれに従わせる（OS 問い合わせをコア内に持たない） | デスクトップでも同経路で動作。`profile` が `sysinfo` に直接依存しない | mobile-design §3-2 | 実装済み（H-9）。モバイルでの `sysinfo` 実値は未検証 |
+| D-5 | 学習ファイルとユーザー辞書の複数プロセス同時アクセス対策（キーボード拡張と本体アプリが同じ App Group / アプリ領域を触る）。排他制御と原子的書き込みの再点検 | 2 プロセス同時 flush のテストが通る | mobile-design §2 | 実装済み（H-10）。iOS の `0xdead10cc` は未検証 |
+| D-6 | 予測変換の仕様を確定する（G-44 は現状仕様で確定済み。モバイルは予測候補バーが主要 UI のため、候補供給と件数・順位の要件を追記） | 設計書に要件を追記 | decisions G-44 | 未着手 |
 
-D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見て具体化する。
+D-1〜D-5 は実装済み（上表の状態欄。実機でしか確認できない事項は未検証）。D-6 は M0 の結果を見て具体化する。
 
 ## 3. モバイルのマイルストーン
 

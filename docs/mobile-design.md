@@ -64,16 +64,20 @@
 - 配布形態: iOS は XCFramework、Android は AAR（`cargo xtask` にビルドタスクを追加）
 - クラッシュ隔離: 子プロセス化できないため、iOS ではコアのパニックが拡張ごと落ちる。`catch_unwind` で FFI 境界を守り、復帰時は `restore_session` 相当をフロントが呼ぶ
 
-### 4.2 プロトコル追加（案）
+### 4.2 プロトコル追加（決定済み・実装済み）
+
+仕様は設計書 §3.2、決定の経緯は `decisions.md` H-3・H-7・H-9。
 
 | method | 種別 | 内容 |
 | --- | --- | --- |
-| `insert_reading` | F→C 要求 | ローマ字を経由せず reading を挿入（フリック・12キー・物理かな配列）。応答は `process_key` と同じ描画差分 |
-| `perform_action` | F→C 要求 | タッチ UI のボタンから `Action`（文節移動・区切り伸縮・範囲選択・スタイル変換等）を直接実行 |
-| `initialize` の capability 拡張 | — | `platform: ios \| android`、`memory_limit_mb`、`low_power`、`thermal_state`、`supports_preedit_attributes` |
+| `insert_reading` | F→C 要求 | `{session_id, reading}`。ローマ字を経由せず reading を挿入（フリック・12キー・物理かな配列）。未確定ローマ字は先に確定し、`Converting` 中は変換結果を確定してから挿入する。応答は `process_key` と同じ描画差分 |
+| `perform_action` | F→C 要求 | `{session_id, action: ActionSpec}`。タッチ UI のボタンから `Action`（文節移動・区切り伸縮・範囲選択・スタイル変換等）を直接実行。キーマップは経由しない。`Insert` / `InsertText` / `CommitAndPassThrough` / `NoOp` は指定できない |
+| `initialize` の `client_capabilities` | — | 任意。`memory_limit_mb`、`environment`（`set_environment` と同じ値）、`input_modality: physical_keyboard \| touch`。注入値は `sysinfo` の検出より優先 |
 
 - キーマップ（TOML）の解決は物理キー経路のまま使う。タッチ UI のレイアウトはフロントの描画責務、ボタンと Action の対応はコアの設定（プリセット）で持つ
-- 12キーのトグル入力（「あ」を連打して「い」）とフリック方向の解決は、**コアで行う**（ロジックをフロントに持ち込まない原則）。フロントはタップ・フリック方向・ロングプレスを正規化して送るだけにする。この場合 `insert_reading` ではなく、タッチイベントを表す `kind` を `process_key` に追加する方式も候補（要決定、H 節）
+- 12キーのトグル入力（「あ」を連打して「い」）とフリック方向の解決は、**コアで行う**（ロジックをフロントに持ち込まない原則）。`process_key.kind` は拡張しない（H-3）。この解決を `insert_reading` の前段としてコアのどこに置くかは未実装
+- 旧案にあった `platform` / `low_power` / `thermal_state` / `supports_preedit_attributes` は、電源・熱は `environment` に集約し、`platform` / `supports_preedit_attributes` は未実装
+- `input_modality` は現状保持のみで、挙動には使っていない
 
 ### 4.3 環境プロファイル
 

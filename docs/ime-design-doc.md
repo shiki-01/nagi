@@ -125,8 +125,10 @@
 
 | method | 種別 | 内容 |
 | --- | --- | --- |
-| `initialize` | F→C 要求 | プロトコルバージョン・capability・OS情報の交換 |
+| `initialize` | F→C 要求 | プロトコルバージョン・capability・OS情報の交換。任意の `client_capabilities {memory_limit_mb, environment, input_modality: physical_keyboard\|touch}` で、ホストが環境情報を注入できる（注入値は OS 検出より優先し、プロファイルを再判定。`input_modality` は保持のみ） |
 | `process_key` | F→C 要求 | `{session_id, keysym, keycode, text, modifiers, kind: down\|flags_changed}` |
+| `insert_reading` | F→C 要求 | `{session_id, reading}`。ローマ字を経由せず reading を挿入（フリック等）。未確定ローマ字は先に確定（`n`→`ん`）、`Converting` 中は変換結果を確定してから挿入、入力モードが英数でも挿入。応答は `process_key` と同じ |
+| `perform_action` | F→C 要求 | `{session_id, action: ActionSpec}`。キーマップを経由せず `Action` を直接実行。`ActionSpec` は `{"type":..,"content":..}` の隣接タグで、`Insert` / `InsertText` / `CommitAndPassThrough` / `NoOp` を含まない。`Direct` 状態ではモード操作と `UndoCommit` 以外は `consumed:false`。応答は `process_key` と同じ |
 | `focus_in` / `focus_out` | F→C 要求 | セッションのフォーカス変化。`focus_out` 時は表示中の surface を確定して返す |
 | `set_context` | F→C 通知 | Surrounding Text、アプリ識別子、secure input フラグ |
 | `select_candidate` | F→C 要求 | 候補ウィンドウ外からの選択（将来のマウス対応用に予約） |
@@ -368,6 +370,7 @@ key → romaji変換 → Preedit更新 → 候補生成 → アライメント �
 - スコア: `ln(1+count)` × 最終使用からの指数減衰（半減期14日）。パラメータ設定可。`max_entries` 超過は低スコアから削除
 - 保存: TSV（1行目スキーマバージョン、タブ・改行はバックスラッシュエスケープ）。
   IME切替・フォーカス喪失時 + 5分毎に flush。一時ファイル→rename で原子的に書き、ファイルロックを取る
+- **複数プロセスのマージ規則**（同じ学習ファイルを複数プロセスが書く場合）: flush は排他ロック → ディスク上の最新を読む → 差分を適用 → tmp に書いて fsync → rename → 親ディレクトリを fsync の順。差分の適用は `count` を加算、`last_used` は max、誤学習削除は全 `context_hash` の同一 (reading, surface) を対象、全削除は clear。`.lock` ファイルは削除しない。未知のスキーマバージョンは上書きせずエラー。ユーザー辞書の書き込みはコア内に無く、フロントの責務
 - **誤学習削除**: 候補ウィンドウで学習候補に `Ctrl+Delete`（変更可）
 - **学習停止条件**: secure input / シークレットモード / パスワードマネージャ系アプリ。停止中は Surrounding Text 取得も止める
 - 予測変換（Phase 2）: 一般的なスマホ・PC IME と同様。reading `predict.min_chars`（既定1）文字以上で表示、Tab/↓で選択。供給元は学習キャッシュ・ユーザー辞書の前方一致（LLMによる続き生成は後続）

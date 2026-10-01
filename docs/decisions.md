@@ -726,6 +726,48 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - アプリ仕様（キーボード UI・本体アプリの構成・設定項目）は azooKey を参考にする。変換エンジン本体は参考にしない（F の方針どおり）
 - 詳細は `mobile-design.md` §5.0・§6
 
+### H-6. 辞書形式 v3・mmap 読み込み（D-1、暫定判断・要レビュー）
+
+- **形式**: ヘッダのセクション表に各セクションの絶対オフセットを持ち、各セクションの先頭を 8 バイト境界に揃える。`Dictionary` は読み込んだバッファ上を zero-copy で参照する
+- **読み込み**: `Dictionary::load` は mmap で開く。mmap に失敗した場合はヒープへの読み込みに落とす。旧版（v3 未満）のファイルは「再生成せよ」という趣旨のエラーにする（`cargo xtask build-dict`）
+- **精度**: 不変（`nagi-eval --no-llm` で 403/609）
+- **更新手順**: mmap 中のファイルが書き換えられた場合の挙動は不定。辞書の更新は別名で書いてから rename する。`build-dict` は tmp に書いてから rename する（H-10）
+- **未検証**: mmap による常駐メモリの削減効果（実機・モバイルでの実測は M0 項目）
+
+### H-7. `insert_reading` / `perform_action`（D-2、暫定判断・要レビュー）
+
+H-3 の案A（タッチ入力は専用メソッド、`process_key.kind` は拡張しない）の具体化。応答はいずれも `process_key` と同じ描画差分。
+
+- **`insert_reading {session_id, reading}`**: ローマ字を経由せず reading を挿入する。未確定のローマ字があれば先に確定させる（`n` → `ん`）。`Converting` 中は表示中の変換結果を確定してから新しい入力として挿入する。入力モードが英数でも挿入する
+- **`perform_action {session_id, action: ActionSpec}`**: キーマップを経由せず `Action` を直接実行する。`Direct` 状態では、モード操作と `UndoCommit` 以外は `consumed: false`
+- **`ActionSpec`**: プロトコル用の `Action` 表現で、`Insert` / `InsertText` / `CommitAndPassThrough` / `NoOp` を含まない（挿入は `insert_reading`、素通しはフロントの責務のため）。JSON は `{"type": ..., "content": ...}` の隣接タグ
+- **設計書との差**: `mobile-design.md` §4.2 の旧案にあった `process_key` への touch `kind` 追加は採らない（H-3 のとおり）。12 キーのトグル・フリック方向の解決をコアのどこに置くかは未実装・未決（H-2 の方針のみ）
+
+### H-8. モバイル向けクロスビルドの CI（D-3、暫定判断・要レビュー）
+
+- `.github/workflows/ci.yml` に `mobile` ジョブを追加。`aarch64-apple-ios` / `aarch64-linux-android` で `cargo check` を行う
+- **未検証**: このジョブは CI 上で未実行。初回実行で失敗する可能性がある
+
+### H-9. `initialize` の `client_capabilities`（D-4、暫定判断・要レビュー）
+
+- `initialize` に任意の `client_capabilities {memory_limit_mb, environment, input_modality}` を追加。`environment` は `set_environment` と同じ `SetEnvironmentParams`、`input_modality` は `physical_keyboard` | `touch`
+- 注入された値は `sysinfo` による検出より優先し、受け取った時点でプロファイルを再判定する
+- `input_modality` は保持するだけで、挙動にはまだ使っていない
+- `nagi-profile` の `sysinfo` 依存は optional feature にし、判定材料の取得は `SystemSource` trait の裏に置く（`sysinfo` なしでもビルドできる）
+- **未対応**: ffi 側で `sysinfo` を外すには ffi crate に feature が必要
+- **設計書との差**: `mobile-design.md` §4.2 の旧案にあった `platform` / `low_power` / `thermal_state` / `supports_preedit_attributes` は、電源・熱は `environment` に集約し、`platform` / `supports_preedit_attributes` は未実装
+- **未検証**: モバイル実機での `sysinfo` の実値（メモリ量等が取れるか）
+
+### H-10. 学習ファイル・辞書の複数プロセス書き込み（D-5、暫定判断・要レビュー）
+
+- **learn の flush**: 排他ロックを取る → ディスク上の最新を読む → 自プロセスの差分を適用 → tmp に書いて fsync → rename → 親ディレクトリを fsync
+- **マージ規則**: `count` は加算、`last_used` は max。`forget` は全 `context_hash` の同一 (reading, surface) を対象にする。`clear` は全削除
+- **`.lock` ファイルは削除しない**
+- **未知のスキーマバージョン**: 上書きせずエラーにする（新しい版のデータを壊さない）
+- **`build-dict`**: tmp に書いてから rename（H-6）
+- **ユーザー辞書**: コア内にファイルへの書き込み処理は無い。書き込みの排他・原子性はフロント（本体アプリ）の責務
+- **未検証**: iOS の App Group コンテナでファイルロックを保持したままバックグラウンドへ移ると強制終了される問題（`0xdead10cc`）。実機での挙動は未確認
+
 ### G-43. ライブ変換: 追記中は変換結果を固定して表示し、末尾だけ再変換する（2026-09-30）
 
 - **背景**: ライブ変換の表示条件が「`source_reading` と現在の reading の完全一致」（G-25 / G-39）だったため、変換結果の表示後に1文字打つたびに preedit 全体がひらがなに戻り、デバウンス後の結果でまた変換表示に戻る、というちらつきが実機で出た
