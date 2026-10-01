@@ -99,7 +99,7 @@ jobs:
           done
           # 埋め込み結果の検証（application-groups が無ければ失敗させる）
           for bin in "$APP/NagiSpike" "$APP"/PlugIns/*.appex/NagiSpikeKeyboard; do
-            ldid -e "$bin" | tee /dev/stderr | grep -q 'group.com.shiki.nagi.spike'
+            ldid -e "$bin" | tee /dev/stderr | grep -q '<key>com.apple.security.application-groups</key>'
           done
 
       - name: IPA を作成

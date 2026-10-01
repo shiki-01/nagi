@@ -50,7 +50,7 @@ targets:
     entitlements:
       path: App/NagiSpike.entitlements
       properties:
-        application-groups:
+        com.apple.security.application-groups:
           - group.com.shiki.nagi.spike
 
     settings:
@@ -87,7 +87,7 @@ targets:
     entitlements:
       path: Keyboard/NagiSpikeKeyboard.entitlements
       properties:
-        application-groups:
+        com.apple.security.application-groups:
           - group.com.shiki.nagi.spike
 
     info:
