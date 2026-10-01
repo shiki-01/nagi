@@ -12,10 +12,14 @@ authors.workspace = true
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-nagi-server = { path = "../server" }
+nagi-server = { path = "../server", default-features = false }
 serde_json = { workspace = true }
 
 [features]
+# デスクトップ既定を保つため ON。モバイルは --no-default-features で外し、メモリ等はホスト注入値を使う
+default = ["sysinfo", "update-check"]
+sysinfo = ["nagi-server/sysinfo"]
+update-check = ["nagi-server/update-check"]
 # LLM 推論（zenz）を含む。llama.cpp の C++ ビルドが必要
 llama = ["nagi-server/llama"]
 

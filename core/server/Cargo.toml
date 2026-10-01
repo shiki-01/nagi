@@ -28,14 +28,16 @@ nagi-profile.workspace = true
 nagi-rewriter.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ureq = { version = "2.11", features = ["json"] }
-ed25519-dalek = "2"
-sha2 = "0.10"
+ureq = { version = "2.11", features = ["json"], optional = true }
+ed25519-dalek = { version = "2", optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [features]
-default = ["sysinfo"]
+default = ["sysinfo", "update-check"]
 # デスクトップ既定の OS 問い合わせ（搭載メモリ）。モバイルでは無効にしてホスト注入値を使う
 sysinfo = ["nagi-profile/sysinfo"]
+# アップデート確認（ureq=rustls/ring の C ビルドを含む）。モバイルは本体アプリ側で更新確認するため無効にする
+update-check = ["dep:ureq", "dep:ed25519-dalek", "dep:sha2"]
 # llama.cpp による zenz 推論（C++ ビルドが必要。リリースビルドでは有効にする）
 llama = ["nagi-infer/llama"]
 

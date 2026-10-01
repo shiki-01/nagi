@@ -474,6 +474,7 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
         runtime.push_event(e);
     }
 
+    #[cfg(feature = "update-check")]
     if config.update.auto_check {
         let runtime_for_update = runtime.clone();
         let url = config

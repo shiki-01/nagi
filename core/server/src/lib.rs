@@ -10,7 +10,7 @@
 //! - [`server`] — JSON-RPC ループ
 //! - [`settings`] — GUI 設定画面向けの設定 RPC（`get_settings` / `update_settings`）
 //! - [`calibration`] — キャリブレーション推論の実測結果のファイルへの永続化
-//! - [`update_check`] — アップデート確認（`config.toml` の `[update] auto_check`）
+//! - [`update_check`] — アップデート確認（feature `update-check`）（`config.toml` の `[update] auto_check`）
 
 pub mod calibration;
 pub mod learning;
@@ -19,6 +19,7 @@ pub mod runtime;
 pub mod server;
 pub mod settings;
 pub mod setup;
+#[cfg(feature = "update-check")]
 pub mod update_check;
 
 pub use pipeline::Pipeline;

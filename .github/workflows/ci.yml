@@ -96,3 +96,6 @@ jobs:
       # profile は sysinfo 無し（OS 問い合わせをホスト注入に置き換える構成）でも通ること
       - name: check (profile without sysinfo)
         run: cargo check --target ${{ matrix.target }} -p nagi-profile --no-default-features
+      # ffi は sysinfo / update-check 無し（モバイル構成。ring 等の C 依存を含まない）でも通ること
+      - name: check (ffi without default features)
+        run: cargo check --target ${{ matrix.target }} -p nagi-ffi --no-default-features

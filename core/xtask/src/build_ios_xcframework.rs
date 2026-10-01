@@ -20,6 +20,8 @@ fn is_macos() -> bool {
 fn run_cargo_build(target: &str, features: &[&str]) -> Result<(), String> {
     let mut cmd = Command::new("cargo");
     cmd.args(["build", "--release", "-p", "nagi-ffi", "--target", target]);
+    // iOS はホスト注入値を使うため sysinfo（既定 feature）を外す
+    cmd.arg("--no-default-features");
 
     if !features.is_empty() {
         cmd.arg("--features");
