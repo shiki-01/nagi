@@ -34,7 +34,7 @@
 6. **辞書形式を mmap 可能な形式へ変更**（優先度高・デスクトップ v1 中に。決定 H-3 参照）: 現状は `core/dict/src/dictionary.rs:203` の `std::fs::read` による全量読み込み。アラインメント・オフセット表現を持つバイナリ形式に変更し、mmap 対応を可能にする。読み込み実装の mmap 化自体は形式対応後でよい
 7. **`insert_reading` / `perform_action` のプロトコル設計を core/protocol に追加**（typeshare 生成・check-types 含む。モバイル着手時でも可、設計だけ先行）: タッチ由来の入力表現（H-4 参照）。物理キー（`process_key`）との分離
 8. **iOS 拡張のメモリ上限実測と LLM 可否判定**（M0 最優先）: `nagi-infer` を iOS 環境でビルド・実行し、メモリ上限（Apple 公式ドキュメントの記載値・実測値）と LLM ロードのコストを測定。実測が出るまで iOS の品質基準は `minimal`（辞書+Viterbi）
-9. **SideStore 検証**（entitlement/App Group、無料 Apple ID 制限、URL scheme）: 再署名後の entitlement / App Group の維持、無料 Apple ID のデバイス台数・有効期限制限の数え方、更新時の URL scheme 対応を検証。デスクトップ作業と独立に早期に実施
+9. ~~**SideStore 検証**~~ → 撤回（2026-10-02、Apple Developer Program 加入により SideStore を使わない。decisions I 節）。代わりに、macOS の Developer ID 署名・公証、iOS の TestFlight 配布の整備が必要（decisions I-4）
 10. **UniFFI 試作**（ネスト構造のコスト・callback・JSON か型かの計測）: FFI 方式を UniFFI で確定（H-4 参照）。実装時に以下を計測して詳細を決める: Preedit 等のネスト構造を毎キー渡すコスト、非同期通知（revision 付き差し替え）の callback 表現、描画差分を JSON 文字列か UniFFI 型で渡すか（p95 < 16ms 目標への影響）
 11. macOS フロントエンド（IMKit。`set_environment` の送信、`set_context.app_id` の報告を含む。**未着手**: 本環境にXcode等が無く、Swift/IMKitのコードを書いてもコンパイル確認ができないため）。~~アップデート確認（署名検証）~~ → 検証ロジックは実装済み（G-31。ed25519署名検証。ダウンロード・インストールの実処理はプラットフォーム実装待ち）。インストールスクリプトは、対象の`.app`バンドル（フロントエンド本体）が無いため未着手（フロントエンド着手時に合わせて作る）。`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）は作成済み
 7. Phase 3 以降: ~~範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）~~ → 選択・再変換・ToHankaku まで実装済み（G-17・G-22）。~~確定取消~~ → エンジン側は実装済み（G-28。`ProcessKeyResult.delete_before` を追加。ホストアプリのテキストを実際に削除するフロント側の対応は別途必要）。スタイル変換は未着手。~~Rewriter~~ → 全角/半角英数記号・半角カナ・漢数字・日付・簡易計算まで実装済み（G-15・G-16・G-20）

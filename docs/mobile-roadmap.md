@@ -5,9 +5,9 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 ## 1. 着手順の方針
 
 - 設計の制約は厳しい側（iOS）に合わせる。ただし実装・検証は Android を先行する（H-2 の既存決定と整合）。
-  - iOS 拡張は子プロセス不可・メモリ上限が数十 MB 級・SideStore 配布で、実装の試行回数が稼ぎにくい。Android で FFI・タッチ入力・辞書共有の仕組みを先に確立する。
+  - iOS 拡張は子プロセス不可・メモリ上限が数十 MB 級・実機での試行に TestFlight / 実機署名が必要で、実装の試行回数が稼ぎにくい。Android で FFI・タッチ入力・辞書共有の仕組みを先に確立する。
   - 「厳しい側に合わせる」は実装順ではなくコア設計の基準として適用する。辞書は mmap 前提、LLM は `minimal` で常用に耐える、依存は iOS/Android 両方でビルド可能、を Android 実装中も守る。
-- iOS の致命的リスク（拡張のメモリ上限、SideStore の App Group 動作）は M0 で実測し、Android 実装に入る前に判定する。iOS が成立しない場合の設計変更を早く知るため。
+- iOS の致命的リスク（拡張のメモリ上限）は M0 で実測し、Android 実装に入る前に判定する。iOS が成立しない場合の設計変更を早く知るため。
 
 ## 2. デスクトップ側の先行修正（D 系）
 
@@ -38,7 +38,7 @@ D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見�
 
 1. iOS キーボード拡張で、mmap した辞書 + Viterbi が動く際の常駐メモリと、拡張が強制終了される閾値
 2. iOS 拡張で LLM（zenz-v3.1-small の GGUF）が載るか。載らない場合は本体アプリ側での推論やオンデバイス外の代替は採らず、`minimal` 固定とする
-3. SideStore 配布で App Group と Custom Keyboard が実際に動作するか（entitlement の扱い）
+3. TestFlight 配布で App Group と Custom Keyboard が実機で動作するか（SideStore は使わない。decisions I-2）
 4. UniFFI 経由の 1 キーあたりのレイテンシ（JSON 文字列渡しと型渡しの比較）。目標は既存の p95 < 16ms（ひらがな反映）を維持
 5. Android で `android:process` 分離した IME サービスのメモリと、コールドスタート時間
 6. azooKey のキーボード UI・拡張構成の調査（参考実装）

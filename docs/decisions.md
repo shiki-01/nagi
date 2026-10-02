@@ -178,7 +178,7 @@
 - 入力モード: 状態の正はコアの内部モードとする。表示は OS の入力モード（ひらがな / 英数）へ同期し、メニューバーに「あ / A」を出す（Mozc と同じ方式）
 - 候補ウィンドウ: 独自の NSPanel で実装する
 - preedit の属性がアプリごとにどこまで反映されるかは、Phase 0 で実機確認する（下線スタイル、選択範囲の強調）
-- 配布: Apple Developer Program には加入しない
+- 配布: ~~Apple Developer Program には加入しない~~ → 2026-10-02 に加入済み前提へ変更（I 節。以下の ad-hoc 前提の記述は旧方針で、ローカル開発時の署名としてのみ残る）
   - アプリには ad-hoc 署名だけを付ける
   - 主な導入手段はインストールスクリプト（`curl -fsSL https://shiki-01.com/nagi/install.sh | sh`）。`~/Library/Input Methods` に配置する。curl で取得したファイルには quarantine 属性が付かないため、Gatekeeper の警告は出ない
   - 手動用に zip と手順書も配布する
@@ -715,12 +715,12 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 
 ### H-4. 追加決定（2026-09-30）
 
-- **SideStore 検証**: entitlement / App Group の維持（再署名後）、無料 Apple ID の制限の数え方、更新時の URL scheme 対応を、デスクトップ作業と独立に早期に実施する。H-2 の「FFI バインディングは UniFFI」の前提で、Swift のバインディングとして同時に検証する
+- ~~**SideStore 検証**: entitlement / App Group の維持（再署名後）、無料 Apple ID の制限の数え方、更新時の URL scheme 対応を、デスクトップ作業と独立に早期に実施する。~~（2026-10-02 撤回。SideStore を使わないため不要。I 節）H-2 の「FFI バインディングは UniFFI」の前提で、Swift のバインディングとして同時に検証する
 - **FFI 方式**: UniFFI で確定（H-2 の第一候補を確定に格上げ）。確認事項として以下を実装時に計測して決める旨を添える: (1) Preedit 等のネスト構造を毎キー渡すコスト、(2) 非同期通知（revision 付き差し替え）の callback 表現、(3) 描画差分を JSON 文字列か UniFFI 型で渡すか（p95 < 16ms 目標への影響）
 
 ### H-5. 配布・更新・アプリ仕様（2026-09-29 ユーザー決定）
 
-- iOS は SideStore によるサイドロードで配布する（Apple Developer Program 非加入の方針を維持）。更新は AltStore 互換のソース JSON を `shiki-01.com` に置いて配信する
+- ~~iOS は SideStore によるサイドロードで配布する（Apple Developer Program 非加入の方針を維持）。更新は AltStore 互換のソース JSON を `shiki-01.com` に置いて配信する~~ → 2026-10-02 に撤回。iOS は TestFlight → App Store（I 節）
 - Android は署名済み APK の直接配布とする（公式ストアは使わない）
 - 両 OS とも本体アプリに更新確認を入れる。データ資産（辞書・モデル・プリセット）は再インストールなしで更新できるようにする。アプリ本体は Android が `PackageInstaller` で上書き、iOS は SideStore の更新へ誘導する（iOS は署名済みでないコードを実行できないため）
 - アプリ仕様（キーボード UI・本体アプリの構成・設定項目）は azooKey を参考にする。変換エンジン本体は参考にしない（F の方針どおり）
@@ -803,3 +803,36 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **影響**: `romaji/src/lib.rs`（`Backspace`・`RomajiConverter::{feed,backspace}`・`Composer::backspace`）。テストは romaji の `test_backspace_*`・`test_converter_backspace_outcomes`、engine の `api.rs`（`backspace_rolls_back_*`・`second_backspace_is_conventional`・`cursor_move_discards_backspace_history`・ライブ変換ケース）と golden `30_composing_edit.yaml`（`composing-backspace-rollback-*`）。既存テストの期待値変更なし
 - **未対応**: Undo（確定後の取り消し）や複数キーにわたる巻き戻しは対象外。`k`+`-`（k が Raw、`-` が「ー」で保留が空）も Raw を含むため巻き戻し対象（BS で保留 k に戻る）
 
+
+## I. Apple Developer Program 加入（2026-10-02 ユーザー決定）
+
+Apple Developer Program（有料）に加入したため、「非加入」を前提としていた D・H-5 の配布方針を変更する。
+
+### I-1. macOS
+
+- Developer ID Application 証明書で署名し、Hardened Runtime を有効にして公証（`notarytool`）・staple する。Gatekeeper の警告・「このまま開く」手順・quarantine 属性の回避策は不要になる
+- Mac App Store には出さない。エンジンを子プロセスとして起動する構成と `~/Library/Input Methods` への配置が、App Sandbox と相性が悪いため。Developer ID 配布を主とする
+- 主導線は署名・公証済み `.pkg`（または zip）。`install.sh` は CLI・自動化向けの補助に格下げする
+- アップデートは自前の ed25519 署名検証付き（G-31）を継続する。Sparkle は採用しない（検証ロジックは実装・テスト済みで、モバイルとコアを共有するため）。Developer ID / 公証は OS 側の信頼、ed25519 は更新経路の完全性という別目的
+- ローカル開発・CI のビルド確認は ad-hoc 署名のままでよい。署名・公証はリリース用ジョブ（secrets: 証明書・App Store Connect API キー）に分ける
+- `UPDATE_PUBLIC_KEY_HEX` のプレースホルダー差し替え（G-31）は引き続き実配布前に必要
+- Hardened Runtime で llama.cpp（Metal・mmap）が動作することを実機で確認する（必要な entitlement は最小限にする）
+
+### I-2. iOS（H-5 を置き換え）
+
+- SideStore は使わない。配布は TestFlight（開発・テスト）→ App Store（公開）。キーボード拡張・App Group・フルアクセス（`RequestsOpenAccess`）は App Store で通常どおり使える
+- 7 日失効・無料 Apple ID の台数制限・再署名による App Group ID 書き換えの問題は消える。H-4 の SideStore 検証、`frontend-ios-spike` の SideStore 前提の手順と `ios-spike.yml` の ldid 擬似署名は不要になる（実署名に置き換える）
+- アプリ本体の更新は App Store / TestFlight に任せる。本体アプリの更新確認はデータ資産（辞書・モデル・プリセット）のみを対象とする。データ資産のダウンロードは App Store ガイドライン上の扱い（実行コードを含まないこと）を満たす形にする
+- App Review 対応（プライバシーラベル・フルアクセスの用途説明）が必要になる。「全処理ローカル・外部送信なし」の方針は維持する
+
+### I-3. Android・Windows
+
+- Android は変更なし（署名済み APK の直接配布）。Google Play 出しは未決定（開発者登録は別料金・別アカウントのため、着手時に判断する）
+- Windows のコード署名証明書は Apple の加入とは無関係。Phase 5 で決める
+
+### I-4. 影響範囲（未実施の作業）
+
+- `core/xtask/src/bundle_macos.rs`: Developer ID 署名・公証・staple のステップ追加（macOS のみ。環境変数で証明書 ID を渡し、未指定なら従来の ad-hoc）
+- `.github/workflows/macos-frontend.yml`: リリース用の署名・公証ジョブ追加（secrets 設定が必要）
+- `.github/workflows/ios-spike.yml`・`frontend-ios-spike/README.md`: SideStore 前提から TestFlight 前提へ
+- インストールスクリプト（未着手）は補助の位置づけで作る

@@ -13,7 +13,7 @@
 - プロトコルを「同期応答で差分を返す」方式に再設計（§3.2）
 - 環境プロファイル（ハードウェアに応じた精度/軽さの自動調整）を追加（§4.7）
 - 辞書のみで動く `minimal` 経路を Phase 1 に前倒し（モデル無しでも常に動く）
-- 配布・アップデート方式（Apple Developer Program 非加入前提）を追加（§5.2, §8）
+- 配布・アップデート方式を追加（§5.2, §8）。当初は Apple Developer Program 非加入前提だったが、2026-10-02 に加入済み前提へ変更（`decisions.md` I 節）
 
 ---
 
@@ -435,11 +435,12 @@ model = "style"              # style | 専用GGUFパス
 - Secure Input検知で学習停止フラグを送る
 - preedit 属性の各アプリでの反映範囲は Phase 0 で実機確認
 - 既知の罠（karukan README等より）: ログイン再認識、TextInputMenuAgentのキャッシュ、スリープ時のパイプ破棄 → 設計に織込み済み
-- 配布（Apple Developer Program 非加入）:
-  - ad-hoc 署名のみ
-  - 主導線: `curl -fsSL https://shiki-01.com/nagi/install.sh | sh` で `~/Library/Input Methods` へ配置（curl 取得物には quarantine 属性が付かず Gatekeeper 警告が出ない。配布元の信頼が前提）
-  - 手動用 zip + 手順書（Gatekeeper の「このまま開く」手順を含む）
-  - アンインストールスクリプトも同梱
+- 配布（Apple Developer Program 加入済み。2026-10-02 に非加入前提から変更、`decisions.md` I 節）:
+  - Developer ID Application 証明書で署名（Hardened Runtime 有効）→ 公証（`notarytool`）→ staple。Mac App Store には出さない（エンジンの子プロセス起動・`~/Library/Input Methods` への配置・サンドボックス制約のため）
+  - 主導線: 署名・公証済みの `.pkg`（または zip）を `shiki-01.com` と GitHub Releases で配布。Gatekeeper の警告は出ない
+  - 補助: `curl -fsSL https://shiki-01.com/nagi/install.sh | sh`（CLI・自動化向け）。アンインストールスクリプトも同梱
+  - アップデートは自前の ed25519 署名検証を継続（Sparkle は採用しない）。公証・Developer ID 署名は OS 側の信頼、ed25519 は更新経路の完全性という別目的で併用する
+  - 署名・公証は CI の secrets（証明書・App Store Connect API キー）で行う。ローカル開発は従来どおり ad-hoc 署名でよい
 
 ### 5.3 Windows（後続実装）
 
@@ -558,7 +559,7 @@ auto_check = true
 | 変換モデルのライセンス・品質 | 高 | Phase 0 で比較。同梱せず別途取得でライセンス分離。将来は自前 fine-tune も選択肢 |
 | アライメント（§4.2）の精度不足 | 高 | Phase 0 で検証。不足時は文節単位選択に限定し、辞書 Viterbi の区切りを優先 |
 | Windows TSFの実装難度 | 高 | macOS先行でコアを固める。azooKey-Windows/rakukanのコードを精読してから着手 |
-| 未署名配布による導入障壁・信頼性 | 中 | インストールスクリプト + ed25519 検証 + 手順書。将来 Developer Program 加入を再検討 |
+| 公証・署名運用の失敗（証明書期限切れ、公証拒否、Hardened Runtime の権限不足） | 中 | CI で署名・公証・staple を自動化し、`spctl --assess` で検証。証明書の期限を管理。Windows の署名は別途 Phase 5 で決める |
 | Phase 1 の範囲拡大（文節変換を含む） | 中 | 辞書 Viterbi を先に作り、LLM 無しで文節操作を完成させてから LLM を載せる順で進める |
 | 投機的デコーディングの実装コスト | 中 | Phase 6 まで素朴推論 + プロファイル + チャンクで対応 |
 | IMKit/TSF固有の互換性問題 | 中 | 互換チェックリスト運用。preedit非対応アプリ向けフォールバック |

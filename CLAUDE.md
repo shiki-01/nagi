@@ -116,8 +116,8 @@ nagi/
 - secure input / シークレットモード / パスワードマネージャ系アプリでは学習・Surrounding Text取得・ログを停止する
 - ログに入力内容を残さない（デバッグビルドのみopt-inで許可）
 - 学習データはワンコマンドで全削除可能にする
-- macOS 配布は Apple Developer Program 非加入: ad-hoc 署名 + インストールスクリプト（`shiki-01.com`）+ ed25519 署名検証付きアップデート
-- モバイル（将来）: iOS は SideStore、Android は APK 直接配布。どちらも本体アプリで更新確認し、データ資産は再インストールなしで更新（`docs/mobile-design.md` §6）
+- macOS 配布は Apple Developer Program 加入済み（2026-10-02、`docs/decisions.md` I 節）: Developer ID 署名 + Hardened Runtime + 公証（notarization）+ staple。Mac App Store には出さず `shiki-01.com` から配布。インストールスクリプトは補助。更新は自前の ed25519 署名検証付きアップデートを継続
+- モバイル（将来）: iOS は TestFlight → App Store、Android は APK 直接配布。どちらも本体アプリで更新確認し、データ資産は再インストールなしで更新（`docs/mobile-design.md` §6）。SideStore は使わない
 
 ## テスト戦略
 
