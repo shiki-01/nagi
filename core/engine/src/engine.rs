@@ -14,6 +14,7 @@ use crate::ir::{
 use crate::kana::{normalize_reading_char, to_katakana};
 use crate::keymap::{KeyContext, KeyMap, parse_action};
 use crate::observer::{CommitContext, CommitObserver, CommittedSegment};
+use nagi_fuzzy::{FuzzyConfig, KeyAlternatives};
 use nagi_protocol::key::{KeyEvent, KeyKind};
 use nagi_protocol::methods::{
     InputAlternative, ProcessKeyResult, RestoreSessionParams, SetContextParams,
@@ -41,6 +42,36 @@ pub enum InitialView {
     Segment,
 }
 
+/// 曖昧入力の設定（`config.toml` の `[fuzzy]` に対応する部分。設計: `docs/fuzzy-input-design.md`）
+#[derive(Debug, Clone)]
+pub struct FuzzyEngineConfig {
+    /// 曖昧入力（補正候補）を使うか。`false` なら打鍵の記録も補正の計算も一切行わない
+    pub enabled: bool,
+    /// 仮説探索・コスト換算の設定（`max_hypotheses` は第一仮説を含む仮説数）
+    pub search: FuzzyConfig,
+    /// 入力コストの重み（`total = conv_cost + input_weight * input_cost`）
+    pub input_weight: f32,
+    /// 曖昧さの閾値（nat）。追加仮説を走らせる条件と、補正候補を残す条件の両方に使う
+    pub ambiguity_margin: f32,
+    /// 第一仮説の変換で辞書に載らない割合がこれ以上なら追加仮説を走らせる
+    pub poor_coverage: f32,
+    /// 第一仮説が `poor_coverage` 以上のとき、補正候補を先頭に出す
+    pub promote_corrected: bool,
+}
+
+impl Default for FuzzyEngineConfig {
+    fn default() -> Self {
+        FuzzyEngineConfig {
+            enabled: false,
+            search: FuzzyConfig::default(),
+            input_weight: 1.0,
+            ambiguity_margin: 1.5,
+            poor_coverage: 0.3,
+            promote_corrected: false,
+        }
+    }
+}
+
 /// エンジンの設定（`config.toml` の `[input]` `[conversion]` に対応する部分）
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -66,6 +97,8 @@ pub struct EngineConfig {
     /// 文全体N-bestの候補数の起点（`conversion.beam_width`。既定値のみ。実行時のプロファイル
     /// 反映は `Effective.beam_width`（`nagi-server`）が別に持つ）
     pub beam_width: usize,
+    /// 曖昧入力（`[fuzzy]`。既定は無効）
+    pub fuzzy: FuzzyEngineConfig,
 }
 
 impl Default for EngineConfig {
@@ -81,6 +114,7 @@ impl Default for EngineConfig {
             composing_chunk_len: 30,
             initial_view: InitialView::Sentence,
             beam_width: 3,
+            fuzzy: FuzzyEngineConfig::default(),
         }
     }
 }
@@ -127,6 +161,31 @@ struct Conv {
     /// 候補選択（`NextCand`/`PrevCand`/`SelectCand`/`select_candidate`）以外の操作が来たら、
     /// 選択中の候補の分割へ丸ごと置き換えて `None` にする（`ensure_segmented`）
     sentence_alternatives: Option<Vec<Vec<Segment>>>,
+    /// 曖昧入力の補正仮説（`base_reading` が `Some` の 1 文節のときだけ使い、`ensure_candidates` が
+    /// 候補の末尾に Corrected として足す）
+    corrections: Vec<Correction>,
+    /// `corrections` の元になった、入力全体の reading（打たれたとおり）。`Some` の間、先頭の文節で
+    /// 補正候補を選ぶとその reading に、通常の候補へ戻すとこの reading に書き換わる
+    base_reading: Option<String>,
+}
+
+/// 曖昧入力の補正仮説 1 つぶんの変換結果
+#[derive(Debug, Clone)]
+struct Correction {
+    /// 補正後の読み
+    reading: String,
+    /// その読みの文全体変換
+    segments: Vec<BackendSegment>,
+    /// 変換結果の表記（`segments` の連結）
+    surface: String,
+}
+
+/// 追加の読み仮説を変換した結果（`Engine::fuzzy_corrections`）
+struct FuzzyOutcome {
+    /// 補正候補（総合スコアの良い順）
+    corrections: Vec<Correction>,
+    /// 先頭に出す（`promote_corrected` かつ第一仮説が低品質）
+    promote: bool,
 }
 
 enum State {
@@ -180,6 +239,8 @@ struct Session {
     last_commit: Option<LastCommit>,
     /// このキー処理で確定取消が成功した場合の `delete_before`（`finish` が読んで消費する）
     pending_delete_before: Option<u32>,
+    /// 処理中のキーに添えられた曖昧入力の代替 `(文字, 距離)`。`insert_char` が打鍵ログへ渡して消費する
+    key_alts: Vec<(char, f32)>,
 }
 
 /// ライブ変換のキャッシュ
@@ -238,6 +299,11 @@ fn tail_chars(s: &str, n: usize) -> String {
     s.chars().skip(count.saturating_sub(n)).collect()
 }
 
+/// Piece 列の reading の連結
+fn pieces_reading(pieces: &[Piece]) -> String {
+    pieces.iter().map(|p| p.text.as_str()).collect()
+}
+
 fn push_candidate(items: &mut Vec<Candidate>, surface: &str, sources: &[CandidateSource]) {
     if let Some(existing) = items.iter_mut().find(|c| c.surface == surface) {
         for s in sources {
@@ -249,6 +315,7 @@ fn push_candidate(items: &mut Vec<Candidate>, surface: &str, sources: &[Candidat
         items.push(Candidate {
             surface: surface.to_string(),
             sources: sources.to_vec(),
+            reading: None,
         });
     }
 }
@@ -279,6 +346,7 @@ impl Engine {
         for sess in self.sessions.values_mut() {
             sess.composer
                 .reconfigure(self.table.clone(), config.shift_letter);
+            sess.composer.set_key_log_enabled(config.fuzzy.enabled);
             sess.sent.candidates.page_size = config.page_size as u32;
         }
         self.keymap = config.keymap.clone();
@@ -306,11 +374,13 @@ impl Engine {
     }
 
     fn new_session(&self) -> Session {
+        let mut composer = Composer::new(self.table.clone(), self.config.shift_letter);
+        composer.set_key_log_enabled(self.config.fuzzy.enabled);
         Session {
             id: String::new(),
             mode: self.config.initial_mode,
             state: State::Direct,
-            composer: Composer::new(self.table.clone(), self.config.shift_letter),
+            composer,
             left_context: String::new(),
             app_id: None,
             secure_input: false,
@@ -328,6 +398,7 @@ impl Engine {
             live_suppressed: false,
             last_commit: None,
             pending_delete_before: None,
+            key_alts: Vec::new(),
         }
     }
 
@@ -344,10 +415,28 @@ impl Engine {
 
     /// キー 1 つを処理する
     pub fn process_key(&mut self, session_id: &str, key: &KeyEvent) -> ProcessKeyResult {
+        self.process_key_with_alternatives(session_id, key, &[])
+    }
+
+    /// [`Engine::process_key`] に、タップされたキーの代替（近傍のキー。`distance` はキー幅で
+    /// 正規化した距離）を添える。`ProcessKeyParams.alternatives` の入口。
+    ///
+    /// 代替は `fuzzy.enabled` のときだけ、ローマ字の文字入力（`Action::Insert`）の打鍵ログに記録する
+    /// （検証は [`sanitize_alternatives`]）。無効なら `process_key` と完全に同じ
+    pub fn process_key_with_alternatives(
+        &mut self,
+        session_id: &str,
+        key: &KeyEvent,
+        alternatives: &[InputAlternative],
+    ) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
         sess.origins.clear();
+        if self.config.fuzzy.enabled && !alternatives.is_empty() {
+            sess.key_alts = alternative_pairs(alternatives);
+        }
         let mut commit = String::new();
         let consumed = self.handle_key(&mut sess, key, &mut commit);
+        sess.key_alts.clear();
         let result = self.finish(&mut sess, consumed, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
@@ -362,16 +451,16 @@ impl Engine {
     /// - Direct からは Composing を開始する。Converting 中は変換結果を確定してから新規入力を始める
     ///   （`process_key` の文字入力と同じ）
     /// - 挿入できる文字が無ければ `consumed = false`（何もしない）
-    /// - `alternatives`（曖昧入力の代替）は F-1 で使用する。現状は検証（1 文字・distance が有限で
-    ///   0 以上）するだけで、挙動には使わない
+    /// - `alternatives`（曖昧入力の代替ひらがな）は検証（1 文字・distance が有限で 0 以上。
+    ///   [`sanitize_alternatives`]）のうえ、`reading` が 1 文字のときだけ、その打鍵の代替として
+    ///   `fuzzy.enabled` のときの打鍵ログに記録する（複数文字の挿入は 1 打鍵ではないので記録しない）
     pub fn insert_reading(
         &mut self,
         session_id: &str,
         reading: &str,
         alternatives: &[InputAlternative],
     ) -> ProcessKeyResult {
-        // F-1 で Composer が保持する。今は検証のみ（不正な代替は捨てる）
-        let _alternatives = sanitize_alternatives(alternatives);
+        let alternatives = alternative_pairs(alternatives);
         let mut sess = self.take_session(session_id);
         sess.origins.clear();
         // 文字入力も「確定直後のみ有効」の取消の対象外にする（process_key と同じ）
@@ -385,13 +474,20 @@ impl Engine {
         let consumed = chars.peek().is_some();
         if consumed {
             self.begin_insert(&mut sess, &mut commit);
+            let chars: Vec<(char, bool)> = chars.collect();
+            // 代替は 1 打鍵（1 文字の挿入）に対するものだけ
+            let alts: &[(char, f32)] = if self.config.fuzzy.enabled && chars.len() == 1 {
+                &alternatives
+            } else {
+                &[]
+            };
             for (c, japanese) in chars {
                 let kind = if japanese {
                     PieceKind::Japanese
                 } else {
                     PieceKind::Literal
                 };
-                sess.composer.insert_reading_char(c, kind);
+                sess.composer.insert_reading_char_with_alts(c, kind, alts);
             }
             sess.state = State::Composing;
         }
@@ -471,13 +567,7 @@ impl Engine {
             let f = conv.focus;
             self.ensure_candidates(&sess.left_context, conv, f);
             let index = index as usize;
-            if let Some(set) = conv.segments[f].candidates.as_mut()
-                && index < set.items.len()
-            {
-                set.selected = index;
-                let surface = set.items[index].surface.clone();
-                conv.segments[f].surface = surface;
-            }
+            Self::set_selected(conv, f, index);
             conv.visible = false;
         }
         let result = self.finish(&mut sess, true, String::new());
@@ -715,6 +805,8 @@ impl Engine {
                     visible: false,
                     range_anchor: None,
                     sentence_alternatives: None,
+                    corrections: Vec::new(),
+                    base_reading: None,
                 });
             } else {
                 let pieces: Vec<Piece> = params
@@ -768,6 +860,8 @@ impl Engine {
                 visible: false,
                 range_anchor: None,
                 sentence_alternatives: None,
+                corrections: Vec::new(),
+                base_reading: None,
             });
         }
         let result = self.finish(&mut sess, true, commit);
@@ -994,6 +1088,8 @@ impl Engine {
                 true
             }
             Action::InsertText(text) => {
+                // 代替は 1 キーの文字入力（Insert）に対するものなので、テキスト挿入には使わない
+                sess.key_alts.clear();
                 let mut chars = text.chars();
                 if let Some(first) = chars.next() {
                     self.insert_char(sess, first, commit);
@@ -1016,7 +1112,8 @@ impl Engine {
 
     fn insert_char(&self, sess: &mut Session, c: char, commit: &mut String) {
         self.begin_insert(sess, commit);
-        sess.composer.insert_char(c);
+        let alts = std::mem::take(&mut sess.key_alts);
+        sess.composer.insert_char_with_alts(c, &alts);
         sess.state = State::Composing;
     }
 
@@ -1426,6 +1523,8 @@ impl Engine {
             visible: true,
             range_anchor: None,
             sentence_alternatives: None,
+            corrections: Vec::new(),
+            base_reading: None,
         });
     }
 
@@ -1441,11 +1540,19 @@ impl Engine {
         sess.origins.clear();
         // Space 変換は常に新しく変換する（古いライブ変換結果を持ち越さない。G-44）
         sess.live_conversion = None;
+        // 曖昧入力の補正候補（`fuzzy.enabled` で打鍵ログが有効、かつ補正が必要なときだけ Some）。
+        // 第一仮説（打たれたとおりの reading）の変換には一切影響しない
+        let fuzzy = if how == Start::Convert {
+            self.fuzzy_corrections(sess, &pieces)
+        } else {
+            None
+        };
         if how == Start::Convert
             && self.config.initial_view == InitialView::Sentence
             && pieces.len() == 1
             && pieces[0].kind == PieceKind::Japanese
-            && let Some(conv) = self.start_converting_sentence_n_best(sess, &pieces[0].text)
+            && let Some(conv) =
+                self.start_converting_sentence_n_best(sess, &pieces[0].text, fuzzy.as_ref())
         {
             // メガ文節も他の文節と同じく非同期のLLM完了差し替えの対象にする（G-32 系の統合）。
             // 予算超過で最初は辞書寄りの表示になっていても、遅延結果が届き次第 replace_origins
@@ -1461,6 +1568,7 @@ impl Engine {
         }
         let mut segments: Vec<Segment> = Vec::new();
         let mut context = sess.left_context.clone();
+        let base = fuzzy.is_some().then(|| pieces_reading(&pieces));
         for piece in pieces {
             match (piece.kind, how) {
                 (PieceKind::Japanese, Start::Convert) => {
@@ -1504,19 +1612,210 @@ impl Engine {
                 }
             }
         }
-        sess.state = State::Converting(Conv {
+        let mut conv = Conv {
             segments,
             focus: 0,
             visible: false,
             range_anchor: None,
             sentence_alternatives: None,
+            corrections: Vec::new(),
+            base_reading: None,
+        };
+        if let (Some(outcome), Some(base)) = (fuzzy, base) {
+            self.attach_corrections(sess, &mut conv, outcome, base);
+        }
+        sess.state = State::Converting(conv);
+    }
+
+    /// 通常の変換結果（第一仮説）に曖昧入力の補正候補を添える。
+    ///
+    /// - 結果が日本語 1 文節で、reading が入力全体の場合: 補正仮説を `conv.corrections` に持ち、
+    ///   `ensure_candidates` が文節の候補の末尾に Corrected として足す
+    /// - それ以外（複数文節・Literal を含む入力。`nihn` の `h` のように、不一致のローマ字は
+    ///   Literal として残る）: 文全体の候補（`sentence_alternatives`）に載せる。第一仮説の文節列を
+    ///   先頭の候補として保持し、他の候補で確定すると、その仮説の文節列に丸ごと置き換わる。
+    ///   このとき非同期の LLM 完了による差し替え（`origins`）は行わない
+    fn attach_corrections(
+        &self,
+        sess: &mut Session,
+        conv: &mut Conv,
+        outcome: FuzzyOutcome,
+        base: String,
+    ) {
+        if outcome.corrections.is_empty() {
+            return;
+        }
+        let single = conv.segments.len() == 1
+            && conv.segments[0].kind == SegmentKind::Japanese
+            && conv.segments[0].reading == base;
+        if single {
+            conv.corrections = outcome.corrections;
+            conv.base_reading = Some(base);
+            if outcome.promote {
+                self.ensure_candidates(&sess.left_context, conv, 0);
+                Self::promote_first_correction(conv);
+            }
+            return;
+        }
+        let first_segments = std::mem::take(&mut conv.segments);
+        let first_surface: String = first_segments.iter().map(|s| s.surface.as_str()).collect();
+        let first_source = if first_surface == base {
+            CandidateSource::Kana
+        } else {
+            CandidateSource::SystemDict
+        };
+        let mut items = vec![Candidate {
+            surface: first_surface,
+            sources: vec![first_source],
+            reading: None,
+        }];
+        let mut alternatives = vec![first_segments];
+        Self::push_corrections(&mut items, &mut alternatives, &outcome.corrections);
+        if outcome.promote && items.len() > 1 {
+            items.swap(0, 1);
+            alternatives.swap(0, 1);
+        }
+        sess.origins.clear();
+        conv.segments = vec![Segment {
+            reading: base,
+            surface: items[0].surface.clone(),
+            kind: SegmentKind::Japanese,
+            candidates: Some(CandidateSet { items, selected: 0 }),
+            chunk_id: 0,
+        }];
+        conv.sentence_alternatives = Some(alternatives);
+    }
+
+    /// 補正候補を文全体の候補（`items` と対応する `alternatives`）の末尾に足す。
+    /// 表記が既存の候補と同じものは足さない
+    fn push_corrections(
+        items: &mut Vec<Candidate>,
+        alternatives: &mut Vec<Vec<Segment>>,
+        corrections: &[Correction],
+    ) {
+        for c in corrections {
+            if items.iter().any(|i| i.surface == c.surface) {
+                continue;
+            }
+            items.push(Candidate {
+                surface: c.surface.clone(),
+                sources: vec![CandidateSource::Corrected],
+                reading: Some(c.reading.clone()),
+            });
+            alternatives.push(
+                c.segments
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| Segment {
+                        reading: s.reading.clone(),
+                        surface: s.surface.clone(),
+                        kind: SegmentKind::Japanese,
+                        candidates: None,
+                        chunk_id: i as u32,
+                    })
+                    .collect(),
+            );
+        }
+    }
+
+    /// 先頭の文節の候補のうち、最初の補正候補を先頭へ移して選択する（`promote_corrected`）
+    fn promote_first_correction(conv: &mut Conv) {
+        let Some(set) = conv.segments[0].candidates.as_mut() else {
+            return;
+        };
+        let Some(pos) = set.items.iter().position(|c| c.reading.is_some()) else {
+            return;
+        };
+        let item = set.items.remove(pos);
+        set.items.insert(0, item);
+        Self::set_selected(conv, 0, 0);
+    }
+
+    /// 曖昧入力の補正仮説を作って変換する（Space 変換のときだけ呼ぶ）。
+    ///
+    /// 次のいずれかを満たすときだけ `Some`（満たさなければ仮説探索 `expand` 自体を呼ばない）:
+    /// 1. 第一仮説の変換が低品質（`quality.uncovered >= poor_coverage`）
+    /// 2. 入力モデル上の曖昧さ: 打鍵の代替のうち、コストが `ambiguity_margin` 以内のものがある
+    ///    （「`expand` の第 2 仮説の cost が margin 以内」を、探索せずに代替キーの cost で近似する。
+    ///    タイポ編集のコストは既定で 2.0 以上なので margin 1.5 では編集由来の曖昧さは対象外）
+    ///
+    /// 打鍵ログが無効（文中編集・Literal の混入・復元など）なら `None`。補正仮説の順位は
+    /// `total = conv_cost + input_weight * input_cost`。第一仮説の `conv_cost` より
+    /// `ambiguity_margin` を超えて悪いものは、条件 1 の場合を除いて捨てる。最大 `hypotheses - 1` 件
+    fn fuzzy_corrections(&self, sess: &Session, pieces: &[Piece]) -> Option<FuzzyOutcome> {
+        let fz = &self.config.fuzzy;
+        if !fz.enabled || fz.search.max_hypotheses <= 1 {
+            return None;
+        }
+        let log = sess.composer.key_log()?;
+        let oracle = self.backend.prefix_oracle()?;
+        let base = pieces_reading(pieces);
+        let quality = self.backend.quality(&base)?;
+        let keys: Vec<KeyAlternatives> = log
+            .iter()
+            .map(|r| KeyAlternatives::from_distances(r.typed, &r.alts, &fz.search))
+            .collect();
+        let poor = quality.uncovered >= fz.poor_coverage;
+        let ambiguous = keys.iter().any(|k| {
+            k.items()
+                .get(1)
+                .is_some_and(|a| a.cost <= fz.ambiguity_margin)
         });
+        if !poor && !ambiguous {
+            return None;
+        }
+        let hyps = nagi_fuzzy::expand(&keys, &self.table, oracle, &fz.search);
+        // 打鍵ログの再生が入力と食い違う場合は補正しない（入力を失わない）
+        if hyps.len() < 2 || hyps[0].reading != base {
+            return None;
+        }
+        let left = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
+        let limit = fz.search.max_hypotheses - 1;
+        let scored = self.backend.convert_hypotheses(&hyps[1..], &left, limit);
+        let mut ranked: Vec<(f32, Correction)> = Vec::new();
+        for s in scored {
+            let Some(h) = hyps.get(s.hypothesis_index + 1) else {
+                continue;
+            };
+            let joined: String = s.segments.iter().map(|x| x.reading.as_str()).collect();
+            if s.segments.is_empty() || joined != h.reading {
+                continue;
+            }
+            let total = s.conv_cost + fz.input_weight * h.cost;
+            if !poor && total > quality.conv_cost + fz.ambiguity_margin {
+                continue;
+            }
+            let surface: String = s.segments.iter().map(|x| x.surface.as_str()).collect();
+            ranked.push((
+                total,
+                Correction {
+                    reading: h.reading.clone(),
+                    segments: s.segments,
+                    surface,
+                },
+            ));
+        }
+        ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+        ranked.truncate(limit);
+        let corrections: Vec<Correction> = ranked.into_iter().map(|(_, c)| c).collect();
+        (!corrections.is_empty()).then_some(FuzzyOutcome {
+            corrections,
+            promote: fz.promote_corrected && poor,
+        })
     }
 
     /// `initial_view = sentence` かつ入力全体が1つの日本語 Piece のときに、文全体のN-bestを
     /// 候補ウィンドウに載せた単一の「メガ文節」を作る。候補が2件未満（多様性が無い）なら
     /// `None` を返し、呼び出し側は通常の（1-best・文節ごとの）変換にフォールバックする
-    fn start_converting_sentence_n_best(&self, sess: &Session, reading: &str) -> Option<Conv> {
+    ///
+    /// `fuzzy`（曖昧入力の補正）があれば、補正候補を文全体の候補の末尾に足す（`promote` なら 2 番目へ
+    /// ではなく先頭へ）。補正候補で確定すると、その仮説の文節列・reading に置き換わる
+    fn start_converting_sentence_n_best(
+        &self,
+        sess: &Session,
+        reading: &str,
+        fuzzy: Option<&FuzzyOutcome>,
+    ) -> Option<Conv> {
         let context = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
         let beam_width = self.config.beam_width.max(2);
         let candidates = self
@@ -1554,11 +1853,26 @@ impl Engine {
                 })
                 .collect();
             let surface: String = segments.iter().map(|s| s.surface.as_str()).collect();
-            items.push(Candidate { surface, sources });
+            items.push(Candidate {
+                surface,
+                sources,
+                reading: None,
+            });
             alternatives.push(segments);
         }
         if alternatives.len() < 2 {
             return None;
+        }
+        if let Some(outcome) = fuzzy {
+            Self::push_corrections(&mut items, &mut alternatives, &outcome.corrections);
+            if outcome.promote
+                && let Some(pos) = items.iter().position(|c| c.reading.is_some())
+            {
+                let item = items.remove(pos);
+                items.insert(0, item);
+                let alt = alternatives.remove(pos);
+                alternatives.insert(0, alt);
+            }
         }
         let mega = Segment {
             reading: reading.to_string(),
@@ -1573,6 +1887,8 @@ impl Engine {
             visible: true,
             range_anchor: None,
             sentence_alternatives: Some(alternatives),
+            corrections: Vec::new(),
+            base_reading: None,
         })
     }
 
@@ -1641,10 +1957,45 @@ impl Engine {
             }
             push_candidate(&mut items, &seg.reading, &[CandidateSource::Kana]);
             push_candidate(&mut items, &katakana, &[CandidateSource::Kana]);
+            // 曖昧入力の補正候補は通常の候補の後ろ。表記が既にある候補は足さない
+            if idx == 0 && conv.base_reading.as_deref() == Some(seg.reading.as_str()) {
+                for c in &conv.corrections {
+                    if !items.iter().any(|i| i.surface == c.surface) {
+                        items.push(Candidate {
+                            surface: c.surface.clone(),
+                            sources: vec![CandidateSource::Corrected],
+                            reading: Some(c.reading.clone()),
+                        });
+                    }
+                }
+            }
         } else {
             push_candidate(&mut items, &seg.surface, &[]);
         }
         conv.segments[idx].candidates = Some(CandidateSet { items, selected: 0 });
+    }
+
+    /// 文節 `f` の候補 `index` を選択し、表記を反映する。曖昧入力の補正候補（`reading` を持つ候補）
+    /// を含む 1 文節では、補正候補を選ぶとその文節の reading が補正後の読みに書き換わり、
+    /// 通常の候補に戻すと元の reading（打たれたとおり）に戻る（確定・学習・取消は書き換え後の
+    /// reading を使う。補正前への Undo は未対応）
+    fn set_selected(conv: &mut Conv, f: usize, index: usize) {
+        let Some(set) = conv.segments[f].candidates.as_mut() else {
+            return;
+        };
+        let Some(cand) = set.items.get(index) else {
+            return;
+        };
+        let (surface, corrected) = (cand.surface.clone(), cand.reading.clone());
+        let ours = set.items.iter().any(|c| c.reading.is_some());
+        set.selected = index;
+        conv.segments[f].surface = surface;
+        if f == 0
+            && ours
+            && let Some(base) = &conv.base_reading
+        {
+            conv.segments[0].reading = corrected.unwrap_or_else(|| base.clone());
+        }
     }
 
     fn step_candidate(&self, sess: &mut Session, delta: isize) {
@@ -1654,11 +2005,10 @@ impl Engine {
         let f = conv.focus;
         self.ensure_candidates(&sess.left_context, conv, f);
         conv.visible = true;
-        if let Some(set) = conv.segments[f].candidates.as_mut() {
+        if let Some(set) = conv.segments[f].candidates.as_ref() {
             let n = set.items.len() as isize;
-            set.selected = ((set.selected as isize + delta).rem_euclid(n)) as usize;
-            let surface = set.items[set.selected].surface.clone();
-            conv.segments[f].surface = surface;
+            let next = ((set.selected as isize + delta).rem_euclid(n)) as usize;
+            Self::set_selected(conv, f, next);
         }
     }
 
@@ -1689,12 +2039,10 @@ impl Engine {
         }
         let f = conv.focus;
         let page_size = self.config.page_size.max(1);
-        if let Some(set) = conv.segments[f].candidates.as_mut() {
+        if let Some(set) = conv.segments[f].candidates.as_ref() {
             let index = (set.selected / page_size) * page_size + n - 1;
             if index < set.items.len() {
-                set.selected = index;
-                let surface = set.items[index].surface.clone();
-                conv.segments[f].surface = surface;
+                Self::set_selected(conv, f, index);
                 conv.visible = false;
             }
         }
@@ -1962,6 +2310,7 @@ impl Engine {
                     .map(|c| CandidateView {
                         surface: c.surface.clone(),
                         sources: c.sources.clone(),
+                        note: c.reading.clone(),
                     })
                     .collect(),
                 selected: set.selected as u32,
@@ -2014,7 +2363,15 @@ impl Engine {
 #[error("{0}")]
 pub struct UnknownAction(pub String);
 
-/// 曖昧入力の代替を検証する（F-1 で使用予定）。1 文字でない、または `distance` が
+/// 検証済みの代替を `(文字, 距離)` に直す（`Composer` の打鍵ログの形）
+fn alternative_pairs(alternatives: &[InputAlternative]) -> Vec<(char, f32)> {
+    sanitize_alternatives(alternatives)
+        .iter()
+        .filter_map(|a| a.text.chars().next().map(|c| (c, a.distance)))
+        .collect()
+}
+
+/// 曖昧入力の代替を検証する。1 文字でない、または `distance` が
 /// 有限でない・負のものは捨てる
 pub fn sanitize_alternatives(alternatives: &[InputAlternative]) -> Vec<InputAlternative> {
     alternatives

@@ -17,7 +17,9 @@ use crate::runtime::{Effective, Runtime};
 use nagi_dict::{Dictionary, Overlay};
 use nagi_engine::{
     BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend,
+    ReadingQuality, ScoredSentence,
 };
+use nagi_fuzzy::{PrefixOracle, ReadingHypothesis};
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
 use nagi_protocol::view::CandidateSource;
@@ -37,8 +39,25 @@ const CACHE_CAPACITY: usize = 512;
 const LEARN_OVERRIDE_MIN_SCORE: f64 = 0.3;
 /// 文脈のハッシュ（学習の context_hash）に使う左文脈の文字数（engine が渡す上限）
 const HASH_CONTEXT_CHARS: usize = 40;
+/// 辞書の変換コスト（Mozc 辞書の尺度）を nat 相当に直す係数。曖昧入力で、辞書のコストと
+/// 入力コスト（nat）を足し合わせるための暫定値（F-5 の実機較正で更新する）
+const DICT_COST_PER_NAT: f32 = 500.0;
 /// キャリブレーション用の変換対象
 const CALIBRATION_READING: &str = "きょうはいいてんきです";
+
+/// `Dictionary` を曖昧入力の枝刈り（`PrefixOracle`）に写すラッパー。ユーザー辞書・学習は含まない
+/// （F-1。システム辞書の FST だけを引く）
+struct DictOracle(Arc<Dictionary>);
+
+impl PrefixOracle for DictOracle {
+    fn has_prefix(&self, reading_prefix: &str) -> bool {
+        self.0.has_prefix(reading_prefix)
+    }
+
+    fn contains_word(&self, word: &str) -> bool {
+        self.0.contains_reading(word)
+    }
+}
 
 type SharedModel = Arc<Mutex<Box<dyn ConversionModel>>>;
 type Cache = Arc<Mutex<HashMap<(String, String), String>>>;
@@ -79,6 +98,8 @@ impl Completions {
 /// 変換パイプライン
 pub struct Pipeline {
     dict: Option<Arc<Dictionary>>,
+    /// `dict` を曖昧入力の枝刈りに使うためのラッパー（`dict` と同時に Some）
+    oracle: Option<DictOracle>,
     /// 変換モデル。起動時に無くても、非同期の読み込み完了後に [`Pipeline::attach_model`] で一度だけ入る
     llm: OnceLock<Llm>,
     runtime: Arc<Runtime>,
@@ -134,6 +155,7 @@ impl Pipeline {
         let name = backend_name(dict.is_some(), llm.get().is_some());
         runtime.set_backend_name(name);
         Pipeline {
+            oracle: dict.clone().map(DictOracle),
             dict,
             llm,
             runtime,
@@ -593,6 +615,58 @@ impl ConversionBackend for Pipeline {
         if let Ok(mut w) = self.completions.waker.lock() {
             *w = Some(waker);
         }
+    }
+
+    fn prefix_oracle(&self) -> Option<&dyn PrefixOracle> {
+        self.oracle.as_ref().map(|o| o as &dyn PrefixOracle)
+    }
+
+    /// 第一仮説の変換品質。辞書のみの Viterbi（LLM は使わない。F-1）の未知語の割合と総コスト
+    fn quality(&self, reading: &str) -> Option<ReadingQuality> {
+        let dict = self.dict.as_ref()?;
+        let overlay = self.runtime.overlay();
+        let scored = dict.convert_scored(reading, Some(&overlay));
+        if scored.total_chars == 0 {
+            return None;
+        }
+        Some(ReadingQuality {
+            uncovered: scored.unknown_chars as f32 / scored.total_chars as f32,
+            conv_cost: scored.cost as f32 / DICT_COST_PER_NAT,
+        })
+    }
+
+    /// 補正仮説の変換。各仮説の読みを辞書の Viterbi（ユーザー辞書を含む）で変換し、総コストを
+    /// `quality` と同じ尺度で付ける。LLM による再採点は行わない（後続の課題。F-1 は辞書コストのみで比較する）
+    fn convert_hypotheses(
+        &self,
+        hyps: &[ReadingHypothesis],
+        _left_context: &str,
+        limit: usize,
+    ) -> Vec<ScoredSentence> {
+        let Some(dict) = &self.dict else {
+            return Vec::new();
+        };
+        let overlay = self.runtime.overlay();
+        hyps.iter()
+            .enumerate()
+            .take(limit)
+            .filter_map(|(i, h)| {
+                let scored = dict.convert_scored(&h.reading, Some(&overlay));
+                (!scored.segments.is_empty()).then(|| ScoredSentence {
+                    segments: scored
+                        .segments
+                        .into_iter()
+                        .map(|s| BackendSegment {
+                            sources: vec![source_of(&s.surface, &s.reading)],
+                            reading: s.reading,
+                            surface: s.surface,
+                        })
+                        .collect(),
+                    conv_cost: scored.cost as f32 / DICT_COST_PER_NAT,
+                    hypothesis_index: i,
+                })
+            })
+            .collect()
     }
 
     fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {

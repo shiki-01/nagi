@@ -191,8 +191,9 @@ fn state_name(s: StateKind) -> &'static str {
     }
 }
 
-fn build_engine(case: &Case) -> Engine {
+fn build_engine(case: &Case, fuzzy: bool) -> Engine {
     let mut config = EngineConfig::default();
+    config.fuzzy.enabled = fuzzy;
     if let Some(c) = &case.config {
         if let Some(s) = &c.shift_letter {
             config.shift_letter = match s.as_str() {
@@ -354,12 +355,19 @@ fn check(
     errors
 }
 
-fn run_case(case: &Case) -> Vec<String> {
+/// `fuzzy` は `fuzzy.enabled`。補正に対応しないバックエンド（`MockBackend` / `KanaBackend`）では、
+/// 有効でも挙動が変わらないこと（第一仮説の不変性）を、全ケースで検査する
+fn run_case(case: &Case, fuzzy: bool) -> Vec<String> {
     let mut failures = Vec::new();
-    let mut engine = build_engine(case);
+    let mut engine = build_engine(case, fuzzy);
     let mut prev_revision = 0u32;
     for (i, step) in case.steps.iter().enumerate() {
-        let label = format!("[{}] step {}", case.name, i + 1);
+        let label = format!(
+            "[{}{}] step {}",
+            case.name,
+            if fuzzy { " (fuzzy.enabled)" } else { "" },
+            i + 1
+        );
         let result = match (&step.key, step.action.as_deref()) {
             (Some(KeySpec::Name(name)), None) => match parse_key(name) {
                 Ok(key) => engine.process_key(&case.session, &key),
@@ -468,7 +476,8 @@ fn golden() {
             if !names.insert(case.name.clone()) {
                 failures.push(format!("ケース名が重複: {}", case.name));
             }
-            failures.extend(run_case(&case));
+            failures.extend(run_case(&case, false));
+            failures.extend(run_case(&case, true));
         }
     }
     eprintln!("golden cases: {total}");

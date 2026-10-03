@@ -15,9 +15,11 @@ pub mod observer;
 pub use action::{Action, Direction};
 pub use backend::{
     BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend, KanaBackend,
-    MockBackend,
+    MockBackend, ReadingQuality, ScoredSentence,
 };
-pub use engine::{Engine, EngineConfig, InitialView, SessionSnapshot, StateKind, UnknownAction};
+pub use engine::{
+    Engine, EngineConfig, FuzzyEngineConfig, InitialView, SessionSnapshot, StateKind, UnknownAction,
+};
 pub use ir::{Candidate, CandidateSet, CursorPos, Preedit, Segment};
 pub use keymap::{KeyContext, KeyMap};
 pub use keys::{KeyParseError, key_from_text, parse_key};

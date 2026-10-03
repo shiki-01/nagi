@@ -371,9 +371,11 @@ impl Server {
             method::PROCESS_KEY => {
                 self.require_initialized()?;
                 let p: ProcessKeyParams = params(req)?;
-                let result = self
-                    .engine_lock()
-                    .process_key(&p.session_id, &p.key_event());
+                let result = self.engine_lock().process_key_with_alternatives(
+                    &p.session_id,
+                    &p.key_event(),
+                    &p.alternatives,
+                );
                 self.maybe_schedule_live_conversion(&p.session_id);
                 to_value(result)
             }

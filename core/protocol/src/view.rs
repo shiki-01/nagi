@@ -113,6 +113,9 @@ pub enum CandidateSource {
     Kana,
     /// Rewriter（正規化・変換済み）
     Rewriter,
+    /// 曖昧入力の補正候補（打ち間違い・タッチ誤差を想定した別の読みからの変換結果）。
+    /// 選択すると、その文節の reading が `CandidateView.note` の読みに書き換わる
+    Corrected,
 }
 
 /// 単一の候補
@@ -123,6 +126,10 @@ pub struct CandidateView {
     pub surface: String,
     /// 出所のリスト（複数の出所から同じ候補が来た場合）
     pub sources: Vec<CandidateSource>,
+    /// 補足の文字列。補正候補（`CandidateSource::Corrected`）では、補正後の読み（例「にほん」）。
+    /// 入力内容を含むのでログには出さない。無ければ省略される
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub note: Option<String>,
 }
 
 /// 候補ウィンドウの状態

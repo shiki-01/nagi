@@ -1487,3 +1487,160 @@ fn perform_action_unknown_name_is_error_and_keeps_state() {
     assert!(e.perform_action("s", "SelectCand:0").is_err());
     assert_eq!(e.snapshot("s").unwrap(), before);
 }
+
+// ---- 曖昧入力: fuzzy.enabled の有無で第一仮説の挙動が変わらないこと（設計 §2-2） ----
+
+mod fuzzy_invariance {
+    use super::*;
+    use nagi_protocol::methods::InputAlternative;
+
+    enum Step {
+        Key(&'static str),
+        /// 代替付きのタップ（代替は無視されるだけで結果に影響しないこと）
+        Tap(&'static str, Vec<InputAlternative>),
+        Insert(&'static str, Vec<InputAlternative>),
+        Select(u32),
+        Focus(&'static str),
+    }
+
+    fn alt(text: &str, distance: f32) -> InputAlternative {
+        InputAlternative {
+            text: text.to_string(),
+            distance,
+        }
+    }
+
+    fn mock() -> MockBackend {
+        MockBackend::new()
+            .with_sentence("きょう", vec![("きょう", vec!["今日", "京"])])
+            .with_sentence(
+                "きょうはいい",
+                vec![
+                    ("きょうは", vec!["今日は", "京は"]),
+                    ("いい", vec!["いい", "良い"]),
+                ],
+            )
+            .with_segments("かん", vec!["缶", "感"])
+    }
+
+    fn run(enabled: bool, view: InitialView, steps: &[Step]) -> Vec<String> {
+        let mut config = EngineConfig::default();
+        config.fuzzy.enabled = enabled;
+        config.initial_view = view;
+        let mut e = Engine::new(Arc::new(mock()), config);
+        let mut trace = Vec::new();
+        for step in steps {
+            let r = match step {
+                Step::Key(k) => e.process_key("s", &parse_key(k).unwrap()),
+                Step::Tap(k, alts) => {
+                    e.process_key_with_alternatives("s", &parse_key(k).unwrap(), alts)
+                }
+                Step::Insert(text, alts) => e.insert_reading("s", text, alts),
+                Step::Select(i) => e.select_candidate("s", *i),
+                Step::Focus(name) => match *name {
+                    "out" => e.focus_out("s"),
+                    _ => e.focus_in("s"),
+                },
+            };
+            // 応答（差分・revision を含む）と、そのあとの全状態
+            trace.push(format!("{r:?}\n{:?}", e.snapshot("s")));
+        }
+        trace
+    }
+
+    fn keys(s: &'static str) -> Vec<Step> {
+        s.chars()
+            .map(|c| Step::Key(Box::leak(c.to_string().into_boxed_str())))
+            .collect()
+    }
+
+    fn patterns() -> Vec<(&'static str, Vec<Step>)> {
+        let mut v: Vec<(&'static str, Vec<Step>)> = Vec::new();
+        // 通常入力 → 変換 → 候補 → 確定
+        let mut s = keys("kyou");
+        s.extend([Step::Key("Space"), Step::Key("Space"), Step::Key("Enter")]);
+        v.push(("normal", s));
+        // 長めの入力と文節の操作
+        let mut s = keys("kyouhaii");
+        s.extend([
+            Step::Key("Space"),
+            Step::Key("Right"),
+            Step::Key("Space"),
+            Step::Key("Shift+Left"),
+            Step::Key("Enter"),
+        ]);
+        v.push(("segments", s));
+        // Backspace（変換済みの文字・保留・G-49 の巻き戻し）
+        let mut s = keys("kon");
+        s.extend([Step::Key("BackSpace"), Step::Key("BackSpace")]);
+        s.extend(keys("kk"));
+        s.extend([Step::Key("BackSpace")]);
+        s.extend(keys("a"));
+        s.extend([Step::Key("Space"), Step::Key("Enter")]);
+        v.push(("backspace", s));
+        // 代替付きのタップ（距離付き）
+        let s = vec![
+            Step::Tap("k", vec![alt("l", 0.3), alt("j", 0.5)]),
+            Step::Tap("y", vec![alt("u", 0.4)]),
+            Step::Key("o"),
+            Step::Tap("u", vec![]),
+            Step::Key("Space"),
+            Step::Key("Space"),
+            Step::Select(1),
+            Step::Key("Enter"),
+        ];
+        v.push(("touch alternatives", s));
+        // かな直接挿入（保留の n は確定してから挿入される）
+        let s = vec![
+            Step::Insert("か", vec![alt("け", 0.2)]),
+            Step::Key("n"),
+            Step::Insert("ん", vec![]),
+            Step::Key("Space"),
+            Step::Key("Space"),
+            Step::Key("Enter"),
+        ];
+        v.push(("kana insert", s));
+        // 不一致のローマ字（Raw の Literal）
+        let mut s = keys("nihn");
+        s.extend([Step::Key("Space"), Step::Key("Space"), Step::Key("Enter")]);
+        v.push(("raw literal", s));
+        // 文中編集・カーソル移動・Literal 混入・確定取消・フォーカス喪失
+        let mut s = keys("kyo");
+        s.extend([
+            Step::Key("Left"),
+            Step::Key("Left"),
+            Step::Key("u"),
+            Step::Key("Delete"),
+            Step::Key("End"),
+            Step::Key("Shift+a"),
+        ]);
+        s.extend(keys("bc"));
+        s.extend([Step::Key("Enter"), Step::Key("Ctrl+Backspace")]);
+        s.extend([Step::Focus("out"), Step::Focus("in")]);
+        v.push(("mid edits", s));
+        // 変換を取り消して再度変換
+        let mut s = keys("kyou");
+        s.extend([
+            Step::Key("Space"),
+            Step::Key("Escape"),
+            Step::Key("Space"),
+            Step::Key("Enter"),
+        ]);
+        v.push(("cancel and reconvert", s));
+        v
+    }
+
+    #[test]
+    fn traces_are_identical_with_and_without_fuzzy() {
+        for view in [InitialView::Sentence, InitialView::Segment] {
+            for (name, steps) in patterns() {
+                let off = run(false, view, &steps);
+                let on = run(true, view, &steps);
+                assert_eq!(off.len(), on.len());
+                for (i, (a, b)) in off.iter().zip(&on).enumerate() {
+                    assert_eq!(a, b, "{name} ({view:?}) step {}", i + 1);
+                }
+            }
+        }
+    }
+}

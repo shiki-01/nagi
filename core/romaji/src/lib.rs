@@ -336,17 +336,57 @@ pub struct Piece {
     pub text: String,
 }
 
+/// 打鍵 1 回の記録（曖昧入力用。`Composer::key_log`）
+///
+/// 打たれた文字と、フロントが渡した代替（近傍のキー・フリックの方向ゾーン）を持つ。
+/// 代替の距離はキー幅で正規化された値で、コストへの換算は使う側が行う
+/// （この crate は曖昧入力の実装に依存しない）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyRecord {
+    /// 打たれた文字（小文字 ASCII のローマ字キー、またはひらがな 1 文字）
+    pub typed: char,
+    /// 代替の `(文字, 距離)`。距離の小さい順。代替なしなら空
+    pub alts: Vec<(char, f32)>,
+}
+
+/// 1 打鍵に保持する代替の最大数
+const MAX_ALTS_PER_KEY: usize = 8;
+/// `Composer::backspace` で、変換済みの文字 1 つを消したときに巻き戻す打鍵数の上限
+/// （最長のローマ字綴り `xtsu` などを想定）
+const MAX_KEYS_PER_CHAR: usize = 4;
+
+/// 打鍵ログに載せるかな（ひらがな・長音）
+fn is_loggable_kana(c: char) -> bool {
+    ('ぁ'..='ゖ').contains(&c) || c == 'ー'
+}
+
 #[derive(Debug)]
 /// ローマ字入力バッファ・カーソル管理
 ///
 /// バッファは 1 文字ずつ種別（日本語 / Literal）を持つ平坦な列で、カーソルはその文字位置。
 /// 保留中のローマ字はバッファに含めず、常にカーソル位置に付随する。
+///
+/// # 打鍵ログ（曖昧入力。既定は無効）
+///
+/// [`Composer::set_key_log_enabled`] で有効にすると、`chars` とは別に打鍵の列 [`KeyRecord`] を
+/// 保持する（`chars` は変換後のかなで打鍵と 1 対 1 ではないため、並行する配列にはしない）。
+/// ログは「この入力がすべて小文字 ASCII のローマ字キーと `insert_reading_char` のひらがなだけから成り、
+/// 末尾への追記と Backspace だけで編集されている」間だけ有効で、次の操作で無効化（クリア）される:
+/// 文中への挿入・`delete`・カーソル移動・大文字/数字/記号など Literal 化する入力・ひらがな以外の挿入・
+/// `load_pieces`・保留の確定（`flush_pending`）の後に続けて打ったキー・Backspace 後に打鍵との対応が
+/// 取れなくなったとき。無効化したログは入力が空になる（または `clear`）まで復活しない。
+/// ログは `reading`・保留・Backspace の結果には一切影響しない。
 pub struct Composer {
     converter: RomajiConverter,
     shift_letter: ShiftLetterMode,
     chars: Vec<(char, PieceKind)>,
     cursor: usize,
     literal_mode: bool, // Shift+英字で開始した literal モード
+    key_log: Vec<KeyRecord>,
+    key_log_enabled: bool,
+    key_log_valid: bool,
+    /// 保留を確定（`flush_pending`）してから、まだ打鍵のログに反映していない（ログの再生では再現できない）
+    flushed_since_key: bool,
 }
 
 impl Composer {
@@ -358,7 +398,35 @@ impl Composer {
             chars: Vec::new(),
             cursor: 0,
             literal_mode: false,
+            key_log: Vec::new(),
+            key_log_enabled: false,
+            key_log_valid: true,
+            flushed_since_key: false,
         }
+    }
+
+    /// 打鍵ログの有効・無効を切り替える（既定は無効。無効の間は何も記録せず、コストもかからない）。
+    ///
+    /// すでに入力がある状態で有効にすると、それまでの打鍵は分からないので、
+    /// 入力が空になるまでログは無効のままになる
+    pub fn set_key_log_enabled(&mut self, enabled: bool) {
+        if enabled == self.key_log_enabled {
+            return;
+        }
+        self.key_log_enabled = enabled;
+        self.key_log.clear();
+        self.key_log_valid = !enabled || self.is_empty();
+        self.flushed_since_key = false;
+    }
+
+    /// 有効な打鍵ログ。無効化されている・無効にしている・空なら `None`
+    ///
+    /// 戻り値の列を `RomajiConverter` に順に入力して最後に `flush` した結果が、
+    /// この Composer の `text()` + 保留の確定と一致することが保証される
+    /// （ひらがなの記録は、保留を確定してから挿入する）
+    pub fn key_log(&self) -> Option<&[KeyRecord]> {
+        (self.key_log_enabled && self.key_log_valid && !self.key_log.is_empty())
+            .then_some(self.key_log.as_slice())
     }
 
     /// 設定の再読み込み用: Shift+英字の扱いと、ローマ字テーブルを差し替える。
@@ -374,20 +442,37 @@ impl Composer {
     ///
     /// ASCII 大文字は Shift 押下で打たれたものとして Literal になる。
     pub fn insert_char(&mut self, ch: char) {
+        self.insert_char_with_alts(ch, &[]);
+    }
+
+    /// [`Composer::insert_char`] に、打鍵の代替 `(文字, 距離)` を添える（曖昧入力用）。
+    ///
+    /// 代替は小文字 ASCII のローマ字キーのときだけ打鍵ログ（[`Composer::key_log`]）に記録する
+    /// （小文字 ASCII 以外の代替は捨てる）。入力される文字・保留の扱いは `insert_char` と同じ
+    pub fn insert_char_with_alts(&mut self, ch: char, alts: &[(char, f32)]) {
         if ch.is_control() {
             return;
         }
         if ch.is_ascii_uppercase() {
+            self.invalidate_key_log();
             self.flush_pending();
             self.literal_mode = matches!(self.shift_letter, ShiftLetterMode::LiteralContinue);
             self.insert_at_cursor(ch, PieceKind::Literal);
         } else if ch.is_ascii_digit() || (self.literal_mode && ch.is_ascii_graphic()) {
+            self.invalidate_key_log();
             self.flush_pending();
             self.insert_at_cursor(ch, PieceKind::Literal);
         } else if !ch.is_ascii() {
+            self.invalidate_key_log();
             self.flush_pending();
             self.insert_at_cursor(ch, PieceKind::Japanese);
         } else {
+            if ch.is_ascii_lowercase() {
+                self.log_key(ch, alts, false);
+            } else {
+                // `-` `,` などの記号は小文字のローマ字キーではないので、補正の対象外にする
+                self.invalidate_key_log();
+            }
             let emits = self.converter.feed(ch);
             self.insert_emits(emits);
         }
@@ -398,15 +483,35 @@ impl Composer {
     /// 保留中のローマ字は先に確定する（`n` → ん など）。タッチ UI の `insert_reading` 用。
     /// 制御文字は無視する
     pub fn insert_reading_char(&mut self, ch: char, kind: PieceKind) {
+        self.insert_reading_char_with_alts(ch, kind, &[]);
+    }
+
+    /// [`Composer::insert_reading_char`] に、打鍵の代替 `(文字, 距離)` を添える（フリックの代替ひらがな。
+    /// 曖昧入力用）。ひらがな（日本語）のときだけ打鍵ログに記録し、代替はひらがな・長音だけ残す
+    pub fn insert_reading_char_with_alts(
+        &mut self,
+        ch: char,
+        kind: PieceKind,
+        alts: &[(char, f32)],
+    ) {
         if ch.is_control() {
             return;
         }
+        // ログの再生は「保留を確定してから挿入」なので、確定した結果は打鍵のログと一致する
         self.flush_pending();
+        if kind == PieceKind::Japanese && is_loggable_kana(ch) {
+            self.log_key(ch, alts, true);
+        } else {
+            self.invalidate_key_log();
+        }
         self.insert_at_cursor(ch, kind);
     }
 
     /// 保留を確定させる（`n` → ん など）
     pub fn flush_pending(&mut self) {
+        if self.converter.has_pending() {
+            self.flushed_since_key = true;
+        }
         let emits = self.converter.flush();
         self.insert_emits(emits);
     }
@@ -421,7 +526,9 @@ impl Composer {
     /// 直前のキーで不一致の確定などが起きていれば、その出力を消して保留をキー入力前に戻す。
     /// そうでなければ保留の末尾 1 文字、保留も無ければカーソル直前の 1 文字を削除する
     pub fn backspace(&mut self) -> bool {
-        match self.converter.backspace() {
+        let at_end = self.cursor == self.chars.len();
+        let kind = self.converter.backspace();
+        let changed = match kind {
             Backspace::Pending => true,
             Backspace::Rollback { retract } => {
                 // 巻き戻せるのは直前の feed 直後だけ（カーソル移動等は履歴を破棄する）ので、
@@ -439,11 +546,16 @@ impl Composer {
                 self.chars.remove(self.cursor);
                 true
             }
+        };
+        if self.key_log_enabled && self.key_log_valid {
+            self.rewind_key_log(kind, at_end);
         }
+        changed
     }
 
     /// カーソル直後の 1 文字を削除する（保留は先に確定する）
     pub fn delete(&mut self) -> bool {
+        self.invalidate_key_log();
         self.flush_pending();
         if self.cursor >= self.chars.len() {
             return false;
@@ -454,6 +566,7 @@ impl Composer {
 
     /// カーソルを左へ 1 文字移動する（保留は先に確定する）
     pub fn move_left(&mut self) -> bool {
+        self.invalidate_key_log();
         self.flush_pending();
         if self.cursor == 0 {
             return false;
@@ -464,6 +577,7 @@ impl Composer {
 
     /// カーソルを右へ 1 文字移動する（保留は先に確定する）
     pub fn move_right(&mut self) -> bool {
+        self.invalidate_key_log();
         self.flush_pending();
         if self.cursor >= self.chars.len() {
             return false;
@@ -474,12 +588,14 @@ impl Composer {
 
     /// カーソルを先頭へ移動する
     pub fn move_home(&mut self) {
+        self.invalidate_key_log();
         self.flush_pending();
         self.cursor = 0;
     }
 
     /// カーソルを末尾へ移動する
     pub fn move_end(&mut self) {
+        self.invalidate_key_log();
         self.flush_pending();
         self.cursor = self.chars.len();
     }
@@ -503,6 +619,8 @@ impl Composer {
     ///
     /// 保留と literal_mode はクリアされる。`cursor` は文字数単位で、範囲外は末尾に丸める。
     pub fn load_pieces(&mut self, pieces: &[Piece], cursor: usize) {
+        // 復元した入力には打鍵の記録が無い
+        self.invalidate_key_log();
         self.converter.clear();
         self.literal_mode = false;
         self.chars = pieces
@@ -553,6 +671,107 @@ impl Composer {
         self.converter.clear();
         self.cursor = 0;
         self.literal_mode = false;
+        self.key_log.clear();
+        self.key_log_valid = true;
+        self.flushed_since_key = false;
+    }
+
+    /// 打鍵ログを無効化（クリア）する。入力が空になる（または `clear`）まで復活しない
+    fn invalidate_key_log(&mut self) {
+        self.key_log.clear();
+        self.key_log_valid = false;
+    }
+
+    /// 打鍵を記録する（`typed` を入力する直前に呼ぶ）。記録できない状態なら無効化する
+    fn log_key(&mut self, typed: char, alts: &[(char, f32)], is_kana: bool) {
+        if !self.key_log_enabled {
+            return;
+        }
+        // 入力が完全に空なら新しい入力の開始なので、無効化を解いてやり直す
+        if self.chars.is_empty() && !self.converter.has_pending() {
+            self.key_log.clear();
+            self.key_log_valid = true;
+            self.flushed_since_key = false;
+        }
+        if !self.key_log_valid {
+            return;
+        }
+        // 文中への挿入、または保留の確定の後に続けたローマ字キーは、ログの再生と一致しない
+        if self.cursor != self.chars.len() || (!is_kana && self.flushed_since_key) {
+            self.invalidate_key_log();
+            return;
+        }
+        let mut alts: Vec<(char, f32)> = alts
+            .iter()
+            .copied()
+            .filter(|&(c, d)| {
+                c != typed
+                    && d.is_finite()
+                    && d >= 0.0
+                    && if is_kana {
+                        is_loggable_kana(c)
+                    } else {
+                        c.is_ascii_lowercase()
+                    }
+            })
+            .collect();
+        alts.sort_by(|a, b| a.1.total_cmp(&b.1));
+        alts.truncate(MAX_ALTS_PER_KEY);
+        self.key_log.push(KeyRecord { typed, alts });
+        self.flushed_since_key = false;
+    }
+
+    /// 打鍵ログを先頭 `n` 件だけ再生した結果（確定したテキスト, 保留）
+    fn replay_key_log(&self, n: usize) -> (String, String) {
+        let mut conv = RomajiConverter::new(self.converter.table.clone());
+        let mut text = String::new();
+        let mut push = |emits: Vec<Emit>| {
+            for e in emits {
+                match e {
+                    Emit::Converted(t) => text.push_str(&t),
+                    Emit::Raw(c) => text.push(c),
+                }
+            }
+        };
+        for rec in &self.key_log[..n] {
+            if is_loggable_kana(rec.typed) {
+                push(conv.flush());
+                push(vec![Emit::Raw(rec.typed)]);
+            } else {
+                push(conv.feed(rec.typed));
+            }
+        }
+        let pending = conv.pending().to_string();
+        (text, pending)
+    }
+
+    /// 先頭 `n` 件のログが現在の入力（確定したテキストと保留）と一致するか
+    fn key_log_matches(&self, n: usize) -> bool {
+        let (text, pending) = self.replay_key_log(n);
+        text == self.text() && pending == self.converter.pending()
+    }
+
+    /// Backspace の後に、打鍵ログを入力と対応させ直す。対応が取れなければ無効化する。
+    ///
+    /// 保留の 1 文字削除と `feed` の巻き戻しは直前の 1 打鍵に対応する。変換済みの文字を消した場合は、
+    /// その文字を作った打鍵（`ka` なら 2 打鍵）を、再生結果が入力と一致するまで遡って捨てる
+    fn rewind_key_log(&mut self, kind: Backspace, at_end: bool) {
+        if !at_end {
+            self.invalidate_key_log();
+            return;
+        }
+        let len = self.key_log.len();
+        let max = match kind {
+            Backspace::Pending | Backspace::Rollback { .. } => 1,
+            Backspace::Nothing => MAX_KEYS_PER_CHAR,
+        };
+        for k in 1..=max.min(len) {
+            if self.key_log_matches(len - k) {
+                self.key_log.truncate(len - k);
+                return;
+            }
+        }
+        self.invalidate_key_log();
     }
 
     fn insert_at_cursor(&mut self, ch: char, kind: PieceKind) {
@@ -1812,5 +2031,300 @@ mod tests {
             .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
             .count();
         assert_eq!(lines, RomajiTable::standard().entries.len());
+    }
+
+    // ---- 打鍵ログ（曖昧入力） ----
+
+    fn logged_composer() -> Composer {
+        let mut c = Composer::new(RomajiTable::standard(), ShiftLetterMode::LiteralContinue);
+        c.set_key_log_enabled(true);
+        c
+    }
+
+    fn typed_of(c: &Composer) -> String {
+        c.key_log()
+            .map(|l| l.iter().map(|r| r.typed).collect())
+            .unwrap_or_default()
+    }
+
+    /// ログの再生結果が Composer の状態と一致する（`key_log` が Some のとき）
+    fn assert_log_consistent(c: &Composer) {
+        let Some(log) = c.key_log() else { return };
+        let mut conv = RomajiConverter::new(RomajiTable::standard());
+        let mut text = String::new();
+        let mut push = |emits: Vec<Emit>| {
+            for e in emits {
+                match e {
+                    Emit::Converted(t) => text.push_str(&t),
+                    Emit::Raw(ch) => text.push(ch),
+                }
+            }
+        };
+        for r in log {
+            if ('ぁ'..='ゖ').contains(&r.typed) || r.typed == 'ー' {
+                push(conv.flush());
+                push(vec![Emit::Raw(r.typed)]);
+            } else {
+                push(conv.feed(r.typed));
+            }
+        }
+        // 保留を確定した結果どうしで比べる（Space 変換の前に flush されていても一致する）
+        push(conv.flush());
+        let mut expected = c.text();
+        if c.pending() == "n" {
+            expected.push('ん');
+        } else {
+            expected.push_str(c.pending());
+        }
+        assert_eq!(text, expected, "log = {log:?}");
+    }
+
+    #[test]
+    fn key_log_is_off_by_default() {
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "ka");
+        assert!(c.key_log().is_none());
+        // 無効のままでも alts 付き挿入は通常の挿入と同じ
+        c.insert_char_with_alts('k', &[('l', 0.3)]);
+        assert!(c.key_log().is_none());
+        assert_eq!(c.pending(), "k");
+    }
+
+    #[test]
+    fn key_log_records_keys_and_sorted_clean_alts() {
+        let mut c = logged_composer();
+        c.insert_char_with_alts(
+            'k',
+            &[
+                ('l', 0.6),
+                ('j', 0.2),
+                ('K', 0.1), // 大文字は捨てる
+                ('k', 0.0), // 打たれた文字自身は捨てる
+                ('1', 0.1), // 数字は捨てる
+                ('m', f32::NAN),
+                ('o', -1.0),
+            ],
+        );
+        c.insert_char('a');
+        let log = c.key_log().unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].typed, 'k');
+        assert_eq!(log[0].alts, vec![('j', 0.2), ('l', 0.6)]);
+        assert!(log[1].alts.is_empty());
+        assert_log_consistent(&c);
+    }
+
+    #[test]
+    fn key_log_includes_hiragana_inserts() {
+        let mut c = logged_composer();
+        c.insert_reading_char_with_alts('か', PieceKind::Japanese, &[('け', 0.4), ('K', 0.1)]);
+        c.insert_char('n');
+        c.insert_reading_char('き', PieceKind::Japanese); // 保留の n を確定してから挿入
+        assert_eq!(typed_of(&c), "かnき");
+        assert_eq!(c.key_log().unwrap()[0].alts, vec![('け', 0.4)]);
+        assert_eq!(c.text(), "かんき");
+        assert_log_consistent(&c);
+    }
+
+    #[test]
+    fn key_log_backspace_pops_per_keystroke() {
+        let mut c = logged_composer();
+        insert_string(&mut c, "ka");
+        assert_eq!(typed_of(&c), "ka");
+        // か（2 打鍵）を消すとログも 2 件戻る
+        c.backspace();
+        assert!(c.is_empty());
+        assert!(c.key_log().is_none());
+
+        // 保留の削除（1 打鍵）
+        insert_string(&mut c, "sh");
+        c.backspace();
+        assert_eq!(typed_of(&c), "s");
+        assert_log_consistent(&c);
+
+        // G-49 の巻き戻し: `kk` → っ + 保留 k。Backspace で保留 k に戻る（1 打鍵）
+        c.clear();
+        insert_string(&mut c, "kk");
+        assert_eq!(c.text(), "っ");
+        c.backspace();
+        assert_eq!(c.text(), "");
+        assert_eq!(c.pending(), "k");
+        assert_eq!(typed_of(&c), "k");
+        assert_log_consistent(&c);
+        c.backspace();
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn key_log_survives_raw_literal_output() {
+        // `nihn`: 不一致の h は Raw（Literal）として残るが、小文字キーだけの入力なのでログは有効
+        let mut c = logged_composer();
+        insert_string(&mut c, "nihn");
+        assert_eq!(typed_of(&c), "nihn");
+        assert_log_consistent(&c);
+        // 巻き戻しも整合する
+        c.backspace();
+        assert_log_consistent(&c);
+        c.backspace();
+        assert_log_consistent(&c);
+    }
+
+    #[test]
+    fn key_log_is_invalidated_by_non_append_edits() {
+        type Op = fn(&mut Composer);
+        let invalidated: Vec<(&str, Op)> = vec![
+            ("uppercase", |c| c.insert_char('A')),
+            ("digit", |c| c.insert_char('1')),
+            ("symbol", |c| c.insert_char('-')),
+            ("non-ascii", |c| c.insert_char('ｱ')),
+            ("literal reading", |c| {
+                c.insert_reading_char('a', PieceKind::Literal)
+            }),
+            ("non-kana reading", |c| {
+                c.insert_reading_char('。', PieceKind::Japanese)
+            }),
+            ("delete", |c| {
+                c.delete();
+            }),
+            ("move_left", |c| {
+                c.move_left();
+            }),
+            ("move_right", |c| {
+                c.move_right();
+            }),
+            ("move_home", |c| c.move_home()),
+            ("move_end", |c| c.move_end()),
+            ("load_pieces", |c| {
+                let p = c.pieces();
+                c.load_pieces(&p, 2)
+            }),
+        ];
+        for (name, op) in invalidated {
+            let mut c = logged_composer();
+            insert_string(&mut c, "kak");
+            assert!(c.key_log().is_some(), "{name}");
+            op(&mut c);
+            assert!(c.key_log().is_none(), "{name}: 無効化されること");
+            // 以降の打鍵でも復活しない
+            insert_string(&mut c, "a");
+            assert!(c.key_log().is_none(), "{name}: 復活しないこと");
+        }
+    }
+
+    #[test]
+    fn key_log_is_invalidated_by_mid_insert_and_flushed_pending() {
+        // 文中への挿入（カーソル移動で無効化済みだが、戻ってきても復活しない）
+        let mut c = logged_composer();
+        insert_string(&mut c, "ka");
+        c.move_left();
+        c.insert_char('s');
+        assert!(c.key_log().is_none());
+
+        // 保留 n を確定したあとに続けた打鍵はログの再生と一致しない
+        let mut c = logged_composer();
+        insert_string(&mut c, "n");
+        c.flush_pending();
+        c.insert_char('a');
+        assert!(c.key_log().is_none());
+        assert_eq!(c.text(), "んあ");
+
+        // Space 変換相当（flush のみ）ではログは保たれる
+        let mut c = logged_composer();
+        insert_string(&mut c, "kan");
+        c.flush_pending();
+        assert_eq!(typed_of(&c), "kan");
+        assert_log_consistent(&c);
+    }
+
+    #[test]
+    fn key_log_revives_after_input_becomes_empty() {
+        let mut c = logged_composer();
+        insert_string(&mut c, "a");
+        c.insert_char('Z');
+        assert!(c.key_log().is_none());
+        c.clear();
+        insert_string(&mut c, "ka");
+        assert_eq!(typed_of(&c), "ka");
+        // 全部 Backspace で消して空になっても、新しい入力は有効
+        let mut c = logged_composer();
+        insert_string(&mut c, "a");
+        c.delete();
+        c.insert_char('u');
+        assert!(c.key_log().is_none());
+        c.backspace();
+        c.backspace();
+        assert!(c.is_empty());
+        insert_string(&mut c, "i");
+        assert_eq!(typed_of(&c), "i");
+    }
+
+    #[test]
+    fn key_log_enabling_midway_stays_invalid_until_empty() {
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "ka");
+        c.set_key_log_enabled(true);
+        insert_string(&mut c, "k");
+        assert!(c.key_log().is_none());
+        c.clear();
+        insert_string(&mut c, "a");
+        assert_eq!(typed_of(&c), "a");
+        c.set_key_log_enabled(false);
+        assert!(c.key_log().is_none());
+    }
+
+    /// 擬似乱数で追記・Backspace・その他の編集を混ぜ、(1) ログが有効なら常に再生結果と一致する
+    /// (2) ログの有無で text / pending / cursor / pieces が 1 ビットも変わらない
+    #[test]
+    fn key_log_never_changes_composer_behavior() {
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let alphabet: Vec<char> = "kknasihtuoeyzj".chars().collect();
+        for _ in 0..300 {
+            let mut with_log = logged_composer();
+            let mut without =
+                Composer::new(RomajiTable::standard(), ShiftLetterMode::LiteralContinue);
+            for _ in 0..40 {
+                let r = next();
+                let ch = alphabet[(r >> 8) as usize % alphabet.len()];
+                match r % 24 {
+                    0..=13 => {
+                        with_log.insert_char_with_alts(ch, &[('l', 0.4)]);
+                        without.insert_char(ch);
+                    }
+                    14..=18 => {
+                        assert_eq!(with_log.backspace(), without.backspace());
+                    }
+                    19 => {
+                        with_log.insert_reading_char('か', PieceKind::Japanese);
+                        without.insert_reading_char('か', PieceKind::Japanese);
+                    }
+                    20 => {
+                        with_log.flush_pending();
+                        without.flush_pending();
+                    }
+                    21 => {
+                        assert_eq!(with_log.move_left(), without.move_left());
+                    }
+                    22 => {
+                        with_log.move_end();
+                        without.move_end();
+                    }
+                    _ => {
+                        with_log.insert_char('Q');
+                        without.insert_char('Q');
+                    }
+                }
+                assert_eq!(with_log.text(), without.text());
+                assert_eq!(with_log.pending(), without.pending());
+                assert_eq!(with_log.cursor(), without.cursor());
+                assert_eq!(with_log.pieces(), without.pieces());
+                assert_log_consistent(&with_log);
+            }
+        }
     }
 }

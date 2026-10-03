@@ -54,3 +54,11 @@
 ```
 
 `consumed` / `commit` / `result_*` / `revision_increased` は「そのステップの応答」、それ以外は「そのステップ後の状態」を検査する。
+
+## 曖昧入力（`fuzzy.enabled`）との関係
+
+`golden.rs` は全ケースを `fuzzy.enabled = false` と `true` の両方で実行し、同じ期待値を要求する。
+ゴールデンのバックエンド（`kana` / `mock`）は補正に対応しない（`prefix_oracle` を持たない）ので、
+`fuzzy.enabled` を有効にしても打たれたとおりの読み（第一仮説）の挙動・表示・確定結果は
+一切変わらないことの回帰になる（設計: `docs/fuzzy-input-design.md` §2-2）。補正候補が出るケースは、
+辞書付きのモックが要るので `core/engine/tests/fuzzy.rs`（Rust のテスト）に書く。

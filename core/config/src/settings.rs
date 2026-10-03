@@ -126,6 +126,10 @@ fn int(min: i32, max: i32, step: i32) -> SettingKind {
     SettingKind::Int { min, max, step }
 }
 
+fn float(min: f64, max: f64, step: f64) -> SettingKind {
+    SettingKind::Float { min, max, step }
+}
+
 fn def(
     key: &'static str,
     group: &'static str,
@@ -289,13 +293,97 @@ pub fn definitions() -> Vec<SettingDef> {
             "読みがこの文字数以上になったら予測を表示します。",
             int(1, 20, 1),
         ),
+        def(
+            "fuzzy.enabled",
+            "曖昧入力",
+            "曖昧入力（補正候補）",
+            "打ち間違いやタッチのずれを想定した読みを、Space 変換のときに補正候補として追加します。打った読みは選ぶまで変わりません。",
+            SettingKind::Bool,
+        ),
+        def(
+            "fuzzy.sigma",
+            "曖昧入力",
+            "タッチ誤差の大きさ",
+            "小さいほど、隣のキーとの取り違えを疑いにくくなります（キー幅に対する比）。",
+            float(0.05, 2.0, 0.05),
+        ),
+        def(
+            "fuzzy.max_distance",
+            "曖昧入力",
+            "代替キーとして扱う最大距離",
+            "タッチ位置からこの距離（キー幅比）を超えるキーは、取り違えの候補にしません。",
+            float(0.0, 3.0, 0.1),
+        ),
+        def(
+            "fuzzy.max_edits",
+            "曖昧入力",
+            "タイポ補正の最大回数",
+            "打鍵の欠落・余剰・入れ替えを直せる回数です。0 でタイポ補正を使いません。",
+            int(0, 3, 1),
+        ),
+        def(
+            "fuzzy.window",
+            "曖昧入力",
+            "タイポ補正の対象打鍵数",
+            "入力の末尾からこの打鍵数だけタイポ補正を試みます。大きいほど遅くなります。",
+            int(1, 32, 1),
+        ),
+        def(
+            "fuzzy.beam",
+            "曖昧入力",
+            "探索の幅",
+            "読みの候補を同時に検討する数です。大きいほど見落としが減りますが遅くなります。",
+            int(1, 64, 1),
+        ),
+        def(
+            "fuzzy.max_cost",
+            "曖昧入力",
+            "補正の許容コスト",
+            "入力のずれの大きさがこの値を超える読みは、補正候補にしません。",
+            float(0.0, 30.0, 0.5),
+        ),
+        def(
+            "fuzzy.hypotheses",
+            "曖昧入力",
+            "検討する読みの数",
+            "打った読みを含めて、変換にかける読みの最大数です。補正候補はこの数より 1 つ少なくなります。",
+            int(1, 8, 1),
+        ),
+        def(
+            "fuzzy.input_weight",
+            "曖昧入力",
+            "入力のずれの重み",
+            "大きいほど、打った読みに近い補正候補を優先します。",
+            float(0.0, 10.0, 0.1),
+        ),
+        def(
+            "fuzzy.ambiguity_margin",
+            "曖昧入力",
+            "補正を検討する曖昧さ",
+            "打った読みとの差がこの範囲内の補正だけを候補に残します。大きいほど多くの補正候補が出ます。",
+            float(0.0, 30.0, 0.5),
+        ),
+        def(
+            "fuzzy.poor_coverage",
+            "曖昧入力",
+            "補正を検討する未知語の割合",
+            "打った読みのうち辞書に載らない部分がこの割合以上のときは、常に補正を検討します。",
+            float(0.0, 1.0, 0.05),
+        ),
+        def(
+            "fuzzy.promote_corrected",
+            "曖昧入力",
+            "補正候補を先頭に出す",
+            "打った読みがほとんど辞書に載らないときだけ、補正候補を先頭に出します。",
+            SettingKind::Bool,
+        ),
         update_check,
     ]
 }
 
 /// 設定値の現在値（`Config` から取り出す）。未指定の任意項目は `None`
 fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
-    use SettingValue::{Bool, Int, Text};
+    use SettingValue::{Bool, Float, Int, Text};
     let n = |v: usize| Int(i32::try_from(v).unwrap_or(i32::MAX));
     match key {
         "profile.mode" => Some(Text(config.profile.mode.as_str().to_string())),
@@ -326,6 +414,18 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         "learning.max_entries" => Some(n(config.learning.max_entries)),
         "predict.enabled" => Some(Bool(config.predict.enabled)),
         "predict.min_chars" => Some(n(config.predict.min_chars)),
+        "fuzzy.enabled" => Some(Bool(config.fuzzy.enabled)),
+        "fuzzy.sigma" => Some(Float(config.fuzzy.sigma)),
+        "fuzzy.max_distance" => Some(Float(config.fuzzy.max_distance)),
+        "fuzzy.max_edits" => Some(n(config.fuzzy.max_edits)),
+        "fuzzy.window" => Some(n(config.fuzzy.window)),
+        "fuzzy.beam" => Some(n(config.fuzzy.beam)),
+        "fuzzy.max_cost" => Some(Float(config.fuzzy.max_cost)),
+        "fuzzy.hypotheses" => Some(n(config.fuzzy.hypotheses)),
+        "fuzzy.input_weight" => Some(Float(config.fuzzy.input_weight)),
+        "fuzzy.ambiguity_margin" => Some(Float(config.fuzzy.ambiguity_margin)),
+        "fuzzy.poor_coverage" => Some(Float(config.fuzzy.poor_coverage)),
+        "fuzzy.promote_corrected" => Some(Bool(config.fuzzy.promote_corrected)),
         "update.auto_check" => Some(Bool(config.update.auto_check)),
         _ => None,
     }

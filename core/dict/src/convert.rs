@@ -31,6 +31,19 @@ pub struct SegmentCandidate {
     pub cost: i32,
 }
 
+/// Viterbi の最良経路の変換結果とそのコスト（曖昧入力の仮説比較用）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScoredConversion {
+    /// 文節に区切った変換結果（[`Dictionary::convert_with`] と同じ）
+    pub segments: Vec<ConvertedSegment>,
+    /// 経路の総コスト（語コスト + 連接コスト。Mozc 辞書の尺度で、小さいほど良い）
+    pub cost: i32,
+    /// 辞書に載らず素通しした文字数（記号・句読点は数えない）
+    pub unknown_chars: usize,
+    /// 読みの文字数
+    pub total_chars: usize,
+}
+
 #[derive(Clone, Copy)]
 enum Source {
     /// 辞書の語（全体通しの語 index）
@@ -76,17 +89,36 @@ impl Dictionary {
 
     /// [`Dictionary::convert`] にユーザー辞書（オーバーレイ）を加えたもの
     pub fn convert_with(&self, reading: &str, overlay: Option<&Overlay>) -> Vec<ConvertedSegment> {
+        self.convert_scored(reading, overlay).segments
+    }
+
+    /// [`Dictionary::convert_with`] に、最良経路の総コストと未知語の文字数を添えて返す
+    /// （曖昧入力で複数の読みの仮説を同じ尺度で比べるため）。`segments` は `convert_with` と同一
+    pub fn convert_scored(&self, reading: &str, overlay: Option<&Overlay>) -> ScoredConversion {
         let chars: Vec<char> = reading.chars().collect();
         if chars.is_empty() {
-            return Vec::new();
+            return ScoredConversion {
+                segments: Vec::new(),
+                cost: 0,
+                unknown_chars: 0,
+                total_chars: 0,
+            };
         }
         let path = self.viterbi(reading, &chars, overlay);
+        let mut unknown_chars = 0;
         let mut segments: Vec<ConvertedSegment> = Vec::new();
         let mut prev_pos: Option<Pos> = None;
         for w in &path.words {
             let pos = self.pos_of(w.pos_id);
             let text: String = chars[w.start..w.end].iter().collect();
             let surface = self.word_surface(w, &text, &path.extras);
+            if matches!(w.source, Source::Unknown)
+                && chars[w.start..w.end]
+                    .iter()
+                    .any(|&c| self.unknown_ids(c).1 == UNKNOWN_COST)
+            {
+                unknown_chars += w.end - w.start;
+            }
             if starts_bunsetsu(prev_pos, pos) || segments.is_empty() {
                 segments.push(ConvertedSegment {
                     reading: text,
@@ -98,7 +130,12 @@ impl Dictionary {
             }
             prev_pos = Some(pos);
         }
-        segments
+        ScoredConversion {
+            segments,
+            cost: path.total,
+            unknown_chars,
+            total_chars: chars.len(),
+        }
     }
 
     /// 1 文節分の候補を返す（良い順、表記重複なし、最大 `limit` 件）

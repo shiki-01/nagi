@@ -822,6 +822,7 @@ dependencies = [
 name = "nagi-engine"
 version = "0.0.1"
 dependencies = [
+ "nagi-fuzzy",
  "nagi-protocol",
  "nagi-rewriter",
  "nagi-romaji",
@@ -897,6 +898,7 @@ dependencies = [
  "nagi-config",
  "nagi-dict",
  "nagi-engine",
+ "nagi-fuzzy",
  "nagi-infer",
  "nagi-learn",
  "nagi-profile",

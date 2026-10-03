@@ -383,6 +383,58 @@ impl Default for PredictSection {
     }
 }
 
+/// 曖昧入力セクション（設計: `docs/fuzzy-input-design.md` §7）。
+///
+/// 浮動小数点を持つので `Eq` は実装しない。値は TOML の f64 をそのまま保持し、
+/// `nagi_fuzzy::FuzzyConfig` への変換は使う側（`nagi-server`）で行う。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FuzzySection {
+    /// 曖昧入力（補正候補）を使うかどうか。既定: false。
+    pub enabled: bool,
+    /// 距離→コスト変換の標準偏差（キー幅比）。既定: 0.35。
+    pub sigma: f64,
+    /// これを超える距離の代替は捨てる（キー幅比）。既定: 1.0。
+    pub max_distance: f64,
+    /// タイポ補完の最大編集数。0 で編集を無効化。既定: 1。
+    pub max_edits: usize,
+    /// 補正を適用する直近の打鍵数。既定: 8。
+    pub window: usize,
+    /// 仮説探索のビーム幅。既定: 8。
+    pub beam: usize,
+    /// 補正仮説の入力コスト上限（nat）。既定: 6.0。
+    pub max_cost: f64,
+    /// 変換に回す仮説の最大数（打たれたとおりの第一仮説を含む）。既定: 3。
+    pub hypotheses: usize,
+    /// 入力コストの重み。既定: 1.0。
+    pub input_weight: f64,
+    /// 追加仮説を走らせる／候補に残す曖昧さの閾値（nat）。既定: 1.5。
+    pub ambiguity_margin: f64,
+    /// 第一仮説の変換で辞書に載らない読みの割合がこれ以上なら追加仮説を走らせる。既定: 0.3。
+    pub poor_coverage: f64,
+    /// 補正候補を先頭に出すか（第一仮説がほぼ未知語のときのみ）。既定: false。
+    pub promote_corrected: bool,
+}
+
+impl Default for FuzzySection {
+    fn default() -> Self {
+        FuzzySection {
+            enabled: false,
+            sigma: 0.35,
+            max_distance: 1.0,
+            max_edits: 1,
+            window: 8,
+            beam: 8,
+            max_cost: 6.0,
+            hypotheses: 3,
+            input_weight: 1.0,
+            ambiguity_margin: 1.5,
+            poor_coverage: 0.3,
+            promote_corrected: false,
+        }
+    }
+}
+
 /// キーマップセクション。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -428,7 +480,7 @@ impl Default for UpdateSection {
 }
 
 /// Nagi の全設定。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// 環境プロファイルセクション。
@@ -443,6 +495,8 @@ pub struct Config {
     pub learning: LearningSection,
     /// 予測変換セクション。
     pub predict: PredictSection,
+    /// 曖昧入力セクション。
+    pub fuzzy: FuzzySection,
     /// キーマップセクション。
     pub keymap: KeymapSection,
     /// アップデートセクション。
@@ -539,6 +593,33 @@ impl Config {
             ));
         }
 
+        // fuzzy: 各項目の範囲
+        let f = &self.fuzzy;
+        let mut range_f = |key: &str, v: f64, lo: f64, hi: f64| {
+            if !(v.is_finite() && (lo..=hi).contains(&v)) {
+                errors.push(format!(
+                    "fuzzy.{key} は {lo} から {hi} の間である必要があります: {v}"
+                ));
+            }
+        };
+        range_f("sigma", f.sigma, 0.05, 2.0);
+        range_f("max_distance", f.max_distance, 0.0, 3.0);
+        range_f("max_cost", f.max_cost, 0.0, 30.0);
+        range_f("input_weight", f.input_weight, 0.0, 10.0);
+        range_f("ambiguity_margin", f.ambiguity_margin, 0.0, 30.0);
+        range_f("poor_coverage", f.poor_coverage, 0.0, 1.0);
+        let mut range_u = |key: &str, v: usize, lo: usize, hi: usize| {
+            if !(lo..=hi).contains(&v) {
+                errors.push(format!(
+                    "fuzzy.{key} は {lo} から {hi} の間である必要があります: {v}"
+                ));
+            }
+        };
+        range_u("max_edits", f.max_edits, 0, 3);
+        range_u("window", f.window, 1, 32);
+        range_u("beam", f.beam, 1, 64);
+        range_u("hypotheses", f.hypotheses, 1, 8);
+
         // ranking.source_order: 既知の名前のみ、重複なし、空でない
         const KNOWN_SOURCES: &[&str] = &[
             "learned",
@@ -624,6 +705,7 @@ const KNOWN_KEYS: &[&str] = &[
     "ranking",
     "learning",
     "predict",
+    "fuzzy",
     "keymap",
     "update",
 ];
@@ -652,6 +734,20 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         "ranking" => &["source_order"],
         "learning" => &["enabled", "max_entries", "disabled_apps"],
         "predict" => &["enabled", "min_chars"],
+        "fuzzy" => &[
+            "enabled",
+            "sigma",
+            "max_distance",
+            "max_edits",
+            "window",
+            "beam",
+            "max_cost",
+            "hypotheses",
+            "input_weight",
+            "ambiguity_margin",
+            "poor_coverage",
+            "promote_corrected",
+        ],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
         _ => &[],
@@ -1346,6 +1442,88 @@ min_chars = 3
         let (config, _) = parse(source).expect("should parse predict section");
         assert!(!config.predict.enabled);
         assert_eq!(config.predict.min_chars, 3);
+    }
+
+    #[test]
+    fn test_fuzzy_section_defaults_and_parse() {
+        // 既定は無効で、default.toml と Config::default が一致する
+        let (config, warnings) = parse(DEFAULT_TOML).expect("default.toml should parse");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.fuzzy, FuzzySection::default());
+        assert!(!config.fuzzy.enabled);
+
+        let source = r#"
+[fuzzy]
+enabled = true
+sigma = 0.5
+max_edits = 0
+hypotheses = 2
+promote_corrected = true
+"#;
+        let (config, issues) = parse(source).expect("should parse fuzzy section");
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(config.fuzzy.enabled);
+        assert_eq!(config.fuzzy.sigma, 0.5);
+        assert_eq!(config.fuzzy.max_edits, 0);
+        assert_eq!(config.fuzzy.hypotheses, 2);
+        assert!(config.fuzzy.promote_corrected);
+        // 未指定は既定
+        assert_eq!(config.fuzzy.window, 8);
+    }
+
+    #[test]
+    fn test_fuzzy_all_keys_known_and_unknown_key_warns() {
+        // 全項目を書いても警告が出ない（KNOWN と構造体の食い違い防止）
+        let f = FuzzySection::default();
+        let source = format!(
+            "[fuzzy]\nenabled = {}\nsigma = {:?}\nmax_distance = {:?}\nmax_edits = {}\nwindow = {}\nbeam = {}\nmax_cost = {:?}\nhypotheses = {}\ninput_weight = {:?}\nambiguity_margin = {:?}\npoor_coverage = {:?}\npromote_corrected = {}\n",
+            f.enabled,
+            f.sigma,
+            f.max_distance,
+            f.max_edits,
+            f.window,
+            f.beam,
+            f.max_cost,
+            f.hypotheses,
+            f.input_weight,
+            f.ambiguity_margin,
+            f.poor_coverage,
+            f.promote_corrected
+        );
+        let (_, issues) = parse(&source).expect("should parse");
+        assert!(issues.is_empty(), "{issues:?}");
+        // auto_apply は F-1 では未実装（設定項目にしない）ので未知のキーとして警告される
+        let (_, issues) = parse("[fuzzy]\nauto_apply = \"off\"\n").expect("should parse");
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("fuzzy.auto_apply"))
+        );
+    }
+
+    #[test]
+    fn test_validate_fuzzy_ranges() {
+        let mut config = Config::default();
+        assert!(config.validate().is_empty());
+        config.fuzzy.sigma = 0.0;
+        config.fuzzy.poor_coverage = 1.5;
+        config.fuzzy.hypotheses = 0;
+        config.fuzzy.max_edits = 4;
+        config.fuzzy.ambiguity_margin = f64::NAN;
+        let errors = config.validate();
+        for key in [
+            "fuzzy.sigma",
+            "fuzzy.poor_coverage",
+            "fuzzy.hypotheses",
+            "fuzzy.max_edits",
+            "fuzzy.ambiguity_margin",
+        ] {
+            assert!(
+                errors.iter().any(|e| e.starts_with(key)),
+                "{key}: {errors:?}"
+            );
+        }
+        assert_eq!(errors.len(), 5, "{errors:?}");
     }
 
     #[test]

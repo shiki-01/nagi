@@ -18,6 +18,9 @@ public enum CandidateSource: String, Codable {
 	case kana
 	/// Rewriter（正規化・変換済み）
 	case rewriter
+	/// 曖昧入力の補正候補（打ち間違い・タッチ誤差を想定した別の読みからの変換結果）。
+	/// 選択すると、その文節の reading が `CandidateView.note` の読みに書き換わる
+	case corrected
 }
 
 /// 単一の候補
@@ -26,10 +29,14 @@ public struct CandidateView: Codable {
 	public let surface: String
 	/// 出所のリスト（複数の出所から同じ候補が来た場合）
 	public let sources: [CandidateSource]
+	/// 補足の文字列。補正候補（`CandidateSource::Corrected`）では、補正後の読み（例「にほん」）。
+	/// 入力内容を含むのでログには出さない。無ければ省略される
+	public let note: String?
 
-	public init(surface: String, sources: [CandidateSource]) {
+	public init(surface: String, sources: [CandidateSource], note: String?) {
 		self.surface = surface
 		self.sources = sources
+		self.note = note
 	}
 }
 

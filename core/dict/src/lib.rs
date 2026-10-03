@@ -24,7 +24,7 @@ pub mod user;
 pub use builder::{
     ConnectionLayout, DictionaryBuilder, build_from_mozc_dir, build_from_sudachi_files,
 };
-pub use convert::{ConvertedSegment, SegmentCandidate};
+pub use convert::{ConvertedSegment, ScoredConversion, SegmentCandidate};
 pub use dictionary::{Dictionary, Entry};
 pub use error::DictError;
 pub use nbest::SentenceCandidate;

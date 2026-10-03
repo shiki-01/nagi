@@ -137,9 +137,32 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
                 .conversion
                 .beam_width
                 .unwrap_or(EngineConfig::default().beam_width),
+            fuzzy: fuzzy_engine_config(&config.fuzzy),
         },
         events,
     )
+}
+
+/// `[fuzzy]` をエンジンの設定に直す。プロファイル別の上限（`minimal` は `max_edits = 0` など。
+/// 設計 §7）は F-1 では未対応で、設定値をそのまま使う
+pub fn fuzzy_engine_config(f: &nagi_config::FuzzySection) -> nagi_engine::FuzzyEngineConfig {
+    nagi_engine::FuzzyEngineConfig {
+        enabled: f.enabled,
+        search: nagi_fuzzy::FuzzyConfig {
+            max_edits: u8::try_from(f.max_edits).unwrap_or(u8::MAX),
+            window: f.window,
+            beam: f.beam,
+            max_cost: f.max_cost as f32,
+            max_hypotheses: f.hypotheses,
+            sigma: f.sigma as f32,
+            max_distance: f.max_distance as f32,
+            ..nagi_fuzzy::FuzzyConfig::default()
+        },
+        input_weight: f.input_weight as f32,
+        ambiguity_margin: f.ambiguity_margin as f32,
+        poor_coverage: f.poor_coverage as f32,
+        promote_corrected: f.promote_corrected,
+    }
 }
 
 /// 設定ファイルの問題を通知（`notify`）に直す

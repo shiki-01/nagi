@@ -216,7 +216,8 @@ pub fn expand_with_stats(
     (out, stats)
 }
 
-/// 打たれたとおりの読み（Raw は素通し）
+/// 打たれたとおりの読み（Raw は素通し）。ひらがなのキー（フリック等）は、保留を確定してから
+/// そのまま挿入する（`Composer::insert_reading_char` と同じ）
 fn typed_reading(keys: &[KeyAlternatives], table: &Arc<RomajiTable>) -> String {
     let mut conv = RomajiConverter::new(Arc::clone(table));
     let mut s = String::new();
@@ -229,7 +230,12 @@ fn typed_reading(keys: &[KeyAlternatives], table: &Arc<RomajiTable>) -> String {
         }
     };
     for k in keys {
-        push(conv.feed(k.typed()));
+        if is_kana_char(k.typed()) {
+            push(conv.flush());
+            push(vec![Emit::Raw(k.typed())]);
+        } else {
+            push(conv.feed(k.typed()));
+        }
     }
     push(conv.flush());
     s
@@ -247,6 +253,17 @@ fn step(table: &Arc<RomajiTable>, pending: &str, chars: &[char]) -> Option<(Stri
     }
     let mut out = String::new();
     for &c in chars {
+        if is_kana_char(c) {
+            // ひらがなのキー（フリック等）は、保留を確定してからそのまま挿入する
+            for e in conv.flush() {
+                match e {
+                    Emit::Converted(t) => out.push_str(&t),
+                    Emit::Raw(_) => return None,
+                }
+            }
+            out.push(c);
+            continue;
+        }
         for e in conv.feed(c) {
             match e {
                 Emit::Converted(t) => out.push_str(&t),

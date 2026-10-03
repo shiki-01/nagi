@@ -282,3 +282,37 @@ fn bench_expand() {
     }
     println!("expand: {:?} / iter", t.elapsed() / iters);
 }
+
+#[test]
+fn kana_keys_with_alternatives() {
+    // フリックの「か」行: く を狙って け に判定された、のような代替（ひらがな 1 文字 + 距離）
+    let cfg = FuzzyConfig::default();
+    let table = RomajiTable::standard();
+    let keys = vec![
+        KeyAlternatives::exact('あ'),
+        KeyAlternatives::from_distances('け', &[('く', 0.35)], &cfg),
+    ];
+    let h = expand(&keys, &table, &Mock::new(&["あく"]), &cfg);
+    assert_eq!(readings(&h), vec!["あけ", "あく"], "{h:?}");
+    assert!((h[1].cost - 0.5).abs() < 1e-4);
+}
+
+#[test]
+fn kana_keys_flush_pending_romaji_like_the_composer() {
+    // ローマ字の n を打ってからひらがなを直接挿入すると、n は「ん」に確定してから挿入される
+    let cfg = FuzzyConfig::default();
+    let table = RomajiTable::standard();
+    let keys = vec![KeyAlternatives::exact('n'), KeyAlternatives::exact('か')];
+    let h = expand(&keys, &table, &Mock::new(&["んか"]), &cfg);
+    assert_eq!(h[0].reading, "んか");
+
+    // 混在したキー列でもローマ字側の編集が効く（欠落補完: nihn → にほん の後ろに kana）
+    let keys: Vec<KeyAlternatives> = "nihn"
+        .chars()
+        .map(KeyAlternatives::exact)
+        .chain([KeyAlternatives::exact('の')])
+        .collect();
+    let h = expand(&keys, &table, &Mock::new(&["にほん", "の"]), &cfg);
+    assert_eq!(h[0].reading, "にhんの");
+    assert!(readings(&h).contains(&"にほんの"), "{h:?}");
+}

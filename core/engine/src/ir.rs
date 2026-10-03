@@ -15,6 +15,9 @@ pub struct Candidate {
     pub surface: String,
     /// 出所（複数の供給元が同じ表記を出した場合は複数）
     pub sources: Vec<CandidateSource>,
+    /// 補正候補（`CandidateSource::Corrected`）を選んだときに、その文節の reading を書き換える
+    /// 先の読み（曖昧入力）。通常の候補は `None`
+    pub reading: Option<String>,
 }
 
 /// 文節ごとの候補セット（遅延生成）

@@ -3,6 +3,7 @@
 //! 候補の供給元を差し替えられるように、状態機械は [`ConversionBackend`] だけを見る。
 //! 辞書との接続は `nagi-server` 側の実装が行う。
 
+use nagi_fuzzy::{PrefixOracle, ReadingHypothesis};
 use nagi_protocol::view::CandidateSource;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,6 +34,27 @@ pub struct BackendCandidate {
     pub surface: String,
     /// 出所
     pub sources: Vec<CandidateSource>,
+}
+
+/// [`ConversionBackend::convert_hypotheses`] が返す、1 つの読み仮説の文全体変換（曖昧入力）
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoredSentence {
+    /// 変換結果の文節列。reading を連結すると、その仮説の reading に一致すること
+    pub segments: Vec<BackendSegment>,
+    /// 変換コスト（小さいほど良い。単位は nat 相当で、[`ReadingQuality::conv_cost`] と同じ尺度。
+    /// 入力コスト（`ReadingHypothesis::cost`）と足し合わせて順位を決める）
+    pub conv_cost: f32,
+    /// 渡した `hyps` の何番目の仮説か（0 始まり）
+    pub hypothesis_index: usize,
+}
+
+/// 読みの変換品質（[`ConversionBackend::quality`]）。曖昧入力で補正仮説を走らせるか判定するのに使う
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReadingQuality {
+    /// 辞書に載らない読みの割合（0.0〜1.0）
+    pub uncovered: f32,
+    /// 変換コスト（[`ScoredSentence::conv_cost`] と同じ尺度。小さいほど良い）
+    pub conv_cost: f32,
 }
 
 /// バックエンドの非同期処理が完了したことの通知。`convert_sentence` に渡された引数と同じ値を持つ
@@ -90,6 +112,34 @@ pub trait ConversionBackend: Send + Sync {
         limit: usize,
     ) -> Vec<BackendSentence> {
         let _ = (reading, left_context, limit);
+        Vec::new()
+    }
+
+    /// 曖昧入力（補正候補）の枝刈りに使う辞書の照会。辞書を持つバックエンドだけ `Some` を返す
+    /// （既定は `None`。`None` のバックエンドでは補正候補は出ない）
+    fn prefix_oracle(&self) -> Option<&dyn PrefixOracle> {
+        None
+    }
+
+    /// 読みの変換品質（辞書に載らない割合と変換コスト）。第一仮説（打たれたとおりの読み）の
+    /// 変換が良好かの判定と、補正仮説との比較に使う。既定は非対応（`None`）
+    fn quality(&self, reading: &str) -> Option<ReadingQuality> {
+        let _ = reading;
+        None
+    }
+
+    /// 読みの仮説ごとの文全体変換（曖昧入力）。`hyps` は**第一仮説（打たれたとおりの読み）を
+    /// 含まない**補正仮説で、第一仮説は呼び出し側が `convert_sentence` / [`ConversionBackend::quality`]
+    /// で別に扱う。仮説の入力コストとの合成（順位付け）は呼び出し側が行うので、ここでは変換コスト
+    /// だけを付ける。`hypothesis_index` は `hyps` の添字。結果は仮説の順（変換できなかった仮説は
+    /// 飛ばしてよい）、最大 `limit` 件。既定は非対応で空を返す
+    fn convert_hypotheses(
+        &self,
+        hyps: &[ReadingHypothesis],
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<ScoredSentence> {
+        let _ = (hyps, left_context, limit);
         Vec::new()
     }
 
