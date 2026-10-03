@@ -11,11 +11,13 @@ use crate::backend::{BackendSegment, Completion, ConversionBackend};
 use crate::ir::{
     Candidate, CandidateSet, CandidateSource, CursorPos, Preedit, Segment, SegmentKind,
 };
-use crate::kana::to_katakana;
-use crate::keymap::{KeyContext, KeyMap};
+use crate::kana::{normalize_reading_char, to_katakana};
+use crate::keymap::{KeyContext, KeyMap, parse_action};
 use crate::observer::{CommitContext, CommitObserver, CommittedSegment};
 use nagi_protocol::key::{KeyEvent, KeyKind};
-use nagi_protocol::methods::{ProcessKeyResult, RestoreSessionParams, SetContextParams};
+use nagi_protocol::methods::{
+    InputAlternative, ProcessKeyResult, RestoreSessionParams, SetContextParams,
+};
 use nagi_protocol::utf16;
 use nagi_protocol::view::{CandidateView, CandidatesView, InputMode, PreeditView};
 use nagi_rewriter::Rewriter;
@@ -349,6 +351,84 @@ impl Engine {
         let result = self.finish(&mut sess, consumed, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
+    }
+
+    /// ローマ字変換を経由せず `reading` を挿入する（フリック・12 キー等のタッチ UI 向け）。
+    ///
+    /// - ひらがな・長音・CJK 記号は日本語、カタカナはひらがなに正規化して日本語、
+    ///   それ以外の文字は Literal として扱う（`kana::normalize_reading_char`）。制御文字は無視
+    /// - 保留中のローマ字（`k` など）は、挿入の前に確定する（`Action::InsertText` と同じ
+    ///   `Composer` の流儀。`n` → `ん`、確定できない子音はそのまま残る）
+    /// - Direct からは Composing を開始する。Converting 中は変換結果を確定してから新規入力を始める
+    ///   （`process_key` の文字入力と同じ）
+    /// - 挿入できる文字が無ければ `consumed = false`（何もしない）
+    /// - `alternatives`（曖昧入力の代替）は F-1 で使用する。現状は検証（1 文字・distance が有限で
+    ///   0 以上）するだけで、挙動には使わない
+    pub fn insert_reading(
+        &mut self,
+        session_id: &str,
+        reading: &str,
+        alternatives: &[InputAlternative],
+    ) -> ProcessKeyResult {
+        // F-1 で Composer が保持する。今は検証のみ（不正な代替は捨てる）
+        let _alternatives = sanitize_alternatives(alternatives);
+        let mut sess = self.take_session(session_id);
+        sess.origins.clear();
+        // 文字入力も「確定直後のみ有効」の取消の対象外にする（process_key と同じ）
+        sess.last_commit = None;
+        let mut commit = String::new();
+        let mut chars = reading
+            .chars()
+            .filter(|c| !c.is_control())
+            .map(normalize_reading_char)
+            .peekable();
+        let consumed = chars.peek().is_some();
+        if consumed {
+            self.begin_insert(&mut sess, &mut commit);
+            for (c, japanese) in chars {
+                let kind = if japanese {
+                    PieceKind::Japanese
+                } else {
+                    PieceKind::Literal
+                };
+                sess.composer.insert_reading_char(c, kind);
+            }
+            sess.state = State::Composing;
+        }
+        let result = self.finish(&mut sess, consumed, commit);
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// キーマップの Action 名（`Commit`、`MoveCursor:Left`、`SelectCand:2` など。
+    /// [`parse_action`] と同じ）で Action を直接実行する（タッチ UI のボタン操作向け）。
+    ///
+    /// 状態遷移は `process_key` と同じ `apply` を通る。未知の名前（`Insert` / `InsertText` /
+    /// `SetMode` も含む）は [`UnknownAction`] を返し、状態は変えない。
+    /// Direct 状態では、入力中にだけ意味を持つ Action は `consumed = false`（ホストアプリに任せる。
+    /// Backspace・Enter 等をタッチキーボードが素通しできるように）
+    pub fn perform_action(
+        &mut self,
+        session_id: &str,
+        action_name: &str,
+    ) -> Result<ProcessKeyResult, UnknownAction> {
+        let action = parse_action(action_name).map_err(UnknownAction)?;
+        let mut sess = self.take_session(session_id);
+        sess.origins.clear();
+        let mut commit = String::new();
+        let consumed = if matches!(sess.state, State::Direct)
+            && !matches!(
+                action,
+                Action::ToggleMode | Action::UndoCommit | Action::NoOp
+            ) {
+            sess.last_commit = None;
+            false
+        } else {
+            self.dispatch(&mut sess, action, &mut commit)
+        };
+        let result = self.finish(&mut sess, consumed, commit);
+        self.sessions.insert(session_id.to_string(), sess);
+        Ok(result)
     }
 
     /// フォーカスを得た（状態は変えない）
@@ -872,10 +952,19 @@ impl Engine {
             sess.last_commit = None;
         }
         match action {
-            Some(action) => self.apply(sess, action, commit),
+            Some(action) => self.dispatch(sess, action, commit),
             // 割当なし: 未入力なら素通し、入力中はキーを消費して何もしない
             None => !matches!(sess.state, State::Direct),
         }
+    }
+
+    /// 確定取消以外の操作では確定直後の記憶を捨ててから、Action を適用する
+    /// （`handle_key` と `perform_action` の共通経路）。戻り値は「消費したか」
+    fn dispatch(&self, sess: &mut Session, action: Action, commit: &mut String) -> bool {
+        if !matches!(action, Action::UndoCommit) {
+            sess.last_commit = None;
+        }
+        self.apply(sess, action, commit)
     }
 
     /// Action を適用する。戻り値は「キーを消費したか」
@@ -926,6 +1015,14 @@ impl Engine {
     }
 
     fn insert_char(&self, sess: &mut Session, c: char, commit: &mut String) {
+        self.begin_insert(sess, commit);
+        sess.composer.insert_char(c);
+        sess.state = State::Composing;
+    }
+
+    /// 文字挿入の前処理（Converting なら確定、ライブ変換結果の破棄など）。
+    /// `insert_char` と `insert_reading` で共通
+    fn begin_insert(&self, sess: &mut Session, commit: &mut String) {
         if matches!(sess.state, State::Converting(_)) {
             // 変換結果を確定して新しい入力を始める
             self.commit_all(sess, commit);
@@ -937,8 +1034,6 @@ impl Engine {
         }
         // 文字の入力（追記）でライブ変換の抑制を解く（G-46）
         sess.live_suppressed = false;
-        sess.composer.insert_char(c);
-        sess.state = State::Composing;
     }
 
     fn apply_composing(&self, sess: &mut Session, action: Action, commit: &mut String) {
@@ -1912,4 +2007,19 @@ impl Engine {
         result.revision = sess.revision as u32;
         result
     }
+}
+
+/// 未知の Action 名（`perform_action`）
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct UnknownAction(pub String);
+
+/// 曖昧入力の代替を検証する（F-1 で使用予定）。1 文字でない、または `distance` が
+/// 有限でない・負のものは捨てる
+pub fn sanitize_alternatives(alternatives: &[InputAlternative]) -> Vec<InputAlternative> {
+    alternatives
+        .iter()
+        .filter(|a| a.text.chars().count() == 1 && a.distance.is_finite() && a.distance >= 0.0)
+        .cloned()
+        .collect()
 }

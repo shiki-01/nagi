@@ -12,6 +12,10 @@ pub mod method {
     pub const INITIALIZE: &str = "initialize";
     /// `process_key` メソッド
     pub const PROCESS_KEY: &str = "process_key";
+    /// `insert_reading` メソッド（ローマ字を経由せず reading を挿入。タッチ UI 向け）
+    pub const INSERT_READING: &str = "insert_reading";
+    /// `perform_action` メソッド（ボタン操作などを Action として直接実行。タッチ UI 向け）
+    pub const PERFORM_ACTION: &str = "perform_action";
     /// `focus_in` メソッド
     pub const FOCUS_IN: &str = "focus_in";
     /// `focus_out` メソッド
@@ -74,6 +78,9 @@ pub struct ServerCapabilities {
     pub live_conversion: bool,
     /// スタイル変換に対応しているか
     pub style_conversion: bool,
+    /// タッチ入力（`insert_reading` / `perform_action`）に対応しているか
+    #[serde(default)]
+    pub touch_input: bool,
 }
 
 /// `initialize` メソッドの応答
@@ -122,7 +129,7 @@ pub struct NotifyParams {
 
 /// `process_key` メソッドの要求パラメータ
 #[typeshare]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessKeyParams {
     /// セッション ID
     pub session_id: String,
@@ -136,6 +143,48 @@ pub struct ProcessKeyParams {
     pub modifiers: Modifiers,
     /// キーの種別
     pub kind: KeyKind,
+    /// 曖昧入力用の代替キー（QWERTY のタッチ。省略可。`key_event()` には影響しない）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<InputAlternative>,
+}
+
+/// 曖昧入力用の代替（タッチ位置の近くにあった別のキー・方向ゾーン）
+///
+/// フロントがレイアウトのジオメトリを持つため、レイアウト ID や座標はコアに送らない。
+/// 第一候補（実際にタップされたキー）との関係はコアが `distance` で判断する。
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InputAlternative {
+    /// 代替の文字（1 文字。フリック等はひらがな 1 文字、QWERTY は 1 キーの文字）
+    pub text: String,
+    /// タッチ位置からそのキー（または方向ゾーン）の中心までの距離をキー幅で正規化した値
+    /// （小さいほど近い）
+    pub distance: f32,
+}
+
+/// `insert_reading` メソッドの要求パラメータ（ローマ字を経由せず reading を挿入する。
+/// フリック・12 キー等のタッチ UI 向け）。応答は [`ProcessKeyResult`]
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InsertReadingParams {
+    /// セッション ID
+    pub session_id: String,
+    /// 挿入する reading（ひらがな。カタカナはひらがなに正規化される）
+    pub reading: String,
+    /// 曖昧入力用の代替（省略時は空）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<InputAlternative>,
+}
+
+/// `perform_action` メソッドの要求パラメータ（ボタン操作を Action として直接実行する）。
+/// 応答は [`ProcessKeyResult`]
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerformActionParams {
+    /// セッション ID
+    pub session_id: String,
+    /// Action 名（キーマップ TOML で使うものと同じ。例：`Commit`、`MoveCursor:Left`、`SelectCand:2`）
+    pub action: String,
 }
 
 impl ProcessKeyParams {

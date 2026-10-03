@@ -40,7 +40,11 @@
         result_preedit_present: true   # 応答に preedit（差分）が含まれるか
         result_candidates_present: false
         revision_increased: true       # 応答の revision が前のステップより増えたか
-    - action: focus_out    # focus_in | focus_out | reset | restore
+    - action: focus_out    # focus_in | focus_out | reset | restore | insert_reading | perform_action
+    - action: insert_reading   # ローマ字を経由せず reading を挿入（タッチ UI）
+      reading: "か"
+    - action: perform_action   # キーマップの Action 名を直接実行
+      name: "MoveCursor:Left"
     - action: restore
       restore:
         segments: [{reading: "かな", surface: "かな", kind: japanese}]

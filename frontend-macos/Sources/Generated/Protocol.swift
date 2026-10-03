@@ -144,11 +144,14 @@ public struct ServerCapabilities: Codable {
 	public let live_conversion: Bool
 	/// スタイル変換に対応しているか
 	public let style_conversion: Bool
+	/// タッチ入力（`insert_reading` / `perform_action`）に対応しているか
+	public let touch_input: Bool?
 
-	public init(reconvert: Bool, live_conversion: Bool, style_conversion: Bool) {
+	public init(reconvert: Bool, live_conversion: Bool, style_conversion: Bool, touch_input: Bool?) {
 		self.reconvert = reconvert
 		self.live_conversion = live_conversion
 		self.style_conversion = style_conversion
+		self.touch_input = touch_input
 	}
 }
 
@@ -174,6 +177,40 @@ public struct InitializeResult: Codable {
 		self.profile = profile
 		self.mode = mode
 		self.capabilities = capabilities
+	}
+}
+
+/// 曖昧入力用の代替（タッチ位置の近くにあった別のキー・方向ゾーン）
+/// 
+/// フロントがレイアウトのジオメトリを持つため、レイアウト ID や座標はコアに送らない。
+/// 第一候補（実際にタップされたキー）との関係はコアが `distance` で判断する。
+public struct InputAlternative: Codable {
+	/// 代替の文字（1 文字。フリック等はひらがな 1 文字、QWERTY は 1 キーの文字）
+	public let text: String
+	/// タッチ位置からそのキー（または方向ゾーン）の中心までの距離をキー幅で正規化した値
+	/// （小さいほど近い）
+	public let distance: Float
+
+	public init(text: String, distance: Float) {
+		self.text = text
+		self.distance = distance
+	}
+}
+
+/// `insert_reading` メソッドの要求パラメータ（ローマ字を経由せず reading を挿入する。
+/// フリック・12 キー等のタッチ UI 向け）。応答は [`ProcessKeyResult`]
+public struct InsertReadingParams: Codable {
+	/// セッション ID
+	public let session_id: String
+	/// 挿入する reading（ひらがな。カタカナはひらがなに正規化される）
+	public let reading: String
+	/// 曖昧入力用の代替（省略時は空）
+	public let alternatives: [InputAlternative]?
+
+	public init(session_id: String, reading: String, alternatives: [InputAlternative]?) {
+		self.session_id = session_id
+		self.reading = reading
+		self.alternatives = alternatives
 	}
 }
 
@@ -271,6 +308,20 @@ public struct NotifyParams: Codable {
 	}
 }
 
+/// `perform_action` メソッドの要求パラメータ（ボタン操作を Action として直接実行する）。
+/// 応答は [`ProcessKeyResult`]
+public struct PerformActionParams: Codable {
+	/// セッション ID
+	public let session_id: String
+	/// Action 名（キーマップ TOML で使うものと同じ。例：`Commit`、`MoveCursor:Left`、`SelectCand:2`）
+	public let action: String
+
+	public init(session_id: String, action: String) {
+		self.session_id = session_id
+		self.action = action
+	}
+}
+
 /// セグメントの種別
 public enum SegmentKind: String, Codable {
 	/// 日本語（変換対象）
@@ -354,14 +405,17 @@ public struct ProcessKeyParams: Codable {
 	public let modifiers: Modifiers
 	/// キーの種別
 	public let kind: KeyKind
+	/// 曖昧入力用の代替キー（QWERTY のタッチ。省略可。`key_event()` には影響しない）
+	public let alternatives: [InputAlternative]?
 
-	public init(session_id: String, keysym: UInt32, keycode: UInt32, text: String, modifiers: Modifiers, kind: KeyKind) {
+	public init(session_id: String, keysym: UInt32, keycode: UInt32, text: String, modifiers: Modifiers, kind: KeyKind, alternatives: [InputAlternative]?) {
 		self.session_id = session_id
 		self.keysym = keysym
 		self.keycode = keycode
 		self.text = text
 		self.modifiers = modifiers
 		self.kind = kind
+		self.alternatives = alternatives
 	}
 }
 

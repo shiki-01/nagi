@@ -393,6 +393,18 @@ impl Composer {
         }
     }
 
+    /// ローマ字変換を経由せず、読みの 1 文字を種別つきでカーソル位置へ挿入する
+    ///
+    /// 保留中のローマ字は先に確定する（`n` → ん など）。タッチ UI の `insert_reading` 用。
+    /// 制御文字は無視する
+    pub fn insert_reading_char(&mut self, ch: char, kind: PieceKind) {
+        if ch.is_control() {
+            return;
+        }
+        self.flush_pending();
+        self.insert_at_cursor(ch, kind);
+    }
+
     /// 保留を確定させる（`n` → ん など）
     pub fn flush_pending(&mut self) {
         let emits = self.converter.flush();

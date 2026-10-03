@@ -11,10 +11,10 @@ use nagi_protocol::jsonrpc::{
     ErrorObject, Notification, Request, Response, error_code, parse_message,
 };
 use nagi_protocol::methods::{
-    ConfigError, EmptyResult, InitializeParams, InitializeResult, NotifyParams, ProcessKeyParams,
-    ReconvertParams, ReloadConfigResult, RestoreSessionParams, SelectCandidateParams,
-    ServerCapabilities, SessionParams, SetContextParams, SetEnvironmentParams, UpdatePreeditParams,
-    method,
+    ConfigError, EmptyResult, InitializeParams, InitializeResult, InsertReadingParams,
+    NotifyParams, PerformActionParams, ProcessKeyParams, ReconvertParams, ReloadConfigResult,
+    RestoreSessionParams, SelectCandidateParams, ServerCapabilities, SessionParams,
+    SetContextParams, SetEnvironmentParams, UpdatePreeditParams, method,
 };
 use nagi_protocol::settings::{UpdateSettingsParams, UpdateSettingsResult};
 use nagi_protocol::view::InputMode;
@@ -358,6 +358,7 @@ impl Server {
                         reconvert: true,
                         live_conversion: false,
                         style_conversion: false,
+                        touch_input: true,
                     },
                 })
             }
@@ -373,6 +374,25 @@ impl Server {
                 let result = self
                     .engine_lock()
                     .process_key(&p.session_id, &p.key_event());
+                self.maybe_schedule_live_conversion(&p.session_id);
+                to_value(result)
+            }
+            method::INSERT_READING => {
+                self.require_initialized()?;
+                let p: InsertReadingParams = params(req)?;
+                let result =
+                    self.engine_lock()
+                        .insert_reading(&p.session_id, &p.reading, &p.alternatives);
+                self.maybe_schedule_live_conversion(&p.session_id);
+                to_value(result)
+            }
+            method::PERFORM_ACTION => {
+                self.require_initialized()?;
+                let p: PerformActionParams = params(req)?;
+                let result = self
+                    .engine_lock()
+                    .perform_action(&p.session_id, &p.action)
+                    .map_err(|e| ErrorObject::new(error_code::INVALID_PARAMS, e.to_string()))?;
                 self.maybe_schedule_live_conversion(&p.session_id);
                 to_value(result)
             }

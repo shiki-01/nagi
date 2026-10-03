@@ -65,6 +65,66 @@ fn initialize_reports_profile_and_capabilities() {
 }
 
 #[test]
+fn touch_input_insert_reading_then_perform_action() {
+    let mut s = server();
+    init(&mut s);
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":2,"method":"initialize","params":{
+            "protocol_version":1,"client_name":"t","client_version":"1","os":"ios"}}),
+    );
+    assert_eq!(r["result"]["capabilities"]["touch_input"], true);
+
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":3,"method":"insert_reading","params":{
+            "session_id":"s","reading":"か",
+            "alternatives":[{"text":"け","distance":0.4}]}}),
+    );
+    assert_eq!(r["result"]["consumed"], true);
+    assert_eq!(r["result"]["preedit"]["text"], "か");
+    let rev = r["result"]["revision"].as_u64().unwrap();
+
+    // alternatives は省略可
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":4,"method":"insert_reading","params":{
+            "session_id":"s","reading":"な"}}),
+    );
+    assert_eq!(r["result"]["preedit"]["text"], "かな");
+    assert!(r["result"]["revision"].as_u64().unwrap() > rev);
+
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":5,"method":"perform_action","params":{
+            "session_id":"s","action":"StartConvert"}}),
+    );
+    assert_eq!(r["result"]["consumed"], true);
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":6,"method":"perform_action","params":{
+            "session_id":"s","action":"Commit"}}),
+    );
+    assert_eq!(r["result"]["commit"], "かな");
+
+    // 未知の Action 名は invalid params
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":7,"method":"perform_action","params":{
+            "session_id":"s","action":"Bogus"}}),
+    );
+    assert_eq!(r["error"]["code"], -32602);
+    // initialize 前は拒否される
+    let mut fresh = server();
+    let r = call(
+        &mut fresh,
+        json!({"jsonrpc":"2.0","id":1,"method":"insert_reading","params":{
+            "session_id":"s","reading":"か"}}),
+    );
+    assert_eq!(r["error"]["code"], -32002);
+}
+
+#[test]
 fn unsupported_protocol_version_is_rejected() {
     let mut s = server();
     let r = call(

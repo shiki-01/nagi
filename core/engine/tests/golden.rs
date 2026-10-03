@@ -93,12 +93,17 @@ struct RestoreSegSpec {
 struct Step {
     #[serde(default)]
     key: Option<KeySpec>,
-    /// `focus_in` | `focus_out` | `reset` | `restore` | `live_convert`
+    /// `focus_in` | `focus_out` | `reset` | `restore` | `live_convert` | `insert_reading` |
+    /// `perform_action`
     #[serde(default)]
     action: Option<String>,
-    /// `action: live_convert` の期待 reading（サーバーがデバウンス後に渡す入力全体の読み）
+    /// `action: live_convert` の期待 reading（サーバーがデバウンス後に渡す入力全体の読み）。
+    /// `action: insert_reading` では挿入する reading
     #[serde(default)]
     reading: Option<String>,
+    /// `action: perform_action` の Action 名（キーマップと同じ。例: `Commit`、`MoveCursor:Left`）
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     restore: Option<RestoreSpec>,
     #[serde(default)]
@@ -378,6 +383,26 @@ fn run_case(case: &Case) -> Vec<String> {
                 engine
                     .live_convert(&case.session, reading)
                     .unwrap_or_default()
+            }
+            (None, Some("insert_reading")) => {
+                let reading = step
+                    .reading
+                    .as_deref()
+                    .expect("action: insert_reading には reading: が必要");
+                engine.insert_reading(&case.session, reading, &[])
+            }
+            (None, Some("perform_action")) => {
+                let name = step
+                    .name
+                    .as_deref()
+                    .expect("action: perform_action には name: が必要");
+                match engine.perform_action(&case.session, name) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        failures.push(format!("{label}: Action 名 {name:?} が不正: {e}"));
+                        continue;
+                    }
+                }
             }
             (None, Some("restore")) => {
                 let spec = step

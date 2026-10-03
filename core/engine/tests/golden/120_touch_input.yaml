@@ -1,0 +1,87 @@
+- name: touch_insert_reading_starts_composing
+  steps:
+    - action: insert_reading
+      reading: "か"
+      expect: {consumed: true, state: composing, preedit: "か", readings: ["か"], kinds: ["japanese"], cursor: 1, revision_increased: true}
+    - action: insert_reading
+      reading: "な"
+      expect: {preedit: "かな", cursor: 2, state: composing}
+
+- name: touch_insert_reading_normalizes_katakana_and_literal
+  steps:
+    - action: insert_reading
+      reading: "カa"
+      expect: {preedit: "かa", segments: ["か", "a"], kinds: ["japanese", "literal"]}
+
+- name: touch_insert_reading_flushes_pending_romaji
+  steps:
+    - key: "n"
+      expect: {pending: "n"}
+    - action: insert_reading
+      reading: "か"
+      expect: {preedit: "んか", pending: "", state: composing}
+    - key: "k"
+      expect: {preedit: "んかk", pending: "k"}
+    - action: insert_reading
+      reading: "き"
+      expect: {preedit: "んかkき", pending: ""}
+
+- name: touch_backspace_after_insert_reading
+  steps:
+    - action: insert_reading
+      reading: "かな"
+    - key: "BackSpace"
+      expect: {preedit: "か", state: composing}
+    - action: perform_action
+      name: Backspace
+      expect: {consumed: true, preedit: "", state: direct}
+
+- name: touch_perform_action_convert_and_commit
+  steps:
+    - action: insert_reading
+      reading: "かな"
+    - action: perform_action
+      name: StartConvert
+      expect: {consumed: true, state: converting}
+    - action: perform_action
+      name: Commit
+      expect: {commit: "かな", state: direct}
+
+- name: touch_perform_action_next_segment_focus
+  backend: mock
+  mock:
+    sentences:
+      "きょうはいいてんき":
+        - {reading: "きょうは", candidates: ["今日は"]}
+        - {reading: "いいてんき", candidates: ["いい天気"]}
+  steps:
+    - action: insert_reading
+      reading: "きょうはいいてんき"
+    - action: perform_action
+      name: StartConvert
+      expect: {state: converting, focus: 0, segments: ["今日は", "いい天気"]}
+    - action: perform_action
+      name: "MoveFocus:Right"
+      expect: {focus: 1}
+    - action: perform_action
+      name: Commit
+      expect: {commit: "今日はいい天気", state: direct}
+
+- name: touch_insert_reading_while_converting_commits
+  steps:
+    - action: insert_reading
+      reading: "か"
+    - action: perform_action
+      name: StartConvert
+    - action: insert_reading
+      reading: "き"
+      expect: {commit: "か", preedit: "き", state: composing}
+
+- name: touch_perform_action_direct_passthrough
+  steps:
+    - action: perform_action
+      name: Backspace
+      expect: {consumed: false, state: direct, result_preedit_present: false}
+    - action: perform_action
+      name: ToggleMode
+      expect: {consumed: true, result_mode: alphanumeric}

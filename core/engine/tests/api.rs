@@ -1389,3 +1389,101 @@ fn converting_backspace_cancels_and_discards_live_view() {
     press(&mut e, "s", "Space");
     assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
 }
+
+// ---- タッチ入力（insert_reading / perform_action） ----
+
+#[test]
+fn insert_reading_starts_composing_and_appends() {
+    let mut e = engine();
+    let r = e.insert_reading("s", "か", &[]);
+    assert!(r.consumed);
+    assert_eq!(r.preedit.unwrap().text, "か");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    let r = e.insert_reading("s", "ナ", &[]); // カタカナはひらがなへ
+    assert_eq!(r.preedit.unwrap().text, "かな");
+    assert!(r.revision > 0);
+}
+
+#[test]
+fn insert_reading_flushes_pending_romaji() {
+    let mut e = engine();
+    press(&mut e, "s", "n");
+    let r = e.insert_reading("s", "か", &[]);
+    assert_eq!(r.preedit.unwrap().text, "んか");
+}
+
+#[test]
+fn insert_reading_empty_or_control_is_not_consumed() {
+    let mut e = engine();
+    let r = e.insert_reading("s", "", &[]);
+    assert!(!r.consumed);
+    assert!(!e.insert_reading("s", "\n", &[]).consumed);
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+}
+
+#[test]
+fn insert_reading_while_converting_commits_first() {
+    let mut e = engine();
+    e.insert_reading("s", "か", &[]);
+    press(&mut e, "s", "Space");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+    let r = e.insert_reading("s", "き", &[]);
+    assert_eq!(r.commit.as_deref(), Some("か"));
+    assert_eq!(r.preedit.unwrap().text, "き");
+}
+
+#[test]
+fn insert_reading_ignores_invalid_alternatives() {
+    use nagi_protocol::methods::InputAlternative;
+    let alt = |t: &str, d: f32| InputAlternative {
+        text: t.into(),
+        distance: d,
+    };
+    let mut e = engine();
+    let alts = [
+        alt("け", 0.4),
+        alt("", 0.1),
+        alt("あい", 0.1),
+        alt("く", f32::NAN),
+        alt("こ", -1.0),
+    ];
+    let r = e.insert_reading("s", "か", &alts);
+    assert_eq!(r.preedit.unwrap().text, "か");
+    let kept = nagi_engine::engine::sanitize_alternatives(&alts);
+    assert_eq!(kept, vec![alt("け", 0.4)]);
+}
+
+#[test]
+fn perform_action_runs_through_state_machine() {
+    let mut e = engine();
+    e.insert_reading("s", "か", &[]);
+    let r = e.perform_action("s", "StartConvert").unwrap();
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+    let r = e.perform_action("s", "Commit").unwrap();
+    assert_eq!(r.commit.as_deref(), Some("か"));
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+}
+
+#[test]
+fn perform_action_in_direct_passes_through() {
+    let mut e = engine();
+    let r = e.perform_action("s", "Backspace").unwrap();
+    assert!(!r.consumed);
+    assert_eq!(r.revision, 0);
+    // モード切替は Direct でも効く
+    let r = e.perform_action("s", "ToggleMode").unwrap();
+    assert!(r.consumed);
+    assert_eq!(r.mode, Some(InputMode::Alphanumeric));
+}
+
+#[test]
+fn perform_action_unknown_name_is_error_and_keeps_state() {
+    let mut e = engine();
+    e.insert_reading("s", "か", &[]);
+    let before = e.snapshot("s").unwrap();
+    assert!(e.perform_action("s", "NotAnAction").is_err());
+    assert!(e.perform_action("s", "Insert").is_err());
+    assert!(e.perform_action("s", "SelectCand:0").is_err());
+    assert_eq!(e.snapshot("s").unwrap(), before);
+}
