@@ -23,7 +23,7 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 | D-5 | 学習ファイルとユーザー辞書の複数プロセス同時アクセス対策（キーボード拡張と本体アプリが同じ App Group / アプリ領域を触る）。排他制御と原子的書き込みの再点検 | 2 プロセス同時 flush のテストが通る | mobile-design §2 |
 | D-6 | 予測変換の仕様を確定する（G-44 は現状仕様で確定済み。モバイルは予測候補バーが主要 UI のため、候補供給と件数・順位の要件を追記） | 設計書に要件を追記 | decisions G-44 |
 
-D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見て具体化する。D-7 は D-2 と同時にプロトコルを決める（`touch` / `flick` フィールド。破壊的変更を 2 回に分けないため）。
+D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見て具体化する。D-7 は D-2 と同時にプロトコルを決める（`alternatives` フィールド。破壊的変更を 2 回に分けないため）。
 
 **D-3 の状況（2026-10-03）**: `.github/workflows/ci.yml` に `mobile-android` / `mobile-ios` ジョブを追加。Linux 上で 2 ターゲットとも engine / romaji / dict / protocol / profile / infer / config / learn / rewriter の `cargo check` が通ることを確認済み（`sysinfo` 0.38.4 もそのままビルドでき、trait での注入への変更は不要）。`nagi-ffi` は C 依存のため NDK（Android）/ Xcode（iOS）が必要で、Linux 開発環境では未検証。CI 上の結果は初回実行で確認する（Android の ffi ステップは検証前のため `continue-on-error`）。
 
