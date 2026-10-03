@@ -21,7 +21,7 @@ final class EngineSupervisorTests: XCTestCase {
         ProcessKeyParams(
             session_id: session, keysym: 0x61, keycode: 0, text: "a",
             modifiers: Modifiers(shift: false, ctrl: false, alt: false, meta: false, caps_lock: false),
-            kind: .down)
+            kind: .down, alternatives: nil)
     }
 
     func testStartSendsInitializeAndProcessKeyRoundTrip() async throws {

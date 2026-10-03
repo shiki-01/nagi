@@ -37,7 +37,7 @@ final class JsonRpcClientTests: XCTestCase {
             params: ProcessKeyParams(
                 session_id: "s1", keysym: 0x61, keycode: 0, text: "a",
                 modifiers: Modifiers(shift: false, ctrl: false, alt: false, meta: false, caps_lock: false),
-                kind: .down))
+                kind: .down, alternatives: nil))
         XCTAssertEqual(result.revision, 3)
         let req = try XCTUnwrap(conn.sent.first)
         XCTAssertEqual(req["jsonrpc"] as? String, "2.0")

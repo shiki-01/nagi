@@ -54,7 +54,7 @@ final class NagiInputController: IMKInputController {
 
         let params = ProcessKeyParams(
             session_id: sessionId, keysym: key.keysym, keycode: key.keycode, text: key.text,
-            modifiers: key.modifiers, kind: key.kind)
+            modifiers: key.modifiers, kind: key.kind, alternatives: nil)
         let supervisor = context.supervisor
         switch SyncBridge.wait(timeout: context.keyTimeout, { try await supervisor.processKey(params) }) {
         case .success(let result):

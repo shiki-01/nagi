@@ -25,6 +25,8 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 
 D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見て具体化する。D-7 は D-2 と同時にプロトコルを決める（`alternatives` フィールド。破壊的変更を 2 回に分けないため）。
 
+**D-2 の状況（2026-10-03）**: 実装済み。`insert_reading` / `perform_action`、共通型 `InputAlternative { text, distance }`、`process_key` の任意 `alternatives`、`ServerCapabilities.touch_input` を追加（`core/protocol`・`core/engine`・`core/server`、golden `120_touch_input.yaml`、Swift 型再生成）。Action 名は keymap の実物（`StartConvert`、`MoveCursor:Left` 形式）に合わせた。`alternatives` は受け取って検証するのみで挙動には使わない（F-1 で Composer に保持）。未知の Action 名は JSON-RPC の `INVALID_PARAMS`。Swift 側は呼び出し 3 箇所に `alternatives: nil` を追加したが、Linux では未ビルドのため macOS での `swift build` / `swift test` が必要。
+
 **D-3 の状況（2026-10-03）**: `.github/workflows/ci.yml` に `mobile-android` / `mobile-ios` ジョブを追加。Linux 上で 2 ターゲットとも engine / romaji / dict / protocol / profile / infer / config / learn / rewriter の `cargo check` が通ることを確認済み（`sysinfo` 0.38.4 もそのままビルドでき、trait での注入への変更は不要）。`nagi-ffi` は C 依存のため NDK（Android）/ Xcode（iOS）が必要で、Linux 開発環境では未検証。CI 上の結果は初回実行で確認する（Android の ffi ステップは検証前のため `continue-on-error`）。
 
 ## 3. モバイルのマイルストーン
