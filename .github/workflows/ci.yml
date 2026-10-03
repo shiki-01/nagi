@@ -60,3 +60,59 @@ jobs:
         run: cargo install typeshare-cli --locked
       - name: Regenerate Swift types and check diff
         run: cargo xtask check-types
+
+  # モバイル向けクロスビルド（mobile-design §3-6）。Rust のみで完結するクレートは必須、
+  # C 依存を含む nagi-ffi は NDK / Xcode が要るため別ステップで検証する
+  mobile-android:
+    name: cross-check (aarch64-linux-android)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Add target
+        run: rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: android
+      - name: check (portable crates)
+        run: >-
+          cargo check --target aarch64-linux-android
+          -p nagi-engine -p nagi-romaji -p nagi-dict -p nagi-protocol
+          -p nagi-profile -p nagi-infer -p nagi-config -p nagi-learn -p nagi-rewriter
+      # nagi-ffi は C 依存のため NDK の clang が必要（ubuntu ランナーに NDK は同梱）
+      - name: check nagi-ffi (NDK)
+        continue-on-error: true
+        run: |
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$TOOLCHAIN/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$TOOLCHAIN/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          cargo check --target aarch64-linux-android -p nagi-ffi
+
+  mobile-ios:
+    name: cross-check (aarch64-apple-ios)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Add target
+        run: rustup target add aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: ios
+      - name: check (portable crates + nagi-ffi)
+        run: >-
+          cargo check --target aarch64-apple-ios
+          -p nagi-engine -p nagi-romaji -p nagi-dict -p nagi-protocol
+          -p nagi-profile -p nagi-infer -p nagi-config -p nagi-learn -p nagi-rewriter
+          -p nagi-ffi

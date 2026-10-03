@@ -18,19 +18,22 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 | D-1 | 辞書形式を mmap 可能にする（アラインメント・オフセット表現。読み込みの mmap 化は形式変更後） | `nagi-dict.bin` を `std::fs::read` せず参照でき、既存の精度評価（`nagi-eval --no-llm`）が変わらない | progress #6、H-3 |
 | D-2 | `insert_reading` / `perform_action` をプロトコルに追加（フリック等のかな直接挿入。Action 駆動のまま） | `core/protocol` に追加、`gen-types` / `check-types` 通過、状態機械のゴールデンテスト追加 | progress #7、H-3/H-4 |
 | D-3 | モバイル向けクロスビルドの CI 化。`cargo check --target aarch64-apple-ios` / `aarch64-linux-android` を engine / romaji / dict / protocol / profile / infer（llama 無し）に対して実行。`sysinfo` の可否を確認し、不可なら trait で注入に変更 | CI で上記ターゲットの check が通る | mobile-design §3-6 |
+| D-7 | 曖昧入力（タッチ誤差・タイポ許容）のコア実装。段階 F-0〜F-1（`nagi-fuzzy` 新設・タイポ仮説・`convert_hypotheses`・`CandidateSource::Corrected`）。F-2 以降（タッチ・フリック・学習）は D-2 のプロトコル追加と同時に進める | 合成ノイズ評価で補正あり top-5 が改善し、ノイズ無しの精度は劣化 0 | `fuzzy-input-design.md` |
 | D-4 | `initialize` の capability で、メモリ上限・電源状態・熱状態・入力方式（物理キー/タッチ）をホストから受け取れるようにし、プロファイル判定をこれに従わせる（OS 問い合わせをコア内に持たない） | デスクトップでも同経路で動作。`profile` が `sysinfo` に直接依存しない | mobile-design §3-2 |
 | D-5 | 学習ファイルとユーザー辞書の複数プロセス同時アクセス対策（キーボード拡張と本体アプリが同じ App Group / アプリ領域を触る）。排他制御と原子的書き込みの再点検 | 2 プロセス同時 flush のテストが通る | mobile-design §2 |
 | D-6 | 予測変換の仕様を確定する（G-44 は現状仕様で確定済み。モバイルは予測候補バーが主要 UI のため、候補供給と件数・順位の要件を追記） | 設計書に要件を追記 | decisions G-44 |
 
-D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見て具体化する。
+D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見て具体化する。D-7 は D-2 と同時にプロトコルを決める（`touch` / `flick` フィールド。破壊的変更を 2 回に分けないため）。
+
+**D-3 の状況（2026-10-03）**: `.github/workflows/ci.yml` に `mobile-android` / `mobile-ios` ジョブを追加。Linux 上で 2 ターゲットとも engine / romaji / dict / protocol / profile / infer / config / learn / rewriter の `cargo check` が通ることを確認済み（`sysinfo` 0.38.4 もそのままビルドでき、trait での注入への変更は不要）。`nagi-ffi` は C 依存のため NDK（Android）/ Xcode（iOS）が必要で、Linux 開発環境では未検証。CI 上の結果は初回実行で確認する（Android の ffi ステップは検証前のため `continue-on-error`）。
 
 ## 3. モバイルのマイルストーン
 
 | M | 内容 | DoD |
 | --- | --- | --- |
 | M0 | 技術検証（実機） | 下記の実測結果が `docs/decisions.md` に記録されている |
-| M1 | FFI 層 + Android MVP | `core/ffi/`（UniFFI）で `handle_line` を公開し、AAR を生成。InputMethodService でフリック/QWERTY 入力・候補バー・確定が動き、`minimal` プロファイルで日常入力に使える |
-| M2 | Android 拡張 | 学習・ユーザー辞書・本体アプリでのデータ更新・更新確認（ed25519 検証）。LLM 変換（可能な端末のみ）とプロファイル自動切替 |
+| M1 | FFI 層 + Android MVP | `core/ffi/`（UniFFI）で `handle_line` を公開し、AAR を生成。InputMethodService でフリック/QWERTY 入力・候補バー・確定が動き、`minimal` プロファイルで日常入力に使える。QWERTY のタッチ誤差補正（`fuzzy-input-design.md` F-2）を含む |
+| M2 | Android 拡張 | 学習・ユーザー辞書・本体アプリでのデータ更新・更新確認（ed25519 検証）。LLM 変換（可能な端末のみ）とプロファイル自動切替。フリック誤判定の補正（F-3）、補正選択の学習（F-4）、実機でのパラメータ較正（F-5） |
 | M3 | iOS | XCFramework。Custom Keyboard Extension + 本体アプリ（App Group 共有）。M0 のメモリ実測に基づき `minimal` から開始し、実測余裕に応じて昇格 |
 | M4 | スタイル変換等の拡張 | デスクトップ Phase 4 の機能をモバイルに展開 |
 
@@ -42,6 +45,7 @@ D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見�
 4. UniFFI 経由の 1 キーあたりのレイテンシ（JSON 文字列渡しと型渡しの比較）。目標は既存の p95 < 16ms（ひらがな反映）を維持
 5. Android で `android:process` 分離した IME サービスのメモリと、コールドスタート時間
 6. azooKey のキーボード UI・拡張構成の調査（参考実装）
+7. 曖昧入力の較正データ収集（`fuzzy-input-design.md` §10-5）: 実機でのタッチ座標ログ（ローカル保存・明示的に開始）。M1 以降の F-5 で使う
 
 ## 4. 依存関係と順序
 
