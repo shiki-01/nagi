@@ -1,0 +1,18 @@
+[package]
+name = "nagi-fuzzy"
+description = "Nagi 曖昧入力: ローマ字の構造に基づくタイポ補正とタッチ距離コストによる読み仮説の生成。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+nagi-romaji = { workspace = true }
+
+[dev-dependencies]
+nagi-dict = { workspace = true }
+
+[lints]
+workspace = true

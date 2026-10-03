@@ -373,6 +373,24 @@ impl Dictionary {
         }
     }
 
+    /// 読みが辞書のいずれかの読みの接頭辞か（完全一致を含む。空文字は true）
+    ///
+    /// FST を辿るだけで語は取り出さない。曖昧入力の枝刈り用。
+    pub fn has_prefix(&self, reading: &str) -> bool {
+        use fst::{Automaton, IntoStreamer, Streamer};
+        if reading.is_empty() {
+            return true;
+        }
+        let automaton = fst::automaton::Str::new(reading).starts_with();
+        let mut stream = self.trie.search(automaton).into_stream();
+        stream.next().is_some()
+    }
+
+    /// 読みが辞書の読みとして完全一致で存在するか
+    pub fn contains_reading(&self, reading: &str) -> bool {
+        self.group_of(reading).is_some()
+    }
+
     /// 完全一致するグループ番号
     pub(crate) fn group_of(&self, reading: &str) -> Option<u32> {
         self.trie.get(reading.as_bytes()).map(|v| v as u32)
