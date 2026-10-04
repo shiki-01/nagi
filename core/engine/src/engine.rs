@@ -1753,7 +1753,14 @@ impl Engine {
         let quality = self.backend.quality(&base)?;
         let keys: Vec<KeyAlternatives> = log
             .iter()
-            .map(|r| KeyAlternatives::from_distances(r.typed, &r.alts, &fz.search))
+            .map(|r| {
+                // 打たれたキー自身の距離があれば、代替のコストはそれを基準にした相対値になる
+                let mut alts = r.alts.clone();
+                if let Some(d) = r.typed_distance {
+                    alts.push((r.typed, d));
+                }
+                KeyAlternatives::from_distances(r.typed, &alts, &fz.search)
+            })
             .collect();
         let poor = quality.uncovered >= fz.poor_coverage;
         let ambiguous = keys.iter().any(|k| {

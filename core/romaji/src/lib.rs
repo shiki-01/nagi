@@ -131,6 +131,14 @@ impl RomajiTable {
         RomajiTable { entries }
     }
 
+    /// テーブルの全エントリ `(入力, 出力, 保留)` を返す（順序は不定）。
+    /// 逆引き（かな → ローマ字）など、評価・診断ツール向け
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.entries
+            .iter()
+            .map(|(k, (out, pending))| (k.as_str(), out.as_str(), pending.as_str()))
+    }
+
     /// テーブルから入力に対応する出力と保留を取得する
     fn get(&self, input: &str) -> Option<(String, String)> {
         self.entries.get(input).cloned()
@@ -345,8 +353,11 @@ pub struct Piece {
 pub struct KeyRecord {
     /// 打たれた文字（小文字 ASCII のローマ字キー、またはひらがな 1 文字）
     pub typed: char,
-    /// 代替の `(文字, 距離)`。距離の小さい順。代替なしなら空
+    /// 代替の `(文字, 距離)`（`typed` 自身は含まない）。距離の小さい順。代替なしなら空
     pub alts: Vec<(char, f32)>,
+    /// フロントが代替に含めた、打たれたキー自身の距離（タッチ位置からそのキー中心まで）。
+    /// 代替のコストは、これを基準にした相対値で換算する。送られなかったなら `None`
+    pub typed_distance: Option<f32>,
 }
 
 /// 1 打鍵に保持する代替の最大数
@@ -701,6 +712,12 @@ impl Composer {
             self.invalidate_key_log();
             return;
         }
+        // 打たれたキー自身の距離は代替と分けて持つ（代替の上限に数えない）
+        let typed_distance = alts
+            .iter()
+            .filter(|&&(c, d)| c == typed && d.is_finite() && d >= 0.0)
+            .map(|&(_, d)| d)
+            .fold(None, |m: Option<f32>, d| Some(m.map_or(d, |m| m.min(d))));
         let mut alts: Vec<(char, f32)> = alts
             .iter()
             .copied()
@@ -717,7 +734,11 @@ impl Composer {
             .collect();
         alts.sort_by(|a, b| a.1.total_cmp(&b.1));
         alts.truncate(MAX_ALTS_PER_KEY);
-        self.key_log.push(KeyRecord { typed, alts });
+        self.key_log.push(KeyRecord {
+            typed,
+            alts,
+            typed_distance,
+        });
         self.flushed_since_key = false;
     }
 
@@ -2110,8 +2131,25 @@ mod tests {
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].typed, 'k');
         assert_eq!(log[0].alts, vec![('j', 0.2), ('l', 0.6)]);
+        // 打たれた文字自身の距離は alts と分けて保持する
+        assert_eq!(log[0].typed_distance, Some(0.0));
         assert!(log[1].alts.is_empty());
+        assert_eq!(log[1].typed_distance, None);
         assert_log_consistent(&c);
+    }
+
+    #[test]
+    fn key_log_keeps_typed_distance_outside_alt_limit() {
+        let mut c = logged_composer();
+        let mut alts: Vec<(char, f32)> = ('a'..='j')
+            .filter(|&ch| ch != 'k')
+            .map(|ch| (ch, 0.1 + (ch as u8 - b'a') as f32 * 0.01))
+            .collect();
+        alts.push(('k', 0.9));
+        c.insert_char_with_alts('k', &alts);
+        let log = c.key_log().unwrap();
+        assert_eq!(log[0].alts.len(), MAX_ALTS_PER_KEY);
+        assert_eq!(log[0].typed_distance, Some(0.9));
     }
 
     #[test]

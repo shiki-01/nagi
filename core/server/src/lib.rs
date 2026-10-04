@@ -6,6 +6,7 @@
 //! - [`setup`] — 起動オプション・設定・辞書・モデル・学習・ユーザー辞書の読み込み
 //! - [`pipeline`] — 学習 → ユーザー辞書 → LLM → システム辞書 の変換パイプライン
 //! - [`runtime`] — 環境プロファイル・学習・ユーザー辞書・ランキング設定・通知の共有状態
+//! - [`noise_eval`] — 曖昧入力の合成ノイズ評価（`nagi-eval --noise`）
 //! - [`learning`] — 確定を学習に記録する observer
 //! - [`server`] — JSON-RPC ループ
 //! - [`settings`] — GUI 設定画面向けの設定 RPC（`get_settings` / `update_settings`）
@@ -14,6 +15,7 @@
 
 pub mod calibration;
 pub mod learning;
+pub mod noise_eval;
 pub mod pipeline;
 pub mod runtime;
 pub mod server;

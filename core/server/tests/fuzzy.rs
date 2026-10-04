@@ -194,6 +194,102 @@ fn touch_alternatives_over_rpc_offer_correction() {
     );
 }
 
+/// キー種別だけで送るフロント（`text` が空。keysym は ASCII）のタップでも、代替が打鍵ログに届く
+#[test]
+fn touch_alternatives_work_with_empty_text_over_rpc() {
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    for c in "kansi".chars() {
+        let alts = if c == 's' {
+            json!([{"text":"z","distance":0.2}])
+        } else {
+            Value::Null
+        };
+        let mut params = json!({"session_id":"s","keysym":c as u32,"keycode":0,"text":"",
+            "modifiers":{},"kind":"down"});
+        if !alts.is_null() {
+            params["alternatives"] = alts;
+        }
+        let r = send(&mut s, "process_key", params);
+        assert_eq!(r["result"]["consumed"], true, "{r}");
+    }
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(r["preedit"]["text"], "監視");
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(
+        corrected(&r),
+        [("漢字".to_string(), Some("かんじ".to_string()))],
+        "{r}"
+    );
+}
+
+/// フロントが打たれたキー自身の距離も代替に含めると、代替のコストはその距離を基準にした相対値になる
+/// （タップ位置が 2 つのキーの境界に近いとき、遠い方への代替も十分あり得るとして扱う）
+#[test]
+fn typed_key_distance_is_the_cost_baseline_over_rpc() {
+    let run = |s_alts: Value| {
+        let mut s = server(ENABLED);
+        initialize(&mut s);
+        type_str(&mut s, "kan");
+        press(&mut s, "s", s_alts);
+        type_str(&mut s, "i");
+        press(&mut s, "Space", Value::Null);
+        corrected(&press(&mut s, "Space", Value::Null))
+    };
+    // z だけが距離 0.9: 絶対コスト 0.5 * (0.9 / 0.35)^2 ≒ 3.3 は曖昧さの閾値 1.5 を超えるので補正なし
+    assert!(run(json!([{"text":"z","distance":0.9}])).is_empty());
+    // s 自身が 0.8、z が 0.9: 相対コスト ≒ 0.7 なので補正候補が出る
+    assert_eq!(
+        run(json!([{"text":"s","distance":0.8},{"text":"z","distance":0.9}])),
+        [("漢字".to_string(), Some("かんじ".to_string()))]
+    );
+}
+
+/// フリック: `insert_reading` の `alternatives`（ひらがな）が打鍵ログ → 補正候補まで届く
+#[test]
+fn flick_alternatives_over_insert_reading_offer_correction() {
+    let insert = |s: &mut Server, reading: &str, alternatives: Value| {
+        let mut params = json!({"session_id":"s","reading":reading});
+        if !alternatives.is_null() {
+            params["alternatives"] = alternatives;
+        }
+        let r = send(s, "insert_reading", params);
+        assert!(r.get("error").is_none(), "{r}");
+        r["result"].clone()
+    };
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    insert(&mut s, "か", Value::Null);
+    insert(&mut s, "ん", Value::Null);
+    // 「じ」を狙って「し」に判定された、のような代替
+    let r = insert(&mut s, "し", json!([{"text":"じ","distance":0.2}]));
+    assert_eq!(r["preedit"]["text"], "かんし");
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(r["preedit"]["text"], "監視");
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(
+        corrected(&r),
+        [("漢字".to_string(), Some("かんじ".to_string()))],
+        "{r}"
+    );
+}
+
+/// フリックで複数文字を一度に挿入するときの代替は 1 打鍵のものではないので無視される
+#[test]
+fn flick_alternatives_ignored_for_multi_char_insert() {
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    let r = send(
+        &mut s,
+        "insert_reading",
+        json!({"session_id":"s","reading":"かんし","alternatives":[{"text":"じ","distance":0.2}]}),
+    );
+    assert!(r.get("error").is_none(), "{r}");
+    press(&mut s, "Space", Value::Null);
+    let r = press(&mut s, "Space", Value::Null);
+    assert!(corrected(&r).is_empty(), "{r}");
+}
+
 #[test]
 fn fuzzy_is_off_by_default_over_rpc() {
     let mut s = server("");
@@ -299,6 +395,12 @@ fn real_dictionary_correction_latency() {
             hyps.len(),
             scored.len()
         );
-        assert!(expand_ms + convert_ms < 500.0, "{typed}: 補正が遅すぎる");
+        // 最適化なしのビルドは数倍遅いので、極端な劣化の検出に留める
+        let limit_ms = if cfg!(debug_assertions) {
+            5000.0
+        } else {
+            500.0
+        };
+        assert!(expand_ms + convert_ms < limit_ms, "{typed}: 補正が遅すぎる");
     }
 }
