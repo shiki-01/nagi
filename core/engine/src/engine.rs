@@ -167,6 +167,10 @@ struct Conv {
     /// `corrections` の元になった、入力全体の reading（打たれたとおり）。`Some` の間、先頭の文節で
     /// 補正候補を選ぶとその reading に、通常の候補へ戻すとこの reading に書き換わる
     base_reading: Option<String>,
+    /// 複数文節（または Literal を含む）入力の補正仮説（入力全体の reading, 補正）。
+    /// 表示構造（文節列・候補リスト）は第一仮説のまま変えず、注目文節の候補の末尾に文全体の補正候補
+    /// （`Candidate::reading` が `Some`）を足す。選んだときだけ文全体が 1 文節（文全体候補）へ置き換わる
+    sentence_corrections: Option<(String, Vec<Correction>)>,
 }
 
 /// 曖昧入力の補正仮説 1 つぶんの変換結果
@@ -567,7 +571,9 @@ impl Engine {
             let f = conv.focus;
             self.ensure_candidates(&sess.left_context, conv, f);
             let index = index as usize;
-            Self::set_selected(conv, f, index);
+            if Self::set_selected(conv, f, index) {
+                sess.origins.clear();
+            }
             conv.visible = false;
         }
         let result = self.finish(&mut sess, true, String::new());
@@ -807,6 +813,7 @@ impl Engine {
                     sentence_alternatives: None,
                     corrections: Vec::new(),
                     base_reading: None,
+                    sentence_corrections: None,
                 });
             } else {
                 let pieces: Vec<Piece> = params
@@ -862,6 +869,7 @@ impl Engine {
                 sentence_alternatives: None,
                 corrections: Vec::new(),
                 base_reading: None,
+                sentence_corrections: None,
             });
         }
         let result = self.finish(&mut sess, true, commit);
@@ -1525,6 +1533,7 @@ impl Engine {
             sentence_alternatives: None,
             corrections: Vec::new(),
             base_reading: None,
+            sentence_corrections: None,
         });
     }
 
@@ -1620,6 +1629,7 @@ impl Engine {
             sentence_alternatives: None,
             corrections: Vec::new(),
             base_reading: None,
+            sentence_corrections: None,
         };
         if let (Some(outcome), Some(base)) = (fuzzy, base) {
             self.attach_corrections(sess, &mut conv, outcome, base);
@@ -1632,9 +1642,9 @@ impl Engine {
     /// - 結果が日本語 1 文節で、reading が入力全体の場合: 補正仮説を `conv.corrections` に持ち、
     ///   `ensure_candidates` が文節の候補の末尾に Corrected として足す
     /// - それ以外（複数文節・Literal を含む入力。`nihn` の `h` のように、不一致のローマ字は
-    ///   Literal として残る）: 文全体の候補（`sentence_alternatives`）に載せる。第一仮説の文節列を
-    ///   先頭の候補として保持し、他の候補で確定すると、その仮説の文節列に丸ごと置き換わる。
-    ///   このとき非同期の LLM 完了による差し替え（`origins`）は行わない
+    ///   Literal として残る）: 構造は変えず `conv.sentence_corrections` に持ち、各文節の候補の末尾に
+    ///   文全体の補正候補を足す。選んだときだけ文全体候補（`sentence_alternatives`）へ置き換わる
+    ///   （`promote` のときだけは従来どおり最初から文全体候補にして補正を先頭に出す）
     fn attach_corrections(
         &self,
         sess: &mut Session,
@@ -1655,6 +1665,12 @@ impl Engine {
                 self.ensure_candidates(&sess.left_context, conv, 0);
                 Self::promote_first_correction(conv);
             }
+            return;
+        }
+        if !outcome.promote {
+            // 第一仮説の表示・文節構造・候補リストは変えない。補正は注目文節の候補の末尾に
+            // 追加項目として出し、選ばれたときだけ文全体を置き換える（`restructure_to_correction`）
+            conv.sentence_corrections = Some((base, outcome.corrections));
             return;
         }
         let first_segments = std::mem::take(&mut conv.segments);
@@ -1896,6 +1912,7 @@ impl Engine {
             sentence_alternatives: Some(alternatives),
             corrections: Vec::new(),
             base_reading: None,
+            sentence_corrections: None,
         })
     }
 
@@ -1979,6 +1996,18 @@ impl Engine {
         } else {
             push_candidate(&mut items, &seg.surface, &[]);
         }
+        // 複数文節入力の文全体の補正候補は、どの文節の候補にも末尾に足す（選ぶと文全体が置き換わる）
+        if let Some((_, corrections)) = &conv.sentence_corrections {
+            for c in corrections {
+                if !items.iter().any(|i| i.surface == c.surface) {
+                    items.push(Candidate {
+                        surface: c.surface.clone(),
+                        sources: vec![CandidateSource::Corrected],
+                        reading: Some(c.reading.clone()),
+                    });
+                }
+            }
+        }
         conv.segments[idx].candidates = Some(CandidateSet { items, selected: 0 });
     }
 
@@ -1986,14 +2015,20 @@ impl Engine {
     /// を含む 1 文節では、補正候補を選ぶとその文節の reading が補正後の読みに書き換わり、
     /// 通常の候補に戻すと元の reading（打たれたとおり）に戻る（確定・学習・取消は書き換え後の
     /// reading を使う。補正前への Undo は未対応）
-    fn set_selected(conv: &mut Conv, f: usize, index: usize) {
+    ///
+    /// 複数文節入力の文全体の補正候補（`sentence_corrections`）を選ぶと、文全体が 1 文節の文全体候補へ
+    /// 置き換わる。置き換えたら `true`（呼び出し側が `origins` を捨てる）
+    fn set_selected(conv: &mut Conv, f: usize, index: usize) -> bool {
         let Some(set) = conv.segments[f].candidates.as_mut() else {
-            return;
+            return false;
         };
         let Some(cand) = set.items.get(index) else {
-            return;
+            return false;
         };
         let (surface, corrected) = (cand.surface.clone(), cand.reading.clone());
+        if conv.sentence_corrections.is_some() && corrected.is_some() {
+            return Self::restructure_to_correction(conv, &surface);
+        }
         let ours = set.items.iter().any(|c| c.reading.is_some());
         set.selected = index;
         conv.segments[f].surface = surface;
@@ -2003,6 +2038,56 @@ impl Engine {
         {
             conv.segments[0].reading = corrected.unwrap_or_else(|| base.clone());
         }
+        false
+    }
+
+    /// 文全体の補正候補（表記 `surface`）の選択: 現在の文節列を第一仮説として保持したまま、文全体を
+    /// 1 文節（候補は第一仮説と補正候補）に置き換え、補正候補を選択する。以後は文全体候補として
+    /// 前後に移動でき、第一仮説に戻せる。置き換えできなければ何もせず `false`
+    fn restructure_to_correction(conv: &mut Conv, surface: &str) -> bool {
+        let Some((base, corrections)) = conv.sentence_corrections.as_ref() else {
+            return false;
+        };
+        let joined: String = conv.segments.iter().map(|s| s.reading.as_str()).collect();
+        if joined != *base {
+            return false;
+        }
+        let base = base.clone();
+        let first_segments = conv.segments.clone();
+        let first_surface: String = first_segments.iter().map(|s| s.surface.as_str()).collect();
+        let first_source = if first_surface == base {
+            CandidateSource::Kana
+        } else {
+            CandidateSource::SystemDict
+        };
+        let mut items = vec![Candidate {
+            surface: first_surface,
+            sources: vec![first_source],
+            reading: None,
+        }];
+        let mut alternatives = vec![first_segments];
+        Self::push_corrections(&mut items, &mut alternatives, corrections);
+        let Some(pos) = items
+            .iter()
+            .position(|c| c.reading.is_some() && c.surface == surface)
+        else {
+            return false;
+        };
+        conv.segments = vec![Segment {
+            reading: base,
+            surface: items[pos].surface.clone(),
+            kind: SegmentKind::Japanese,
+            candidates: Some(CandidateSet {
+                items,
+                selected: pos,
+            }),
+            chunk_id: 0,
+        }];
+        conv.focus = 0;
+        conv.range_anchor = None;
+        conv.sentence_alternatives = Some(alternatives);
+        conv.sentence_corrections = None;
+        true
     }
 
     fn step_candidate(&self, sess: &mut Session, delta: isize) {
@@ -2015,7 +2100,9 @@ impl Engine {
         if let Some(set) = conv.segments[f].candidates.as_ref() {
             let n = set.items.len() as isize;
             let next = ((set.selected as isize + delta).rem_euclid(n)) as usize;
-            Self::set_selected(conv, f, next);
+            if Self::set_selected(conv, f, next) {
+                sess.origins.clear();
+            }
         }
     }
 
@@ -2049,7 +2136,9 @@ impl Engine {
         if let Some(set) = conv.segments[f].candidates.as_ref() {
             let index = (set.selected / page_size) * page_size + n - 1;
             if index < set.items.len() {
-                Self::set_selected(conv, f, index);
+                if Self::set_selected(conv, f, index) {
+                    sess.origins.clear();
+                }
                 conv.visible = false;
             }
         }

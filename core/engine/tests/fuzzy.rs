@@ -349,8 +349,18 @@ fn nihn_offers_nihon_when_composition_has_raw_literal() {
     assert!(corrected(&off).is_empty());
 
     press(&mut e, "Space");
+    // 構造（文節列・表示）は第一仮説のまま、注目文節の候補の末尾に文全体の補正候補が付く
     assert_eq!(corrected(&e), [("日本".to_string(), Some("にほん".into()))]);
-    assert_eq!(candidate_surfaces(&e), ["二hん", "日本"]);
+    assert_eq!(candidate_surfaces(&e), ["二", "に", "ニ", "日本"]);
+    // 2 度目の Space で次の候補（に）へ進んでいる
+    assert_eq!(preedit_text(&e), "にhん");
+    // 補正候補を選ぶと文全体が置き換わり、第一仮説にも戻せる
+    e.select_candidate(S, 3);
+    assert_eq!(preedit_text(&e), "日本");
+    assert_eq!(candidate_surfaces(&e), ["にhん", "日本"]);
+    e.select_candidate(S, 0);
+    assert_eq!(preedit_text(&e), "にhん");
+    e.select_candidate(S, 1);
     assert_eq!(preedit_text(&e), "日本");
     let r = press(&mut e, "Enter");
     assert_eq!(r.commit.as_deref(), Some("日本"));
