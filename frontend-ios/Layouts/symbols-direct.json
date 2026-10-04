@@ -1,0 +1,287 @@
+{
+  "version": 1,
+  "id": "symbols-direct",
+  "name": "記号・数字（英数）",
+  "rows": [
+    {
+      "keys": [
+        {
+          "id": "1",
+          "tap": {
+            "type": "char",
+            "text": "1"
+          }
+        },
+        {
+          "id": "2",
+          "tap": {
+            "type": "char",
+            "text": "2"
+          }
+        },
+        {
+          "id": "3",
+          "tap": {
+            "type": "char",
+            "text": "3"
+          }
+        },
+        {
+          "id": "4",
+          "tap": {
+            "type": "char",
+            "text": "4"
+          }
+        },
+        {
+          "id": "5",
+          "tap": {
+            "type": "char",
+            "text": "5"
+          }
+        },
+        {
+          "id": "6",
+          "tap": {
+            "type": "char",
+            "text": "6"
+          }
+        },
+        {
+          "id": "7",
+          "tap": {
+            "type": "char",
+            "text": "7"
+          }
+        },
+        {
+          "id": "8",
+          "tap": {
+            "type": "char",
+            "text": "8"
+          }
+        },
+        {
+          "id": "9",
+          "tap": {
+            "type": "char",
+            "text": "9"
+          }
+        },
+        {
+          "id": "0",
+          "tap": {
+            "type": "char",
+            "text": "0"
+          }
+        }
+      ]
+    },
+    {
+      "keys": [
+        {
+          "id": "-",
+          "tap": {
+            "type": "char",
+            "text": "-"
+          }
+        },
+        {
+          "id": "/",
+          "tap": {
+            "type": "char",
+            "text": "/"
+          }
+        },
+        {
+          "id": ":",
+          "tap": {
+            "type": "char",
+            "text": ":"
+          }
+        },
+        {
+          "id": ";",
+          "tap": {
+            "type": "char",
+            "text": ";"
+          }
+        },
+        {
+          "id": "(",
+          "tap": {
+            "type": "char",
+            "text": "("
+          }
+        },
+        {
+          "id": ")",
+          "tap": {
+            "type": "char",
+            "text": ")"
+          }
+        },
+        {
+          "id": "&",
+          "tap": {
+            "type": "char",
+            "text": "&"
+          }
+        },
+        {
+          "id": "@",
+          "tap": {
+            "type": "char",
+            "text": "@"
+          }
+        },
+        {
+          "id": "\"",
+          "tap": {
+            "type": "char",
+            "text": "\""
+          }
+        },
+        {
+          "id": "'",
+          "tap": {
+            "type": "char",
+            "text": "'"
+          }
+        }
+      ]
+    },
+    {
+      "keys": [
+        {
+          "id": "#",
+          "tap": {
+            "type": "char",
+            "text": "#"
+          }
+        },
+        {
+          "id": "%",
+          "tap": {
+            "type": "char",
+            "text": "%"
+          }
+        },
+        {
+          "id": "+",
+          "tap": {
+            "type": "char",
+            "text": "+"
+          }
+        },
+        {
+          "id": "=",
+          "tap": {
+            "type": "char",
+            "text": "="
+          }
+        },
+        {
+          "id": "*",
+          "tap": {
+            "type": "char",
+            "text": "*"
+          }
+        },
+        {
+          "id": ".",
+          "tap": {
+            "type": "char",
+            "text": "."
+          }
+        },
+        {
+          "id": ",",
+          "tap": {
+            "type": "char",
+            "text": ","
+          }
+        },
+        {
+          "id": "?",
+          "tap": {
+            "type": "char",
+            "text": "?"
+          }
+        },
+        {
+          "id": "!",
+          "tap": {
+            "type": "char",
+            "text": "!"
+          }
+        },
+        {
+          "id": "backspace",
+          "label": "⌫",
+          "width": 1.5,
+          "style": "function",
+          "tap": {
+            "type": "key",
+            "name": "backspace"
+          },
+          "repeats": true
+        }
+      ]
+    },
+    {
+      "keys": [
+        {
+          "id": "to-abc",
+          "label": "ABC",
+          "width": 1.3,
+          "style": "function",
+          "tap": {
+            "type": "layout",
+            "layout": "qwerty-direct"
+          }
+        },
+        {
+          "id": "globe",
+          "label": "🌐",
+          "width": 1.1,
+          "style": "function",
+          "tap": {
+            "type": "key",
+            "name": "globe"
+          }
+        },
+        {
+          "id": "to-flick",
+          "label": "あ",
+          "width": 1.1,
+          "style": "function",
+          "tap": {
+            "type": "layout",
+            "layout": "flick-12"
+          }
+        },
+        {
+          "id": "space",
+          "label": "空白",
+          "width": 4.0,
+          "tap": {
+            "type": "key",
+            "name": "space"
+          }
+        },
+        {
+          "id": "enter",
+          "label": "⏎",
+          "width": 1.6,
+          "style": "accent",
+          "tap": {
+            "type": "key",
+            "name": "enter"
+          }
+        }
+      ]
+    }
+  ],
+  "direct": true
+}

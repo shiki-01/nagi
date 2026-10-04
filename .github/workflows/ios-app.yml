@@ -1,0 +1,157 @@
+name: ios-app
+
+# iOS キーボードアプリ（frontend-ios）のビルド。未署名 IPA を artifact として出力する。
+# 署名は SideStore 等で端末側に任せる想定（App Group の entitlement は ldid で埋め込む）。
+# LLM なし（辞書のみ）。辞書は拡張にバンドルする。
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-app-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Rust ツールチェーン（core/rust-toolchain.toml に従う）
+        working-directory: core
+        run: |
+          rustup show
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: XcodeGen と ldid を用意
+        run: brew install xcodegen ldid
+
+      - name: XCFramework をビルド（LLM なし）
+        working-directory: core
+        run: cargo xtask build-ios-xcframework --out-dir ../frontend-ios
+
+      - name: 辞書を取得・生成（拡張のリソースに含める）
+        working-directory: core
+        run: |
+          cargo xtask fetch-dict
+          cargo xtask build-dict
+
+      - name: 辞書を拡張のリソースへ配置
+        run: |
+          mkdir -p frontend-ios/Resources/data/dict
+          cp data/dict/nagi-dict.bin frontend-ios/Resources/data/dict/
+          ls -lh frontend-ios/Resources/data/dict/
+
+      - name: Xcode プロジェクトを生成
+        working-directory: frontend-ios
+        run: xcodegen generate
+
+      - name: アーカイブ（未署名）
+        working-directory: frontend-ios
+        run: |
+          mkdir -p build
+          xcodebuild archive \
+            -project Nagi.xcodeproj \
+            -scheme Nagi \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/Nagi.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tee build/xcodebuild.log | tail -n 40
+        shell: bash
+
+      # CODE_SIGNING_ALLOWED=NO ではエンタイトルメントがバイナリに入らず、SideStore が
+      # App Group を付与できない。ldid の擬似署名で埋め込む（実署名は SideStore が行う）。
+      - name: エンタイトルメントを埋め込む（ldid）
+        working-directory: frontend-ios
+        run: |
+          APP=build/Nagi.xcarchive/Products/Applications/Nagi.app
+          ldid -SApp/Nagi.entitlements "$APP/Nagi"
+          for appex in "$APP"/PlugIns/*.appex; do
+            name=$(basename "$appex" .appex)
+            ldid -SKeyboard/NagiKeyboard.entitlements "$appex/$name"
+          done
+          # 埋め込み結果の検証（application-groups が無ければ失敗させる）
+          for bin in "$APP/Nagi" "$APP"/PlugIns/*.appex/NagiKeyboard; do
+            ldid -e "$bin" | tee /dev/stderr | grep -q '<key>com.apple.security.application-groups</key>'
+          done
+          # 辞書がキーボード拡張に入っていることを確認（無ければ失敗させる）
+          test -f "$APP/PlugIns/NagiKeyboard.appex/data/dict/nagi-dict.bin"
+          test -f "$APP/PlugIns/NagiKeyboard.appex/Layouts/qwerty-romaji.json"
+
+      - name: IPA を作成
+        working-directory: frontend-ios
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/Nagi.xcarchive/Products/Applications/Nagi.app build/ipa/Payload/
+          (cd build/ipa && zip -qr ../Nagi-unsigned.ipa Payload)
+          ls -lh build/Nagi-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nagi-unsigned.ipa
+          path: frontend-ios/build/Nagi-unsigned.ipa
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xcodebuild-log
+          path: frontend-ios/build/xcodebuild.log
+          if-no-files-found: ignore
+
+  # 単体テスト（IPA のジョブとは独立。失敗しても IPA の成否に影響しない）。
+  # NagiCore（C ABI）に依存しないコードだけをテストするので XCFramework は不要。
+  test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: XcodeGen を用意
+        run: brew install xcodegen
+
+      # project.yml が参照する XCFramework のパスを空で用意（テストのスキームでは使わない）
+      - name: Xcode プロジェクトを生成
+        working-directory: frontend-ios
+        run: |
+          mkdir -p NagiCore.xcframework
+          xcodegen generate
+
+      - name: シミュレータ上で単体テスト
+        working-directory: frontend-ios
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for k,v in d.items() if 'iOS' in k for x in v if 'iPhone' in x['name']))")
+          echo "simulator: $UDID"
+          mkdir -p build
+          xcodebuild test \
+            -project Nagi.xcodeproj \
+            -scheme NagiLogicTests \
+            -destination "id=$UDID" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee build/xcodebuild-test.log | tail -n 60
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xcodebuild-test-log
+          path: frontend-ios/build/xcodebuild-test.log
+          if-no-files-found: ignore

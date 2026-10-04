@@ -22,3 +22,11 @@ Thumbs.db
 /frontend-ios-spike/build/
 /frontend-ios-spike/.build/
 frontend-ios-spike/Resources/
+
+# iOS keyboard app（XcodeGen の生成物・ビルド成果物）
+/frontend-ios/*.xcodeproj/
+/frontend-ios/NagiCore.xcframework/
+/frontend-ios/build/
+/frontend-ios/Resources/
+/frontend-ios/App/Info.plist
+/frontend-ios/Keyboard/Info.plist

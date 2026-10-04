@@ -1,0 +1,265 @@
+{
+  "version": 1,
+  "id": "flick-12",
+  "name": "フリック（12キー）",
+  "rows": [
+    {
+      "keys": [
+        {
+          "id": "to-abc",
+          "label": "ABC",
+          "width": 1.0,
+          "style": "function",
+          "tap": {
+            "type": "layout",
+            "layout": "qwerty-romaji"
+          }
+        },
+        {
+          "id": "kana-あ",
+          "label": "あ",
+          "tap": {
+            "type": "kana",
+            "text": "あ"
+          },
+          "flick": {
+            "left": "い",
+            "up": "う",
+            "right": "え",
+            "down": "お"
+          }
+        },
+        {
+          "id": "kana-か",
+          "label": "か",
+          "tap": {
+            "type": "kana",
+            "text": "か"
+          },
+          "flick": {
+            "left": "き",
+            "up": "く",
+            "right": "け",
+            "down": "こ"
+          }
+        },
+        {
+          "id": "kana-さ",
+          "label": "さ",
+          "tap": {
+            "type": "kana",
+            "text": "さ"
+          },
+          "flick": {
+            "left": "し",
+            "up": "す",
+            "right": "せ",
+            "down": "そ"
+          }
+        },
+        {
+          "id": "backspace",
+          "label": "⌫",
+          "width": 1.0,
+          "style": "function",
+          "tap": {
+            "type": "key",
+            "name": "backspace"
+          },
+          "repeats": true
+        }
+      ]
+    },
+    {
+      "keys": [
+        {
+          "id": "left",
+          "label": "◀",
+          "width": 1.0,
+          "style": "function",
+          "tap": {
+            "type": "key",
+            "name": "left"
+          }
+        },
+        {
+          "id": "kana-た",
+          "label": "た",
+          "tap": {
+            "type": "kana",
+            "text": "た"
+          },
+          "flick": {
+            "left": "ち",
+            "up": "つ",
+            "right": "て",
+            "down": "と"
+          }
+        },
+        {
+          "id": "kana-な",
+          "label": "な",
+          "tap": {
+            "type": "kana",
+            "text": "な"
+          },
+          "flick": {
+            "left": "に",
+            "up": "ぬ",
+            "right": "ね",
+            "down": "の"
+          }
+        },
+        {
+          "id": "kana-は",
+          "label": "は",
+          "tap": {
+            "type": "kana",
+            "text": "は"
+          },
+          "flick": {
+            "left": "ひ",
+            "up": "ふ",
+            "right": "へ",
+            "down": "ほ"
+          }
+        },
+        {
+          "id": "space",
+          "label": "空白",
+          "width": 1.0,
+          "style": "function",
+          "tap": {
+            "type": "key",
+            "name": "space"
+          }
+        }
+      ]
+    },
+    {
+      "keys": [
+        {
+          "id": "right",
+          "label": "▶",
+          "width": 1.0,
+          "style": "function",
+          "tap": {
+            "type": "key",
+            "name": "right"
+          }
+        },
+        {
+          "id": "kana-ま",
+          "label": "ま",
+          "tap": {
+            "type": "kana",
+            "text": "ま"
+          },
+          "flick": {
+            "left": "み",
+            "up": "む",
+            "right": "め",
+            "down": "も"
+          }
+        },
+        {
+          "id": "kana-や",
+          "label": "や",
+          "tap": {
+            "type": "kana",
+            "text": "や"
+          },
+          "flick": {
+            "left": "(",
+            "up": "ゆ",
+            "right": ")",
+            "down": "よ"
+          }
+        },
+        {
+          "id": "kana-ら",
+          "label": "ら",
+          "tap": {
+            "type": "kana",
+            "text": "ら"
+          },
+          "flick": {
+            "left": "り",
+            "up": "る",
+            "right": "れ",
+            "down": "ろ"
+          }
+        },
+        {
+          "id": "enter",
+          "label": "⏎",
+          "width": 1.0,
+          "style": "accent",
+          "tap": {
+            "type": "key",
+            "name": "enter"
+          }
+        }
+      ]
+    },
+    {
+      "keys": [
+        {
+          "id": "globe",
+          "label": "🌐",
+          "width": 1.0,
+          "style": "function",
+          "tap": {
+            "type": "key",
+            "name": "globe"
+          }
+        },
+        {
+          "id": "dakuten",
+          "label": "小゛゜",
+          "style": "function",
+          "tap": {
+            "type": "key",
+            "name": "dakuten"
+          }
+        },
+        {
+          "id": "kana-わ",
+          "label": "わ",
+          "tap": {
+            "type": "kana",
+            "text": "わ"
+          },
+          "flick": {
+            "left": "を",
+            "up": "ん",
+            "right": "ー"
+          }
+        },
+        {
+          "id": "punct",
+          "label": "、。?!",
+          "tap": {
+            "type": "kana",
+            "text": "、"
+          },
+          "flick": {
+            "left": "。",
+            "up": "？",
+            "right": "！"
+          }
+        },
+        {
+          "id": "to-symbols",
+          "label": "☆123",
+          "width": 1.0,
+          "style": "function",
+          "tap": {
+            "type": "layout",
+            "layout": "symbols"
+          }
+        }
+      ]
+    }
+  ]
+}

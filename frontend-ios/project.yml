@@ -1,0 +1,151 @@
+name: Nagi
+
+options:
+  bundleIdPrefix: com.shiki
+  deploymentTarget:
+    iOS: "16.1"
+  groupSortPosition: top
+
+settings:
+  PROVISIONING_PROFILE_SPECIFIER: ""
+  DEVELOPMENT_TEAM: ""
+  MARKETING_VERSION: "0.1.0"
+  CURRENT_PROJECT_VERSION: "1"
+
+attributes:
+  ORGANIZATIONNAME: Shiki
+  LastUpgradeCheck: "1500"
+  LastSwiftMigration: "1500"
+
+targets:
+  # 本体アプリ（有効化の案内・テスト入力・状態表示・診断）
+  Nagi:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.1"
+
+    sources:
+      - path: App
+      - path: Shared
+      # typeshare 生成物（frontend-macos と共有。コピーしない）
+      - path: ../frontend-macos/Sources/Generated
+
+    dependencies:
+      - target: NagiKeyboard
+      - sdk: UIKit.framework
+      - sdk: Foundation.framework
+      - sdk: SwiftUI.framework
+      - framework: NagiCore.xcframework
+        embed: false
+
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Nagi
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ALTAppGroups:
+          - group.com.shiki.nagi
+
+    entitlements:
+      path: App/Nagi.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.shiki.nagi
+
+    settings:
+      SWIFT_VERSION: "5"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_APP"
+      CODE_SIGN_STYLE: Automatic
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.nagi
+
+    scheme:
+      testTargets: []
+      gatherCoverageData: false
+
+  # キーボード拡張（辞書はこちらにだけ同梱する）
+  NagiKeyboard:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.1"
+    productName: NagiKeyboard
+
+    sources:
+      - path: Keyboard
+      - path: Shared
+      - path: ../frontend-macos/Sources/Generated
+      # 宣言的なレイアウト定義（JSON）。バンドル内の Layouts/ フォルダとして配置される
+      - path: Layouts
+        type: folder
+        buildPhase: resources
+      - path: Resources/data
+        type: folder
+        optional: true
+        buildPhase: resources
+
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: Foundation.framework
+      - framework: NagiCore.xcframework
+        embed: false
+
+    entitlements:
+      path: Keyboard/NagiKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.shiki.nagi
+
+    info:
+      path: Keyboard/Info.plist
+      properties:
+        CFBundleDisplayName: Nagi
+        ALTAppGroups:
+          - group.com.shiki.nagi
+        NSExtension:
+          NSExtensionAttributes:
+            PrimaryLanguage: ja-JP
+            IsASCIICapable: false
+            RequestsOpenAccess: false
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).KeyboardViewController"
+
+    settings:
+      SWIFT_VERSION: "5"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_KEYBOARD"
+      CODE_SIGN_STYLE: Automatic
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.nagi.keyboard
+
+    scheme:
+      testTargets: []
+      gatherCoverageData: false
+
+  # 単体テスト（レイアウト・タッチ距離・コントローラ）。NagiCore（C ABI）には依存しない
+  NagiTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.1"
+
+    sources:
+      - path: Tests
+      - path: Shared/Layout
+      - path: Shared/Core
+      - path: ../frontend-macos/Sources/Generated
+      - path: Layouts
+        type: folder
+        buildPhase: resources
+
+    settings:
+      SWIFT_VERSION: "5"
+      GENERATE_INFOPLIST_FILE: YES
+      CODE_SIGN_STYLE: Automatic
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.nagi.tests
+
+schemes:
+  NagiLogicTests:
+    build:
+      targets:
+        NagiTests: [test]
+    test:
+      targets:
+        - NagiTests
