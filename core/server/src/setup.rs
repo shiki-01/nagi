@@ -293,6 +293,17 @@ pub fn load_dictionary(data_dir: &Path) -> Result<Arc<Dictionary>, String> {
     if !path.exists() {
         return Err(format!("辞書が見つかりません: {}", path.display()));
     }
+    // feature `mmap` ではファイルを mmap してゼロコピーで参照する（常駐メモリが小さい）。
+    // mmap に失敗したら `fs::read` で全量をヒープに読む
+    #[cfg(feature = "mmap")]
+    match Dictionary::load_mmap(&path) {
+        Ok(dict) => return Ok(Arc::new(dict)),
+        // 形式の不正（バージョン違い等）は読み直しても同じなのでそのまま返す
+        Err(e @ nagi_dict::DictError::Format(_)) => {
+            return Err(format!("辞書の読み込みに失敗しました: {e}"));
+        }
+        Err(e) => eprintln!("辞書の mmap に失敗したため通常読み込みにします: {e}"),
+    }
     Dictionary::load(&path)
         .map(Arc::new)
         .map_err(|e| format!("辞書の読み込みに失敗しました: {e}"))

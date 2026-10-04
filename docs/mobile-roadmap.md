@@ -25,6 +25,8 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 
 D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見て具体化する。D-7 は D-2 と同時にプロトコルを決める（`alternatives` フィールド。破壊的変更を 2 回に分けないため）。
 
+**D-1 の状況（2026-10-04）**: 実装済み。辞書形式を v3（全セクション 8 バイト境界・ロード時に展開しない）にし、`Dictionary::load_mmap`（feature `mmap`、`nagi-server`・`nagi-ffi` の既定で有効）を追加。実辞書（約 56MB）のロード後ヒープ（RssAnon）は 約 62.5MB から 約 0.5MB、ロード時間はウォームで 約 85ms から 約 1ms（コールド 約 21ms）。`nagi-eval --no-llm` の結果は変更前と全行一致（403/609）。旧形式（v2）は読めず `cargo xtask build-dict` で作り直しが必要。iOS 実機の `phys_footprint` は未測定。逆引き索引（`reverse.rs`、約 270〜300MB のヒープ）は未対応で、iOS では `reconvert` を無効にするか、逆引きを辞書の別セクション（mmap）にする必要がある。
+
 **D-7 の状況（2026-10-03）**: F-0・F-1 実装済み（`fuzzy-input-design.md` §13・§14）。F-2 以降（タッチ距離の接続・合成ノイズ評価・フリック・学習・実機較正）は未着手。
 
 **D-2 の状況（2026-10-03）**: 実装済み。`insert_reading` / `perform_action`、共通型 `InputAlternative { text, distance }`、`process_key` の任意 `alternatives`、`ServerCapabilities.touch_input` を追加（`core/protocol`・`core/engine`・`core/server`、golden `120_touch_input.yaml`、Swift 型再生成）。Action 名は keymap の実物（`StartConvert`、`MoveCursor:Left` 形式）に合わせた。`alternatives` は受け取って検証するのみで挙動には使わない（F-1 で Composer に保持）。未知の Action 名は JSON-RPC の `INVALID_PARAMS`。Swift 側は呼び出し 3 箇所に `alternatives: nil` を追加したが、Linux では未ビルドのため macOS での `swift build` / `swift test` が必要。

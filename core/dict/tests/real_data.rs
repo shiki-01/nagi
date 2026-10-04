@@ -163,3 +163,82 @@ fn align_other_surfaces() {
         );
     }
 }
+
+/// 実辞書で mmap 版とヒープ版の変換結果が一致する（feature `mmap`。辞書が無ければ skip）
+#[cfg(feature = "mmap")]
+#[test]
+fn mmap_matches_heap_on_real_dictionary() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict/nagi-dict.bin");
+    if !path.exists() {
+        eprintln!("skip: {} が無い（cargo xtask build-dict）", path.display());
+        return;
+    }
+    let heap = Dictionary::load(&path).expect("辞書の読み込み");
+    let mapped = Dictionary::load_mmap(&path).expect("mmap");
+    assert_eq!(mapped.entry_count(), heap.entry_count());
+    assert_eq!(mapped.reading_count(), heap.reading_count());
+    for text in [
+        "きょうはいいてんきです",
+        "わたしのなまえはなかのです",
+        "とうきょうにいく",
+        "にほんごにゅうりょくのへんかんせいど",
+        "あしたのかいぎのしりょうをじゅんびしないと",
+    ] {
+        assert_eq!(mapped.convert(text), heap.convert(text), "{text}");
+        assert_eq!(
+            mapped.segment_candidates(text, 8),
+            heap.segment_candidates(text, 8)
+        );
+        assert_eq!(
+            mapped.common_prefix_lookup(text),
+            heap.common_prefix_lookup(text)
+        );
+        assert_eq!(mapped.has_prefix(text), heap.has_prefix(text));
+    }
+}
+
+#[cfg(all(feature = "mmap", target_os = "linux"))]
+fn status_kb(key: &str) -> usize {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    status
+        .lines()
+        .find(|l| l.starts_with(key))
+        .and_then(|l| l[key.len()..].split_whitespace().next()?.parse().ok())
+        .unwrap_or(0)
+}
+
+/// ロード時のヒープ（RssAnon）の比較。Linux・実辞書が必要:
+/// `cargo test --release -p nagi-dict --features mmap --test real_data -- --ignored --nocapture`
+#[cfg(all(feature = "mmap", target_os = "linux"))]
+#[test]
+#[ignore = "実辞書と /proc が必要。メモリ計測（実行は単独で: --test-threads=1）"]
+fn mmap_keeps_heap_small_on_real_dictionary() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict/nagi-dict.bin");
+    if !path.exists() {
+        eprintln!("skip: {} が無い（cargo xtask build-dict）", path.display());
+        return;
+    }
+    let anon0 = status_kb("RssAnon:");
+    let mapped = Dictionary::load_mmap(&path).expect("mmap");
+    for text in ["きょうはいいてんきです", "とうきょうにいく"] {
+        let _ = mapped.convert(text);
+    }
+    let mmap_delta = status_kb("RssAnon:").saturating_sub(anon0);
+    eprintln!(
+        "mmap: RssAnon +{mmap_delta} kB, RssFile {} kB",
+        status_kb("RssFile:")
+    );
+    let anon1 = status_kb("RssAnon:");
+    let heap = Dictionary::load(&path).expect("辞書の読み込み");
+    let heap_delta = status_kb("RssAnon:").saturating_sub(anon1);
+    eprintln!("heap: RssAnon +{heap_delta} kB");
+    assert!(
+        mmap_delta < 5_000,
+        "mmap 版のヒープが大きい: {mmap_delta} kB"
+    );
+    assert!(
+        heap_delta > 40_000,
+        "ヒープ版の計測値が小さすぎる: {heap_delta} kB"
+    );
+    drop(heap);
+}

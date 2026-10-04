@@ -116,7 +116,7 @@ pub fn run(source: DictSource) -> Result<(), String> {
                 .map_err(|e| format!("辞書ビルド失敗: {e}"))?
         }
     };
-    let binary_data = dictionary.to_bytes();
+    let binary_data = dictionary.as_bytes();
 
     let build_time = start.elapsed();
     let binary_size = binary_data.len();
@@ -128,7 +128,11 @@ pub fn run(source: DictSource) -> Result<(), String> {
             .ok_or("出力ディレクトリが特定できない")?,
     )
     .map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
-    fs::write(&output_file, binary_data).map_err(|e| format!("ファイル書き込み失敗: {}", e))?;
+    // 辞書は mmap で参照されるため、その場で上書きせず一時ファイルに書いてからリネームする
+    // （原子的置換。旧ファイルをマップ中のプロセスは旧 inode を見続ける。nagi-dict の mmap.rs 参照）
+    let tmp_file = output_file.with_extension("bin.tmp");
+    fs::write(&tmp_file, binary_data).map_err(|e| format!("ファイル書き込み失敗: {}", e))?;
+    fs::rename(&tmp_file, &output_file).map_err(|e| format!("ファイル置換失敗: {}", e))?;
 
     eprintln!();
     eprintln!("完了");

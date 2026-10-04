@@ -10,7 +10,20 @@ authors.workspace = true
 
 [dependencies]
 fst = "0.4.7"
+memmap2 = { version = "0.9.11", optional = true }
 thiserror = { workspace = true }
 
-[lints]
-workspace = true
+[features]
+# 辞書ファイルを mmap してゼロコピーで参照する `Dictionary::load_mmap`（常駐メモリ削減。iOS / Android 向け）
+mmap = ["dep:memmap2"]
+
+[lints.rust]
+# ワークスペース既定は forbid だが、forbid は下位で allow できない。mmap の `Mmap::map`
+# （feature `mmap`、`src/mmap.rs` のみ）を局所的に許可するため、この crate は deny にして
+# 当該モジュールだけ `#[allow(unsafe_code)]` する（infer の G-32 と同じ方針）。それ以外の
+# 場所で unsafe を書けばコンパイルエラーになる
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

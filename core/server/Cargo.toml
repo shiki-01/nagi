@@ -34,6 +34,9 @@ ed25519-dalek = "2"
 sha2 = "0.10"
 
 [features]
+# 既定で mmap 辞書（`Dictionary::load_mmap`）を使う。デスクトップ・モバイル共通
+default = ["mmap"]
+mmap = ["nagi-dict/mmap"]
 # llama.cpp による zenz 推論（C++ ビルドが必要。リリースビルドでは有効にする）
 llama = ["nagi-infer/llama"]
 

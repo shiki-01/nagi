@@ -15,6 +15,9 @@ pub mod bunsetsu;
 pub mod convert;
 pub mod dictionary;
 pub mod error;
+#[cfg(feature = "mmap")]
+#[allow(unsafe_code)]
+mod mmap;
 mod nbest;
 pub mod overlay;
 pub mod pos;

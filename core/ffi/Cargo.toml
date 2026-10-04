@@ -12,10 +12,13 @@ authors.workspace = true
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-nagi-server = { path = "../server" }
+nagi-server = { path = "../server", default-features = false }
 serde_json = { workspace = true }
 
 [features]
+# 辞書の mmap 読み込み（既定で有効。iOS キーボード拡張のメモリ上限対策）
+default = ["mmap"]
+mmap = ["nagi-server/mmap"]
 # LLM 推論（zenz）を含む。llama.cpp の C++ ビルドが必要
 llama = ["nagi-server/llama"]
 
