@@ -11,6 +11,9 @@ on:
     branches: [claude/amazing-mccarthy-3bg0ge]
     paths:
       - 'frontend-ios/**'
+      - 'core/**'
+      - 'config/**'
+      - 'frontend-macos/Sources/Generated/**'
       - '.github/workflows/ios-app.yml'
 
 concurrency:
