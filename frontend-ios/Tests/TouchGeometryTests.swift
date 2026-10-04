@@ -41,6 +41,29 @@ final class TouchGeometryTests: XCTestCase {
         XCTAssertEqual(alts[0].distance, 0.6, accuracy: 1e-9)
     }
 
+    func testQwertyAlternativesCanIncludeTheChosenKeyDistance() {
+        let frames = twoKeyFrames()
+        let targets = TouchGeometry.charTargets(frames: frames, transform: { $0 })
+        // f の中心 (25, 25) まで 20 / 50 = 0.4、g の中心 (75, 25) まで 30 / 50 = 0.6
+        let alts = TouchGeometry.alternatives(
+            touch: CGPoint(x: 45, y: 25), targets: targets, excluding: "f", includeChosen: true
+        )
+        XCTAssertEqual(alts.map { $0.text }, ["g", "f"])
+        XCTAssertEqual(alts[0].distance, 0.6, accuracy: 1e-9)
+        XCTAssertEqual(alts[1].distance, 0.4, accuracy: 1e-9)
+        // 遠くても（上限 1.0 を超えても）確定したキー自身は加える: (10, 25) → g は 1.3 で落ち、f は 0.3
+        let far = TouchGeometry.alternatives(
+            touch: CGPoint(x: 10, y: 25), targets: targets, excluding: "f", includeChosen: true
+        )
+        XCTAssertEqual(far.map { $0.text }, ["f"])
+        XCTAssertEqual(far[0].distance, 0.3, accuracy: 1e-9)
+        // ターゲットに無い文字は加えない
+        let none = TouchGeometry.alternatives(
+            touch: CGPoint(x: 45, y: 25), targets: targets, excluding: "z", includeChosen: true
+        )
+        XCTAssertEqual(none.map { $0.text }, ["f", "g"])
+    }
+
     func testAlternativesBeyondMaxDistanceAreDropped() {
         let frames = twoKeyFrames()
         let targets = TouchGeometry.charTargets(frames: frames, transform: { $0 })
@@ -98,19 +121,92 @@ final class TouchGeometryTests: XCTestCase {
         XCTAssertEqual(FlickGeometry.decide(start: a, startPoint: CGPoint(x: 30, y: 60), end: CGPoint(x: 30, y: 60), allFrames: frames)?.text, "お")
     }
 
-    func testFlickAlternativesExcludeChosenAndIncludeNeighbors() throws {
+    func testFlickAlternativesIncludeNeighborsAndTheChosenZoneItself() throws {
         let frames = flickFrames()
         let a = frames[0]
+        // あ の中心（30, 30）で離す。spread = 60 * 0.8 = 48
+        // 他のゾーン い・う・え・お は距離 48 / 60 = 0.8、か の中央ゾーンは (90, 30) まで 60 / 60 = 1.0。
+        // 上位 3 件は 0.8 の同率を文字の昇順で い・う・え。そのあとに確定したゾーン あ（距離 0）
         let decision = try XCTUnwrap(FlickGeometry.decide(start: a, startPoint: CGPoint(x: 30, y: 30), end: CGPoint(x: 30, y: 30), allFrames: frames))
         XCTAssertEqual(decision.text, "あ")
-        XCTAssertFalse(decision.alternatives.contains(where: { $0.text == "あ" }))
-        XCTAssertLessThanOrEqual(decision.alternatives.count, 3)
+        XCTAssertEqual(decision.alternatives.map { $0.text }, ["い", "う", "え", "あ"])
+        XCTAssertEqual(decision.alternatives[0].distance, 0.8, accuracy: 1e-9)
+        XCTAssertEqual(decision.alternatives[1].distance, 0.8, accuracy: 1e-9)
+        XCTAssertEqual(decision.alternatives[2].distance, 0.8, accuracy: 1e-9)
+        XCTAssertEqual(decision.alternatives[3].distance, 0.0, accuracy: 1e-9)
+        // 確定したゾーン以外は最大 3 件・上限 1.0 以内
+        XCTAssertEqual(decision.alternatives.filter { $0.text != decision.text }.count, 3)
         for alt in decision.alternatives {
             XCTAssertLessThanOrEqual(alt.distance, 1.0)
         }
-        // 右端（か キーの近く）で離すと、か のゾーンが代替に入る
+        // 右端（か キーの近く）で離すと、か のゾーンが代替に入る。
+        // 確定は え（右ゾーン (78, 30) まで 20 / 60）。あ は 28 / 60、か は (90, 30) まで 32 / 60、
+        // う は (30, -18) まで sqrt(28^2 + 48^2) / 60 = 0.926、お も同じ、い は 76 / 60 で圏外。
+        // 上位 3 件は あ・か・う（う と お は同率で文字の昇順）。そのあとに え（20 / 60）
         let nearKa = try XCTUnwrap(FlickGeometry.decide(start: a, startPoint: CGPoint(x: 58, y: 30), end: CGPoint(x: 58, y: 30), allFrames: frames))
-        XCTAssertTrue(nearKa.alternatives.contains(where: { $0.text == "か" }), "\(nearKa)")
+        XCTAssertEqual(nearKa.text, "え")
+        XCTAssertEqual(nearKa.alternatives.map { $0.text }, ["あ", "か", "う", "え"], "\(nearKa)")
+        XCTAssertEqual(nearKa.alternatives[1].distance, 32.0 / 60.0, accuracy: 1e-9)
+        XCTAssertEqual(nearKa.alternatives[3].distance, 20.0 / 60.0, accuracy: 1e-9)
+    }
+
+    private func singleKanaFrame(center: String, flick: [String: String]) -> [KeyFrame] {
+        let row = KeyRow(height: nil, keys: [
+            KeyDef(id: "k", label: nil, width: nil, spacer: nil, style: nil,
+                   tap: KeyAction(type: "kana", text: center, name: nil, layout: nil),
+                   flick: flick, longPress: nil, repeats: nil),
+        ])
+        let layout = KeyboardLayout(id: "s", name: "s", direct: nil, rows: [row])
+        // キーは (0, 0, 60, 60)。中心 (30, 30)、spread 48
+        return LayoutGeometry.frames(for: layout, in: CGSize(width: 60, height: 60))
+    }
+
+    func testFlickAlternativesExcludeNonKanaBeforeTakingTheTopCount() throws {
+        // や の左 ( ・右 ) は、かな以外なので代替に入れない（枠 3 を消費しない）。
+        // 並びの昇順では ( ) ゆ ... なので、除かずに上位 3 件を取ると ゆ の前に 2 件を使ってしまう
+        let frames = singleKanaFrame(center: "や", flick: ["left": "(", "up": "ゆ", "right": ")", "down": "よ"])
+        let center = CGPoint(x: 30, y: 30)
+        let decision = try XCTUnwrap(FlickGeometry.decide(start: frames[0], startPoint: center, end: center, allFrames: frames))
+        XCTAssertEqual(decision.text, "や")
+        // ゆ・よ（各 0.8）と、確定した や（0）
+        XCTAssertEqual(decision.alternatives.map { $0.text }, ["ゆ", "よ", "や"])
+        XCTAssertEqual(decision.alternatives[2].distance, 0.0, accuracy: 1e-9)
+    }
+
+    func testFlickProlongedSoundMarkIsAKanaAlternative() throws {
+        // わ（中央）を ー（右ゾーン (78, 30)）で離す。を は (-18, 30) まで 96 / 60、ん は (30, -18) まで 1.13 で圏外。
+        // 代替は わ（48 / 60 = 0.8）と、確定した ー（0）
+        let frames = singleKanaFrame(center: "わ", flick: ["left": "を", "up": "ん", "right": "ー"])
+        let decision = try XCTUnwrap(FlickGeometry.decide(start: frames[0], startPoint: CGPoint(x: 78, y: 30), end: CGPoint(x: 78, y: 30), allFrames: frames))
+        XCTAssertEqual(decision.text, "ー")
+        XCTAssertEqual(decision.alternatives.map { $0.text }, ["わ", "ー"])
+        XCTAssertEqual(decision.alternatives[0].distance, 0.8, accuracy: 1e-9)
+        XCTAssertEqual(decision.alternatives[1].distance, 0.0, accuracy: 1e-9)
+    }
+
+    func testFlickSendsNoAlternativesWhenTheChosenReadingIsNotKana() throws {
+        // 確定した 、 がかな以外なら、代替は送らない（他のゾーン 。 もかな以外）
+        let frames = singleKanaFrame(center: "、", flick: ["right": "。"])
+        let center = CGPoint(x: 30, y: 30)
+        let decision = try XCTUnwrap(FlickGeometry.decide(start: frames[0], startPoint: center, end: center, allFrames: frames))
+        XCTAssertEqual(decision.text, "、")
+        XCTAssertTrue(decision.alternatives.isEmpty)
+        // 隣のかなキー（あ）が近くても、記号キーが確定したなら代替は空
+        let row = KeyRow(height: nil, keys: [
+            KeyDef(id: "a", label: nil, width: nil, spacer: nil, style: nil,
+                   tap: KeyAction(type: "kana", text: "あ", name: nil, layout: nil),
+                   flick: nil, longPress: nil, repeats: nil),
+            KeyDef(id: "t", label: nil, width: nil, spacer: nil, style: nil,
+                   tap: KeyAction(type: "kana", text: "、", name: nil, layout: nil),
+                   flick: ["right": "。"], longPress: nil, repeats: nil),
+        ])
+        let layout = KeyboardLayout(id: "n", name: "n", direct: nil, rows: [row])
+        // あ: (0,0,60,60)、、: (60,0,60,60)。、 の中心 (90, 30) のすぐ左 (70, 30) を押す
+        let two = LayoutGeometry.frames(for: layout, in: CGSize(width: 120, height: 60))
+        let near = CGPoint(x: 70, y: 30)
+        let next = try XCTUnwrap(FlickGeometry.decide(start: two[1], startPoint: near, end: near, allFrames: two))
+        XCTAssertEqual(next.text, "、")
+        XCTAssertTrue(next.alternatives.isEmpty, "\(next)")
     }
 
     func testFlickWithoutZonesReturnsNil() {

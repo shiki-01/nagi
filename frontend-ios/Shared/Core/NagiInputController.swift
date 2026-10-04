@@ -80,6 +80,9 @@ final class NagiInputController {
     private var successesSinceRecovery = 0
     private var secureInput = false
     private var message: String?
+    /// 直前のフリックで送った確定かなと代替。「小゛゜」で代替を引き継ぐために覚える。
+    /// 別の入力・確定・レイアウト切替でクリアする
+    private(set) var lastFlick: LastFlick?
 
     init(output: HostTextOutput) {
         self.output = output
@@ -199,6 +202,7 @@ final class NagiInputController {
     /// 入力欄にフォーカスしたとき。secure 入力欄ならコアに伝えて学習を止める（変換しない設定は呼び出し側が `directInput` で行う）
     func focusIn(secure: Bool) {
         secureInput = secure
+        lastFlick = nil
         guard state == .ready, let rpc = rpc else { return }
         sendContext()
         do {
@@ -211,6 +215,7 @@ final class NagiInputController {
 
     /// キーボードが隠れるとき。未確定の文字列を確定して入力を失わない
     func focusOut() {
+        lastFlick = nil
         if state == .ready, let rpc = rpc {
             do {
                 let result: ProcessKeyResult = try rpc.call("focus_out", params: SessionParams(session_id: sessionId))
@@ -225,6 +230,7 @@ final class NagiInputController {
 
     /// 未確定の状態を確定せずに捨てる（コアの `reset`）
     func reset() {
+        lastFlick = nil
         if state == .ready, let rpc = rpc {
             do {
                 let result: ProcessKeyResult = try rpc.call("reset", params: SessionParams(session_id: sessionId))
@@ -281,6 +287,7 @@ final class NagiInputController {
 
     /// 入力 1 件を処理する
     func handle(_ input: KeyboardInput) {
+        clearLastFlick(unlessInputIs: input)
         if shouldHandleDirectly(input) {
             handleDirect(input)
             return
@@ -305,6 +312,18 @@ final class NagiInputController {
             handleFailure(error, input: input)
         } catch {
             handleFailure(.decodeFailed(method: "unknown"), input: input)
+        }
+    }
+
+    /// フリック（`kana`）と「小゛゜」以外の入力では、直前のフリックの代替を忘れる
+    private func clearLastFlick(unlessInputIs input: KeyboardInput) {
+        switch input {
+        case .kana:
+            return
+        case .special(let key) where key == .dakuten:
+            return
+        default:
+            lastFlick = nil
         }
     }
 
@@ -345,6 +364,7 @@ final class NagiInputController {
             let result = try rpc.insertReading(sessionId: sessionId, reading: reading, alternatives: alternatives)
             apply(result)
             if !result.consumed { output.insertText(reading) }
+            lastFlick = LastFlick(reading: reading, alternatives: alternatives)
 
         case .special(let key):
             try processSpecial(key, rpc: rpc)
@@ -400,7 +420,8 @@ final class NagiInputController {
         }
     }
 
-    /// 12 キーの「小゛゜」: 末尾のかなを 1 つ消して、次の形を挿入し直す（変換中は何もしない）
+    /// 12 キーの「小゛゜」: 末尾のかなを 1 つ消して、次の形を挿入し直す（変換中は何もしない）。
+    /// 直前のフリックの代替（`lastFlick`。読みが末尾のかなと一致するときだけ）は、同じ変換で写して引き継ぐ
     private func applyDakuten(rpc: NagiRpcClient) throws {
         guard let preedit = lastPreedit,
               preedit.focus == nil,
@@ -414,8 +435,17 @@ final class NagiInputController {
             sessionId: sessionId, keysym: Keysym.backspace, text: "", shift: false, alternatives: []
         )
         apply(removed)
-        let inserted = try rpc.insertReading(sessionId: sessionId, reading: String(next), alternatives: [])
+        var carried: LastFlick?
+        if let flick = lastFlick, flick.reading == String(last) {
+            carried = flick.transformed()
+        }
+        let inserted = try rpc.insertReading(
+            sessionId: sessionId,
+            reading: String(next),
+            alternatives: carried?.alternatives ?? []
+        )
         apply(inserted)
+        lastFlick = carried
     }
 
     /// 候補バーのタップ。変換中は候補を選び、最後の文節なら確定、そうでなければ次の文節へ進む。
@@ -490,6 +520,7 @@ final class NagiInputController {
         }
         lastPreedit = nil
         lastCandidates = nil
+        lastFlick = nil
         publishBar(message: nil)
     }
 

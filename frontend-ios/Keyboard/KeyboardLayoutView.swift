@@ -338,7 +338,9 @@ final class KeyboardLayoutView: UIView {
         if case .char(let text) = target.key.tapAction {
             let chosen = applyShift(text)
             let targets = TouchGeometry.charTargets(frames: frames, transform: { self.applyShift($0) })
-            let alternatives = TouchGeometry.alternatives(touch: point, targets: targets, excluding: chosen)
+            let alternatives = TouchGeometry.alternatives(
+                touch: point, targets: targets, excluding: chosen, includeChosen: true
+            )
             delegate?.layoutView(self, didProduce: .char(text: chosen, alternatives: alternatives))
             return
         }

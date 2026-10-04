@@ -129,6 +129,85 @@ final class InputControllerTests: XCTestCase {
         XCTAssertTrue(transport.methods.contains("process_key"))
     }
 
+    private func sentAlternatives(_ params: [String: Any]?) -> [(text: String, distance: Double)] {
+        let list = (params?["alternatives"] as? [[String: Any]]) ?? []
+        return list.map { (text: ($0["text"] as? String) ?? "", distance: ($0["distance"] as? Double) ?? -1) }
+    }
+
+    func testDakutenCarriesFlickAlternativesThroughTheCycle() throws {
+        let (controller, transport, _) = makeReady()
+        transport.results["insert_reading"] = [
+            preeditJSON(text: "か", reading: "か"),
+            preeditJSON(text: "が", reading: "が"),
+            preeditJSON(text: "か", reading: "か"),
+        ]
+        controller.handle(.kana(reading: "か", alternatives: [
+            AltCandidate(text: "き", distance: 0.5),
+            AltCandidate(text: "く", distance: 0.75),
+            AltCandidate(text: "か", distance: 0.25),
+        ]))
+        // か → が: 代替 き・く・か が ぎ・ぐ・が に写り、距離はそのまま
+        controller.handle(.special(.dakuten))
+        var params = transport.params(of: "insert_reading")
+        XCTAssertEqual(params?["reading"] as? String, "が")
+        var sent = sentAlternatives(params)
+        XCTAssertEqual(sent.map { $0.text }, ["ぎ", "ぐ", "が"])
+        XCTAssertEqual(sent.map { $0.distance }, [0.5, 0.75, 0.25])
+        // が → か: 連続して押すたびに写る
+        controller.handle(.special(.dakuten))
+        params = transport.params(of: "insert_reading")
+        XCTAssertEqual(params?["reading"] as? String, "か")
+        sent = sentAlternatives(params)
+        XCTAssertEqual(sent.map { $0.text }, ["き", "く", "か"])
+        XCTAssertEqual(sent.map { $0.distance }, [0.5, 0.75, 0.25])
+    }
+
+    func testDakutenWithoutPrecedingFlickSendsNoAlternatives() {
+        let (controller, transport, _) = makeReady()
+        transport.results["insert_reading"] = [preeditJSON(text: "か", reading: "か")]
+        controller.handle(.kana(reading: "か", alternatives: []))
+        controller.handle(.special(.dakuten))
+        XCTAssertTrue(sentAlternatives(transport.params(of: "insert_reading")).isEmpty)
+    }
+
+    func testOtherInputClearsRememberedFlickAlternatives() {
+        let (controller, transport, _) = makeReady()
+        transport.results["insert_reading"] = [preeditJSON(text: "か", reading: "か")]
+        let flick = KeyboardInput.kana(reading: "か", alternatives: [
+            AltCandidate(text: "き", distance: 0.5),
+            AltCandidate(text: "か", distance: 0.25),
+        ])
+        // 別のキー（char）を挟むと忘れる（コアは not consumed なので preedit は か のまま）
+        controller.handle(flick)
+        XCTAssertNotNil(controller.lastFlick)
+        controller.handle(.char(text: "x", alternatives: []))
+        XCTAssertNil(controller.lastFlick)
+        controller.handle(.special(.dakuten))
+        XCTAssertTrue(sentAlternatives(transport.params(of: "insert_reading")).isEmpty)
+        // Backspace・レイアウト切替・候補バーの選択・エンジン操作でも忘れる
+        let others: [KeyboardInput] = [
+            .special(.backspace), .switchLayout("qwerty-romaji"), .selectCandidate(0), .engineAction("Commit"),
+        ]
+        for other in others {
+            controller.handle(flick)
+            XCTAssertNotNil(controller.lastFlick)
+            controller.handle(other)
+            XCTAssertNil(controller.lastFlick)
+        }
+    }
+
+    func testFocusOutAndResetClearRememberedFlick() {
+        let (controller, transport, _) = makeReady()
+        transport.results["insert_reading"] = [preeditJSON(text: "か", reading: "か")]
+        controller.handle(.kana(reading: "か", alternatives: [AltCandidate(text: "か", distance: 0.25)]))
+        XCTAssertNotNil(controller.lastFlick)
+        controller.focusOut()
+        XCTAssertNil(controller.lastFlick)
+        controller.handle(.kana(reading: "か", alternatives: [AltCandidate(text: "か", distance: 0.25)]))
+        controller.reset()
+        XCTAssertNil(controller.lastFlick)
+    }
+
     func testSelectCandidateCommitsAfterLastSegment() throws {
         let (controller, transport, _) = makeReady()
         transport.results["process_key"] = [preeditJSON(text: "日本", reading: "にほん", focus: 0)]

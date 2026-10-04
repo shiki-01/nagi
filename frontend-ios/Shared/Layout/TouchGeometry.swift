@@ -31,11 +31,14 @@ enum TouchGeometry {
     }
 
     /// 近傍の代替を、近い順に返す。`chosenText`（実際に採用した文字）は除く。
-    /// 同じ文字が複数あれば近い方を採る。距離が同じなら文字の昇順
+    /// 同じ文字が複数あれば近い方を採る。距離が同じなら文字の昇順。
+    /// `includeChosen` なら、`chosenText` 自身の距離（同じ文字のターゲットのうち最も近いもの）を末尾に加える
+    /// （`maxCount` の外。コアは打鍵自身の距離を基準にした相対コストで換算する）。ターゲットに無ければ加えない
     static func alternatives(
         touch: CGPoint,
         targets: [TouchTarget],
         excluding chosenText: String,
+        includeChosen: Bool = false,
         maxDistance: Double = TouchGeometry.defaultMaxDistance,
         maxCount: Int = TouchGeometry.defaultMaxCount
     ) -> [AltCandidate] {
@@ -54,7 +57,17 @@ enum TouchGeometry {
             if a.distance != b.distance { return a.distance < b.distance }
             return a.text < b.text
         }
-        return Array(list.prefix(max(0, maxCount)))
+        var result = Array(list.prefix(max(0, maxCount)))
+        if includeChosen {
+            var chosenDistance = Double.infinity
+            for target in targets where target.text == chosenText {
+                chosenDistance = min(chosenDistance, normalizedDistance(from: touch, to: target))
+            }
+            if chosenDistance.isFinite {
+                result.append(AltCandidate(text: chosenText, distance: chosenDistance))
+            }
+        }
+        return result
     }
 
     /// 点から矩形までの距離（内側なら 0）
@@ -105,7 +118,9 @@ struct FlickDecision: Equatable {
     let direction: FlickDirection
     /// 確定した方向の出力文字
     let text: String
-    /// 他のゾーン・隣接キーのゾーンのうち近いもの
+    /// 他のゾーン・隣接キーのゾーンのうち近いもの（ひらがな・長音のみ。最大 `maxCount` 件）と、
+    /// 確定したゾーン自身（離した位置からそのゾーン中心までの距離。末尾）。
+    /// 確定したゾーンを含めると、コアは打鍵自身の距離を基準にした相対コストで換算する
     let alternatives: [AltCandidate]
 }
 
@@ -160,6 +175,11 @@ enum FlickGeometry {
     /// - 開始キーの他のゾーン（方向の取り違え）: `end` からゾーン中心までの距離
     /// - 同じ種類（`tap.type`）の隣接キーの中央ゾーン（押し始めのキーの取り違え）: `startPoint` からキー中心までの距離
     ///   （隣接キーの方向ゾーンは、開始キーの領域に重なるため含めない）
+    ///
+    /// 代替の文字は、かなキー（`tap.type` が `kana`）ならひらがな・長音 1 文字のみ（コアの打鍵ログが受け付ける形。
+    /// 「(」「、」などは枠を消費しないよう除いてから上位 `maxCount` 件を取る）、それ以外のキーなら ASCII の英小文字 1 文字。
+    /// 確定した文字自身が同じ条件を満たすときだけ、その距離を末尾に加える。満たさない（記号キーなど）ときは、
+    /// 隣接キーの代替も含めて代替を一切送らない
     static func decide(
         start: KeyFrame,
         startPoint: CGPoint,
@@ -178,9 +198,13 @@ enum FlickGeometry {
                 chosen = zone
             }
         }
+        let kanaKey = start.key.isKana
+        func isSendable(_ text: String) -> Bool {
+            return kanaKey ? KanaText.isLoggableKana(text) : isLowercaseLetter(text)
+        }
         var best: [String: Double] = [:]
         func consider(_ text: String, _ d: Double) {
-            guard text != chosen.text, d.isFinite, d <= maxDistance else { return }
+            guard text != chosen.text, isSendable(text), d.isFinite, d <= maxDistance else { return }
             if let old = best[text], old <= d { return }
             best[text] = d
         }
@@ -201,10 +225,25 @@ enum FlickGeometry {
             if a.distance != b.distance { return a.distance < b.distance }
             return a.text < b.text
         }
+        // 確定した文字自体が代替の条件を満たさない（記号キーなど）なら、代替は送らない
+        var alternatives: [AltCandidate] = []
+        if isSendable(chosen.text) {
+            alternatives = Array(list.prefix(max(0, maxCount)))
+            if chosenDistance.isFinite {
+                alternatives.append(AltCandidate(text: chosen.text, distance: chosenDistance))
+            }
+        }
         return FlickDecision(
             direction: chosen.direction,
             text: chosen.text,
-            alternatives: Array(list.prefix(max(0, maxCount)))
+            alternatives: alternatives
         )
+    }
+
+    /// ASCII の英小文字 1 文字か（かな以外のキーの代替）
+    private static func isLowercaseLetter(_ text: String) -> Bool {
+        let scalars = text.unicodeScalars
+        guard scalars.count == 1, let scalar = scalars.first else { return false }
+        return scalar.value >= 0x61 && scalar.value <= 0x7a
     }
 }

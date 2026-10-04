@@ -27,8 +27,9 @@
 //! - `--noise flick`: フリック 12 キー（`frontend-ios/Layouts/flick-12.json` のかなキー）の操作列を作る。
 //!   読みの各かなを「行キー + 方向」に写像し（濁点・小書きは「基本かな + 小゛゜」= Backspace +
 //!   `insert_reading`）、ノイズは方向の取り違え・隣接キーへのずれ。代替は iOS の `FlickGeometry.decide` と
-//!   同じ規則（確定したゾーンを除き、他のゾーンと隣接キーの中央ゾーン、距離 <= 1.0、最大 3 件）で、
-//!   `--flick-typed-distance` で確定したゾーン自身の距離も加える（コアは相対コストで換算する）。
+//!   同じ規則（他のゾーンと隣接キーの中央ゾーンのうち、ひらがな・長音だけ、距離 <= 1.0、最大 3 件）で、
+//!   確定したゾーン自身の距離も末尾に加える（既定。コアは相対コストで換算する。旧フロントの模擬は
+//!   `--no-flick-typed-distance`）。濁点・小書きの「小゛゜」は、直前のフリックの代替を同じ循環で写して付ける。
 //!   ひらがな・長音以外（記号・漢字・英数字）を含む読みは対象外（件数と文字を出力する）。`--tap-sigma` の既定は 0.15
 //! - `--noise-rate`: 1 打鍵（flick は 1 フリック）あたりのノイズ確率（既定 0.1）、`--max-noise`: 1 入力に混ぜる最大数（既定 1）
 //! - `--noise-tail N`: ノイズを末尾 N 打鍵にだけ混ぜる（既定 0 = 全体。補正の `window` は 8 なので、
@@ -102,6 +103,7 @@ fn main() {
             "--noise-tail" => noise_cfg.tail = number(&mut args, "--noise-tail"),
             "--tap-sigma" => tap_sigma = Some(number(&mut args, "--tap-sigma")),
             "--flick-typed-distance" => noise_cfg.flick_typed_distance = true,
+            "--no-flick-typed-distance" => noise_cfg.flick_typed_distance = false,
             "--seed" => seed = number(&mut args, "--seed"),
             "--top-n" => top_n = number(&mut args, "--top-n"),
             "--fuzzy-sigma" => tune.sigma = Some(number(&mut args, "--fuzzy-sigma")),

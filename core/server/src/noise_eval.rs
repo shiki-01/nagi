@@ -185,6 +185,11 @@ fn is_hiragana(c: char) -> bool {
     ('ぁ'..='ゖ').contains(&c)
 }
 
+/// 打鍵ログが代替として受け付けるかな（ひらがなと長音。`KanaText.isLoggableKana`）
+fn is_loggable_kana(c: char) -> bool {
+    is_hiragana(c) || c == 'ー'
+}
+
 // ---- ノイズ ----
 
 /// ノイズの種類
@@ -246,8 +251,8 @@ pub struct NoiseConfig {
     pub max_distance: f32,
     /// 代替として送る打たれたキー以外の最大数
     pub max_alts: usize,
-    /// フリックで、確定したゾーン自身の距離も代替に含める（既定 false = iOS フロントの現状。
-    /// 含めると、コアは確定したゾーンとの相対コストで換算する）
+    /// フリックで、確定したゾーン自身の距離も代替に含める（既定 true = iOS フロントと同じ。
+    /// 含めると、コアは確定したゾーンとの相対コストで換算する。false は旧フロントの模擬）
     pub flick_typed_distance: bool,
 }
 
@@ -261,7 +266,7 @@ impl Default for NoiseConfig {
             tap_sigma: 0.25,
             max_distance: 1.0,
             max_alts: 3,
-            flick_typed_distance: false,
+            flick_typed_distance: true,
         }
     }
 }
@@ -588,7 +593,8 @@ pub struct FlickDecision {
     pub dir: Dir,
     /// 確定したかな
     pub text: char,
-    /// 代替 `(かな, 距離)`。近い順。確定したかな自身は含まない
+    /// 代替 `(かな, 距離)`。他のゾーン・キーのひらがな・長音のみ（近い順、最大 3 件）。
+    /// `typed_distance` なら、確定したかな自身を末尾に加える。確定がひらがな・長音以外なら空
     pub alts: Vec<(char, f32)>,
     /// 確定したゾーン中心までの距離
     pub chosen_distance: f32,
@@ -673,7 +679,9 @@ impl FlickLayout {
     /// 開始キー `start` を `start_pt` で押し、`end` で離したときの判定（`FlickGeometry.decide` と同じ規則）:
     /// 確定するのは開始キーのゾーンのうち `end` に最も近いもの。代替は、開始キーの他のゾーン
     /// （`end` からの距離）と、他のかなキーの中央ゾーン（`start_pt` からの距離）のうち距離 <= 1.0 のものを
-    /// 近い順（同距離は文字の昇順）に最大 3 件。`typed_distance` なら確定したゾーン自身も加える
+    /// 近い順（同距離は文字の昇順）に最大 3 件。代替はひらがな・長音のみ（「(」「、」などは除いてから
+    /// 上位 3 件を取る）。`typed_distance` なら確定したゾーン自身も加える。確定がひらがな・長音以外
+    /// （記号キー）なら代替は空
     pub fn decide(
         &self,
         start: usize,
@@ -686,7 +694,7 @@ impl FlickLayout {
         let (dir, text, chosen_d) = key.nearest_zone(end);
         let mut best: Vec<(char, f64)> = Vec::new();
         let mut consider = |c: char, d: f64| {
-            if c == text || d > max_distance {
+            if c == text || !is_loggable_kana(c) || d > max_distance {
                 return;
             }
             match best.iter_mut().find(|b| b.0 == c) {
@@ -705,8 +713,12 @@ impl FlickLayout {
         }
         best.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
         best.truncate(FLICK_MAX_COUNT);
+        // 確定したのがかな以外（記号キー）なら、代替は一切送らない
+        if !is_loggable_kana(text) {
+            best.clear();
+        }
         let mut alts: Vec<(char, f32)> = best.into_iter().map(|(c, d)| (c, d as f32)).collect();
-        if typed_distance {
+        if typed_distance && is_loggable_kana(text) {
             alts.push((text, chosen_d as f32));
         }
         FlickDecision {
@@ -852,10 +864,19 @@ fn flick_decision(
     layout.decide(unit.key, start_pt, end, max_d, cfg.flick_typed_distance)
 }
 
+/// 「小゛゜」で代替を引き継ぐ: 各代替のかなを `next_kana` で写し、距離はそのまま。写せないものは落とす
+fn carry_alts(alts: &[(char, f32)]) -> Vec<(char, f32)> {
+    alts.iter()
+        .filter_map(|&(c, d)| next_kana(c).map(|n| (n, d)))
+        .collect()
+}
+
 /// 読みの操作列（`plan`）をフロントの操作列に直す。ノイズ・代替は `cfg` に従う。
 ///
 /// 各かなは基本かなのフリック（`Step::Reading`、代替つき）と、濁点・小書きなら続く
-/// 「`Backspace` + `Reading`（代替なし）」× 回数（iOS の `applyDakuten` と同じ）。
+/// 「`Backspace` + `Reading`」× 回数（iOS の `applyDakuten` と同じ）。「小゛゜」の `Reading` の代替は、
+/// 直前の `Reading` の代替（確定したかな自身の距離を含む）を同じ循環（`next_kana`）で写して距離はそのまま付ける
+/// （写せない代替は落とす。`LastFlick.transformed`）。
 /// 戻り値は 手順、ノイズ（確定したかなが狙いと違う）の数、打たれたとおりの読み
 pub fn flick_input(
     layout: &FlickLayout,
@@ -874,18 +895,21 @@ pub fn flick_input(
         if Some(d.text) != intended {
             noised += 1;
         }
+        let alts_sent = d.alts.clone();
         steps.push(Step::Reading {
             text: d.text,
             alts: d.alts,
         });
         let mut last = d.text;
+        let mut last_alts = alts_sent;
         for _ in 0..unit.presses {
             // 循環に無いかなでは「小゛゜」は何もしない
             let Some(next) = next_kana(last) else { break };
+            last_alts = carry_alts(&last_alts);
             steps.push(Step::Backspace);
             steps.push(Step::Reading {
                 text: next,
-                alts: Vec::new(),
+                alts: last_alts.clone(),
             });
             last = next;
         }
@@ -1751,6 +1775,114 @@ mod tests {
     }
 
     #[test]
+    fn flick_decide_sends_only_kana_alternatives_and_none_for_symbol_keys() {
+        let layout = FlickLayout::standard();
+        // や（中央）: 左 ( と右 ) はかな以外なので、除いてから上位 3 件を取る（ゆ・よ のあとに隣のキー）
+        let ya = layout
+            .keys
+            .iter()
+            .position(|k| k.center_char() == 'や')
+            .expect("や");
+        let c = layout.keys[ya].center();
+        for typed_distance in [false, true] {
+            let d = layout.decide(ya, c, c, 1.0, typed_distance);
+            assert_eq!(d.text, 'や');
+            let others: Vec<char> = d
+                .alts
+                .iter()
+                .take(FLICK_MAX_COUNT)
+                .map(|a| a.0)
+                .filter(|&x| x != 'や')
+                .collect();
+            assert_eq!(others.len(), FLICK_MAX_COUNT, "{:?}", d.alts);
+            assert!(d.alts.iter().all(|a| is_loggable_kana(a.0)), "{:?}", d.alts);
+            assert!(
+                others.contains(&'ゆ') && others.contains(&'よ'),
+                "{:?}",
+                d.alts
+            );
+            assert_eq!(d.alts.len(), FLICK_MAX_COUNT + usize::from(typed_distance));
+        }
+        // 、 キー（記号）を確定したら、近くにかなキーがあっても代替は送らない
+        let comma = layout
+            .keys
+            .iter()
+            .position(|k| k.center_char() == '、')
+            .expect("、");
+        let c = layout.keys[comma].center();
+        for typed_distance in [false, true] {
+            let d = layout.decide(comma, c, c, 1.0, typed_distance);
+            assert_eq!(d.text, '、');
+            assert!(d.alts.is_empty(), "{:?}", d.alts);
+        }
+        // ー はかな扱い（わ キーの右）
+        let wa = layout
+            .keys
+            .iter()
+            .position(|k| k.center_char() == 'わ')
+            .expect("わ");
+        let end = layout.keys[wa].zone_center(Dir::Right);
+        let d = layout.decide(wa, end, end, 1.0, true);
+        assert_eq!(d.text, 'ー');
+        assert_eq!(d.alts.last(), Some(&('ー', 0.0)));
+    }
+
+    #[test]
+    fn dakuten_carries_alternatives_with_the_same_cycle() {
+        // き・く は ぎ・ぐ へ。循環に無い ん は落ち、距離はそのまま
+        assert_eq!(
+            carry_alts(&[('き', 0.3), ('ん', 0.5), ('か', 0.1)]),
+            [('ぎ', 0.3), ('が', 0.1)]
+        );
+        // は → ば → ぱ → は
+        let mut alts = vec![('ひ', 0.5), ('は', 0.1)];
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            alts = carry_alts(&alts);
+            seen.push(alts.clone());
+        }
+        assert_eq!(seen[0], [('び', 0.5), ('ば', 0.1)]);
+        assert_eq!(seen[1], [('ぴ', 0.5), ('ぱ', 0.1)]);
+        assert_eq!(seen[2], [('ひ', 0.5), ('は', 0.1)]);
+        // 操作列でも、が の insert_reading の代替は か の代替の写像で、確定したゾーンの距離も同じ
+        let layout = FlickLayout::standard();
+        let plan = layout.plan("が").unwrap();
+        for seed in 0..20 {
+            let (steps, _, shown) =
+                flick_input(&layout, &plan, &flick_cfg(0.0), &mut Rng::new(seed));
+            assert_eq!(shown, "が");
+            let [
+                Step::Reading { alts: a, text: ka },
+                Step::Backspace,
+                Step::Reading { alts: b, text: ga },
+            ] = &steps[..]
+            else {
+                panic!("{steps:?}");
+            };
+            assert_eq!((*ka, *ga), ('か', 'が'));
+            assert_eq!(b, &carry_alts(a));
+            assert_eq!(a.last().map(|x| x.1), b.last().map(|x| x.1));
+            assert_eq!(b.last().map(|x| x.0), Some('が'));
+        }
+        // 確定ゾーンの距離を含めない模擬（旧フロント）でも、代替は写る
+        let cfg = NoiseConfig {
+            flick_typed_distance: false,
+            ..flick_cfg(0.0)
+        };
+        let (steps, _, _) = flick_input(&layout, &plan, &cfg, &mut Rng::new(1));
+        let [
+            Step::Reading { alts: a, .. },
+            Step::Backspace,
+            Step::Reading { alts: b, .. },
+        ] = &steps[..]
+        else {
+            panic!("{steps:?}");
+        };
+        assert!(a.iter().all(|x| x.0 != 'か'));
+        assert_eq!(b, &carry_alts(a));
+    }
+
+    #[test]
     fn flick_input_without_noise_confirms_the_intended_kana_with_plausible_alternatives() {
         let layout = FlickLayout::standard();
         let reading = "にほんごきょうはがっこうでぱぴぷぺぽわをんー";
@@ -1766,15 +1898,26 @@ mod tests {
                 let Step::Reading { text, alts } = step else {
                     continue;
                 };
-                // 「小゛゜」の `insert_reading` は代替なし。直前は Backspace
+                // 「小゛゜」の `insert_reading`（直前は Backspace）: 直前のフリックの代替を同じ循環で写したもの
                 if i > 0 && steps[i - 1] == Step::Backspace {
-                    assert!(alts.is_empty());
+                    let Step::Reading { alts: prev, .. } = &steps[i - 2] else {
+                        panic!("{:?}", steps[i - 2]);
+                    };
+                    assert_eq!(alts, &carry_alts(prev));
+                    assert_eq!(alts.last().map(|a| a.0), Some(*text));
                     continue;
                 }
-                // 代替: 確定したかなを含まず、距離の昇順・上限内・最大 3 件・重複なし
-                assert!(alts.len() <= FLICK_MAX_COUNT, "{alts:?}");
-                assert!(alts.iter().all(|a| a.0 != *text && a.1 <= 1.0));
-                assert!(alts.windows(2).all(|w| w[0].1 <= w[1].1));
+                // 代替: 末尾が確定したかな自身（距離つき）。それ以外は確定したかなを含まず、ひらがな・長音のみ、
+                // 距離の昇順・上限内・最大 3 件
+                let (typed, others) = alts.split_last().expect("typed");
+                assert_eq!(typed.0, *text);
+                assert!(others.len() <= FLICK_MAX_COUNT, "{alts:?}");
+                assert!(
+                    others
+                        .iter()
+                        .all(|a| a.0 != *text && is_loggable_kana(a.0) && a.1 <= 1.0)
+                );
+                assert!(others.windows(2).all(|w| w[0].1 <= w[1].1));
             }
             // 同じ seed なら同じ操作列
             assert_eq!(
