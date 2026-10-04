@@ -298,6 +298,241 @@ fn flick_alternatives_ignored_for_multi_char_insert() {
     assert!(corrected(&r).is_empty(), "{r}");
 }
 
+/// `insert_reading`（フリックの 1 文字）。`alternatives` が null なら省略する
+fn flick(s: &mut Server, reading: &str, alternatives: Value) -> Value {
+    let mut params = json!({"session_id":"s","reading":reading});
+    if !alternatives.is_null() {
+        params["alternatives"] = alternatives;
+    }
+    let r = send(s, "insert_reading", params);
+    assert!(r.get("error").is_none(), "{r}");
+    r["result"].clone()
+}
+
+/// Space を 2 回押した（候補ウィンドウが開いた）あとの補正候補
+fn corrected_after_space(s: &mut Server) -> Vec<(String, Option<String>)> {
+    press(s, "Space", Value::Null);
+    corrected(&press(s, "Space", Value::Null))
+}
+
+fn kanji_correction() -> Vec<(String, Option<String>)> {
+    vec![("漢字".to_string(), Some("かんじ".to_string()))]
+}
+
+/// かなだけの composition（フリック列）では、先頭・途中・末尾のどの位置の誤りも補正候補になり、
+/// 第一仮説（打たれたとおり）の表示は変わらない
+#[test]
+fn flick_only_composition_corrects_any_position() {
+    // 末尾: かんし（じ を狙った）
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "か", Value::Null);
+    flick(&mut s, "ん", Value::Null);
+    let r = flick(&mut s, "し", json!([{"text":"じ","distance":0.2}]));
+    assert_eq!(r["preedit"]["text"], "かんし");
+    assert_eq!(corrected_after_space(&mut s), kanji_correction());
+
+    // 途中: にへん（ほ を狙った。「へ」は右フリックの隣のゾーン）
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "に", Value::Null);
+    let r = flick(
+        &mut s,
+        "へ",
+        json!([{"text":"ほ","distance":0.3},{"text":"ふ","distance":0.5}]),
+    );
+    assert_eq!(r["preedit"]["text"], "にへ");
+    let r = flick(&mut s, "ん", Value::Null);
+    assert_eq!(r["preedit"]["text"], "にへん");
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(r["preedit"]["text"], "にへん", "第一仮説の表示は変わらない");
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(
+        corrected(&r),
+        [("日本".to_string(), Some("にほん".to_string()))]
+    );
+}
+
+/// ローマ字キーとかなキー（フリック）が混在した composition でも、双方の代替が効く
+#[test]
+fn flick_and_romaji_keys_can_be_mixed() {
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    // ni（ローマ字）+ へ（フリック。ほ の代替）+ n（ローマ字）
+    type_str(&mut s, "ni");
+    let r = flick(&mut s, "へ", json!([{"text":"ほ","distance":0.3}]));
+    assert_eq!(r["preedit"]["text"], "にへ");
+    press(&mut s, "n", Value::Null);
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(r["preedit"]["text"], "にへん");
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(
+        corrected(&r),
+        [("日本".to_string(), Some("にほん".to_string()))],
+        "{r}"
+    );
+
+    // かん（フリック）+ s（ローマ字。z の代替）+ i（ローマ字）。かなの後ろのローマ字の代替
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "か", Value::Null);
+    flick(&mut s, "ん", Value::Null);
+    press(&mut s, "s", json!([{"text":"z","distance":0.2}]));
+    press(&mut s, "i", Value::Null);
+    assert_eq!(corrected_after_space(&mut s), kanji_correction());
+}
+
+/// 「小゛゜」: フロントは Backspace + `insert_reading`（代替なし）で濁点・小書きを実現する。
+/// Backspace で打鍵ログが 1 件戻り、直後の `insert_reading` の代替が記録される（G-49 の巻き戻しと整合する）
+#[test]
+fn flick_dakuten_via_backspace_keeps_the_key_log_consistent() {
+    // 戻した打鍵の代替は残らない: し（じ の代替つき）→ Backspace → す（別の代替）。
+    // 「かんす」は辞書に無く、戻した「し」の代替 じ で補正されてはならない
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "か", Value::Null);
+    flick(&mut s, "ん", Value::Null);
+    flick(&mut s, "し", json!([{"text":"じ","distance":0.2}]));
+    let r = press(&mut s, "BackSpace", Value::Null);
+    assert_eq!(r["preedit"]["text"], "かん");
+    let r = flick(&mut s, "す", json!([{"text":"ず","distance":0.2}]));
+    assert_eq!(r["preedit"]["text"], "かんす");
+    assert!(corrected_after_space(&mut s).is_empty());
+
+    // 直後の `insert_reading` の代替が記録される: し → Backspace → し（じ の代替つき）で、補正される
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "か", Value::Null);
+    flick(&mut s, "ん", Value::Null);
+    flick(&mut s, "し", json!([{"text":"せ","distance":0.2}]));
+    press(&mut s, "BackSpace", Value::Null);
+    let r = flick(&mut s, "し", json!([{"text":"じ","distance":0.2}]));
+    assert_eq!(r["preedit"]["text"], "かんし");
+    assert_eq!(corrected_after_space(&mut s), kanji_correction());
+
+    // 実際の「小゛゜」: し（代替つき）→ Backspace → じ（代替なし）。表示は かんじ で、打鍵ログは
+    // [か, ん, じ]（代替なし）。補正の元になる代替は無く、通常の変換結果（漢字）が出る
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "か", Value::Null);
+    flick(&mut s, "ん", Value::Null);
+    flick(&mut s, "し", json!([{"text":"じ","distance":0.2}]));
+    press(&mut s, "BackSpace", Value::Null);
+    let r = flick(&mut s, "じ", Value::Null);
+    assert_eq!(r["preedit"]["text"], "かんじ");
+    let r = press(&mut s, "Space", Value::Null);
+    assert_eq!(r["preedit"]["text"], "漢字");
+    let r = press(&mut s, "Space", Value::Null);
+    assert!(corrected(&r).is_empty(), "{r}");
+}
+
+/// 1 文字の composition を Backspace で空にしてから次のフリックを始めても、打鍵ログは新しく始まる
+/// （「小゛゜」で先頭のかなを変えるとき）
+#[test]
+fn flick_log_restarts_after_backspace_empties_the_composition() {
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "き", json!([{"text":"か","distance":0.2}]));
+    let r = press(&mut s, "BackSpace", Value::Null);
+    assert_eq!(r["preedit"]["text"], "");
+    flick(&mut s, "か", Value::Null);
+    flick(&mut s, "ん", Value::Null);
+    flick(&mut s, "し", json!([{"text":"じ","distance":0.2}]));
+    assert_eq!(corrected_after_space(&mut s), kanji_correction());
+}
+
+/// 複数文字の `insert_reading`（ペーストなど）: その代替は無視される。かなだけの挿入は打鍵ログを保つ
+/// （それ以前の 1 打鍵の代替は有効なまま）が、ひらがな以外を含む挿入はログを無効にする
+#[test]
+fn flick_multi_char_insert_ignores_its_alternatives_and_non_kana_invalidates_the_log() {
+    // ペーストした文字（んし）への代替（じ）は 1 打鍵のものではないので使われない
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "か", Value::Null);
+    let r = flick(&mut s, "んし", json!([{"text":"じ","distance":0.2}]));
+    assert_eq!(r["preedit"]["text"], "かんし");
+    assert!(corrected_after_space(&mut s).is_empty());
+
+    // 先頭のフリックの代替は、あとのかなのペーストを挟んでも有効
+    let mut s2 = server(ENABLED);
+    initialize(&mut s2);
+    flick(&mut s2, "に", Value::Null);
+    flick(&mut s2, "へ", json!([{"text":"ほ","distance":0.3}]));
+    let r = flick(&mut s2, "んご", json!([{"text":"ぐ","distance":0.1}]));
+    assert_eq!(r["preedit"]["text"], "にへんご");
+    press(&mut s2, "Space", Value::Null);
+    let r = press(&mut s2, "Space", Value::Null);
+    assert_eq!(
+        corrected(&r),
+        [("日本語".to_string(), Some("にほんご".to_string()))],
+        "{r}"
+    );
+
+    // ひらがな以外（漢字）を含む挿入でログは無効になり、補正は出ない
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    flick(&mut s, "か", Value::Null);
+    flick(&mut s, "ん", Value::Null);
+    flick(&mut s, "し", json!([{"text":"じ","distance":0.2}]));
+    flick(&mut s, "字", Value::Null);
+    press(&mut s, "Space", Value::Null);
+    let r = press(&mut s, "Space", Value::Null);
+    assert!(corrected(&r).is_empty(), "{r}");
+}
+
+/// 確定したかな自身の距離も代替に含めると、コアは相対コストで換算する（iOS フロントは現状含めない）
+#[test]
+fn flick_typed_distance_is_the_cost_baseline_over_rpc() {
+    let run = |alts: Value| {
+        let mut s = server(ENABLED);
+        initialize(&mut s);
+        flick(&mut s, "か", Value::Null);
+        flick(&mut s, "ん", Value::Null);
+        flick(&mut s, "し", alts);
+        corrected_after_space(&mut s)
+    };
+    // じ だけが 0.9: 絶対コスト 0.5 * (0.9 / 0.35)^2 ≒ 3.3 は曖昧さの閾値 1.5 を超えるので補正なし
+    assert!(run(json!([{"text":"じ","distance":0.9}])).is_empty());
+    // し 自身が 0.8、じ が 0.9: 相対コスト ≒ 0.7 なので補正候補が出る
+    assert_eq!(
+        run(json!([{"text":"し","distance":0.8},{"text":"じ","distance":0.9}])),
+        kanji_correction()
+    );
+}
+
+/// かなだけの入力で、各打鍵に多くの代替があっても、補正候補は辞書の語として成立するものだけ
+/// （`expand` の枝刈り。かなに ASCII の欠落補完を足さない）
+#[test]
+fn flick_corrections_are_pruned_by_the_dictionary() {
+    let mut s = server(ENABLED);
+    initialize(&mut s);
+    let kana_row = |c: &str| {
+        // その打鍵の代替として、同じ行の他のかな（距離 0.3〜0.5）を 3 つ
+        let all = ["か", "き", "く", "け", "こ"];
+        let alts: Vec<Value> = all
+            .iter()
+            .filter(|k| **k != c)
+            .take(3)
+            .enumerate()
+            .map(|(i, k)| json!({"text":k,"distance":0.3 + 0.1 * i as f64}))
+            .collect();
+        Value::Array(alts)
+    };
+    flick(&mut s, "か", kana_row("か"));
+    flick(&mut s, "ん", Value::Null);
+    flick(
+        &mut s,
+        "し",
+        json!([{"text":"じ","distance":0.2},{"text":"す","distance":0.3},{"text":"せ","distance":0.4}]),
+    );
+    press(&mut s, "Space", Value::Null);
+    let r = press(&mut s, "Space", Value::Null);
+    let found = corrected(&r);
+    assert_eq!(found, kanji_correction(), "{r}");
+    // 候補の総数も少ない（辞書にない読みの仮説は変換されない）
+    assert!(items(&r).len() <= 12, "{:?}", items(&r));
+}
+
 #[test]
 fn fuzzy_is_off_by_default_over_rpc() {
     let mut s = server("");

@@ -101,7 +101,7 @@ fn cases() -> Vec<EvalCase> {
 
 #[test]
 fn clean_input_is_never_degraded_and_counts_are_consistent() {
-    for kind in [NoiseKind::Touch, NoiseKind::Typo] {
+    for kind in [NoiseKind::Touch, NoiseKind::Typo, NoiseKind::Flick] {
         let noise = NoiseConfig {
             kind,
             rate: 0.0,
@@ -180,4 +180,86 @@ fn touch_noise_is_recovered_through_alternatives() {
     }
     assert!(ran > 0);
     assert!(on_hits > off_hits, "off={off_hits} on={on_hits}");
+}
+
+/// フリックの評価データ: 「小゛゜」を使う読み（かんじ）・記号（、）・漢字・辞書にない語を含む
+fn flick_cases() -> Vec<EvalCase> {
+    [
+        ("にほん", "日本"),
+        ("かんじ", "漢字"),
+        ("かんし", "監視"),
+        ("にほんご", "日本語"),
+        ("ふぉ", "フォ"),
+        ("かんじ、", "漢字、"),
+        ("漢字", "漢字"),
+        ("abc", "abc"),
+    ]
+    .into_iter()
+    .map(|(r, e)| EvalCase {
+        reading: r.to_string(),
+        expected: e.to_string(),
+    })
+    .collect()
+}
+
+#[test]
+fn flick_evaluation_excludes_unsupported_readings_and_never_degrades_clean_input() {
+    let noise = NoiseConfig {
+        kind: NoiseKind::Flick,
+        rate: 0.0,
+        ..NoiseConfig::default()
+    };
+    let r = run(&flick_cases(), noise, 1);
+    assert_eq!(r.cases, 8);
+    // 対象外: 、 を含む読み・漢字・ASCII（最初の対応できない文字で数える）
+    assert_eq!(r.skipped, 3);
+    assert_eq!(r.unsupported.get(&'、'), Some(&1));
+    assert_eq!(r.unsupported.get(&'漢'), Some(&1));
+    assert_eq!(r.unsupported.get(&'a'), Some(&1));
+    // 「小゛゜」を使う読み: かんじ・にほんご・ふぉ
+    assert_eq!(r.with_presses, 3);
+    assert_eq!(r.degraded, 0, "{:?}", r.examples);
+    assert_eq!(r.degradation_checked, 2 * 5);
+    assert_eq!(r.noised, 0);
+    // 代替なしの入力で追加仮説は走らない
+    assert_eq!(r.clean_hypotheses_run, 0);
+}
+
+#[test]
+fn flick_noise_is_recovered_through_alternatives_and_runs_are_reproducible() {
+    let noise = NoiseConfig {
+        kind: NoiseKind::Flick,
+        rate: 0.5,
+        max_noise: 1,
+        tap_sigma: 0.15,
+        ..NoiseConfig::default()
+    };
+    let (mut off_hits, mut on_hits, mut noised) = (0, 0, 0);
+    for seed in 0..40 {
+        let r = run(&flick_cases(), noise, seed);
+        assert_eq!(r.degraded, 0, "{:?}", r.examples);
+        assert!(r.on.top_n >= r.off.top_n);
+        assert!(r.on.any >= r.off.any);
+        off_hits += r.off.top_n;
+        on_hits += r.on.top_n;
+        noised += r.noised;
+        if seed < 3 {
+            let again = run(&flick_cases(), noise, seed);
+            assert_eq!(
+                (r.noised, r.off.top_n, r.on.top_n, r.hypotheses_run),
+                (
+                    again.noised,
+                    again.off.top_n,
+                    again.on.top_n,
+                    again.hypotheses_run
+                ),
+                "同じ seed なら同じ結果"
+            );
+        }
+    }
+    assert!(noised > 0);
+    assert!(
+        on_hits > off_hits,
+        "off={off_hits} on={on_hits} noised={noised}"
+    );
 }

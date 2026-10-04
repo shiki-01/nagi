@@ -16,7 +16,7 @@
 //!
 //! # 合成ノイズ評価（曖昧入力。`docs/fuzzy-input-design.md` §10-3）
 //!
-//! `--noise touch|typo` を付けると、上の評価の代わりに曖昧入力の評価を行う（`Conversion Expected`
+//! `--noise touch|typo|flick` を付けると、上の評価の代わりに曖昧入力の評価を行う（`Conversion Expected`
 //! 系の行の読みからローマ字の打鍵列を作り、ノイズを混ぜて入力 → Space 変換）:
 //!
 //! ```text
@@ -24,7 +24,13 @@
 //!     --noise touch --noise-rate 0.15 --seed 1 [--max-noise 1] [--tap-sigma 0.25] [--top-n 5] [--verbose]
 //! ```
 //!
-//! - `--noise-rate`: 1 打鍵あたりのノイズ確率（既定 0.1）、`--max-noise`: 1 入力に混ぜる最大数（既定 1）
+//! - `--noise flick`: フリック 12 キー（`frontend-ios/Layouts/flick-12.json` のかなキー）の操作列を作る。
+//!   読みの各かなを「行キー + 方向」に写像し（濁点・小書きは「基本かな + 小゛゜」= Backspace +
+//!   `insert_reading`）、ノイズは方向の取り違え・隣接キーへのずれ。代替は iOS の `FlickGeometry.decide` と
+//!   同じ規則（確定したゾーンを除き、他のゾーンと隣接キーの中央ゾーン、距離 <= 1.0、最大 3 件）で、
+//!   `--flick-typed-distance` で確定したゾーン自身の距離も加える（コアは相対コストで換算する）。
+//!   ひらがな・長音以外（記号・漢字・英数字）を含む読みは対象外（件数と文字を出力する）。`--tap-sigma` の既定は 0.15
+//! - `--noise-rate`: 1 打鍵（flick は 1 フリック）あたりのノイズ確率（既定 0.1）、`--max-noise`: 1 入力に混ぜる最大数（既定 1）
 //! - `--noise-tail N`: ノイズを末尾 N 打鍵にだけ混ぜる（既定 0 = 全体。補正の `window` は 8 なので、
 //!   機能そのものの効果を見るには 8 以下にする）
 //! - `--seed`: 乱数の種（既定 1。同じ値なら再現する）、`--tap-sigma`: タップ位置誤差の標準偏差（キー幅比）
@@ -63,6 +69,7 @@ fn main() {
         rate: 0.1,
         ..NoiseConfig::default()
     };
+    let mut tap_sigma: Option<f64> = None;
     let mut seed = 1u64;
     let mut top_n = 5usize;
     let mut tune = Tuning::default();
@@ -87,13 +94,14 @@ fn main() {
                     args.next()
                         .as_deref()
                         .and_then(NoiseKind::parse)
-                        .unwrap_or_else(|| usage("--noise は touch か typo")),
+                        .unwrap_or_else(|| usage("--noise は touch か typo か flick")),
                 );
             }
             "--noise-rate" => noise_cfg.rate = number(&mut args, "--noise-rate"),
             "--max-noise" => noise_cfg.max_noise = number(&mut args, "--max-noise"),
             "--noise-tail" => noise_cfg.tail = number(&mut args, "--noise-tail"),
-            "--tap-sigma" => noise_cfg.tap_sigma = number(&mut args, "--tap-sigma"),
+            "--tap-sigma" => tap_sigma = Some(number(&mut args, "--tap-sigma")),
+            "--flick-typed-distance" => noise_cfg.flick_typed_distance = true,
             "--seed" => seed = number(&mut args, "--seed"),
             "--top-n" => top_n = number(&mut args, "--top-n"),
             "--fuzzy-sigma" => tune.sigma = Some(number(&mut args, "--fuzzy-sigma")),
@@ -125,6 +133,11 @@ fn main() {
     });
     if let Some(kind) = noise {
         noise_cfg.kind = kind;
+        noise_cfg.tap_sigma = tap_sigma.unwrap_or(if kind == NoiseKind::Flick {
+            0.15
+        } else {
+            NoiseConfig::default().tap_sigma
+        });
         if !(0.0..=1.0).contains(&noise_cfg.rate) {
             usage("--noise-rate は 0..1");
         }
@@ -344,6 +357,24 @@ fn run_noise_eval(
         "cases={} skipped(not typeable)={} clean_top1_correct={} noised={}",
         report.cases, report.skipped, report.clean_correct, report.noised
     );
+    if noise.kind == NoiseKind::Flick {
+        let mut reasons: Vec<(char, usize)> =
+            report.unsupported.iter().map(|(c, n)| (*c, *n)).collect();
+        reasons.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let list: Vec<String> = reasons
+            .iter()
+            .take(12)
+            .map(|(c, n)| format!("{c}:{n}"))
+            .collect();
+        println!(
+            "flick: typeable={} (using 小゛゜: {}) excluded={} by first unsupported char [{}] typed_distance={} typeable_chars=hiragana+ー",
+            typeable,
+            report.with_presses,
+            report.skipped,
+            list.join(" "),
+            noise.flick_typed_distance
+        );
+    }
     for (label, t) in [("fuzzy off", &report.off), ("fuzzy on ", &report.on)] {
         println!(
             "{label}: top1 {:>4} / {:<4} ({:.1}%)  top{top_n} {:>4} ({:.1}%)  any {:>4} ({:.1}%)  space latency p50={:.1}ms p95={:.1}ms",
@@ -371,8 +402,21 @@ fn run_noise_eval(
         pct(report.tap_hypotheses_run, typeable),
     );
     println!(
+        "corrections shown on accurate input: {} / {} cases ({:.1}%), {} items ({:.2} per case)",
+        report.tap_corrected_cases,
+        typeable,
+        pct(report.tap_corrected_cases, typeable),
+        report.tap_corrected_items,
+        report.tap_corrected_items as f64 / typeable.max(1) as f64,
+    );
+    println!(
         "degradation (clean input, on vs off): {} / {} (unstable baseline cases: {})",
         report.degraded, report.degradation_checked, report.unstable_baseline
+    );
+    println!(
+        "convert_hypotheses: {} calls, {:.2} ms per call (the rest of the corrected space latency is expand etc.)",
+        counting.hypothesis_calls(),
+        counting.hypothesis_millis() / counting.hypothesis_calls().max(1) as f64,
     );
     eprintln!("elapsed {:.1}s", started.elapsed().as_secs_f64());
     if report.degraded > 0 {

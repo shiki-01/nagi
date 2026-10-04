@@ -316,3 +316,43 @@ fn kana_keys_flush_pending_romaji_like_the_composer() {
     assert_eq!(h[0].reading, "にhんの");
     assert!(readings(&h).contains(&"にほんの"), "{h:?}");
 }
+
+#[test]
+fn insertion_is_not_applied_between_kana_keys() {
+    // かなだけのキー列（フリック）では、ローマ字の欠落補完は意味を持たない
+    let cfg = FuzzyConfig::default();
+    let table = RomajiTable::standard();
+    let wide = FuzzyConfig {
+        beam: 64,
+        ..cfg.clone()
+    };
+    let words = Mock::new(&["かんじ", "かあんじ", "かんあじ", "かんじあ", "あかんじ"]);
+    let kana: Vec<KeyAlternatives> = "かんじ".chars().map(KeyAlternatives::exact).collect();
+    let (h, stats) = expand_with_stats(&kana, &table, &words, &wide);
+    assert_eq!(readings(&h), vec!["かんじ"], "{h:?}");
+    // 探索も広がらない（打たれたとおりの 1 状態ずつ）
+    assert_eq!(stats.states_expanded, 3, "{stats:?}");
+
+    // ローマ字キーに隣接する位置では従来どおり補完される（nihn の末尾の後ろ・かなキーとの境界）
+    let words = Mock::new(&["にほんの", "かんあ"]);
+    let mixed: Vec<KeyAlternatives> = "nihn"
+        .chars()
+        .map(KeyAlternatives::exact)
+        .chain([KeyAlternatives::exact('の')])
+        .collect();
+    let h = expand(&mixed, &table, &words, &cfg);
+    assert!(readings(&h).contains(&"にほんの"), "{h:?}");
+    // かな + ローマ字: かなの直後（ローマ字キーの直前）での補完
+    let mixed: Vec<KeyAlternatives> = [KeyAlternatives::exact('か')]
+        .into_iter()
+        .chain("si".chars().map(KeyAlternatives::exact))
+        .collect();
+    // 子音の欠落補完の候補（保留だけが違う状態）でビームが埋まらないよう、ビームを広げて確かめる
+    let wide = FuzzyConfig {
+        beam: 64,
+        ..cfg.clone()
+    };
+    let h = expand(&mixed, &table, &Mock::new(&["かあし"]), &wide);
+    assert_eq!(h[0].reading, "かし");
+    assert!(readings(&h).contains(&"かあし"), "{h:?}");
+}

@@ -195,7 +195,7 @@ pub fn expand_with_stats(
     for i in 0..=n {
         let mut cur = std::mem::take(&mut layers[i]);
         // 欠落補完は同じ位置に留まるので、編集回数の層ごとに展開する
-        if i >= w_start && max_edits > 0 {
+        if i >= w_start && max_edits > 0 && romaji_adjacent(keys, i) {
             let mut frontier = cur.clone();
             for _ in 0..max_edits {
                 let mut next = Vec::new();
@@ -458,6 +458,13 @@ fn finish(s: State, table: &Steps, oracle: &dyn PrefixOracle, cfg: &FuzzyConfig)
 
 fn lower(c: char) -> bool {
     c.is_ascii_lowercase()
+}
+
+/// 位置 `i`（`keys[i]` の直前）が小文字 ASCII のローマ字キーに隣接しているか。
+/// 欠落補完はローマ字の綴りの欠落を補うものなので、ひらがなのキー（フリック等）だけが並ぶ位置では行わない
+/// （かなだけの入力に ASCII 1 文字を挿入しても、打ち間違いとして意味を持たず、探索を無駄に広げるだけ）
+fn romaji_adjacent(keys: &[KeyAlternatives], i: usize) -> bool {
+    (i > 0 && lower(keys[i - 1].typed())) || keys.get(i).is_some_and(|k| lower(k.typed()))
 }
 
 /// この位置に 1 文字挿入する（テーブル上合法な連続になる a-z だけ）
