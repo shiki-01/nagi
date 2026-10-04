@@ -6,6 +6,12 @@ name: ios-app
 
 on:
   workflow_dispatch:
+  # main に取り込まれるまで workflow_dispatch が使えないため、作業ブランチの push でも走らせる
+  push:
+    branches: [claude/amazing-mccarthy-3bg0ge]
+    paths:
+      - 'frontend-ios/**'
+      - '.github/workflows/ios-app.yml'
 
 concurrency:
   group: ios-app-${{ github.ref }}
