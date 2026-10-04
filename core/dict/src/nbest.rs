@@ -67,10 +67,12 @@ impl Dictionary {
         char_at_byte[bytes.len()] = n;
 
         for p in 0..n {
-            let preds: Vec<(u16, i32, usize)> = best_at[p]
+            let mut preds: Vec<(u16, i32, usize)> = best_at[p]
                 .iter()
                 .flat_map(|(&rid, list)| list.iter().map(move |&(total, node)| (rid, total, node)))
                 .collect();
+            // HashMap の反復順に依存して同点の結果が実行ごとに変わらないよう、右 ID 順に固定する
+            preds.sort_by_key(|p| p.0);
 
             // 辞書の共通接頭辞一致
             for (group, len) in self.common_prefix_groups(&bytes[byte_pos[p]..]) {
@@ -144,7 +146,7 @@ impl Dictionary {
                     .map(move |&(total, node)| (total + self.connection(rid, 0), node))
             })
             .collect();
-        finals.sort_by_key(|&(c, _)| c);
+        finals.sort_by_key(|&(c, node)| (c, node));
         finals.truncate(k);
 
         // 各終端ノードから経路をバックトラックし、文節に区切って SentenceCandidate を作る。

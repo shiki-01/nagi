@@ -357,7 +357,6 @@ fn nihn_offers_nihon_when_composition_has_raw_literal() {
     // 補正候補を選ぶと文全体が置き換わり、第一仮説にも戻せる
     e.select_candidate(S, 3);
     assert_eq!(preedit_text(&e), "日本");
-    assert_eq!(candidate_surfaces(&e), ["にhん", "日本"]);
     e.select_candidate(S, 0);
     assert_eq!(preedit_text(&e), "にhん");
     e.select_candidate(S, 1);

@@ -377,13 +377,17 @@ impl Dictionary {
     ///
     /// FST を辿るだけで語は取り出さない。曖昧入力の枝刈り用。
     pub fn has_prefix(&self, reading: &str) -> bool {
-        use fst::{Automaton, IntoStreamer, Streamer};
-        if reading.is_empty() {
-            return true;
+        // 遷移を辿れれば接頭辞（FST は最小化されており、到達できる節点の先には必ず語がある）。
+        // `search` + ストリームより桁違いに速い（照会ごとの割り当てが無い）
+        let fst = self.trie.as_fst();
+        let mut node = fst.root();
+        for &byte in reading.as_bytes() {
+            let Some(index) = node.find_input(byte) else {
+                return false;
+            };
+            node = fst.node(node.transition(index).addr);
         }
-        let automaton = fst::automaton::Str::new(reading).starts_with();
-        let mut stream = self.trie.search(automaton).into_stream();
-        stream.next().is_some()
+        true
     }
 
     /// 読みが辞書の読みとして完全一致で存在するか

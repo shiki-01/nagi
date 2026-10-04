@@ -163,7 +163,15 @@ fn nihn_space_returns_corrected_candidate_over_rpc() {
         [("日本".to_string(), Some("にほん".to_string()))],
         "{r}"
     );
-    // 補正候補を選ぶ（候補ウィンドウの次候補）と preedit が置き換わり、確定できる
+    // 構造は第一仮説のまま（注目文節の候補が進むだけ）。補正候補まで進むと文全体が置き換わり、確定できる
+    assert_ne!(r["preedit"]["text"], "日本");
+    let mut r = r;
+    for _ in 0..items(&r).len() {
+        if r["preedit"]["text"] == "日本" {
+            break;
+        }
+        r = press(&mut s, "Space", Value::Null);
+    }
     assert_eq!(r["preedit"]["text"], "日本");
     let r = press(&mut s, "Enter", Value::Null);
     assert_eq!(r["commit"], "日本");
@@ -403,4 +411,101 @@ fn real_dictionary_correction_latency() {
         };
         assert!(expand_ms + convert_ms < limit_ms, "{typed}: 補正が遅すぎる");
     }
+}
+
+/// 照会回数と時間を数える `PrefixOracle`（実辞書での `expand` のプロファイル用）
+struct CountingOracle<'a> {
+    inner: &'a dyn nagi_fuzzy::PrefixOracle,
+    prefix: std::cell::Cell<(u64, std::time::Duration)>,
+    word: std::cell::Cell<(u64, std::time::Duration)>,
+}
+
+impl nagi_fuzzy::PrefixOracle for CountingOracle<'_> {
+    fn has_prefix(&self, s: &str) -> bool {
+        let t = std::time::Instant::now();
+        let r = self.inner.has_prefix(s);
+        let (n, d) = self.prefix.get();
+        self.prefix.set((n + 1, d + t.elapsed()));
+        r
+    }
+    fn contains_word(&self, s: &str) -> bool {
+        let t = std::time::Instant::now();
+        let r = self.inner.contains_word(s);
+        let (n, d) = self.word.get();
+        self.word.set((n + 1, d + t.elapsed()));
+        r
+    }
+}
+
+/// 実辞書での `expand` 単体の計測（辞書が無ければ skip）。典型的なタッチ入力（全打鍵に隣接キーの代替つき）。
+/// `cargo test -p nagi-server --release --test fuzzy -- --ignored --nocapture real_dictionary_expand_profile`
+#[test]
+#[ignore = "計測用（実辞書が必要）"]
+fn real_dictionary_expand_profile() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/dict/nagi-dict.bin");
+    if !path.exists() {
+        eprintln!("skip: {} が無い（cargo xtask build-dict）", path.display());
+        return;
+    }
+    let dict = Arc::new(Dictionary::load(&path).expect("辞書の読み込み"));
+    let config = Config::default();
+    let p = Pipeline::new(Some(dict), None, runtime(&config));
+    let oracle = p.prefix_oracle().unwrap();
+    let table = RomajiTable::standard();
+    let cfg = FuzzyConfig::default();
+    for typed in [
+        "nihn",
+        "kanizi",
+        "kyouhaiitenkidesune",
+        "watasihamainitigakkouniikimasu",
+    ] {
+        let keys: Vec<nagi_fuzzy::KeyAlternatives> = typed
+            .chars()
+            .map(|c| {
+                // 近傍キーを 2 つ（距離 0.5・0.7）。打たれたキー自身の距離は 0.3
+                let n1 = neighbor(c, 1);
+                let n2 = neighbor(c, 2);
+                nagi_fuzzy::KeyAlternatives::from_distances(
+                    c,
+                    &[(c, 0.3), (n1, 0.5), (n2, 0.7)],
+                    &cfg,
+                )
+            })
+            .collect();
+        let counting = CountingOracle {
+            inner: oracle,
+            prefix: Default::default(),
+            word: Default::default(),
+        };
+        let started = std::time::Instant::now();
+        let (hyps, stats) = nagi_fuzzy::expand_with_stats(&keys, &table, &counting, &cfg);
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        let (pn, pd) = counting.prefix.get();
+        let (wn, wd) = counting.word.get();
+        eprintln!(
+            "{typed} ({} keys): expand {ms:.2} ms, {} hyps, {} states; has_prefix {pn} calls {:.2} ms; contains_word {wn} calls {:.2} ms",
+            typed.len(),
+            hyps.len(),
+            stats.states_expanded,
+            pd.as_secs_f64() * 1000.0,
+            wd.as_secs_f64() * 1000.0,
+        );
+    }
+}
+
+/// QWERTY の左右隣のキー（計測用の代替）
+fn neighbor(c: char, k: usize) -> char {
+    const ROWS: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+    for row in ROWS {
+        if let Some(i) = row.find(c) {
+            let chars: Vec<char> = row.chars().collect();
+            let j = if k == 1 { i + 1 } else { i.wrapping_sub(1) };
+            return chars
+                .get(j)
+                .copied()
+                .unwrap_or(chars[(i + 2) % chars.len()]);
+        }
+    }
+    c
 }

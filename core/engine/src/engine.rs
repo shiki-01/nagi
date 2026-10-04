@@ -31,6 +31,8 @@ use std::sync::Arc;
 const LEFT_CONTEXT_CHARS: usize = 40;
 /// 文節 1 つ分に集める候補数の上限
 const CANDIDATE_LIMIT: usize = 50;
+/// 複数文節入力の補正候補を、文節の候補リストの何番目に挿入するか（先頭からこの件数は通常候補のまま）
+const CORRECTION_SLOT: usize = 3;
 
 /// 候補ウィンドウの初期表示（`conversion.initial_view`。設計書 §4.4）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1996,15 +1998,22 @@ impl Engine {
         } else {
             push_candidate(&mut items, &seg.surface, &[]);
         }
-        // 複数文節入力の文全体の補正候補は、どの文節の候補にも末尾に足す（選ぶと文全体が置き換わる）
+        // 複数文節入力の文全体の補正候補は、どの文節の候補にも足す（選ぶと文全体が置き換わる）。
+        // 既存の項目の順序・内容は変えず、先頭 `CORRECTION_SLOT` 件の後ろに挿入する（文節の候補は
+        // 最大 50 件あり、末尾では候補ウィンドウの 1 ページ目に出ず補正が使われないため）
         if let Some((_, corrections)) = &conv.sentence_corrections {
+            let mut at = CORRECTION_SLOT.min(items.len());
             for c in corrections {
                 if !items.iter().any(|i| i.surface == c.surface) {
-                    items.push(Candidate {
-                        surface: c.surface.clone(),
-                        sources: vec![CandidateSource::Corrected],
-                        reading: Some(c.reading.clone()),
-                    });
+                    items.insert(
+                        at,
+                        Candidate {
+                            surface: c.surface.clone(),
+                            sources: vec![CandidateSource::Corrected],
+                            reading: Some(c.reading.clone()),
+                        },
+                    );
+                    at += 1;
                 }
             }
         }

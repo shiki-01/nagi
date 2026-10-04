@@ -263,10 +263,12 @@ impl Dictionary {
         best_at[0].insert(0, (0, usize::MAX));
 
         for p in 0..n {
-            let preds: Vec<(u16, i32, usize)> = best_at[p]
+            let mut preds: Vec<(u16, i32, usize)> = best_at[p]
                 .iter()
                 .map(|(&rid, &(total, node))| (rid, total, node))
                 .collect();
+            // HashMap の反復順に依存して同点の結果が実行ごとに変わらないよう、右 ID 順に固定する
+            preds.sort_by_key(|p| p.0);
             // 左 ID ごとに「最良の前ノード + 連接コスト」を使い回す
             let mut memo: HashMap<u16, (i32, usize)> = HashMap::new();
             let mut best_pred = |lid: u16| -> (i32, usize) {
@@ -348,7 +350,7 @@ impl Dictionary {
         let (total, last) = best_at[n]
             .iter()
             .map(|(&rid, &(total, node))| (total + self.connection(rid, 0), node))
-            .min_by_key(|&(c, _)| c)
+            .min_by_key(|&(c, node)| (c, node))
             .unwrap_or((0, usize::MAX));
         let mut words = Vec::new();
         let mut cur = last;

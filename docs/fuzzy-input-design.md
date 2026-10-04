@@ -254,3 +254,14 @@ F-0〜F-1 はデスクトップ単体でも価値があり、モバイル着手�
 - **nagi-fuzzy の修正**: ひらがなキーを Raw として落としていたため、保留を確定してから素通しするよう `step` を修正（かな直接挿入を含む入力で補正が出るように）
 - **設定**: `[fuzzy]`（`sigma` は設計の `touch_sigma` に相当）。`Config` から `Eq` を外した（浮動小数を含むため）
 - **未計測**: 実辞書でのレイテンシ（`real_dictionary_correction_latency` は `data/dict/nagi-dict.bin` が無いと skip）
+
+## 15. F-2 の実装メモと F-1 の修正（2026-10-04）
+
+- **合成ノイズ評価**: `nagi-eval --noise touch|typo --noise-rate <r> --seed <n> [--max-noise N] [--noise-tail N] [--tap-sigma s] [--top-n N]` と、補正の較正用上書き（`--fuzzy-sigma` `--input-weight` `--ambiguity-margin` `--poor-coverage` `--fuzzy-max-edits` `--fuzzy-hypotheses`）。`--user-dir` を必ず指定する。ノイズ無し入力で補正ありが劣化すると非ゼロ終了する。QWERTY 配列とタップの模擬は評価ツール内の仮定でコアには入れていない
+- **打たれたキー自身の距離**: `KeyRecord.typed_distance` を追加。フロントが代替に打鍵自身の距離を含めると、`from_distances` の相対コストが効く
+- **§14 の「複数文節では文全体候補へ変換」を改訂**: 複数文節（Literal 混入を含む）では、表示構造・文節・候補リストを変えず、注目文節の候補リストに文全体の補正候補（`Corrected`、`note` は補正後の読み）を挿入する。選択したときだけ文全体を 1 文節の文全体候補へ置き換える。sentence モードと単一文節は従来どおり
+- **挿入位置**: 候補リストの先頭 3 件の後ろ（`CORRECTION_SLOT = 3`）。末尾だと 1 ページ目に出ず top-5 が 60.5% から 41.5% に落ちたため。§6.3「通常候補の後ろ」の例外
+- **決定的化**: dict の Viterbi / N-best の同点を決定的にした（`HashMap` 反復順依存の除去。`align.rs` には残る）。`nagi-eval --no-llm` の精度は不変（403/609）
+- **高速化**: `expand` の oracle 照会とローマ字変換の遷移を呼び出し単位でメモ化、`Dictionary::has_prefix` を FST の遷移を辿る実装に変更。仮説は不変（504 ケースで旧実装とビット一致）。30 打鍵の `expand` は 366ms から約 32ms。`nagi-eval` の補正あり Space は p95 約 145ms から 12ms（補正なし 0.5ms）
+- **計測結果（touch・rate 0.15）**: 劣化 0/1000、top-5 60.5%（補正なし 0.5%）。typo の top-5 は 3〜7% と低い（第一仮説が辞書で完全に読める場合は条件 1・2 のどちらにも当たらず補正が走らない。§14 の条件 3 未実装）
+- **未解決**: 30 打鍵の `expand` 単体は約 32ms（長文では +20ms を超え得る。残りは割り当て・ハッシュ・`RomajiTable::has_longer_prefix` の線形走査）、文全体補正の選択後に第一仮説へ戻すと元の先頭候補ではなく選択時点の候補構成になる、`poor_coverage` を下げると typo の再現率は上がるが誤爆（辞書にない固有名詞）は未測定

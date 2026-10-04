@@ -3,6 +3,7 @@
 use crate::config::{CONSONANT_CONFUSIONS, FuzzyConfig};
 use crate::keys::KeyAlternatives;
 use nagi_romaji::{Emit, RomajiConverter, RomajiTable};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -17,6 +18,56 @@ pub trait PrefixOracle {
     fn has_prefix(&self, reading_prefix: &str) -> bool;
     /// 読みが辞書の語として完全一致で存在するか
     fn contains_word(&self, word: &str) -> bool;
+}
+
+/// 呼び出し単位（1 回の `expand`）でだけ生きる `PrefixOracle` の照会結果のメモ化。
+///
+/// 探索では同じ文字列（状態間で共通する接尾辞）を何度も照会するため、辞書（FST）への照会を
+/// 1 回にする。`expand` の終了で破棄する（メモリは探索中の状態数に比例する範囲）。結果は元の oracle と同じ
+struct MemoOracle<'a> {
+    inner: &'a dyn PrefixOracle,
+    prefix: RefCell<HashMap<String, bool>>,
+    word: RefCell<HashMap<String, bool>>,
+}
+
+impl<'a> MemoOracle<'a> {
+    fn new(inner: &'a dyn PrefixOracle) -> Self {
+        Self {
+            inner,
+            prefix: RefCell::new(HashMap::new()),
+            word: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
+impl PrefixOracle for MemoOracle<'_> {
+    fn has_prefix(&self, reading_prefix: &str) -> bool {
+        if let Some(&r) = self.prefix.borrow().get(reading_prefix) {
+            return r;
+        }
+        // 接頭辞が辞書の読みの接頭辞でなければ、それを伸ばした文字列もそうではない。
+        // 直前の文字を除いた文字列が既に false と分かっていれば照会しない
+        let shorter = reading_prefix
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| &reading_prefix[..i]);
+        let known_false = shorter
+            .is_some_and(|sh| !sh.is_empty() && self.prefix.borrow().get(sh).is_some_and(|&r| !r));
+        let r = !known_false && self.inner.has_prefix(reading_prefix);
+        self.prefix
+            .borrow_mut()
+            .insert(reading_prefix.to_string(), r);
+        r
+    }
+
+    fn contains_word(&self, word: &str) -> bool {
+        if let Some(&r) = self.word.borrow().get(word) {
+            return r;
+        }
+        let r = self.inner.contains_word(word);
+        self.word.borrow_mut().insert(word.to_string(), r);
+        r
+    }
 }
 
 /// 適用した編集の内訳
@@ -109,6 +160,9 @@ pub fn expand_with_stats(
     oracle: &dyn PrefixOracle,
     cfg: &FuzzyConfig,
 ) -> (Vec<ReadingHypothesis>, ExpandStats) {
+    let steps = Steps::new(table);
+    let memo = MemoOracle::new(oracle);
+    let oracle: &dyn PrefixOracle = &memo;
     let mut stats = ExpandStats::default();
     let first = ReadingHypothesis {
         reading: typed_reading(keys, table),
@@ -149,7 +203,7 @@ pub fn expand_with_stats(
                     if s.edits.edit_ops() >= max_edits {
                         continue;
                     }
-                    insertions(s, table, oracle, cfg, &mut next);
+                    insertions(s, &steps, oracle, cfg, &mut next);
                 }
                 cur.extend(next.iter().cloned());
                 frontier = next;
@@ -169,7 +223,7 @@ pub fn expand_with_stats(
                 i,
                 i >= w_start,
                 max_edits,
-                table,
+                &steps,
                 oracle,
                 cfg,
                 &mut produced,
@@ -183,7 +237,7 @@ pub fn expand_with_stats(
     // 終端: 保留を確定し、全体が辞書語に分割できるものだけ採用する
     let mut best: HashMap<String, ReadingHypothesis> = HashMap::new();
     for s in std::mem::take(&mut layers[n]) {
-        let Some(s) = finish(s, table, oracle, cfg) else {
+        let Some(s) = finish(s, &steps, oracle, cfg) else {
             continue;
         };
         let end = s.kana.len();
@@ -241,9 +295,39 @@ fn typed_reading(keys: &[KeyAlternatives], table: &Arc<RomajiTable>) -> String {
     s
 }
 
+/// 変換器の遷移（保留, 入力文字列）→ 結果のメモ。変換器は決定的なので、同じ入力は 1 回だけ計算する
+/// （`RomajiConverter` の生成・保留の再入力・テーブル照会を状態ごとにやり直さないため）。`expand` の
+/// 呼び出し単位で破棄する
+struct Steps {
+    table: Arc<RomajiTable>,
+    cache: RefCell<HashMap<(String, String), StepResult>>,
+}
+
+/// [`step`] の結果（出力文字列, 新しい保留）。不正な連続は None
+type StepResult = Option<(String, String)>;
+
+impl Steps {
+    fn new(table: &Arc<RomajiTable>) -> Self {
+        Self {
+            table: Arc::clone(table),
+            cache: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
 /// 保留を復元した変換器に `chars` を順に入力する。Raw が出たら（不正な連続として）None。
 /// 戻り値は（出力文字列, 新しい保留）
-fn step(table: &Arc<RomajiTable>, pending: &str, chars: &[char]) -> Option<(String, String)> {
+fn step(steps: &Steps, pending: &str, chars: &[char]) -> StepResult {
+    let key = (pending.to_string(), chars.iter().collect::<String>());
+    if let Some(r) = steps.cache.borrow().get(&key) {
+        return r.clone();
+    }
+    let r = step_uncached(&steps.table, pending, chars);
+    steps.cache.borrow_mut().insert(key, r.clone());
+    r
+}
+
+fn step_uncached(table: &Arc<RomajiTable>, pending: &str, chars: &[char]) -> StepResult {
     let mut conv = RomajiConverter::new(Arc::clone(table));
     for c in pending.chars() {
         // 保留は待機状態の文字列なので、再入力しても何も出ないはず
@@ -254,7 +338,7 @@ fn step(table: &Arc<RomajiTable>, pending: &str, chars: &[char]) -> Option<(Stri
     let mut out = String::new();
     for &c in chars {
         if is_kana_char(c) {
-            // ひらがなのキー（フリック等）は、保留を確定してからそのまま挿入する
+            // ひらがなのキー（フリック等）は、保留を確定してから素通しで挿入する
             for e in conv.flush() {
                 match e {
                     Emit::Converted(t) => out.push_str(&t),
@@ -280,7 +364,7 @@ fn advance(
     chars: &[char],
     add_cost: f32,
     edits: EditSummary,
-    table: &Arc<RomajiTable>,
+    table: &Steps,
     oracle: &dyn PrefixOracle,
     cfg: &FuzzyConfig,
 ) -> Option<State> {
@@ -341,23 +425,21 @@ fn append(s: &mut State, text: &str, oracle: &dyn PrefixOracle, cfg: &FuzzyConfi
             .retain(|&(q, _)| char_count(&kana[q..p]) <= KEEP_BOUNDARY_CHARS);
     }
     let end = s.kana.len();
-    s.boundaries
-        .iter()
-        .any(|&(q, _)| q == end || oracle.has_prefix(&s.kana[q..]))
-        .then_some(())
+    // 末尾が境界なら照会しない。そうでなければ新しい境界から（成立しやすい順に）照会する
+    (s.boundaries.iter().any(|&(q, _)| q == end)
+        || s.boundaries
+            .iter()
+            .rev()
+            .any(|&(q, _)| oracle.has_prefix(&s.kana[q..])))
+    .then_some(())
 }
 
 /// 保留を確定する。不正（Raw）や枝刈りで None
-fn finish(
-    s: State,
-    table: &Arc<RomajiTable>,
-    oracle: &dyn PrefixOracle,
-    cfg: &FuzzyConfig,
-) -> Option<State> {
+fn finish(s: State, table: &Steps, oracle: &dyn PrefixOracle, cfg: &FuzzyConfig) -> Option<State> {
     if s.pending.is_empty() {
         return Some(s);
     }
-    let mut conv = RomajiConverter::new(Arc::clone(table));
+    let mut conv = RomajiConverter::new(Arc::clone(&table.table));
     for c in s.pending.chars() {
         conv.feed(c);
     }
@@ -381,7 +463,7 @@ fn lower(c: char) -> bool {
 /// この位置に 1 文字挿入する（テーブル上合法な連続になる a-z だけ）
 fn insertions(
     s: &State,
-    table: &Arc<RomajiTable>,
+    table: &Steps,
     oracle: &dyn PrefixOracle,
     cfg: &FuzzyConfig,
     out: &mut Vec<State>,
@@ -403,7 +485,7 @@ fn transitions(
     i: usize,
     in_window: bool,
     max_edits: u8,
-    table: &Arc<RomajiTable>,
+    table: &Steps,
     oracle: &dyn PrefixOracle,
     cfg: &FuzzyConfig,
     out: &mut Vec<(usize, State)>,
