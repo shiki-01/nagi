@@ -86,6 +86,16 @@ jobs:
             | tee build/xcodebuild.log | tail -n 40
         shell: bash
 
+      # 診断（キーボード拡張が CODESIGNING Invalid Page で起動直後に kill される件の切り分け用）。
+      # ldid の前後でアプリと拡張の署名・Mach-O 構造・ハッシュを比べる。失敗してもジョブは止めない。
+      - name: 署名診断（ldid 前）
+        working-directory: frontend-ios-spike
+        run: |
+          bash ../.github/scripts/ios-signing-diag.sh before-ldid \
+            build/NagiSpike.xcarchive/Products/Applications/NagiSpike.app \
+            build/diag/signing-before-ldid.log
+        continue-on-error: true
+
       # CODE_SIGNING_ALLOWED=NO ではエンタイトルメントがバイナリに入らず、SideStore が
       # App Group を付与できない。ldid の擬似署名で埋め込む（実署名は SideStore が行う）。
       - name: エンタイトルメントを埋め込む（ldid）
@@ -102,6 +112,14 @@ jobs:
             ldid -e "$bin" | tee /dev/stderr | grep -q '<key>com.apple.security.application-groups</key>'
           done
 
+      - name: 署名診断（ldid 後）
+        working-directory: frontend-ios-spike
+        run: |
+          bash ../.github/scripts/ios-signing-diag.sh after-ldid \
+            build/NagiSpike.xcarchive/Products/Applications/NagiSpike.app \
+            build/diag/signing-after-ldid.log
+        continue-on-error: true
+
       - name: IPA を作成
         working-directory: frontend-ios-spike
         run: |
@@ -110,11 +128,38 @@ jobs:
           (cd build/ipa && zip -qr ../NagiSpike-unsigned.ipa Payload)
           ls -lh build/NagiSpike-unsigned.ipa
 
+      # IPA を展開し直して、ldid 後と実行ファイルが一致するか（zip で壊れていないか）を確認する。
+      # 配布した IPA を SideStore が再署名する前の状態の記録にもなる。
+      - name: 署名診断（IPA 展開後）
+        working-directory: frontend-ios-spike
+        run: |
+          d=$(mktemp -d)
+          unzip -q build/NagiSpike-unsigned.ipa -d "$d"
+          bash ../.github/scripts/ios-signing-diag.sh from-ipa \
+            "$(echo "$d"/Payload/*.app)" \
+            build/diag/signing-from-ipa.log
+          echo "=== 実行ファイルのハッシュ比較（ldid 後の archive と IPA 展開後）"
+          src=build/NagiSpike.xcarchive/Products/Applications/NagiSpike.app
+          for rel in NagiSpike PlugIns/NagiSpikeKeyboard.appex/NagiSpikeKeyboard; do
+            a=$(shasum -a 256 "$src/$rel" | cut -d' ' -f1)
+            b=$(shasum -a 256 "$(echo "$d"/Payload/*.app)/$rel" | cut -d' ' -f1)
+            [ "$a" = "$b" ] && r=一致 || r=不一致
+            echo "$rel: archive=$a ipa=$b $r"
+          done | tee build/diag/hash-compare.log
+        continue-on-error: true
+
       - uses: actions/upload-artifact@v4
         with:
           name: NagiSpike-unsigned-ipa
           path: frontend-ios-spike/build/NagiSpike-unsigned.ipa
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: signing-diag
+          path: frontend-ios-spike/build/diag
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         if: always()
