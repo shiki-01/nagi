@@ -41,6 +41,11 @@ class SharedStore {
         resolution
     }
 
+    /// 実際に使う App Group ID（解決できなければ既定値）
+    var appGroupId: String {
+        resolution.resolvedID ?? "group.com.shiki.nagi.spike"
+    }
+
     /// 辞書ファイルのパス（優先順位: App Group → Bundle）
     /// - Returns: (path: String?, source: String) source は "appgroup" / "bundle" / "none"
     func dictPath() -> (path: String?, source: String) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var selectedTab = 0
@@ -7,6 +8,8 @@ struct ContentView: View {
     @State private var dataStatus = ""
     @State private var showingDocumentPicker = false
     @State private var copyingDict = false
+    @State private var modelFiles: [DataPaths.ModelFile] = []
+    @State private var selectedModelName = ""
     @State private var allResults: [ProbeResult] = []
     @State private var showingAlert = false
     @State private var alertMessage = ""
@@ -74,11 +77,31 @@ struct ContentView: View {
                                 .disabled(!canCopyDict())
                             }
 
-                            if !copyingDict {
-                                Button("モデル(GGUF)をファイルから取り込む") {
+                            if copyingDict {
+                                HStack {
+                                    ProgressView()
+                                    Text("モデルをコピー中…（数十秒かかることがあります）").font(.caption)
+                                }
+                            } else {
+                                Button("モデルをインポート（.gguf を選択）") {
                                     showingDocumentPicker = true
                                 }
                                 .disabled(store.containerURL == nil)
+                            }
+
+                            if modelFiles.count > 1 {
+                                Picker("llm_load で使うモデル", selection: Binding(
+                                    get: { selectedModelName },
+                                    set: { name in
+                                        selectedModelName = name
+                                        DataPaths.setPreferredModelName(name, appGroupId: store.appGroupId)
+                                        updateDataStatus()
+                                    }
+                                )) {
+                                    ForEach(modelFiles, id: \.name) { file in
+                                        Text("\(file.name) (\(formatBytes(file.sizeBytes)))").tag(file.name)
+                                    }
+                                }
                             }
                         }
                         .onAppear { updateDataStatus() }
@@ -92,10 +115,15 @@ struct ContentView: View {
                 .navigationTitle("ホーム")
                 .fileImporter(
                     isPresented: $showingDocumentPicker,
-                    allowedContentTypes: [.init(filenameExtension: "gguf")!],
+                    // .gguf は未登録の拡張子なので、動的型に加えて .data も許可し、拡張子は importModel で検査する
+                    allowedContentTypes: [UTType(filenameExtension: "gguf") ?? .data, .data],
                     onCompletion: { result in
-                        if case .success(let url) = result {
+                        switch result {
+                        case .success(let url):
                             importModel(from: url)
+                        case .failure(let error):
+                            alertMessage = "ファイルを選べませんでした: \(error.localizedDescription)"
+                            showingAlert = true
                         }
                     }
                 )
@@ -248,17 +276,25 @@ struct ContentView: View {
             status += "辞書: なし [\(dictSource)]\n"
         }
 
-        let (modelsDir, modelsSource) = store.modelsDir()
-        if let modelsDir = modelsDir {
-            let files = try? FileManager.default.contentsOfDirectory(atPath: modelsDir)
-            let ggufFiles = files?.filter { $0.hasSuffix(".gguf") } ?? []
-            if !ggufFiles.isEmpty {
-                status += "モデル: あり (\(ggufFiles.count) 個) [\(modelsSource)]\n"
-            } else {
-                status += "モデル: なし [\(modelsSource)]\n"
+        switch DataPaths.modelStatus(appGroupId: store.appGroupId) {
+        case .noContainer:
+            status += "モデル: なし (a) App Group コンテナが取得できません\n"
+            modelFiles = []
+        case .noModelsDir(let path):
+            status += "モデル: なし (b) \(path) がありません。「モデルをインポート」で .gguf を選んでください\n"
+            modelFiles = []
+        case .noGGUF(let path):
+            status += "モデル: なし (c) \(path) に .gguf がありません。「モデルをインポート」で選んでください\n"
+            modelFiles = []
+        case .found(let dir, let files, let source):
+            let preferred = DataPaths.preferredModelName(appGroupId: store.appGroupId)
+            let used = DataPaths.selectModel(from: files, preferredName: preferred)
+            status += "モデル: あり (\(files.count) 個) [\(source)]\n  \(dir)\n"
+            for file in files {
+                status += "  - \(file.name) (\(formatBytes(file.sizeBytes)))\(file.name == used?.name ? " ← llm_load で使用" : "")\n"
             }
-        } else {
-            status += "モデル: なし [\(modelsSource)]\n"
+            modelFiles = files
+            if let used = used, selectedModelName != used.name { selectedModelName = used.name }
         }
 
         dataStatus = status
@@ -267,15 +303,11 @@ struct ContentView: View {
     private func canCopyDict() -> Bool {
         // App Group が利用不可の場合はコピーできない
         guard store.containerURL != nil else { return false }
-
-        if let bundleDict = Bundle.main.url(forResource: "nagi-dict", withExtension: "bin") {
-            return FileManager.default.fileExists(atPath: bundleDict.path)
-        }
-        return false
+        return DataPaths.bundleDictURL() != nil
     }
 
     private func copyDictFromBundle() {
-        guard let bundleDict = Bundle.main.url(forResource: "nagi-dict", withExtension: "bin") else {
+        guard let bundleDict = DataPaths.bundleDictURL() else {
             alertMessage = "バンドルに辞書ファイルが見つかりません"
             showingAlert = true
             return
@@ -292,6 +324,9 @@ struct ContentView: View {
 
         do {
             try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destPath.path) {
+                try FileManager.default.removeItem(at: destPath)
+            }
             try FileManager.default.copyItem(at: bundleDict, to: destPath)
             alertMessage = "辞書をコピーしました"
             showingAlert = true
@@ -303,32 +338,64 @@ struct ContentView: View {
     }
 
     private func importModel(from url: URL) {
-        guard url.startAccessingSecurityScopedResource() else { return }
-        defer { url.stopAccessingSecurityScopedResource() }
+        guard url.pathExtension.lowercased() == "gguf" else {
+            alertMessage = "拡張子が .gguf のファイルを選んでください（選択: \(url.lastPathComponent)）"
+            showingAlert = true
+            return
+        }
 
         guard let container = store.containerURL else {
-            alertMessage = "App Group コンテナが利用不可"
+            alertMessage = "App Group コンテナが利用不可のためインポートできません"
             showingAlert = true
             return
         }
 
         let modelsDir = container.appendingPathComponent("data/models", isDirectory: true)
         let fileName = url.lastPathComponent
-        let destPath = modelsDir.appendingPathComponent(fileName)
+        let destURL = modelsDir.appendingPathComponent(fileName)
+        let tempURL = modelsDir.appendingPathComponent(fileName + ".partial")
+        let appGroupId = store.appGroupId
 
         copyingDict = true
 
-        DispatchQueue.global().async {
+        DispatchQueue.global(qos: .userInitiated).async {
+            // コピーが終わるまでアクセス権を保持する（false でも読める場合があるので結果で中断しない）
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+
+            let fileManager = FileManager.default
             do {
-                try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
-                try FileManager.default.copyItem(at: url, to: destPath)
+                try fileManager.createDirectory(at: modelsDir, withIntermediateDirectories: true)
+                // copyItem はファイル全体をメモリに載せずにコピーする。途中失敗で壊れたモデルを残さないよう一時名に書く
+                try? fileManager.removeItem(at: tempURL)
+                try fileManager.copyItem(at: url, to: tempURL)
+                if fileManager.fileExists(atPath: destURL.path) {
+                    _ = try fileManager.replaceItemAt(destURL, withItemAt: tempURL)
+                } else {
+                    try fileManager.moveItem(at: tempURL, to: destURL)
+                }
+                let size = (try? fileManager.attributesOfItem(atPath: destURL.path))?[.size] as? Int64 ?? 0
+
+                // コアは辞書が無いと LLM を読み込まないので、辞書も App Group に揃える
+                var dictNote = fileName.hasPrefix("ggml-model")
+                    ? "\n注意: HuggingFace の既定名のままです。small と xsmall を両方置く場合は、「ファイル」アプリで zenz-v3.1-small-Q5_K_M.gguf / zenz-v3.1-xsmall-Q5_K_M.gguf に名前を変えてからインポートしてください（同名だと上書きされます）"
+                    : ""
+                do {
+                    if try !DataPaths.ensureDictInAppGroup(appGroupId: appGroupId) {
+                        dictNote += "\n注意: 辞書が App Group にもバンドルにもありません。llm_load には辞書が必要です"
+                    }
+                } catch {
+                    dictNote += "\n注意: 辞書の配置に失敗: \(error.localizedDescription)"
+                }
+
                 DispatchQueue.main.async {
                     copyingDict = false
-                    alertMessage = "モデルをインポートしました: \(fileName)"
+                    alertMessage = "モデルをインポートしました: \(fileName) (\(formatBytes(size)))\(dictNote)"
                     showingAlert = true
                     updateDataStatus()
                 }
             } catch {
+                try? fileManager.removeItem(at: tempURL)
                 DispatchQueue.main.async {
                     copyingDict = false
                     alertMessage = "インポート失敗: \(error.localizedDescription)"

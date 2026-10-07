@@ -98,4 +98,118 @@ struct DataPaths {
 
         return (nil, source)
     }
+
+    // MARK: - モデル（GGUF）の探索
+
+    /// コアの既定モデルファイル名（core/server/src/setup.rs の DEFAULT_MODEL_FILE）
+    static let defaultModelFileName = "zenz-v3.1-small-Q5_K_M.gguf"
+
+    /// 配置済みの GGUF ファイル
+    struct ModelFile {
+        let name: String
+        let path: String
+        let sizeBytes: Int64
+    }
+
+    /// モデルの配置状況（原因別）
+    enum ModelStatus {
+        /// (a) App Group コンテナが取得できない（かつバンドルにもモデルが無い）
+        case noContainer
+        /// (b) コンテナはあるが data/models/ が無い（パスは作成予定の場所）
+        case noModelsDir(String)
+        /// (c) ディレクトリはあるが .gguf が無い
+        case noGGUF(String)
+        /// 1 個以上ある。source は "appgroup" / "bundle"
+        case found(dir: String, files: [ModelFile], source: String)
+    }
+
+    /// モデルの配置状況を調べる（App Group → バンドルの順）。
+    /// `resolveDataDir` と違い、data/ だけ無い場合や辞書の有無に影響されず、原因を区別できる
+    static func modelStatus(appGroupId: String = "group.com.shiki.nagi.spike") -> ModelStatus {
+        let fileManager = FileManager.default
+        let container = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)
+
+        var candidates: [(dir: URL, source: String)] = []
+        if let container = container {
+            candidates.append((container.appendingPathComponent("data/models", isDirectory: true), "appgroup"))
+        }
+        if let resourceURL = Bundle.main.resourceURL {
+            candidates.append((resourceURL.appendingPathComponent("data/models", isDirectory: true), "bundle"))
+        }
+
+        var firstExistingDir: String?
+        for candidate in candidates {
+            var isDir: ObjCBool = false
+            guard fileManager.fileExists(atPath: candidate.dir.path, isDirectory: &isDir), isDir.boolValue else {
+                continue
+            }
+            if firstExistingDir == nil { firstExistingDir = candidate.dir.path }
+            let names = ((try? fileManager.contentsOfDirectory(atPath: candidate.dir.path)) ?? [])
+                .filter { $0.lowercased().hasSuffix(".gguf") }
+                .sorted()
+            let files = names.map { name -> ModelFile in
+                let path = candidate.dir.appendingPathComponent(name).path
+                let size = (try? fileManager.attributesOfItem(atPath: path))?[.size] as? Int64 ?? 0
+                return ModelFile(name: name, path: path, sizeBytes: size)
+            }
+            if !files.isEmpty {
+                return .found(dir: candidate.dir.path, files: files, source: candidate.source)
+            }
+        }
+
+        if let dir = firstExistingDir { return .noGGUF(dir) }
+        if let container = container {
+            return .noModelsDir(container.appendingPathComponent("data/models").path)
+        }
+        return .noContainer
+    }
+
+    /// 使用するモデルの選び方: 設定で選んだファイル名 → 既定名 → 最大サイズ
+    static func selectModel(from files: [ModelFile], preferredName: String?) -> ModelFile? {
+        if let preferredName = preferredName, let hit = files.first(where: { $0.name == preferredName }) {
+            return hit
+        }
+        if let hit = files.first(where: { $0.name == defaultModelFileName }) {
+            return hit
+        }
+        return files.max { $0.sizeBytes < $1.sizeBytes }
+    }
+
+    private static let modelPreferenceKey = "llm_model_file"
+
+    /// 使用するモデルのファイル名の選択（App Group の UserDefaults に保存し、ホストと拡張で共有）
+    static func preferredModelName(appGroupId: String = "group.com.shiki.nagi.spike") -> String? {
+        UserDefaults(suiteName: appGroupId)?.string(forKey: modelPreferenceKey)
+    }
+
+    static func setPreferredModelName(_ name: String?, appGroupId: String = "group.com.shiki.nagi.spike") {
+        UserDefaults(suiteName: appGroupId)?.set(name, forKey: modelPreferenceKey)
+    }
+
+    // MARK: - 辞書
+
+    /// バンドル内の辞書（Resources/data/dict/nagi-dict.bin。フォルダ参照なので subdirectory が必要）
+    static func bundleDictURL() -> URL? {
+        guard let url = Bundle.main.resourceURL?.appendingPathComponent("data/dict/nagi-dict.bin"),
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    /// App Group の data/dict/ に辞書が無ければバンドルからコピーする。
+    /// コアは辞書が読めないと LLM を読み込まないため、モデルを置く前後に必要
+    /// - Returns: 配置済み（または今回コピーした）なら true。バンドルにも無ければ false
+    @discardableResult
+    static func ensureDictInAppGroup(appGroupId: String = "group.com.shiki.nagi.spike") throws -> Bool {
+        let fileManager = FileManager.default
+        guard let container = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
+            return false
+        }
+        let destDir = container.appendingPathComponent("data/dict", isDirectory: true)
+        let dest = destDir.appendingPathComponent("nagi-dict.bin")
+        if fileManager.fileExists(atPath: dest.path) { return true }
+        guard let source = bundleDictURL() else { return false }
+        try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+        try fileManager.copyItem(at: source, to: dest)
+        return true
+    }
 }

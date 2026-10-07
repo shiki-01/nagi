@@ -533,43 +533,89 @@ struct LLMLoadProbe: ProbeRunner {
         var ok = false
 
         #if NAGI_LLM
-        let (modelsDir, dataDirSource) = context.store.modelsDir()
-        guard let modelsDir = modelsDir else {
-            note = "モデルディレクトリが見つかりません（source: \(dataDirSource)）"
-            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
-            return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
+        let appGroupId = context.store.appGroupId
+        let runner = context.processType == "keyboard" ? "keyboard（拡張）" : "app（ホスト）"
+
+        // 1. モデルの配置状況を原因別に判定する
+        let modelsDirHint = "ホストアプリのホーム画面「モデルをインポート」で .gguf を選んでください"
+            + "（\(DataPaths.defaultModelFileName) 約70MB、軽量版 zenz-v3.1-xsmall-Q5_K_M.gguf 約20MB）"
+        let found: (dir: String, files: [DataPaths.ModelFile], source: String)
+        switch DataPaths.modelStatus(appGroupId: appGroupId) {
+        case .noContainer:
+            note = "(a) App Group コンテナが取得できません（appgroup プローブで Resolved ID を確認。"
+                + "SideStore で再署名した後に App Group が無効になっていないか確認してください）"
+            return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
+        case .noModelsDir(let path):
+            note = "(b) App Group コンテナはありますが \(path) がありません（モデル未インポート）。\(modelsDirHint)"
+            return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
+        case .noGGUF(let path):
+            note = "(c) \(path) に .gguf がありません。\(modelsDirHint)"
+            return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
+        case .found(let dir, let files, let source):
+            found = (dir, files, source)
         }
 
+        guard let model = DataPaths.selectModel(
+            from: found.files,
+            preferredName: DataPaths.preferredModelName(appGroupId: appGroupId)
+        ) else {
+            note = "(c) .gguf を選べませんでした"
+            return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
+        }
+        let modelSizeMB = Double(model.sizeBytes) / 1024.0 / 1024.0
+        let modelDesc = "\(model.name) (\(String(format: "%.1f", modelSizeMB)) MB, source: \(found.source), 配置数: \(found.files.count))"
+        metrics["model_size_mb"] = modelSizeMB
+        metrics["data_dir_source"] = found.source == "appgroup" ? 1 : 2
+
+        // 2. data ディレクトリ（コアは辞書が読めないと LLM を読み込まない）。モデルの親が data/
+        let dataDir = URL(fileURLWithPath: found.dir).deletingLastPathComponent().path
+        if found.source == "appgroup" {
+            do {
+                if try !DataPaths.ensureDictInAppGroup(appGroupId: appGroupId) {
+                    note = "(d) 辞書がありません（\(dataDir)/dict/nagi-dict.bin もバンドルにも無い）。LLM は辞書が無いと読み込まれません。"
+                        + "ホストアプリの「辞書をバンドルからコピー」を実行してください [\(modelDesc)]"
+                    return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
+                }
+            } catch {
+                note = "(d) 辞書の配置に失敗: \(error.localizedDescription) [\(modelDesc)]"
+                return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
+            }
+        }
+
+        // 3. コアの既定は固定ファイル名なので、選んだモデルを絶対パスで config.toml に指定する
+        let probeUserDir = FileManager.default.temporaryDirectory.appendingPathComponent("nagi-llm-probe", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: probeUserDir, withIntermediateDirectories: true)
+            let config = "[conversion]\nmodel = '\(model.path)'\n"
+            try config.write(to: probeUserDir.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        } catch {
+            note = "(d) 設定ファイルの作成に失敗: \(error.localizedDescription) [\(modelDesc)]"
+            return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
+        }
+
+        // ロード中に強制終了された場合に原因を追えるよう、開始を先に記録する
         do {
             try context.store.append(result: ProbeResult(
                 id: "llm_load_started",
                 name: "LLM Load Started",
                 process: context.processType,
                 ok: true,
-                metrics: [:],
-                note: "LLM ロード開始",
+                metrics: ["model_size_mb": modelSizeMB],
+                note: "LLM ロード開始 実行元: \(runner) モデル: \(modelDesc)",
                 timestamp: Date(),
                 deviceModel: getDeviceModel(),
                 osVersion: getOSVersion()
             ))
         } catch {
-            note = "進捗記録失敗"
+            // 記録失敗はプローブ自体の失敗にしない
         }
 
         let baselineStats = MemoryProbe.getStats()
         let startTime = Date()
 
-        let (dataDir, _) = context.store.dataDir()
-        guard let dataDir = dataDir else {
-            note = "data ディレクトリが見つかりません"
-            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
-            return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
-        }
-
-        guard let engine = NagiEngine(dataDir: dataDir, userDir: nil, noLLM: false) else {
-            note = "LLM エンジン生成失敗"
-            metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
-            return makeResult(id: id, name: name, ok: ok, metrics: metrics, note: note, process: context.processType)
+        guard let engine = NagiEngine(dataDir: dataDir, userDir: probeUserDir.path, noLLM: false) else {
+            note = "(d) エンジン生成失敗（nagi_server_new が NULL）[\(modelDesc)]"
+            return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
         }
 
         let loadTime = Date().timeIntervalSince(startTime) * 1000.0
@@ -577,23 +623,44 @@ struct LLMLoadProbe: ProbeRunner {
 
         metrics["load_time_ms"] = loadTime
         metrics["footprint_increase_mb"] = afterStats.physFootprintMB - baselineStats.physFootprintMB
+        metrics["footprint_after_mb"] = afterStats.physFootprintMB
+        metrics["available_after_mb"] = afterStats.availableMemoryMB
 
-        // Space 変換テスト
+        // エンジンは LLM のロードに失敗しても辞書のみで起動する。notes で成否を判定する
+        let engineNotes = engine.notes
+        let failureLines = engineNotes.split(separator: "\n").filter {
+            $0.contains("辞書のみで起動します") || $0.contains("読みをそのまま")
+        }
+        if !failureLines.isEmpty {
+            note = "(d) LLM のロードに失敗（コアの応答: \(failureLines.joined(separator: " / "))）"
+                + " 実行元: \(runner) モデル: \(modelDesc)"
+            return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
+        }
+
+        // Space 変換テスト（ローマ字を打ってから Space）
         let initReq = """
         {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client_name":"nagi-ios-spike","client_version":"0.1","os":"ios"}}
         """
         _ = engine.send(line: initReq)
 
+        var nextId = 2
+        for ch in "kyouhaiitenkidesune" {
+            let code = ch.asciiValue.map { Int($0) } ?? 0
+            let req = "{\"jsonrpc\":\"2.0\",\"id\":\(nextId),\"method\":\"process_key\",\"params\":{\"session_id\":\"llm_test\",\"keysym\":\(code),\"keycode\":0,\"text\":\"\(ch)\",\"modifiers\":{\"shift\":false,\"ctrl\":false,\"alt\":false,\"meta\":false},\"kind\":\"down\"}}"
+            _ = engine.send(line: req)
+            nextId += 1
+        }
+
         let spaceStart = Date()
         let spaceReq = """
-        {"jsonrpc":"2.0","id":2,"method":"process_key","params":{"session_id":"llm_test","keysym":32,"keycode":49,"text":" ","modifiers":{"shift":false,"ctrl":false,"alt":false,"meta":false},"kind":"down"}}
+        {"jsonrpc":"2.0","id":\(nextId),"method":"process_key","params":{"session_id":"llm_test","keysym":32,"keycode":49,"text":" ","modifiers":{"shift":false,"ctrl":false,"alt":false,"meta":false},"kind":"down"}}
         """
-        _ = engine.send(line: spaceReq)
+        let spaceResponse = engine.send(line: spaceReq)
         metrics["first_space_ms"] = Date().timeIntervalSince(spaceStart) * 1000.0
-        metrics["data_dir_source"] = dataDirSource == "none" ? 0 : (dataDirSource == "appgroup" ? 1 : 2)
+        let surface = spaceResponse.compactMap { extractFirstCandidateSurface(from: $0) }.first ?? "(候補なし)"
 
         ok = true
-        note = "LLM ロード成功。推論エンジンが有効です（source: \(dataDirSource)）"
+        note = "LLM ロード成功 実行元: \(runner) モデル: \(modelDesc) | 変換結果: kyouhaiitenkidesune → \(surface)"
         #else
         note = "LLM 非対応ビルド（NAGI_LLM フラグが無い）"
         ok = false

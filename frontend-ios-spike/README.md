@@ -78,14 +78,14 @@ cargo xtask build-dict
 
 #### 3. モデルを準備（オプション）
 
-LLM 検証が必要な場合：
+LLM 検証が必要な場合（Mac から取得する場合）：
 
 ```bash
 cd ../core
 cargo xtask fetch-model
 ```
 
-`../data/models/` に GGUF ファイルが生成されます。アプリ内から「モデル(GGUF)をファイルから取り込む」でインポートできます。
+`../data/models/` に GGUF ファイルが生成されます。実機への入れ方は次節「モデルの入手とインポート（実機）」を参照してください。
 
 #### 4. Xcode プロジェクトを生成
 
@@ -108,6 +108,30 @@ Xcode の署名設定：
 
 実機を接続して、Build and Run（Cmd+R）します。
 
+## モデルの入手とインポート（実機）
+
+モデル（GGUF）は CI の IPA に同梱されません（辞書のみ）。実機に次の手順で入れます。App Group が使えること（ホームタブの「App Group」が「✓ 利用可能」）が前提です。
+
+1. iPhone の Safari で HuggingFace の URL を開いてダウンロードする（約70MB。Wi-Fi 推奨）
+   - small（標準）: `https://huggingface.co/Miwa-Keita/zenz-v3.1-small-gguf/resolve/ddf6e44b2e05ab7ea9a3e31559c5e7948761365c/ggml-model-Q5_K_M.gguf`（約70.4MB）
+   - xsmall（軽量。拡張のメモリ上限が厳しい場合の比較用）: `https://huggingface.co/Miwa-Keita/zenz-v3.1-xsmall-gguf/resolve/5c0c4db8c8cc66a6ef01520475bebd56b41f6236/ggml-model-Q5_K_M.gguf`（約20MB）
+2. ダウンロードしたファイルは「ファイル」アプリの「ダウンロード」に入る。**名前が両方 `ggml-model-Q5_K_M.gguf` で同じ**なので、長押し →「名称変更」で `zenz-v3.1-small-Q5_K_M.gguf` / `zenz-v3.1-xsmall-Q5_K_M.gguf` にする（両方置く場合は必須。同名だとインポート時に上書きされる）
+3. NagiSpike のホームタブ「データ」→「モデルをインポート（.gguf を選択）」→「ファイル」アプリで上記ファイルを選ぶ
+   - iCloud Drive 上のファイルは先にダウンロード済みにしておく
+   - コピー中は進捗表示（数十秒）。完了すると「モデルをインポートしました」と表示され、「データ」欄に配置先パスとサイズが出る
+   - 辞書が App Group に無ければ同時にバンドルからコピーする（コアは辞書が読めないと LLM を読み込まない）
+4. モデルが複数あるときは、「データ」欄のピッカーで llm_load が使うモデルを選ぶ（未選択なら `zenz-v3.1-small-Q5_K_M.gguf`、無ければ最大サイズ）。選択はホストとキーボード拡張で共有される
+5. Probes タブの `llm_load` を実行する。結果の note に実行元（app / keyboard）・使用モデル名とサイズ・変換結果が出る
+
+`llm_load` が失敗したときの note の見方:
+
+| 表示 | 意味 / 対処 |
+| --- | --- |
+| (a) App Group コンテナが取得できません | 再署名で App Group が外れた。`appgroup` プローブで確認し、SideStore で再インストール |
+| (b) `data/models` がありません | モデル未インポート。上記手順 3 |
+| (c) `.gguf` がありません | ディレクトリはあるが空。上記手順 3 |
+| (d) LLM のロードに失敗（コアの応答: …） | ファイルはあるがロード失敗。応答文言（ファイル破損・メモリ不足・llama 非対応ビルドなど）を確認。「LLM 非対応ビルド」と出る場合は CI を `llama=true` で実行して IPA を作り直す |
+
 ## アプリの使い方
 
 ### ホームタブ
@@ -116,7 +140,7 @@ Xcode の署名設定：
 - App Group コンテナの可否を確認
 - 辞書・モデルの配置状況を表示
 - 辞書をバンドルからコピーするボタン
-- ファイルからモデルをインポートするボタン
+- モデルをインポートするボタン（配置済みモデルの一覧・サイズ・使用モデルの選択）
 
 ### Probes タブ
 
@@ -133,8 +157,9 @@ Xcode の署名設定：
    - 上限: ホストアプリ 3072MB、キーボード拡張 1024MB
 6. **coldstart**: エンジン生成～最初の process_key 応答までの時間
    - 辞書状態と変換結果（"a" が "あ" になるか）を検証
-7. **llm_load**: LLM ロードのメモリ増加量、時間、その後の Space 変換レイテンシ
-   - LLM 非対応ビルド時は skip
+7. **llm_load**: LLM ロードのメモリ増加量、時間、その後の Space 変換レイテンシ（ローマ字を打ってから Space）
+   - 使用したモデル名・サイズ・実行元（app / keyboard）を note に記録。ロード失敗は原因別 (a)〜(d) で表示
+   - LLM 非対応ビルド（`llama=false` の CI ビルド）時は skip
 8. **thermal_battery**: システムの熱状態・低電力モード・バッテリー状態を記録
 
 「すべての Probe を実行（memory_ramp 除外）」で全項目を一括実行できます。Memory Ramp は強制終了のリスクがあるため、単独ボタン（警告付き）で実行します。
@@ -182,7 +207,7 @@ Sideloadly + 無料 Apple ID での導入など、App Group が使えない環�
 
 ### 辞書・モデルの自動フォールバック
 - **辞書**: App Group コンテナが無い場合、バンドルに同梱された `Resources/data/dict/nagi-dict.bin` を自動的に使用
-- **モデル**: App Group が無いため、ファイルインポート機能は無効化（ホストアプリの「モデルをインポート」ボタンがグレイアウト）
+- **モデル**: App Group が無いため、ファイルインポート機能は無効化（ホストアプリの「モデルをインポート」ボタンがグレイアウト）。llm_load は (a) として失敗を記録
 - 各プローブの metrics には `data_dir_source` を記録（"appgroup" / "bundle" / "none"）
 
 ### 結果の記録場所
@@ -254,9 +279,9 @@ cargo xtask build-ios-xcframework
 
 ### モデルロードが失敗する（LLM Probe）
 
-- `../data/models/` に GGUF ファイルが存在するか確認
-- アプリ内「モデルをファイルから取り込む」で `data/models/` にインポート
-- LLM フラグ付きでビルドしたか確認（project.yml に `NAGI_LLM` フラグ）
+- ホームタブ「データ」欄でモデルの有無・パス・サイズを確認（(a)〜(c) の原因別に表示）
+- 「モデルをインポート」で `data/models/` にインポート（手順は「モデルの入手とインポート（実機）」）
+- LLM フラグ付きでビルドしたか確認（CI を `llama=true` で実行。`NAGI_LLM` 付き xcodegen + `--llama` の XCFramework）
 
 ### キーボード拡張が表示されない
 
