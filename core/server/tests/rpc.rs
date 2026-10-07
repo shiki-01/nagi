@@ -568,11 +568,17 @@ impl Proc {
         let stdin = self.stdin.as_mut().expect("stdin");
         writeln!(stdin, "{line}").unwrap();
         stdin.flush().unwrap();
-        let mut out = String::new();
-        self.stdout.read_line(&mut out).expect("応答の読み取り");
-        let v: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out:?}"));
-        assert_eq!(v["id"], id);
-        v
+        loop {
+            let mut out = String::new();
+            self.stdout.read_line(&mut out).expect("応答の読み取り");
+            let v: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out:?}"));
+            // 非同期通知（`profile_changed` など。id を持たない）は読み飛ばす
+            if v.get("id").is_none() && v.get("method").is_some() {
+                continue;
+            }
+            assert_eq!(v["id"], id);
+            return v;
+        }
     }
 
     fn initialize(&mut self) -> Value {
@@ -754,22 +760,29 @@ fn llm_backed_conversion_end_to_end() {
         "--config",
         config_path.to_str().unwrap(),
     ]);
-    let init = p.initialize();
-    assert_eq!(init["result"]["profile"], "balanced");
-    // 起動後、別スレッドのキャリブレーション推論が終わるとプロファイルの理由に実測値が入る
+    // モデルは非同期ロード（G-38）なので initialize 直後は常に minimal。ロード速度で競合するため
+    // initialize 応答の profile は検査せず、get_status が minimal から上がるのを待つ。
+    // 続く別スレッドのキャリブレーション推論が終わるとプロファイルの理由に実測値が入る。
+    // キャリブレーション推論は 100ms 前後で balanced / light の閾値付近に来るため、プロファイルは
+    // 環境依存。LLM ロード後に minimal でなくなることだけを要求する。
+    p.initialize();
     let started = std::time::Instant::now();
-    let reason = loop {
+    let (profile, reason) = loop {
         let st = p.rpc("get_status", json!({}));
+        let profile = st["result"]["profile"].as_str().unwrap().to_string();
         let reason = st["result"]["profile_reason"].as_str().unwrap().to_string();
-        if reason.contains("キャリブレーション")
+        if (profile != "minimal" && reason.contains("キャリブレーション"))
             || started.elapsed() > std::time::Duration::from_secs(10)
         {
-            break reason;
+            break (profile, reason);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     };
-    eprintln!("profile: {reason}");
-    assert!(reason.contains("キャリブレーション"), "{reason}");
+    eprintln!("profile: {profile} ({reason})");
+    assert!(
+        profile != "minimal" && reason.contains("キャリブレーション"),
+        "minimal 脱却 + キャリブレーション待ちがタイムアウト: profile={profile} reason={reason}"
+    );
     for c in "watashinonamaehanakanodesu".chars() {
         p.press("s", c);
     }
