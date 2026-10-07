@@ -1,19 +1,117 @@
 # 切り分け実験用: キーボード拡張を NagiCore / Shared なしの最小版にする spec。
-# project.yml を include し、NagiSpikeKeyboard ターゲットだけを上書きする
-# （dictionary は再帰マージ、配列は置換）。ホストアプリは従来どおり。
+# project.yml をコピーし、NagiSpikeKeyboard ターゲットだけを最小版に差し替えたもの
+# （XcodeGen の include は配列を結合するため、差分だけの spec では NagiCore が残る）。
+# project.yml を変更したら、このファイルのホストアプリ部分も合わせること。
 # 使い方: xcodegen generate --spec project-minimal-keyboard.yml
-include:
-  - project.yml
+name: NagiSpike
+
+options:
+  bundleIdPrefix: com.shiki.inputmethod
+  deploymentTarget:
+    iOS: "16.1"
+  groupSortPosition: top
+
+settings:
+  PROVISIONING_PROFILE_SPECIFIER: ""
+  DEVELOPMENT_TEAM: ""
+
+attributes:
+  ORGANIZATIONNAME: Shiki
+  LastUpgradeCheck: "1500"
+  LastSwiftMigration: "1500"
 
 targets:
+  NagiSpike:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.1"
+
+    sources:
+      - path: App
+      - path: Shared
+      - path: Resources/data
+        type: folder
+        optional: true
+        buildPhase: resources
+
+    dependencies:
+      - target: NagiSpikeKeyboard
+      - sdk: UIKit.framework
+      - sdk: Foundation.framework
+      - sdk: SwiftUI.framework
+      # libnagi_ffi.a（llama.cpp + ggml-metal 入り）が要求するシステム依存。
+      # llama-cpp-sys-2 の build.rs（Apple）の link-lib と同じ集合
+      - sdk: Accelerate.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - framework: NagiCore.xcframework
+        embed: false
+
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Nagi Spike
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        ALTAppGroups:
+          - group.com.shiki.nagi.spike
+
+    entitlements:
+      path: App/NagiSpike.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.shiki.nagi.spike
+
+    settings:
+      SWIFT_VERSION: "5"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_APP ${NAGI_LLM}"
+      OTHER_LDFLAGS: "$(inherited) -lc++"
+      CODE_SIGN_STYLE: Automatic
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.inputmethod.NagiSpike
+
+    scheme:
+      testTargets: []
+      gatherCoverageData: false
+
   NagiSpikeKeyboard:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.1"
+    productName: NagiSpikeKeyboard
+
     sources:
       - path: KeyboardMinimal
+
     dependencies:
       - sdk: UIKit.framework
-    settings:
-      OTHER_LDFLAGS: "$(inherited)"
-    info:
+
+    entitlements:
+      path: Keyboard/NagiSpikeKeyboard.entitlements
       properties:
+        com.apple.security.application-groups:
+          - group.com.shiki.nagi.spike
+
+    info:
+      path: Keyboard/Info.plist
+      properties:
+        CFBundleDisplayName: Nagi Spike Keyboard
+        ALTAppGroups:
+          - group.com.shiki.nagi.spike
         NSExtension:
+          NSExtensionAttributes:
+            PrimaryLanguage: ja-JP
+            IsASCIICapable: false
+            RequestsOpenAccess: false
+          NSExtensionPointIdentifier: com.apple.keyboard-service
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).MinimalKeyboardViewController"
+
+    settings:
+      SWIFT_VERSION: "5"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_KEYBOARD ${NAGI_LLM}"
+      CODE_SIGN_STYLE: Automatic
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.inputmethod.NagiSpike.Keyboard
+
+    scheme:
+      testTargets: []
+      gatherCoverageData: false
