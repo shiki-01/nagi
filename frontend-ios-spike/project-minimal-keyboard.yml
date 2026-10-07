@@ -1,0 +1,19 @@
+# 切り分け実験用: キーボード拡張を NagiCore / Shared なしの最小版にする spec。
+# project.yml を include し、NagiSpikeKeyboard ターゲットだけを上書きする
+# （dictionary は再帰マージ、配列は置換）。ホストアプリは従来どおり。
+# 使い方: xcodegen generate --spec project-minimal-keyboard.yml
+include:
+  - project.yml
+
+targets:
+  NagiSpikeKeyboard:
+    sources:
+      - path: KeyboardMinimal
+    dependencies:
+      - sdk: UIKit.framework
+    settings:
+      OTHER_LDFLAGS: "$(inherited)"
+    info:
+      properties:
+        NSExtension:
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).MinimalKeyboardViewController"

@@ -15,6 +15,10 @@ on:
         description: "ldid ではなく codesign（アドホック署名）でエンタイトルメントを埋め込む（キーボード拡張の Invalid Page 切り分け用の実験）"
         type: boolean
         default: false
+      keyboard_minimal:
+        description: "キーボード拡張を NagiCore なしの最小版にする（切り替え実験用）"
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-spike-${{ github.ref }}
@@ -70,10 +74,14 @@ jobs:
       - name: Xcode プロジェクトを生成
         working-directory: frontend-ios-spike
         run: |
+          SPEC=project.yml
+          if [ "${{ inputs.keyboard_minimal }}" = "true" ]; then
+            SPEC=project-minimal-keyboard.yml
+          fi
           if [ "${{ inputs.llama }}" = "true" ]; then
-            NAGI_LLM=NAGI_LLM xcodegen generate
+            NAGI_LLM=NAGI_LLM xcodegen generate --spec "$SPEC"
           else
-            NAGI_LLM=NAGI_NO_LLM xcodegen generate
+            NAGI_LLM=NAGI_NO_LLM xcodegen generate --spec "$SPEC"
           fi
 
       - name: アーカイブ（未署名）

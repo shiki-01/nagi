@@ -42,6 +42,13 @@ SideStore は署名時に App Group ID を書き換える可能性がありま�
 - App ID 作成上限: 週 10 個（拡張ごとに消費）
 - 有効期限: 7 日間（定期的に再署名が必要）
 
+### 最小キーボード拡張バリアント（切り分け実験用）
+
+キーボード拡張が起動直後に `CODESIGNING / Invalid Page` で kill される件の切り分け用。NagiCore.xcframework と Shared を一切リンクしない最小の拡張（UIKit のみ。ラベル・次のキーボード・「あ」挿入ボタンだけ）に差し替えます。バンドル ID・Info.plist・エンタイトルメントは通常版と同じです。強制終了されるなら署名・端末・再署名側、動くならバイナリの中身が原因です。
+
+- CI: workflow_dispatch の `keyboard_minimal` を true にして実行（既定 false。ホストアプリは通常どおり NagiCore に依存）
+- ローカル: `xcodegen generate --spec project-minimal-keyboard.yml`
+
 ---
 
 ## ローカル Mac での手動ビルド
