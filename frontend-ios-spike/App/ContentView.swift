@@ -63,48 +63,57 @@ struct ContentView: View {
                     }
 
                     Section("データ") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(dataStatus).font(.system(.body, design: .monospaced))
+                        // ボタンごとに別の行にし、.borderless でボタン本体だけをタップ領域にする。
+                        // 同じ行に複数の Button があると、List では行全体がタップ領域になり、
+                        // 無効なボタンを押しても同じ行の有効なボタンが発火するため
+                        Text(dataStatus)
+                            .font(.system(.body, design: .monospaced))
+                            .onAppear { updateDataStatus() }
 
-                            if store.containerURL == nil {
-                                Text("App Group が利用不可のため、バンドルの辞書を自動的に使用します")
+                        if store.containerURL == nil {
+                            Text("App Group コンテナが取得できていません。辞書はバンドルのものを自動的に使います。モデルはこのアプリ専用の領域（Application Support）にインポートされ、キーボード拡張からは見えません")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        } else {
+                            Button("辞書をバンドルからコピー") {
+                                copyDictFromBundle()
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(!canCopyDict())
+
+                            if !canCopyDict() {
+                                Text("バンドルに辞書ファイルがないためコピーできません")
                                     .font(.caption)
                                     .foregroundColor(.orange)
-                            } else {
-                                Button("辞書をバンドルからコピー") {
-                                    copyDictFromBundle()
-                                }
-                                .disabled(!canCopyDict())
                             }
+                        }
 
-                            if copyingDict {
-                                HStack {
-                                    ProgressView()
-                                    Text("モデルをコピー中…（数十秒かかることがあります）").font(.caption)
-                                }
-                            } else {
-                                Button("モデルをインポート（.gguf を選択）") {
-                                    showingDocumentPicker = true
-                                }
-                                .disabled(store.containerURL == nil)
+                        if copyingDict {
+                            HStack {
+                                ProgressView()
+                                Text("モデルをコピー中…（数十秒かかることがあります）").font(.caption)
                             }
+                        } else {
+                            Button("モデルをインポート（.gguf を選択）") {
+                                showingDocumentPicker = true
+                            }
+                            .buttonStyle(.borderless)
+                        }
 
-                            if modelFiles.count > 1 {
-                                Picker("llm_load で使うモデル", selection: Binding(
-                                    get: { selectedModelName },
-                                    set: { name in
-                                        selectedModelName = name
-                                        DataPaths.setPreferredModelName(name, appGroupId: store.appGroupId)
-                                        updateDataStatus()
-                                    }
-                                )) {
-                                    ForEach(modelFiles, id: \.name) { file in
-                                        Text("\(file.name) (\(formatBytes(file.sizeBytes)))").tag(file.name)
-                                    }
+                        if modelFiles.count > 1 {
+                            Picker("llm_load で使うモデル", selection: Binding(
+                                get: { selectedModelName },
+                                set: { name in
+                                    selectedModelName = name
+                                    DataPaths.setPreferredModelName(name, appGroupId: store.appGroupId)
+                                    updateDataStatus()
+                                }
+                            )) {
+                                ForEach(modelFiles, id: \.name) { file in
+                                    Text("\(file.name) (\(formatBytes(file.sizeBytes)))").tag(file.name)
                                 }
                             }
                         }
-                        .onAppear { updateDataStatus() }
                     }
 
                     Section("キーボード設定") {
@@ -278,7 +287,7 @@ struct ContentView: View {
 
         switch DataPaths.modelStatus(appGroupId: store.appGroupId) {
         case .noContainer:
-            status += "モデル: なし (a) App Group コンテナが取得できません\n"
+            status += "モデル: なし (a) App Group コンテナが取得できません（「モデルをインポート」でこのアプリ専用の領域に置けます）\n"
             modelFiles = []
         case .noModelsDir(let path):
             status += "モデル: なし (b) \(path) がありません。「モデルをインポート」で .gguf を選んでください\n"
@@ -344,13 +353,14 @@ struct ContentView: View {
             return
         }
 
-        guard let container = store.containerURL else {
-            alertMessage = "App Group コンテナが利用不可のためインポートできません"
+        // App Group が取れなければ、このアプリ専用の領域に置く（キーボード拡張からは見えない）
+        guard let modelsDir = store.containerURL?.appendingPathComponent("data/models", isDirectory: true)
+            ?? DataPaths.hostLocalModelsDir() else {
+            alertMessage = "モデルの保存先（App Group / Application Support）を取得できません"
             showingAlert = true
             return
         }
-
-        let modelsDir = container.appendingPathComponent("data/models", isDirectory: true)
+        let savedInAppGroup = store.containerURL != nil
         let fileName = url.lastPathComponent
         let destURL = modelsDir.appendingPathComponent(fileName)
         let tempURL = modelsDir.appendingPathComponent(fileName + ".partial")
@@ -377,15 +387,20 @@ struct ContentView: View {
                 let size = (try? fileManager.attributesOfItem(atPath: destURL.path))?[.size] as? Int64 ?? 0
 
                 // コアは辞書が無いと LLM を読み込まないので、辞書も App Group に揃える
-                var dictNote = fileName.hasPrefix("ggml-model")
-                    ? "\n注意: HuggingFace の既定名のままです。small と xsmall を両方置く場合は、「ファイル」アプリで zenz-v3.1-small-Q5_K_M.gguf / zenz-v3.1-xsmall-Q5_K_M.gguf に名前を変えてからインポートしてください（同名だと上書きされます）"
-                    : ""
-                do {
-                    if try !DataPaths.ensureDictInAppGroup(appGroupId: appGroupId) {
-                        dictNote += "\n注意: 辞書が App Group にもバンドルにもありません。llm_load には辞書が必要です"
+                var dictNote = savedInAppGroup
+                    ? ""
+                    : "\n注意: App Group が使えないため、このアプリ専用の領域に保存しました。キーボード拡張からは見えません"
+                if fileName.hasPrefix("ggml-model") {
+                    dictNote += "\n注意: HuggingFace の既定名のままです。small と xsmall を両方置く場合は、「ファイル」アプリで zenz-v3.1-small-Q5_K_M.gguf / zenz-v3.1-xsmall-Q5_K_M.gguf に名前を変えてからインポートしてください（同名だと上書きされます）"
+                }
+                if savedInAppGroup {
+                    do {
+                        if try !DataPaths.ensureDictInAppGroup(appGroupId: appGroupId) {
+                            dictNote += "\n注意: 辞書が App Group にもバンドルにもありません。llm_load には辞書が必要です"
+                        }
+                    } catch {
+                        dictNote += "\n注意: 辞書の配置に失敗: \(error.localizedDescription)"
                     }
-                } catch {
-                    dictNote += "\n注意: 辞書の配置に失敗: \(error.localizedDescription)"
                 }
 
                 DispatchQueue.main.async {

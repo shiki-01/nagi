@@ -110,7 +110,7 @@ Xcode の署名設定：
 
 ## モデルの入手とインポート（実機）
 
-モデル（GGUF）は CI の IPA に同梱されません（辞書のみ）。実機に次の手順で入れます。App Group が使えること（ホームタブの「App Group」が「✓ 利用可能」）が前提です。
+モデル（GGUF）は CI の IPA に同梱されません（辞書のみ）。実機に次の手順で入れます。キーボード拡張でも使うには App Group が使えること（ホームタブの「App Group」が「✓ 利用可能」）が前提です（使えない場合はホストアプリ専用の領域に入り、拡張からは見えません）。
 
 1. iPhone の Safari で HuggingFace の URL を開いてダウンロードする（約70MB。Wi-Fi 推奨）
    - small（標準）: `https://huggingface.co/Miwa-Keita/zenz-v3.1-small-gguf/resolve/ddf6e44b2e05ab7ea9a3e31559c5e7948761365c/ggml-model-Q5_K_M.gguf`（約70.4MB）
@@ -207,7 +207,7 @@ Sideloadly + 無料 Apple ID での導入など、App Group が使えない環�
 
 ### 辞書・モデルの自動フォールバック
 - **辞書**: App Group コンテナが無い場合、バンドルに同梱された `Resources/data/dict/nagi-dict.bin` を自動的に使用
-- **モデル**: App Group が無いため、ファイルインポート機能は無効化（ホストアプリの「モデルをインポート」ボタンがグレイアウト）。llm_load は (a) として失敗を記録
+- **モデル**: 「モデルをインポート」はホストアプリ専用の領域（`Application Support/com.shiki.nagi/data/models/`）に保存される。キーボード拡張からは見えないため、拡張の llm_load は (a) として失敗を記録（ホストの llm_load は成功しうる）
 - 各プローブの metrics には `data_dir_source` を記録（"appgroup" / "bundle" / "none"）
 
 ### 結果の記録場所

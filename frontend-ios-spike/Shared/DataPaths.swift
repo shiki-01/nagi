@@ -123,7 +123,14 @@ struct DataPaths {
         case found(dir: String, files: [ModelFile], source: String)
     }
 
-    /// モデルの配置状況を調べる（App Group → バンドルの順）。
+    /// このプロセス専用の Application Support 配下のモデル置き場（App Group が使えないときのフォールバック）。
+    /// ホストアプリとキーボード拡張でパスが別になるため、拡張からはホストが置いたモデルは見えない
+    static func hostLocalModelsDir() -> URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("com.shiki.nagi/data/models", isDirectory: true)
+    }
+
+    /// モデルの配置状況を調べる（App Group → このプロセス専用領域 → バンドルの順）。
     /// `resolveDataDir` と違い、data/ だけ無い場合や辞書の有無に影響されず、原因を区別できる
     static func modelStatus(appGroupId: String = "group.com.shiki.nagi.spike") -> ModelStatus {
         let fileManager = FileManager.default
@@ -132,6 +139,9 @@ struct DataPaths {
         var candidates: [(dir: URL, source: String)] = []
         if let container = container {
             candidates.append((container.appendingPathComponent("data/models", isDirectory: true), "appgroup"))
+        }
+        if container == nil, let local = hostLocalModelsDir() {
+            candidates.append((local, "local"))
         }
         if let resourceURL = Bundle.main.resourceURL {
             candidates.append((resourceURL.appendingPathComponent("data/models", isDirectory: true), "bundle"))
