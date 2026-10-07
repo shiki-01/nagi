@@ -11,6 +11,10 @@ on:
         description: "LLM 推論（llama.cpp）を有効にしてビルドする"
         type: boolean
         default: false
+      codesign_adhoc:
+        description: "ldid ではなく codesign（アドホック署名）でエンタイトルメントを埋め込む（キーボード拡張の Invalid Page 切り分け用の実験）"
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-spike-${{ github.ref }}
@@ -99,6 +103,7 @@ jobs:
       # CODE_SIGNING_ALLOWED=NO ではエンタイトルメントがバイナリに入らず、SideStore が
       # App Group を付与できない。ldid の擬似署名で埋め込む（実署名は SideStore が行う）。
       - name: エンタイトルメントを埋め込む（ldid）
+        if: ${{ !inputs.codesign_adhoc }}
         working-directory: frontend-ios-spike
         run: |
           APP=build/NagiSpike.xcarchive/Products/Applications/NagiSpike.app
@@ -112,12 +117,38 @@ jobs:
             ldid -e "$bin" | tee /dev/stderr | grep -q '<key>com.apple.security.application-groups</key>'
           done
 
-      - name: 署名診断（ldid 後）
+      # 実験: ldid の擬似署名ではなく、Apple の codesign でアドホック署名する。
+      # 拡張 → アプリの順（内側から）に署名し、CI 上で codesign --verify で検証できる状態にする。
+      # SideStore が再署名する前提なので、アドホック署名（証明書なし）で足りる。
+      - name: エンタイトルメントを埋め込む（codesign アドホック）
+        if: ${{ inputs.codesign_adhoc }}
         working-directory: frontend-ios-spike
         run: |
-          bash ../.github/scripts/ios-signing-diag.sh after-ldid \
+          set -euo pipefail
+          APP=build/NagiSpike.xcarchive/Products/Applications/NagiSpike.app
+          for appex in "$APP"/PlugIns/*.appex; do
+            codesign --force --sign - \
+              --entitlements Keyboard/NagiSpikeKeyboard.entitlements \
+              --timestamp=none "$appex"
+          done
+          codesign --force --sign - \
+            --entitlements App/NagiSpike.entitlements \
+            --timestamp=none "$APP"
+          # 検証: 署名が有効であること、application-groups が入っていること
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          for target in "$APP" "$APP"/PlugIns/*.appex; do
+            echo "=== $target"
+            ents=$(codesign -d --entitlements :- "$target" 2>&1)
+            echo "$ents"
+            echo "$ents" | grep -q 'com.apple.security.application-groups'
+          done
+
+      - name: 署名診断（署名後）
+        working-directory: frontend-ios-spike
+        run: |
+          bash ../.github/scripts/ios-signing-diag.sh after-sign \
             build/NagiSpike.xcarchive/Products/Applications/NagiSpike.app \
-            build/diag/signing-after-ldid.log
+            build/diag/signing-after-sign.log
         continue-on-error: true
 
       - name: IPA を作成
