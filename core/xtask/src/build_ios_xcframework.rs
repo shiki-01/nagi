@@ -6,6 +6,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// iOS の deployment target。`frontend-ios-spike/project.yml` の `deploymentTarget` と必ず揃えること。
+///
+/// rustc は aarch64-apple-ios の既定（10.0）でリンクする一方、llama.cpp（cmake）は SDK 既定
+/// （最新 iOS）でビルドされ、`___chkstk_darwin`（iOS 13 以降）が解決できずリンクに失敗するため、
+/// cargo / cc / cmake の全てに同じ値を渡す。
+const IOS_DEPLOYMENT_TARGET: &str = "16.1";
+
 pub struct Options {
     pub llama: bool,
     pub out_dir: Option<PathBuf>,
@@ -20,6 +27,15 @@ fn is_macos() -> bool {
 fn run_cargo_build(target: &str, features: &[&str]) -> Result<(), String> {
     let mut cmd = Command::new("cargo");
     cmd.args(["build", "--release", "-p", "nagi-ffi", "--target", target]);
+
+    // 既に設定済みの環境変数は尊重する。CMAKE_OSX_DEPLOYMENT_TARGET は
+    // llama-cpp-sys-2 の build.rs が `CMAKE_*` を -D として cmake に転送する。
+    let deployment_target = std::env::var("IPHONEOS_DEPLOYMENT_TARGET")
+        .unwrap_or_else(|_| IOS_DEPLOYMENT_TARGET.to_string());
+    cmd.env("IPHONEOS_DEPLOYMENT_TARGET", &deployment_target);
+    if std::env::var_os("CMAKE_OSX_DEPLOYMENT_TARGET").is_none() {
+        cmd.env("CMAKE_OSX_DEPLOYMENT_TARGET", &deployment_target);
+    }
 
     if !features.is_empty() {
         cmd.arg("--features");
