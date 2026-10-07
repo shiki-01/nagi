@@ -34,6 +34,11 @@ targets:
       - sdk: UIKit.framework
       - sdk: Foundation.framework
       - sdk: SwiftUI.framework
+      # libnagi_ffi.a（llama.cpp + ggml-metal 入り）が要求するシステム依存。
+      # llama-cpp-sys-2 の build.rs（Apple）の link-lib と同じ集合
+      - sdk: Accelerate.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
       - framework: NagiCore.xcframework
         embed: false
 
@@ -56,6 +61,7 @@ targets:
     settings:
       SWIFT_VERSION: "5"
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_APP ${NAGI_LLM}"
+      OTHER_LDFLAGS: "$(inherited) -lc++"
       CODE_SIGN_STYLE: Automatic
       PRODUCT_BUNDLE_IDENTIFIER: com.shiki.inputmethod.NagiSpike
 
@@ -81,6 +87,11 @@ targets:
       - sdk: UIKit.framework
       - sdk: Foundation.framework
       - sdk: SwiftUI.framework
+      # libnagi_ffi.a（llama.cpp + ggml-metal 入り）が要求するシステム依存。
+      # llama-cpp-sys-2 の build.rs（Apple）の link-lib と同じ集合
+      - sdk: Accelerate.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
       - framework: NagiCore.xcframework
         embed: false
 
@@ -107,6 +118,7 @@ targets:
     settings:
       SWIFT_VERSION: "5"
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_KEYBOARD ${NAGI_LLM}"
+      OTHER_LDFLAGS: "$(inherited) -lc++"
       CODE_SIGN_STYLE: Automatic
       PRODUCT_BUNDLE_IDENTIFIER: com.shiki.inputmethod.NagiSpike.Keyboard
 
