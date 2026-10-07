@@ -9,7 +9,9 @@ repository.workspace = true
 authors.workspace = true
 
 [lib]
-crate-type = ["staticlib", "cdylib", "rlib"]
+# cdylib は不要（iOS は staticlib を XCFramework に入れる）。cdylib は rustc が -nodefaultlibs でリンクし、
+# llama.cpp(Metal) の ___isPlatformVersionAtLeast（compiler-rt）が未解決になるため含めない
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 nagi-server = { path = "../server" }
