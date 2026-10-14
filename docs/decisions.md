@@ -803,3 +803,18 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **影響**: `romaji/src/lib.rs`（`Backspace`・`RomajiConverter::{feed,backspace}`・`Composer::backspace`）。テストは romaji の `test_backspace_*`・`test_converter_backspace_outcomes`、engine の `api.rs`（`backspace_rolls_back_*`・`second_backspace_is_conventional`・`cursor_move_discards_backspace_history`・ライブ変換ケース）と golden `30_composing_edit.yaml`（`composing-backspace-rollback-*`）。既存テストの期待値変更なし
 - **未対応**: Undo（確定後の取り消し）や複数キーにわたる巻き戻しは対象外。`k`+`-`（k が Raw、`-` が「ー」で保留が空）も Raw を含むため巻き戻し対象（BS で保留 k に戻る）
 
+
+### H-6. iOS キーボード拡張のメモリ実測（2026-10-14、ユーザー実測・要レビュー）
+
+端末: iPhone 16e / iOS 26 系、TestFlight ビルド（`ios-testflight`、llama=ON）。拡張内で Probe を実行した結果。
+
+- **拡張のメモリ上限は約 177MB**: `baseline_memory` で `available_memory_mb=166.2`・`phys_footprint_mb=10.8`（`os_proc_available_memory` は上限までの残量）。ホストアプリは 3GB 超（`memory_ramp` を 3072MB まで確保して正常終了。上限は未特定）
+- `dict_load`（Mozc 辞書の全量読み込み）で footprint が +60.9MB（合計 72.0MB）。残りは約 105MB
+- `coldstart` は 48.5ms で成功
+- 一括実行は `latency` の実行中に拡張が終了（メモリ超過の疑い）。`llm_load` は開始のみで完了の記録なし（終了の疑い。未確定）。`memory_ramp`（拡張側の上限 1024MB）も実行中に終了
+- アプリ側の `llm_load`（small、70MB）は footprint が増えず（mmap のため未計上と推測）、ロードに 17 秒。推論時のメモリは未測定
+
+判断（暫定）:
+- 拡張に zenz small は載せられない見込み。iOS の品質基準は `minimal`（辞書+Viterbi）を維持する
+- 辞書の mmap 化（progress.md 未完了項目 6）の優先度を上げる。全量読み込み（約 61MB）は上限の約 1/3 を占める
+- 未確認: xsmall（約 20MB）・CPU のみ（Metal 無効）・mmap 辞書での成立可否。拡張側の `llm_load` が実際に強制終了かの切り分け（Probe の個別実行、ログ追加）
