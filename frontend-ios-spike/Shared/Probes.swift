@@ -709,16 +709,29 @@ struct LLMLoadProbe: ProbeRunner {
             peakFootprint = max(peakFootprint, stats.physFootprintMB)
             minAvailable = min(minAvailable, stats.availableMemoryMB)
         }
-        // 裏で続いている推論の完了通知を待つ（件数が増えなくなるまで、最長 10 秒）
-        var lastUpdateCount = -1
-        var waitedMs = 0
-        while waitedMs < 10_000 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            waitedMs += 500
-            let count = updateCounter.count
-            if count == lastUpdateCount { break }
-            lastUpdateCount = count
+        // 入力を続けない変換を 1 回行い、同期の待ち時間を超えた推論の完了が非同期通知で届くかを確かめる。
+        // ループ中は直後の次のキー入力・確定で変換が変わるため、差し替えは意図的に捨てられる（通知は 0 件が正常）
+        // （ループで使った文は結果がキャッシュされていて同期で返るため、別の文を使う）
+        let countBeforeTail = updateCounter.count
+        for ch in "watashinonamaehananagidesu" {
+            let code = ch.asciiValue.map { Int($0) } ?? 0
+            nextId += 1
+            _ = engine.send(line: keyRequest(id: nextId, session: "llm_tail", keysym: code, keycode: 0, text: String(ch)))
         }
+        nextId += 1
+        let tailStart = Date()
+        _ = engine.send(line: keyRequest(id: nextId, session: "llm_tail", keysym: 32, keycode: 49, text: " "))
+        metrics["tail_space_ms"] = Date().timeIntervalSince(tailStart) * 1000.0
+        var tailArrivalMs = -1.0
+        while Date().timeIntervalSince(tailStart) < 10 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            if updateCounter.count > countBeforeTail {
+                tailArrivalMs = Date().timeIntervalSince(tailStart) * 1000.0
+                break
+            }
+        }
+        metrics["tail_async_arrival_ms"] = tailArrivalMs
+        let waitedMs = Int(Date().timeIntervalSince(tailStart) * 1000.0)
         engine.stopNotifications()
         let afterWait = MemoryProbe.getStats()
         peakFootprint = max(peakFootprint, afterWait.physFootprintMB)

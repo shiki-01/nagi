@@ -890,3 +890,15 @@ H-9 の応答時間の謎の原因: `conversion.sync_budget_ms` の既定が 150
 - **`llm_load` Probe**: `sync_budget_ms = 30` に変更し、連続変換のあと非同期通知（`update_preedit` / `update_candidates`）が届いた件数（`loop_async_updates`）と待ち時間（`loop_async_wait_ms`）を記録する。以前の数値（既定 150ms）とは条件が違う
 - 未実施: iOS 製品の既定 `sync_budget_ms` の決定（30ms は計測用。実測で決める）、`update_candidates`（候補ウィンドウの差し替え）の実機での確認
 
+**sync_budget_ms = 30 の実測（拡張内、新規プロセス、同日）**:
+
+| 項目 | small・light | xsmall・balanced |
+| --- | --- | --- |
+| 最初の Space 応答 | 49.0ms | 83.0ms |
+| Space 応答 p50 / p95・max | 35.3 / 43.1ms | 36.4 / 77.7ms |
+| ピーク footprint | 78.5MB | 48.4MB |
+| 上限までの残り最小 | 98.6MB | 128.6MB |
+
+- **応答時間は目標（p95 150ms 未満）を満たす**。p50 が約 35ms なのは、毎回待ち時間（30ms）を使い切って辞書の結果を返しているため（LLM は 30ms に収まらない）。待ち時間を短くすれば、さらに速くできる
+- **非同期通知は 0 件だった（想定内）**: ループは各変換の直後に Enter で確定するため、差し替えが意図的に捨てられる（G-11: 未操作のときだけ差し替える）。到達の確認は「入力を続けない変換」で行うよう Probe を改め（`tail_async_arrival_ms`、-1 は不達）、次のビルドで確認する
+
