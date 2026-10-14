@@ -124,9 +124,7 @@ fn fetch_model(info: &ModelInfo, output_dir: &Path) -> Result<(), String> {
     eprintln!("  URL: {}", info.url);
     eprintln!("  サイズ: {} バイト", info.size);
 
-    let response = ureq::get(info.url)
-        .call()
-        .map_err(|e| format!("HTTP リクエスト失敗: {}", e))?;
+    let response = crate::http::get(info.url)?;
 
     if response.status() != 200 {
         return Err(format!(

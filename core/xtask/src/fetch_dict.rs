@@ -141,9 +141,7 @@ fn fetch_file(suffix: &str, expected_hash: Option<&str>, output_dir: &Path) -> R
     let url = format!("{}/{}/{}", MOZC_BASE_URL, MOZC_COMMIT, suffix);
     eprintln!("ダウンロード中: {} ...", filename);
 
-    let response = ureq::get(&url)
-        .call()
-        .map_err(|e| format!("HTTP リクエスト失敗 {}: {}", url, e))?;
+    let response = crate::http::get(&url)?;
 
     if response.status() != 200 {
         return Err(format!(

@@ -7,6 +7,7 @@ mod build_ios_xcframework;
 mod bundle_macos;
 mod fetch_dict;
 mod fetch_model;
+mod http;
 mod types;
 
 use std::process::ExitCode;

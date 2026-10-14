@@ -1912,8 +1912,11 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "nagi-dict",
+ "rustls",
+ "rustls-pki-types",
  "sha2",
  "ureq",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
