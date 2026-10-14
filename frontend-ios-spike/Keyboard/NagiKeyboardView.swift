@@ -16,11 +16,11 @@ struct NagiKeyboardView: View {
                 // 片手モード: キー部分を左または右に寄せる（候補バーは全幅のまま）
                 GeometryReader { geo in
                     HStack(spacing: 0) {
-                        if model.ios.oneHanded == "right" { Spacer(minLength: 0) }
+                        if model.ios.oneHanded == "right" { OneHandedButtons(model: model) }
                         padArea
                             .padding(6)
                             .frame(width: geo.size.width * CGFloat(model.ios.oneHandedWidth))
-                        if model.ios.oneHanded == "left" { Spacer(minLength: 0) }
+                        if model.ios.oneHanded == "left" { OneHandedButtons(model: model) }
                     }
                 }
             }
@@ -37,6 +37,38 @@ struct NagiKeyboardView: View {
                 LayoutPad(model: model)
             }
         }
+    }
+}
+
+/// 片手モードで空いた側に出すボタン: 左右の切替と、片手モードの解除。
+/// 設定 `keyboard.one_handed` を更新する（ホストアプリの設定画面と同じ値）
+private struct OneHandedButtons: View {
+    @ObservedObject var model: KeyboardModel
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Spacer(minLength: 0)
+            sideButton(text: "⇄") {
+                model.setOneHanded(model.ios.oneHanded == "left" ? "right" : "left")
+            }
+            sideButton(text: "↔") { model.setOneHanded("off") }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func sideButton(text: String, action: @escaping () -> Void) -> some View {
+        Button(action: {
+            NagiKeyFeedback.keyDown()
+            action()
+        }) {
+            Text(text)
+                .font(.system(size: 18))
+                .foregroundColor(Color(UIColor.label))
+                .frame(width: 30, height: 36)
+                .background(RoundedRectangle(cornerRadius: keyCorner).fill(Color(UIColor.systemGray4)))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -95,7 +127,10 @@ private struct RowView: View {
         GeometryReader { geo in
             HStack(spacing: keySpacing) {
                 ForEach(Array(row.keys.enumerated()), id: \.offset) { index, key in
-                    KeyCell(key: key, model: model, height: rowHeight) { pressed in
+                    KeyCell(
+                        key: key, model: model, height: rowHeight,
+                        originX: originX(index, total: geo.size.width), rowWidth: geo.size.width
+                    ) { pressed in
                         pressedKey = pressed ? "\(rowIndex):\(index)" : nil
                     }
                     .frame(width: cellWidth(key, total: geo.size.width), height: rowHeight)
@@ -109,6 +144,15 @@ private struct RowView: View {
         keyHeight * CGFloat(row.height)
     }
 
+    /// 行内で index 番目のキーの左端の位置（長押しのポップアップを行からはみ出さないようにするため）
+    private func originX(_ index: Int, total: CGFloat) -> CGFloat {
+        var x: CGFloat = 0
+        for previous in 0..<index {
+            x += cellWidth(row.keys[previous], total: total) + keySpacing
+        }
+        return x
+    }
+
     private func cellWidth(_ key: LayoutKey, total: CGFloat) -> CGFloat {
         let weights = row.keys.reduce(0.0) { $0 + $1.width }
         guard weights > 0 else { return 0 }
@@ -117,11 +161,13 @@ private struct RowView: View {
     }
 }
 
-/// キー 1 つ。種類ごとに描き分ける（toggle / longPress は段階 2 で未実装。toggle は押しても何もしない）
+/// キー 1 つ。種類ごとに描き分ける。`longPress` を持つキー（flick 以外）は長押しでポップアップを出す
 private struct KeyCell: View {
     let key: LayoutKey
     @ObservedObject var model: KeyboardModel
     let height: CGFloat
+    let originX: CGFloat
+    let rowWidth: CGFloat
     let onPress: (Bool) -> Void
 
     var body: some View {
@@ -143,13 +189,29 @@ private struct KeyCell: View {
                 action: { model.backspace() }
             )
         default:
-            TapKeyView(
-                content: faceContent(key, model),
-                style: key.style,
-                active: key.action == "shift" && model.shiftState == .caps,
-                fontSize: fontSize(key),
-                action: { activate(key, model) }
-            )
+            if let popup = key.longPress, !popup.isEmpty {
+                LongPressKeyView(
+                    popup: popup,
+                    content: faceContent(key, model),
+                    style: key.style,
+                    active: key.action == "shift" && model.shiftState == .caps,
+                    fontSize: fontSize(key),
+                    height: height,
+                    originX: originX,
+                    rowWidth: rowWidth,
+                    onPress: onPress,
+                    activateKey: { activate(key, model) },
+                    activateItem: { item in activate(item, model) }
+                )
+            } else {
+                TapKeyView(
+                    content: faceContent(key, model),
+                    style: key.style,
+                    active: key.action == "shift" && model.shiftState == .caps,
+                    fontSize: fontSize(key),
+                    action: { activate(key, model) }
+                )
+            }
         }
     }
 }
@@ -161,7 +223,7 @@ private struct KeyFaceContent {
 }
 
 private func fontSize(_ key: LayoutKey) -> CGFloat {
-    let count = (key.label ?? key.text ?? "").count
+    let count = (key.label ?? key.text ?? key.cycle?.first ?? "").count
     if count > 2 { return 16 }
     return (key.kind == .text) ? 20 : 17
 }
@@ -191,7 +253,7 @@ private func faceContent(_ key: LayoutKey, _ model: KeyboardModel) -> KeyFaceCon
     if key.kind == .text, model.layoutDef.mode != .kana, model.shiftState != .off {
         return KeyFaceContent(text: key.shift ?? (key.label ?? key.text ?? "").uppercased(), icon: nil)
     }
-    return KeyFaceContent(text: key.label ?? key.text, icon: key.icon)
+    return KeyFaceContent(text: key.label ?? key.text ?? key.cycle?.first, icon: key.icon)
 }
 
 /// タップしたときの動作
@@ -205,7 +267,9 @@ private func activate(_ key: LayoutKey, _ model: KeyboardModel) {
         if let target = key.target { model.switchLayout(target: target) }
     case .shortcut:
         model.shortcut(key.steps ?? [])
-    case .flick, .toggle, .spacer:
+    case .toggle:
+        model.toggle(key)
+    case .flick, .spacer:
         break
     }
 }
@@ -278,6 +342,152 @@ private struct TapKeyView: View {
                         }
                     }
             )
+    }
+}
+
+/// 長押しでポップアップを出すキー。`flick.long_press_ms` 押し続けると、キーの上に候補キーを並べる。
+/// 指を滑らせて選び、離すと実行する（text / action / shortcut / toggle / layout）。
+/// 長押しになる前に離したときは通常のタップ。ポップアップが出たあと、キーの下へ大きく外れて離すと取り消し
+private struct LongPressKeyView: View {
+    let popup: [LayoutKey]
+    let content: KeyFaceContent
+    let style: KeyStyle
+    let active: Bool
+    let fontSize: CGFloat
+    let height: CGFloat
+    let originX: CGFloat
+    let rowWidth: CGFloat
+    let onPress: (Bool) -> Void
+    let activateKey: () -> Void
+    let activateItem: (LayoutKey) -> Void
+
+    @State private var isDown = false
+    @State private var popupShown = false
+    @State private var selected: Int?
+    @State private var lastLocation = CGPoint.zero
+    @State private var timer: Task<Void, Never>?
+
+    var body: some View {
+        GeometryReader { geo in
+            KeyFace(content: content, style: style, active: active, pressed: isDown, fontSize: fontSize)
+                .overlay(alignment: .topLeading) {
+                    if popupShown {
+                        popupView(keyWidth: geo.size.width)
+                    }
+                }
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in changed(value, keyWidth: geo.size.width) }
+                        .onEnded { value in ended(value) }
+                )
+        }
+        .onDisappear { reset() }
+    }
+
+    // MARK: ジェスチャ
+
+    private func changed(_ value: DragGesture.Value, keyWidth: CGFloat) {
+        lastLocation = value.location
+        if !isDown {
+            isDown = true
+            onPress(true)
+            startTimer(keyWidth: keyWidth)
+        }
+        if popupShown {
+            selected = index(at: value.location, keyWidth: keyWidth)
+        } else if abs(value.translation.width) >= 20 || abs(value.translation.height) >= 20 {
+            // 長押しになる前に大きく動いた: ポップアップは出さない
+            timer?.cancel()
+            timer = nil
+        }
+    }
+
+    private func startTimer(keyWidth: CGFloat) {
+        timer?.cancel()
+        let delay = UInt64(NagiKeyMetrics.current.flickLongPressMs) * 1_000_000
+        timer = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled, isDown else { return }
+            popupShown = true
+            selected = index(at: lastLocation, keyWidth: keyWidth)
+            NagiKeyFeedback.keyDown()
+        }
+    }
+
+    private func ended(_ value: DragGesture.Value) {
+        let wasPopup = popupShown
+        let chosen = selected
+        reset()
+        if wasPopup {
+            if let chosen = chosen, popup.indices.contains(chosen) {
+                NagiKeyFeedback.keyDown()
+                activateItem(popup[chosen])
+            }
+        } else if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
+            NagiKeyFeedback.keyDown()
+            activateKey()
+        }
+    }
+
+    private func reset() {
+        timer?.cancel()
+        timer = nil
+        if isDown { onPress(false) }
+        isDown = false
+        popupShown = false
+        selected = nil
+    }
+
+    // MARK: ポップアップ
+
+    private func itemWidth(keyWidth: CGFloat) -> CGFloat {
+        min(max(keyWidth, 34), rowWidth / CGFloat(max(popup.count, 1)))
+    }
+
+    /// ポップアップの左端（キー内の座標）。行からはみ出さないよう寄せる
+    private func popupLeft(keyWidth: CGFloat) -> CGFloat {
+        let total = itemWidth(keyWidth: keyWidth) * CGFloat(popup.count)
+        var left = keyWidth / 2 - total / 2
+        if originX + left < 0 { left = -originX }
+        if originX + left + total > rowWidth { left = rowWidth - total - originX }
+        return left
+    }
+
+    /// 指の位置から選択中の項目を決める。キーの下へ大きく外れていれば nil（取り消し）。
+    /// 左右に外れたときは端の項目
+    private func index(at location: CGPoint, keyWidth: CGFloat) -> Int? {
+        if location.y > height + 24 { return nil }
+        let width = itemWidth(keyWidth: keyWidth)
+        guard width > 0 else { return nil }
+        let raw = Int(((location.x - popupLeft(keyWidth: keyWidth)) / width).rounded(.down))
+        return min(max(raw, 0), popup.count - 1)
+    }
+
+    private func popupView(keyWidth: CGFloat) -> some View {
+        let width = itemWidth(keyWidth: keyWidth)
+        return HStack(spacing: 0) {
+            ForEach(Array(popup.enumerated()), id: \.offset) { offset, item in
+                let isSelected = (selected == offset)
+                Group {
+                    if let icon = item.icon {
+                        Image(systemName: icon).font(.system(size: 18))
+                    } else {
+                        Text(item.label ?? item.text ?? "").font(.system(size: 20)).lineLimit(1).minimumScaleFactor(0.6)
+                    }
+                }
+                .foregroundColor(isSelected ? Color.white : Color(UIColor.label))
+                .frame(width: width, height: height)
+                .background(
+                    RoundedRectangle(cornerRadius: keyCorner)
+                        .fill(isSelected ? Color.accentColor : Color(UIColor.secondarySystemBackground))
+                )
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: keyCorner).fill(Color(UIColor.secondarySystemBackground)))
+        .overlay(RoundedRectangle(cornerRadius: keyCorner).stroke(Color(UIColor.separator), lineWidth: 0.5))
+        .fixedSize()
+        .offset(x: popupLeft(keyWidth: keyWidth), y: -(height + 6))
+        .allowsHitTesting(false)
     }
 }
 

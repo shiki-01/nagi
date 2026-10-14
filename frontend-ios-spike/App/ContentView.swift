@@ -14,12 +14,17 @@ struct ContentView: View {
     @State private var showingAlert = false
     @State private var alertMessage = ""
     @State private var probesRunning = false
+    // 初回案内（初回のみ自動表示。ホームから再表示できる）
+    @AppStorage("nagi.onboarding.completed") private var onboardingCompleted = false
+    @State private var showingOnboarding = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
             // Tab 1: ホーム・設定
             NavigationStack {
                 List {
+                    NagiSetupStatusSection(onShowGuide: { showingOnboarding = true })
+
                     Section("端末情報") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(deviceInfo).font(.system(.body, design: .monospaced))
@@ -115,11 +120,6 @@ struct ContentView: View {
                             }
                         }
                     }
-
-                    Section("キーボード設定") {
-                        Text("設定 > 一般 > キーボード > 新しいキーボード で NagiSpikeKeyboard を有効化してください")
-                            .font(.caption)
-                    }
                 }
                 .navigationTitle("ホーム")
                 .fileImporter(
@@ -142,125 +142,6 @@ struct ContentView: View {
             }
             .tag(0)
 
-            // Tab 2: Probes
-            NavigationStack {
-                List {
-                    Section("Probes") {
-                        ForEach(Array(allProbes.keys.sorted()), id: \.self) { probeId in
-                            let probeName = allProbes[probeId].map { _ in probeId } ?? probeId
-                            NavigationLink(destination: ProbeDetailView(probeId: probeId)) {
-                                HStack {
-                                    Text(probeName)
-                                    Spacer()
-                                    let results = allResults.filter { $0.id == probeId && $0.process == "app" }
-                                    if let latest = results.last {
-                                        Image(systemName: latest.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                            .foregroundColor(latest.ok ? .green : .red)
-                                    }
-                                }
-                            }
-                            .disabled(probesRunning)
-                        }
-                    }
-
-                    Section("実行") {
-                        Button("すべての Probe を実行（memory_ramp 除外）") {
-                            runAllProbesExcludingMemoryRamp()
-                        }
-                        .frame(maxWidth: .infinity)
-                        .disabled(probesRunning)
-
-                        Button("Memory Ramp を実行（警告: 強制終了の可能性あり）") {
-                            runMemoryRamp()
-                        }
-                        .frame(maxWidth: .infinity)
-                        .disabled(probesRunning)
-                        .foregroundColor(.orange)
-                    }
-                }
-                .navigationTitle("Probes")
-                .onAppear { loadResults() }
-            }
-            .tabItem {
-                Label("Probes", systemImage: "checkmark.square.fill")
-            }
-            .tag(1)
-
-            // Tab 3: 結果
-            NavigationStack {
-                VStack(spacing: 0) {
-                    // サマリ表示（1行テキスト選択可能）
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("結果サマリ")
-                            .font(.headline)
-                            .padding()
-
-                        Text(resultsSummary())
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(.systemGray6))
-                    }
-
-                    Divider()
-
-                    // 詳細表示（TextEditor）
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("詳細（すべての結果）")
-                            .font(.headline)
-                            .padding()
-
-                        TextEditor(text: .constant(resultsFullText()))
-                            .font(.system(.caption, design: .monospaced))
-                            .disabled(true)
-                            .padding()
-                    }
-
-                    Divider()
-
-                    // アクション
-                    VStack(spacing: 8) {
-                        HStack(spacing: 8) {
-                            Button(action: {
-                                UIPasteboard.general.string = resultsSummary()
-                                alertMessage = "サマリをコピーしました"
-                                showingAlert = true
-                            }) {
-                                Label("コピー", systemImage: "doc.on.doc")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-
-                            ShareLink(item: resultsSummary()) {
-                                Label("共有", systemImage: "square.and.arrow.up")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        Button(action: { exportResults() }) {
-                            Label("エクスポート (JSONL)", systemImage: "arrow.down.doc")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("すべてクリア", role: .destructive) {
-                            clearResults()
-                        }
-                        .frame(maxWidth: .infinity)
-
-                    }
-                    .padding()
-                }
-                .navigationTitle("結果")
-                .onAppear { loadResults() }
-            }
-            .tabItem {
-                Label("結果", systemImage: "doc.text.fill")
-            }
-            .tag(2)
-
             // Tab 4: キーボードの入力テスト
             KeyboardTestView()
                 .tabItem {
@@ -274,12 +155,156 @@ struct ContentView: View {
                     Label("設定", systemImage: "gearshape")
                 }
                 .tag(4)
+
+            // Tab 6: データ（辞書・モデルの状況。取り込みはホームタブ）
+            NagiDataStatusView(onOpenImport: { selectedTab = 0 })
+                .tabItem {
+                    Label("データ", systemImage: "externaldrive")
+                }
+                .tag(20)
+
+            // Tab 7: About（検証用の Probes・結果は「開発者向け」から）
+            NagiAboutView { developerView }
+                .tabItem {
+                    Label("About", systemImage: "info.circle")
+                }
+                .tag(21)
         }
         .alert("メッセージ", isPresented: $showingAlert) {
             Button("OK") { }
         } message: {
             Text(alertMessage)
         }
+        .sheet(isPresented: $showingOnboarding, onDismiss: { onboardingCompleted = true }) {
+            NagiOnboardingView(
+                onClose: { showingOnboarding = false },
+                onOpenData: { selectedTab = 20 },
+                onOpenInputTest: { selectedTab = 3 }
+            )
+        }
+        .onAppear {
+            if !onboardingCompleted { showingOnboarding = true }
+        }
+    }
+
+    // MARK: - 検証（Probes・結果。About の「開発者向け」から開く）
+
+    private var developerView: some View {
+        List {
+            Section("検証") {
+                NavigationLink("Probes") { probesView }
+                NavigationLink("結果") { resultsView }
+            }
+        }
+        .navigationTitle("検証")
+    }
+
+    private var probesView: some View {
+        List {
+            Section("Probes") {
+                ForEach(Array(allProbes.keys.sorted()), id: \.self) { probeId in
+                    let probeName = allProbes[probeId].map { _ in probeId } ?? probeId
+                    NavigationLink(destination: ProbeDetailView(probeId: probeId)) {
+                        HStack {
+                            Text(probeName)
+                            Spacer()
+                            let results = allResults.filter { $0.id == probeId && $0.process == "app" }
+                            if let latest = results.last {
+                                Image(systemName: latest.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .foregroundColor(latest.ok ? .green : .red)
+                            }
+                        }
+                    }
+                    .disabled(probesRunning)
+                }
+            }
+
+            Section("実行") {
+                Button("すべての Probe を実行（memory_ramp 除外）") {
+                    runAllProbesExcludingMemoryRamp()
+                }
+                .frame(maxWidth: .infinity)
+                .disabled(probesRunning)
+
+                Button("Memory Ramp を実行（警告: 強制終了の可能性あり）") {
+                    runMemoryRamp()
+                }
+                .frame(maxWidth: .infinity)
+                .disabled(probesRunning)
+                .foregroundColor(.orange)
+            }
+        }
+        .navigationTitle("Probes")
+        .onAppear { loadResults() }
+    }
+
+    private var resultsView: some View {
+        VStack(spacing: 0) {
+            // サマリ表示（1行テキスト選択可能）
+            VStack(alignment: .leading, spacing: 4) {
+                Text("結果サマリ")
+                    .font(.headline)
+                    .padding()
+
+                Text(resultsSummary())
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGray6))
+            }
+
+            Divider()
+
+            // 詳細表示（TextEditor）
+            VStack(alignment: .leading, spacing: 4) {
+                Text("詳細（すべての結果）")
+                    .font(.headline)
+                    .padding()
+
+                TextEditor(text: .constant(resultsFullText()))
+                    .font(.system(.caption, design: .monospaced))
+                    .disabled(true)
+                    .padding()
+            }
+
+            Divider()
+
+            // アクション
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button(action: {
+                        UIPasteboard.general.string = resultsSummary()
+                        alertMessage = "サマリをコピーしました"
+                        showingAlert = true
+                    }) {
+                        Label("コピー", systemImage: "doc.on.doc")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    ShareLink(item: resultsSummary()) {
+                        Label("共有", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button(action: { exportResults() }) {
+                    Label("エクスポート (JSONL)", systemImage: "arrow.down.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button("すべてクリア", role: .destructive) {
+                    clearResults()
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .padding()
+        }
+        .navigationTitle("結果")
+        .onAppear { loadResults() }
     }
 
     private func updateDeviceInfo() {

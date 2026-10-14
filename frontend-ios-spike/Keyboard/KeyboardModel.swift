@@ -87,6 +87,20 @@ final class KeyboardModel: ObservableObject {
     /// 2 回連続とみなす間隔（秒）
     private let doubleTapInterval: TimeInterval = 0.5
 
+    /// 直前のトグルキー（`toggle`）の押下。同じキーを時間内に続けて押すと、直前の文字を次の候補に置き換える。
+    /// 他のキー操作・レイアウト切替・フォーカス変化で破棄する（= 確定）
+    private struct ToggleState {
+        let keyId: String
+        let layoutId: String
+        var index: Int
+        /// 直前に入れた文字列（置き換えで消す文字数の元）
+        var last: String
+        /// 英字で大文字にして入れたか（置き換えでも同じ大文字・小文字にする）
+        var upper: Bool
+        var at: Date
+    }
+    private var toggleState: ToggleState?
+
     // 文脈（set_context）
     private var contextScheduled = false
     /// 最後にコアへ送った文脈（同じ内容を送り直さない）。nil は未送信
@@ -136,11 +150,9 @@ final class KeyboardModel: ObservableObject {
 
     /// `text` キー: 文字を送る。かなモードはコアのローマ字変換に、それ以外はホストへそのまま入れる
     func inputText(_ text: String, shift: String?) {
+        toggleState = nil
         if layoutDef.mode == .kana {
-            // かな直接 / ASCII（ローマ字）はコアが解決する。コアが無い・消費しないときはそのまま入れる
-            if !send("text \(logText(text))", { $0.insert(.text(text)) }) {
-                hostInsert(text)
-            }
+            insertReading(text)
             return
         }
         let output: String
@@ -152,8 +164,72 @@ final class KeyboardModel: ObservableObject {
         if shiftState == .once { shiftState = .off }
     }
 
+    /// かなモードの文字入力: かな直接 / ASCII（ローマ字）はコアが解決する。コアが無い・消費しないときはそのまま入れる
+    private func insertReading(_ text: String) {
+        if !send("text \(logText(text))", { $0.insert(.text(text)) }) {
+            hostInsert(text)
+        }
+    }
+
+    /// `toggle` キー（ガラケー式）: 押すたびに `cycle` の次の文字に切り替わる。
+    /// 時間内（設定 `input.toggle_timeout_ms`、無ければ 1000ms）に同じキーをもう一度押すと、直前の文字を消して次を入れる。
+    /// かなモードは、直前の文字をコアの backspace で消してから `insert_reading(text)` を送る
+    /// （`ReadingInput.key12` のトグルはコアが 12 キーの行の表で解決するので、任意の cycle には使えない）。
+    /// かな以外はホストの deleteBackward + insertText
+    func toggle(_ key: LayoutKey) {
+        let cycle = key.cycle ?? []
+        guard !cycle.isEmpty else { return }
+        let now = Date()
+        var index = 0
+        var replaceCount = 0
+        var upper = false
+        if let state = toggleState, state.keyId == key.id, state.layoutId == layoutDef.id, cycle.count > 1,
+           now.timeIntervalSince(state.at) * 1000 < Double(ios.toggleTimeoutMs) {
+            index = (state.index + 1) % cycle.count
+            replaceCount = state.last.count
+            upper = state.upper
+        } else if layoutDef.mode != .kana {
+            upper = shiftState != .off
+            if shiftState == .once { shiftState = .off }
+        }
+        let base = cycle[index]
+        let text = (layoutDef.mode != .kana && upper) ? base.uppercased() : base
+        if layoutDef.mode == .kana {
+            for _ in 0..<replaceCount {
+                if !send("backspace(toggle)", { $0.perform(.backspace) }) { hostDeleteBackward(1) }
+            }
+            insertReading(text)
+        } else {
+            hostDeleteBackward(replaceCount)
+            hostInsert(text)
+        }
+        toggleState = ToggleState(keyId: key.id, layoutId: layoutDef.id, index: index, last: text, upper: upper, at: now)
+    }
+
+    /// 入力中の文字列を確定する（なければ何もしない）
+    private func commitPreedit() {
+        if hasPreedit, let session = session, let result = session.perform(.commit) {
+            apply(result, origin: "response(commit)")
+        }
+    }
+
+    /// 片手モードの左右切替（キーボード上のボタン）。`side` は `left` / `right` / `off`。
+    /// 書くのは本来ホストアプリだが、キーボード上のボタンなので拡張から App Group の設定ファイルへ書く
+    func setOneHanded(_ side: String) {
+        var latest = NagiIOSSettingsStore.load()
+        latest.set(NagiIOSSettings.Key.keyboardOneHanded, .string(side))
+        do {
+            try NagiIOSSettingsStore.save(latest)
+        } catch {
+            DiagLog.log("setOneHanded save failed: \(error.localizedDescription)")
+        }
+        NagiKeyMetrics.current = latest
+        ios = latest
+    }
+
     /// `flick` キーの操作。`kana` 指定ならコアに任せ、文字を直接指定したキーはその文字を送る
     func flick(_ key: LayoutKey, _ gesture: KeyGesture) {
+        toggleState = nil
         if let kana = key.kana {
             guard let entry = KanaKeyTable.entry(forName: kana) else { return }
             self.key(entry.key, gesture)
@@ -171,19 +247,37 @@ final class KeyboardModel: ObservableObject {
         inputText(text, shift: nil)
     }
 
-    /// `shortcut` キー: 手順を順に実行する
+    /// `action` として実行できる名前（`perform(action:)` と同じ）
+    private static let knownActions: Set<String> = [
+        "space", "enter", "backspace", "shift", "capslock", "convert", "moveLeft", "moveRight",
+        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss",
+    ]
+
+    /// `shortcut` キー: 入力中の文字列を確定してから、手順を順に実行する。
+    /// `text` はコアに通さずそのままホストへ入れる（定型文の挿入）。
+    /// 未知の action や、action も text も無い手順があれば、そこで中断する（それまでの手順は実行済み）
     func shortcut(_ steps: [ShortcutStep]) {
-        for step in steps {
+        toggleState = nil
+        commitPreedit()
+        for (index, step) in steps.enumerated() {
             if let action = step.action {
+                guard Self.knownActions.contains(action) else {
+                    DiagLog.log("shortcut aborted at step \(index + 1): unknown action \(action)")
+                    return
+                }
                 perform(action: action)
-            } else if let text = step.text {
-                inputText(text, shift: nil)
+            } else if let text = step.text, !text.isEmpty {
+                hostInsert(text)
+            } else {
+                DiagLog.log("shortcut aborted at step \(index + 1): empty step")
+                return
             }
         }
     }
 
     /// `action` キー。未知の名前は無視する（将来の拡張で壊れないように）
     func perform(action: String) {
+        toggleState = nil
         switch action {
         case "space": space()
         case "enter": enter()
@@ -205,6 +299,7 @@ final class KeyboardModel: ObservableObject {
     // MARK: - キー操作（コアへ）
 
     func key(_ key: KanaKey, _ gesture: KeyGesture) {
+        toggleState = nil
         // フリック入力では、タップは常に先頭の文字。トグル入力では連続タップを置き換えにする
         let effective: KeyGesture = (gesture == .tap && toggleInput) ? .toggle : gesture
         send("key12 \(key.rawValue) \(effective.rawValue)") {
@@ -213,24 +308,29 @@ final class KeyboardModel: ObservableObject {
     }
 
     func variant() {
+        toggleState = nil
         send("variant") { $0.insert(.variant) }
     }
 
     func space() {
+        toggleState = nil
         if !send("space", { $0.perform(.space) }) { hostInsert(" ") }
     }
 
     func enter() {
+        toggleState = nil
         if !send("enter", { $0.perform(.enter) }) { hostInsert("\n") }
     }
 
     /// ⌫: 入力中ならコアの backspace、未入力ならホストの 1 文字削除（長押しの連打でも 1 回ごとにこれを呼ぶ）
     func backspace() {
+        toggleState = nil
         if !send("backspace", { $0.perform(.backspace) }) { hostDeleteBackward(1) }
     }
 
     /// ←/→: 変換中は注目文節、変換前の入力中はカーソル、未入力ならホストの入力欄のカーソルを動かす
     func arrow(_ direction: TouchDirection) {
+        toggleState = nil
         if isConverting {
             send("move_focus \(direction.rawValue)") { $0.perform(.moveFocus(direction)) }
         } else if hasPreedit {
@@ -261,6 +361,7 @@ final class KeyboardModel: ObservableObject {
             DiagLog.log("layout target not found: \(target)")
             return
         }
+        toggleState = nil
         if hasPreedit, let session = session, let result = session.perform(.commit) {
             apply(result, origin: "response(commit before layout switch)")
         }
@@ -319,6 +420,7 @@ final class KeyboardModel: ObservableObject {
     /// コアが確定する（部分変換。残りは入力中のまま続く）
     func selectCandidate(_ index: Int) {
         guard let session = session else { return }
+        toggleState = nil
         let converting = isConverting
         isExpanded = false
         DiagLog.log("select_candidate index=\(index) converting=\(converting)")
@@ -327,6 +429,7 @@ final class KeyboardModel: ObservableObject {
     }
 
     func focusIn() {
+        toggleState = nil
         reloadIOSSettings()
         applyCoreSettingsChanges()
         // レイアウトのファイルが変わっていても追随する（ホストアプリでの割り当て・取り込み）
@@ -376,6 +479,7 @@ final class KeyboardModel: ObservableObject {
 
     /// フォーカスを失うとき: 変換中の文字列を確定する
     func focusOut() {
+        toggleState = nil
         DiagLog.log("focusOut")
         if let result = session?.focusOut() { apply(result, origin: "response(focus_out)") }
     }

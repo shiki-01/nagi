@@ -2,7 +2,7 @@ import Foundation
 
 // キーボードレイアウトのデータモデル（docs/ios-keyboard-layout.md、スキーマ v1）。
 // レイアウトは「どのキーが何を送るか」だけを持ち、かな変換・トグル・フリックの解決はコアが行う。
-// 段階 1 は text / flick / action / layout / spacer。toggle / longPress は decode だけ通し、描画側では無視する。
+// 段階 2 で toggle / longPress / shortcut も描画・実行する（Keyboard/ 側）。flick キーの longPress は未対応（無視する）。
 
 enum LayoutMode: String, Codable {
     case kana, alpha, number, symbol, emoji, custom
@@ -195,6 +195,15 @@ struct KeyboardLayoutDef: Codable {
                 for step in key.steps ?? [] {
                     if let text = step.text, text.count > 256 { return "キー \(key.id) の shortcut の text が長すぎる" }
                 }
+                if let popup = key.longPress {
+                    if popup.isEmpty || popup.count > 12 { return "キー \(key.id) の longPress は 1〜12 個（\(popup.count)）" }
+                    for item in popup {
+                        if let text = item.text, text.count > 16 { return "キー \(key.id) の longPress の text が長すぎる" }
+                        for step in item.steps ?? [] {
+                            if let text = step.text, text.count > 256 { return "キー \(key.id) の longPress の shortcut の text が長すぎる" }
+                        }
+                    }
+                }
             }
         }
         return nil
@@ -230,10 +239,41 @@ enum LayoutLoader {
         do {
             def = try JSONDecoder().decode(KeyboardLayoutDef.self, from: data)
         } catch {
-            throw LoadError(message: "decode 失敗: \(error)")
+            throw LoadError(message: describe(error))
         }
         if let reason = def.validationError() { throw LoadError(message: reason) }
         return def
+    }
+
+    /// decode の失敗を日本語の説明にする（ホストアプリの取り込み画面に出す）
+    static func describe(_ error: Error) -> String {
+        guard let decoding = error as? DecodingError else {
+            return "読み取れません: \(error.localizedDescription)"
+        }
+        func path(_ keys: [CodingKey]) -> String {
+            var result = ""
+            for key in keys {
+                if let index = key.intValue {
+                    result += "[\(index)]"
+                } else {
+                    result += result.isEmpty ? key.stringValue : ".\(key.stringValue)"
+                }
+            }
+            return result.isEmpty ? "先頭" : result
+        }
+        switch decoding {
+        case .keyNotFound(let key, let context):
+            return "必須の項目「\(key.stringValue)」がありません（場所: \(path(context.codingPath))）"
+        case .typeMismatch(_, let context):
+            return "値の型が違います（場所: \(path(context.codingPath))）"
+        case .valueNotFound(_, let context):
+            return "値がありません（場所: \(path(context.codingPath))）"
+        case .dataCorrupted(let context):
+            if context.codingPath.isEmpty { return "JSON の形式が正しくありません" }
+            return "値が不正です（場所: \(path(context.codingPath))）"
+        @unknown default:
+            return "読み取れません"
+        }
     }
 
     /// id のレイアウトを読む。ユーザー → 同梱の順。どちらも無い・不正なら nil
@@ -289,7 +329,7 @@ enum LayoutLoader {
     }
 
     /// パスの組み立てに使うので、英数字・ハイフン・アンダースコアだけを許す
-    private static func isSafeId(_ id: String) -> Bool {
+    static func isSafeId(_ id: String) -> Bool {
         !id.isEmpty && id.count <= 64 && id.unicodeScalars.allSatisfy {
             ($0.value < 128) && (CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_")
         }

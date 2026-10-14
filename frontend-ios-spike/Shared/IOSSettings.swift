@@ -159,7 +159,7 @@ struct NagiIOSSettings: Codable, Equatable {
             kind: .bool, isSimple: true, defaultValue: .bool(true)),
         NagiIOSSettingDef(
             key: Key.flickLongPressMs, group: "入力", label: "長押しの判定時間（ミリ秒）",
-            description: "長押しと判定するまでの時間です。長押しで出す候補（レイアウトの longPress）に対応するまでは、動作は変わりません。",
+            description: "長押しと判定するまでの時間です。レイアウトの longPress を持つキーを、この時間押し続けると候補のポップアップが出ます。",
             kind: .int(min: 150, max: 1000, step: 50), isSimple: false, defaultValue: .number(350)),
         NagiIOSSettingDef(
             key: Key.keyRepeatDelayMs, group: "入力", label: "⌫の連打を始めるまで（ミリ秒）",
@@ -219,6 +219,7 @@ struct NagiIOSSettings: Codable, Equatable {
 
     enum Key {
         static let toggleInput = "input.toggle_input"
+        static let toggleTimeoutMs = "input.toggle_timeout_ms"
         static let flickSensitivity = "flick.sensitivity"
         static let flickThresholdPt = "flick.threshold_pt"
         static let flickPopup = "flick.popup"
@@ -285,6 +286,14 @@ struct NagiIOSSettings: Codable, Equatable {
     var toggleInput: Bool { bool(Key.toggleInput) }
     var flickPopup: Bool { bool(Key.flickPopup) }
     var flickLongPressMs: Int { int(Key.flickLongPressMs) }
+    /// トグルキー（レイアウトの `toggle`）が次の押下を「置き換え」とみなす時間。
+    /// 設定項目 `input.toggle_timeout_ms` は設定画面には未登録（コア側の概念待ち）で、ファイルに値があれば使い、無ければ 1000ms
+    var toggleTimeoutMs: Int {
+        if case .number(let value)? = stored[Key.toggleTimeoutMs], value.isFinite {
+            return Int(min(max(value, 200), 3000))
+        }
+        return 1000
+    }
     var keyRepeatDelayMs: Int { int(Key.keyRepeatDelayMs) }
     var keyRepeatMs: Int { int(Key.keyRepeatMs) }
     var keySpacingPt: Double { double(Key.keyboardKeySpacingPt) }
