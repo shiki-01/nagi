@@ -163,6 +163,8 @@ struct ContentView: View {
                 }
                 .tag(20)
 
+            LayoutManagerView().tabItem { Label("レイアウト", systemImage: "square.grid.2x2") }.tag(22)
+
             // Tab 7: About（検証用の Probes・結果は「開発者向け」から）
             NagiAboutView { developerView }
                 .tabItem {

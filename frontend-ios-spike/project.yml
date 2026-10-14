@@ -60,6 +60,11 @@ targets:
         # 独自の暗号化を使わない（TestFlight の輸出コンプライアンス質問を省略する）
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        # nagi://layout?data=<base64url json> でレイアウトを取り込む（docs/ios-keyboard-layout.md）
+        CFBundleURLTypes:
+          - CFBundleURLName: com.shiki01.nagi
+            CFBundleURLSchemes:
+              - nagi
         # iPad のマルチタスクに対応するには 4 方向すべての宣言が必要（App Store Connect の検証）
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

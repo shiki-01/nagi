@@ -63,9 +63,28 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 `symbols`（記号）/ `numbers`（数字）/ `emoji`（絵文字）。ユーザーは各モードにどのレイアウトを割り当てるかを設定で選ぶ（App Group の `keyboardLayoutKana` / `keyboardLayoutAlpha`）。
 `layout.target` の特別名 `kana` / `alpha` は「割り当て済みのかな / 英字レイアウト」を指す。
 
+## 動作の詳細（段階 2）
+
+- `toggle`: 同じキーを `input.toggle_timeout_ms`（iOS 設定ファイルに値があれば。無ければ 1000ms 固定。200〜3000）以内に押すと、
+  直前の文字を消して `cycle` の次の文字を入れる（`cycle` が 1 要素なら置き換えず追加）。他のキー・レイアウト切替・フォーカス変化で確定。
+  かなモードは直前の文字をコアの backspace で消してから `insert_reading(text)` を送る（`key12` のトグルは 12 キーの行の表で
+  コアが解決するため、任意の cycle には使えない）。かな以外はホストの deleteBackward + insertText。英字ではシフト状態を最初の押下で適用する
+- `longPress`: `flick.long_press_ms`（既定 350）押し続けるとキーの上にポップアップを出し、指を滑らせて選び、離すと実行する
+  （`text` / `action` / `shortcut`、実装上は `toggle` / `layout` も可）。ポップアップが出る前に離せば通常のタップ。キーの下に大きく外れて離すと取り消し。
+  ポップアップは行の左右からはみ出さないよう寄せる。**`flick` / ⌫ キーの `longPress` は未対応（無視）**
+- `shortcut`: 実行前に入力中の文字列を確定する。`steps` は先頭から順に実行し、`text` はコアに通さずホストへそのまま挿入する
+  （定型文）。未知の `action` や、`action` も `text` も無い手順に当たったらそこで中断する（それまでの手順は実行済み）
+- 片手モード（設定 `keyboard.one_handed` が `left` / `right`）: 空いた側に「⇄（左右の切替）」と「↔（片手モードを解除）」を出す
+
+## 取り込み（ホストアプリ）
+
+- 「レイアウト」タブ: 同梱とユーザーレイアウトの一覧、JSON の貼り付け / ファイル（`fileImporter`）/ URL スキームでの取り込み、
+  書き出し（共有・コピー）、削除、かな / 英字への割り当て、簡易プレビュー。検証は `LayoutLoader.decode`（エラーは日本語で表示）
+- URL スキーム: `nagi://layout?data=<base64url の JSON>`。同じ id のユーザーレイアウトは更新する。同梱と同じ id でもユーザーのものが優先される
+
 ## 実装の段階
 
-1. スキーマ + 既定レイアウトの JSON 化 + キーボード拡張が JSON から描画（`text` / `flick` / `action` / `layout` / `spacer`）
-2. `toggle` / `shortcut` / `longPress`
-3. サイトの編集 GUI（プレビュー、キーの追加/削除/並べ替え/サイズ、種類の切替、JSON の書き出し/読み込み）
-4. ホストアプリでの取り込み・管理・割り当て
+1. スキーマ + 既定レイアウトの JSON 化 + キーボード拡張が JSON から描画（`text` / `flick` / `action` / `layout` / `spacer`）— 実装済み
+2. `toggle` / `shortcut` / `longPress` — 実装済み（実機確認待ち。`docs/ios-device-checklist.md` §3）
+3. サイトの編集 GUI（プレビュー、キーの追加/削除/並べ替え/サイズ、種類の切替、JSON の書き出し/読み込み）— 別担当
+4. ホストアプリでの取り込み・管理・割り当て — 実装済み（`App/LayoutManagerView.swift`。実機確認待ち）

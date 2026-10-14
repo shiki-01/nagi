@@ -23,6 +23,12 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // ホストアプリのセットアップ状況表示用のマーカー（OnboardingView.swift の NagiSetupMarker が読む）
+        if let defaults = UserDefaults(suiteName: SharedStore.shared.appGroupId) {
+            let now = Date().timeIntervalSince1970
+            defaults.set(now, forKey: "keyboardLastSeen")
+            if hasFullAccess { defaults.set(now, forKey: "fullAccessLastSeen") }
+        }
         model?.focusIn()
         // focusIn で読み直した設定の高さを反映する
         heightConstraint?.constant = CGFloat(NagiKeyMetrics.totalHeight)
