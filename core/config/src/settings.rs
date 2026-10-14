@@ -444,6 +444,20 @@ pub fn definitions() -> Vec<SettingDef> {
             int(1, 10, 1),
         ),
         def(
+            "rewriter.emoji",
+            "表記の候補",
+            "絵文字の候補",
+            "読みに合う絵文字（「わらう」→😄 など）を変換候補の後ろに加えます。",
+            SettingKind::Bool,
+        ),
+        def(
+            "rewriter.kaomoji",
+            "表記の候補",
+            "顔文字の候補",
+            "読みに合う顔文字（「えがお」→(^_^) など）を変換候補の後ろに加えます。",
+            SettingKind::Bool,
+        ),
+        def(
             "userdict.enabled",
             "ユーザー辞書",
             "ユーザー辞書を使う",
@@ -500,6 +514,8 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
             Some(Text(format!("{}{}", p.comma, p.period)))
         }
         "input.dakuten_cycle" => Some(Text(config.input.dakuten_cycle.as_str().to_string())),
+        "rewriter.emoji" => Some(Bool(config.rewriter.emoji)),
+        "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
         "userdict.enabled" => Some(Bool(config.userdict.enabled)),
         "snippet.enabled" => Some(Bool(config.snippet.enabled)),
         "learning.enabled" => Some(Bool(config.learning.enabled)),
@@ -889,6 +905,29 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         assert!(c.predict.next_word);
         assert_eq!(c.predict.next_word_count, 3);
+    }
+
+    #[test]
+    fn rewriter_emoji_definitions() {
+        let defs = definitions();
+        let get = |k: &str| defs.iter().find(|d| d.key == k).unwrap();
+        for key in ["rewriter.emoji", "rewriter.kaomoji"] {
+            assert_eq!(get(key).level, SettingLevel::Detail, "{key}");
+            assert_eq!(get(key).platforms, SettingPlatforms::Both, "{key}");
+        }
+        let c = crate::Config::default();
+        assert!(c.rewriter.emoji && c.rewriter.kaomoji);
+        let r = apply_changes(
+            None,
+            &[
+                set("rewriter.emoji", SettingValue::Bool(false)),
+                set("rewriter.kaomoji", SettingValue::Bool(false)),
+            ],
+        )
+        .unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(!c.rewriter.emoji && !c.rewriter.kaomoji);
     }
 
     #[test]

@@ -26,6 +26,10 @@ struct NagiKeyboardView: View {
             }
         }
         .background(Color(UIColor.systemGray6))
+        // 設定 `keyboard.accent` / `keyboard.theme`。テーマが変わったときは子のビューも作り直して新しい色を見せる
+        // （子のビューは入力が変わらないと再評価されないため）。外観の上書きは KeyboardViewController が行う
+        .tint(themeAccent)
+        .id("\(model.ios.theme)-\(model.ios.accent)")
     }
 
     /// キー（または展開した候補一覧）の領域
@@ -75,6 +79,8 @@ private struct OneHandedButtons: View {
 /// キーの間隔と高さ（設定 `keyboard.key_spacing_pt` / 高さの倍率。`NagiKeyMetrics`）
 private var keySpacing: CGFloat { CGFloat(NagiKeyMetrics.keySpacing) }
 private var keyHeight: CGFloat { CGFloat(NagiKeyMetrics.keyHeight) }
+/// アクセントカラー（設定 `keyboard.accent`）
+private var themeAccent: Color { Color(NagiTheme.accentUIColor(NagiKeyMetrics.current.accent)) }
 /// キーの角丸（設定 `keyboard.key_corner_pt`）
 private var keyCorner: CGFloat { CGFloat(NagiKeyMetrics.current.keyCornerPt) }
 
@@ -186,7 +192,17 @@ private struct KeyCell: View {
             RepeatKeyView(
                 content: faceContent(key, model),
                 style: key.style,
-                action: { model.backspace() }
+                action: { model.backspace() },
+                swipeWord: model.ios.backspaceSwipe ? { model.deleteWordBackward() } : nil
+            )
+        case .action where key.action == "space" && model.ios.spaceSwipe && (key.longPress ?? []).isEmpty:
+            SpaceKeyView(
+                content: faceContent(key, model),
+                style: key.style,
+                fontSize: fontSize(key),
+                step: model.ios.spaceSwipeStepPt,
+                tap: { activate(key, model) },
+                move: { model.spaceSwipeMove($0) }
             )
         default:
             if let popup = key.longPress, !popup.isEmpty {
@@ -307,7 +323,7 @@ private struct KeyFace: View {
     private var isAccent: Bool { active || style == .accent }
 
     private var fill: Color {
-        if isAccent { return Color.accentColor }
+        if isAccent { return themeAccent }
         switch style {
         case .function: return Color(UIColor.systemGray4)
         default: return Color(UIColor.systemBackground)
@@ -489,7 +505,7 @@ private struct LongPressKeyView: View {
                 .frame(width: width, height: height)
                 .background(
                     RoundedRectangle(cornerRadius: keyCorner)
-                        .fill(isSelected ? Color.accentColor : Color(UIColor.secondarySystemBackground))
+                        .fill(isSelected ? themeAccent : Color(UIColor.secondarySystemBackground))
                 )
             }
         }
@@ -507,9 +523,13 @@ private struct RepeatKeyView: View {
     let content: KeyFaceContent
     let style: KeyStyle
     let action: () -> Void
+    /// 左スワイプで単語を削除する（設定 `touch.backspace_swipe`。nil なら無効）
+    var swipeWord: (() -> Void)?
 
     @GestureState private var isPressed = false
     @State private var isDown = false
+    /// 左スワイプの単語削除を済ませたか（離すまで連打・再実行をしない）
+    @State private var swiped = false
     @State private var repeatTask: Task<Void, Never>?
 
     /// 連打を始めるまでの待ち（ナノ秒。設定 `touch.key_repeat_delay_ms`）
@@ -519,17 +539,32 @@ private struct RepeatKeyView: View {
     private var minInterval: UInt64 { max(25_000_000, startInterval * 32 / 100) }
     /// 暴走防止（離したイベントが届かなかった場合に、無限に消し続けない）
     private let maxRepeats = 150
+    /// 単語削除とみなす左への移動量（pt）
+    private static let swipeDistance: CGFloat = 40
 
     var body: some View {
         KeyFace(content: content, style: style, active: false, pressed: isPressed, fontSize: 17)
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !isDown else { return }
-                        isDown = true
-                        NagiKeyFeedback.keyDown()
-                        action()
-                        startRepeat()
+                    .onChanged { value in
+                        if !isDown {
+                            isDown = true
+                            NagiKeyFeedback.keyDown()
+                            action()
+                            startRepeat()
+                            return
+                        }
+                        // 押した瞬間の 1 文字削除と連打はそのまま。左へ大きく動かしたら連打を止めて単語を消す
+                        // （`stopRepeat` は押下状態を戻すので使わず、連打のタスクだけ止める）
+                        if let swipeWord = swipeWord, !swiped,
+                           value.translation.width < -Self.swipeDistance,
+                           abs(value.translation.height) < abs(value.translation.width) {
+                            swiped = true
+                            repeatTask?.cancel()
+                            repeatTask = nil
+                            NagiKeyFeedback.keyDown()
+                            swipeWord()
+                        }
                     }
                     .updating($isPressed) { _, state, _ in state = true }
                     .onEnded { _ in stopRepeat() }
@@ -567,6 +602,51 @@ private struct RepeatKeyView: View {
         repeatTask?.cancel()
         repeatTask = nil
         isDown = false
+        swiped = false
+    }
+}
+
+/// スペースキー: タップはスペース（または変換）。押したまま左右に `step` 以上動かすとカーソル移動モードに入り、
+/// ドラッグ距離に比例してカーソルを動かす。このモードで離したときはスペースを入力しない
+private struct SpaceKeyView: View {
+    let content: KeyFaceContent
+    let style: KeyStyle
+    let fontSize: CGFloat
+    let step: Double
+    let tap: () -> Void
+    /// カーソルを動かす文字数（右が正）
+    let move: (Int) -> Void
+
+    @GestureState private var isPressed = false
+    @State private var tracker: SpaceSwipeTracker?
+
+    var body: some View {
+        KeyFace(content: content, style: style, active: false, pressed: isPressed, fontSize: fontSize)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .updating($isPressed) { _, state, _ in state = true }
+                    .onChanged { value in
+                        var current = tracker ?? SpaceSwipeTracker(step: step)
+                        let wasActive = current.isActive
+                        let delta = current.update(translationWidth: Double(value.translation.width))
+                        tracker = current
+                        if current.isActive && !wasActive { NagiKeyFeedback.keyDown() }
+                        if delta != 0 { move(delta) }
+                    }
+                    .onEnded { value in
+                        let active = tracker?.isActive ?? false
+                        tracker = nil
+                        // カーソル移動モードに入っていたらスペースは入れない。動いていない（単純タップ）ときだけスペース
+                        if !active && abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
+                            NagiKeyFeedback.keyDown()
+                            tap()
+                        }
+                    }
+            )
+            // `onEnded` なしで取り消された場合は、カーソル移動の状態を捨てる
+            .onChange(of: isPressed) { pressed in
+                if !pressed { DispatchQueue.main.async { tracker = nil } }
+            }
     }
 }
 
@@ -704,7 +784,7 @@ private struct FlickPopup: View {
                 .frame(width: size.width, height: size.height)
                 .background(
                     RoundedRectangle(cornerRadius: keyCorner)
-                        .fill(isSelected ? Color.accentColor : Color(UIColor.secondarySystemBackground))
+                        .fill(isSelected ? themeAccent : Color(UIColor.secondarySystemBackground))
                 )
                 .overlay(RoundedRectangle(cornerRadius: keyCorner).stroke(Color(UIColor.separator), lineWidth: 0.5))
                 .position(
@@ -751,6 +831,24 @@ private struct CandidateBar: View {
                     .lineLimit(2)
                 Spacer(minLength: 0)
             } else {
+                // 左端の「貼り付け」: クリップボードに文字列があり、入力中でないときだけ（設定 `candbar.paste_button`）。
+                // 表示の判定は `hasStrings` のみ。クリップボードの中身はタップしたときに初めて読む
+                if model.clipboardHasText && !model.hasPreedit {
+                    Button(action: {
+                        NagiKeyFeedback.keyDown()
+                        model.pasteFromClipboard()
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "doc.on.clipboard").font(.system(size: 13))
+                            Text("貼り付け").font(.system(size: 13)).lineLimit(1)
+                        }
+                        .foregroundColor(Color(UIColor.label))
+                        .padding(.horizontal, 8)
+                        .frame(height: 32)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(UIColor.systemBackground)))
+                    }
+                    .buttonStyle(.plain)
+                }
                 if let warning = model.warning, !model.hasPreedit, model.candidates.isEmpty {
                     Text(warning)
                         .font(.system(size: 11))
@@ -815,7 +913,7 @@ private struct CandidateButton: View {
                 .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(selected ? Color.accentColor.opacity(0.25)
+                        .fill(selected ? themeAccent.opacity(0.25)
                               : Color(UIColor.systemBackground).opacity(nextWord ? 0.55 : 1))
                 )
         }
@@ -840,7 +938,7 @@ private struct ExpandedCandidates: View {
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
                                     .fill(item.id == model.selectedCandidate
-                                          ? Color.accentColor.opacity(0.25)
+                                          ? themeAccent.opacity(0.25)
                                           : Color(UIColor.systemBackground))
                             )
                     }

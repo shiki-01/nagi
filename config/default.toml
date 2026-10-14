@@ -175,6 +175,16 @@ next_word = false
 # 既定: 5
 next_word_count = 5
 
+[rewriter]
+# 読みから絵文字の候補を出す（「わらう」→ 😄 など）。変換候補の後ろ（Rewriter の位置）に加わる
+# ユーザー辞書の同じ読みの語・変換モデルの結果より前には出ない
+# 既定: true
+emoji = true
+
+# 読みから顔文字の候補を出す（「えがお」→ (^_^) など）
+# 既定: true
+kaomoji = true
+
 [userdict]
 # ユーザー辞書の語を変換・予測に使うかどうか
 # false にしても登録内容は消えない（スニペットは [snippet] で別に切り替える）

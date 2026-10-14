@@ -54,9 +54,9 @@
 | `touch.tap_slop_pt` | タップと判定する許容移動量 | float 2–20 pt | 8 | D | kbd | 新規(iOS) | |
 | `touch.key_repeat_ms` | ⌫・カーソル長押し連打の間隔 | int 30–300, step 10 | 80 | D | kbd | 既存(iOS) | 初回遅延は `touch.key_repeat_delay_ms` |
 | `touch.key_repeat_delay_ms` | 長押し連打を始めるまでの時間 | int 200–1000, step 50 | 400 | D | kbd | 既存(iOS) | |
-| `touch.space_swipe_cursor` | スペースキーのスワイプでカーソル移動 | bool | true | S | kbd | 新規(iOS) | トラックパッド化（backlog 操作）。変換中は注目文節の移動 |
-| `touch.space_swipe_step_pt` | カーソル移動 1 文字あたりの距離 | float 4–40 pt | 12 | D | kbd | 新規(iOS) | |
-| `touch.backspace_swipe_word` | ⌫のスワイプで単語単位の削除 | bool | false | D | kbd+core | 新規(iOS) | 単語境界の判定はコア側で行う想定（要設計） |
+| `touch.space_swipe` | スペースキーのスワイプでカーソル移動 | bool | true | D | kbd | 実装済み(iOS・要実機確認) | スペースを押したまま左右に動かすと移動モード（離してもスペースは入らない。タップは通常のスペース）。入力中は文節/カーソル移動の Action、未入力はホストの `adjustTextPosition`。旧 ID `touch.space_swipe_cursor` |
+| `touch.space_swipe_step_pt` | カーソル移動 1 文字あたりの距離 | float 4–40 pt, step 1 | 14 | D | kbd | 実装済み(iOS・要実機確認) | ドラッグ距離に比例。最初の 1 文字もこの距離で入る |
+| `touch.backspace_swipe` | ⌫の左スワイプで単語単位の削除 | bool | false | D | kbd | 実装済み(iOS・要実機確認) | 単語境界は文字種の連なり（漢字/ひらがな/カタカナ/英数）でフロントが判定（コアは関与しない暫定）。入力中は無効。押した瞬間の 1 文字削除は先に済む。旧 ID `touch.backspace_swipe_word` |
 | `touch.arrow_flick_cursor` | 左右フリックでカーソル移動 | bool | true | D | kbd | 新規(iOS) | 12 キーの「←」「→」キー |
 
 ### 2.2 変換（`conversion` / `profile` / `predict` / `ranking`）
@@ -142,8 +142,8 @@
 | `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS・要実機確認) | **触覚の発生にはフルアクセスが要る**（`UIFeedbackGenerator` は拡張では制限あり。要実機確認） |
 | `keyboard.sound` | キー入力の音 | choice: `off` / `system` | `off` | S | kbd | 既存(iOS・要実機確認) | 端末の「キーボードのクリック」設定に従う（`UIDevice.playInputClick`）。独自音源は持たない |
 | `keyboard.sound_volume` | 音量 | float 0–1 | 0.5 | - | kbd | 新規(iOS) | `system` では OS が音量を決めるため非表示 |
-| `keyboard.theme` | テーマ | choice: `system` / `light` / `dark` / ユーザー定義 | `system` | S | kbd | 新規(iOS) | |
-| `keyboard.accent_color` | アクセントカラー | 色（sRGB 16 進）または `system` | `system` | D | kbd | 新規(iOS) | |
+| `keyboard.theme` | テーマ | choice: `system` / `light` / `dark`（ユーザー定義は未実装） | `system` | S | kbd | 実装済み(iOS・要実機確認) | 拡張のビューの `overrideUserInterfaceStyle` で上書き |
+| `keyboard.accent` | アクセントカラー | choice: `blue` / `green` / `orange` / `pink` / `gray` | `blue` | S | kbd | 実装済み(iOS・要実機確認) | 確定キー・選択中の候補・シフト等の色。任意色（sRGB 16 進）は未実装。旧 ID `keyboard.accent_color` |
 | `keyboard.key_color_set` | キーの配色 | choice: `standard` / `high_contrast` / `custom` | `standard` | D | kbd | 新規(iOS) | `custom` 時は色ごとの指定を JSON で持つ |
 | `keyboard.background_image` | 背景画像 | 画像（ホストアプリで選択） | なし | D | kbd | 新規(iOS) | **拡張のメモリを消費する**ため縮小して保存（長辺 1024px 以内）し、拡張では必要時のみ読む |
 | `keyboard.show_key_preview` | 押したキーのプレビュー（QWERTY） | bool | true | D | kbd | 新規(iOS) | |
@@ -161,7 +161,7 @@
 | `candbar.show_segments` | 文節列（注目文節の表示）を出す | bool | true | D | kbd | 新規(iOS) | iOS は marked text に属性を付けられないため主手段（`mobile-design.md` §5.1）。OFF は非推奨 |
 | `candbar.auto_hide` | 入力が無いときの候補バーの扱い | choice: `always` / `hide_when_empty` | `always` | D | kbd | 新規(iOS) | 非表示にすると高さが変わるため既定は常時表示 |
 | `candbar.tap_commit` | 候補のタップで即確定 | bool | true | D | kbd | 新規(iOS) | OFF なら 1 回目で選択、2 回目で確定 |
-| `candbar.clipboard_paste` | 「貼り付け」ボタンを候補バーに出す | bool | false | D | kbd | 新規(iOS) | クリップボードの読み取りはペースト通知が出る。既定 OFF |
+| `candbar.paste_button` | 「貼り付け」ボタンを候補バーの左端に出す | bool | true | D | kbd | 実装済み(iOS・要実機確認) | 表示判定は `UIPasteboard.hasStrings` のみ（中身は読まない）、入力中は非表示。中身はタップ時だけ読む（iOS 16 の貼り付け許可が出うる）。旧 ID `candbar.clipboard_paste`（既定は旧 false → true）。`privacy.clipboard_access` とは独立 |
 
 ### 2.6 プライバシー・フルアクセス（`privacy`）
 

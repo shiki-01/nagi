@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// ホストアプリのテキスト入力欄への操作（`UIInputViewController` が実装する）
 protocol KeyboardHost: AnyObject {
@@ -64,6 +65,11 @@ final class KeyboardModel: ObservableObject {
     /// iOS 固有の設定（`ios-settings.json`。focusIn のたびに読み直す）。
     /// 描画が参照する寸法は `NagiKeyMetrics.current` にも同じ値を入れる
     @Published private(set) var ios = NagiIOSSettings()
+
+    /// クリップボードに文字列があるか（候補バーの「貼り付け」ボタンの表示判定）。
+    /// 判定は `hasStrings` だけで行い、中身は読まない（読むとペーストの許可確認が出るため、タップ時のみ読む）
+    @Published private(set) var clipboardHasText = false
+    private var pasteboardObserver: NSObjectProtocol?
 
     weak var host: KeyboardHost?
 
@@ -147,6 +153,13 @@ final class KeyboardModel: ObservableObject {
         environment.onChange = { [weak self] in self?.reportEnvironment(reason: "os change") }
         environment.start()
         reloadIOSSettings()
+        pasteboardObserver = NotificationCenter.default.addObserver(
+            forName: UIPasteboard.changedNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.refreshClipboardState() }
+    }
+
+    deinit {
+        if let observer = pasteboardObserver { NotificationCenter.default.removeObserver(observer) }
     }
 
     /// 現在のセッションに通知の受け取りを付け、実行環境を報告する（生成時・作り直し時）。
@@ -329,6 +342,27 @@ final class KeyboardModel: ObservableObject {
         NagiKeyMetrics.current = settings
         toggleInput = settings.toggleInput
         if settings != ios { ios = settings }
+        refreshClipboardState()
+    }
+
+    /// 「貼り付け」ボタンを出すか更新する。`UIPasteboard.hasStrings` は中身を読まず、貼り付け許可の確認も出さない
+    func refreshClipboardState() {
+        let has = ios.pasteButton && UIPasteboard.general.hasStrings
+        if has != clipboardHasText { clipboardHasText = has }
+    }
+
+    /// 「貼り付け」ボタン: タップされたときだけクリップボードの文字列を読んで入れる。
+    /// フルアクセスが無い・許可されなかった場合は nil になるので、何も入れずにボタンを隠す
+    func pasteFromClipboard() {
+        toggleState = nil
+        // 入力中は出さないボタンだが、押す直前に入力が始まっていた場合に備えて確定してから入れる
+        commitPreedit()
+        if let text = UIPasteboard.general.string, !text.isEmpty {
+            hostInsert(text)
+        } else {
+            DiagLog.log("paste: clipboard empty or denied")
+        }
+        refreshClipboardState()
     }
 
     var isAvailable: Bool { session != nil }
@@ -537,6 +571,31 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
+    /// スペースキーのスワイプによるカーソル移動。`steps` は右が正。
+    /// 変換中は注目文節、入力中はプリエディット内のカーソルを、`arrow` と同じ Action で 1 つずつ動かす。
+    /// 未入力ならホストの入力欄のカーソルをまとめて動かす（`adjustTextPosition`）
+    func spaceSwipeMove(_ steps: Int) {
+        guard steps != 0 else { return }
+        toggleState = nil
+        if hasPreedit {
+            let direction: TouchDirection = steps < 0 ? .left : .right
+            for _ in 0..<min(abs(steps), 20) { arrow(direction) }
+        } else {
+            DiagLog.log("host adjustCursor \(steps)")
+            host?.hostAdjustCursor(by: steps)
+        }
+    }
+
+    /// ⌫の左スワイプ: カーソル手前の単語を消す。入力中（プリエディットあり）は何もしない
+    /// （押した瞬間の 1 文字削除はコアの backspace で済んでいる）。文脈が取れない入力欄でも何もしない
+    func deleteWordBackward() {
+        toggleState = nil
+        guard !hasPreedit, let context = host?.hostContextBeforeInput() else { return }
+        let count = WordBoundary.deleteCount(before: context)
+        guard count > 0 else { return }
+        hostDeleteBackward(count)
+    }
+
     // MARK: - レイアウトの切替
 
     /// かな ⇄ 英字。かな以外（英字・数字・記号・絵文字）からは、かなに戻る
@@ -698,6 +757,7 @@ final class KeyboardModel: ObservableObject {
             toggleState = nil
         }
         scheduleContextUpdate(delay: 0.05)
+        refreshClipboardState()
     }
 
     /// 入力欄そのものが切り替わった（`textDocumentProxy.documentIdentifier` が変わった）。

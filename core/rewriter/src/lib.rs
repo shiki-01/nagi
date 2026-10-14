@@ -1,7 +1,11 @@
 //! Rewriter: 決定的変換の最終段（設計書 §4.13）。
 //!
 //! LLM を使わない決定的な表記変換（全角/半角、カタカナ/半角カナ 等）を候補として提供する。
-//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）・日付（YYYYMMDD）・簡易な二項演算。複雑な式や曖昧な日付は対象外。
+//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）・日付（YYYYMMDD）・簡易な二項演算・絵文字/顔文字（読みの表 `config/emoji.tsv`、[`emoji`]）。複雑な式や曖昧な日付は対象外。
+
+pub mod emoji;
+
+pub use emoji::{EmojiRewriter, EmojiTable};
 
 /// 決定的な表記変換を提供するプラグイン
 pub trait Rewriter: Send + Sync {

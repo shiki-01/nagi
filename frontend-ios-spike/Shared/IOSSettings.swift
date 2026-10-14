@@ -169,6 +169,18 @@ struct NagiIOSSettings: Codable, Equatable {
             key: Key.keyRepeatMs, group: "入力", label: "⌫の連打の間隔（ミリ秒）",
             description: "連打の最初の間隔です。押し続けると少しずつ短くなります。",
             kind: .int(min: 30, max: 300, step: 10), isSimple: false, defaultValue: .number(110)),
+        NagiIOSSettingDef(
+            key: Key.spaceSwipe, group: "入力", label: "スペースキーのスワイプでカーソル移動",
+            description: "スペースキーを押したまま左右に動かすと、カーソルを動かします（離してもスペースは入りません）。入力中は文節・カーソルの移動になります。タップは通常のスペースです。",
+            kind: .bool, isSimple: false, defaultValue: .bool(true)),
+        NagiIOSSettingDef(
+            key: Key.spaceSwipeStepPt, group: "入力", label: "カーソル移動 1 文字あたりの距離（pt）",
+            description: "スペースキーをスワイプしたとき、この距離ごとにカーソルが 1 つ動きます。小さいほど速く動きます。",
+            kind: .float(min: 4, max: 40, step: 1), isSimple: false, defaultValue: .number(14)),
+        NagiIOSSettingDef(
+            key: Key.backspaceSwipe, group: "入力", label: "⌫の左スワイプで単語を削除",
+            description: "⌫を押したまま左へ大きく動かすと、カーソル手前の単語（同じ種類の文字の連なり）をまとめて消します。入力中は働きません。",
+            kind: .bool, isSimple: false, defaultValue: .bool(false)),
 
         NagiIOSSettingDef(
             key: Key.keyboardHeight, group: "キーボード", label: "キーボードの高さ",
@@ -206,6 +218,22 @@ struct NagiIOSSettings: Codable, Equatable {
             description: "端末の「キーボードのクリック」設定に従ってクリック音を鳴らします。",
             kind: NagiIOSSettings.choice([("off", "オフ"), ("system", "システムのクリック音")]),
             isSimple: true, defaultValue: .string("off")),
+        NagiIOSSettingDef(
+            key: Key.keyboardTheme, group: "キーボード", label: "テーマ",
+            description: "キーボードの明るさです。「システム」は端末の外観（ライト/ダーク）に従います。",
+            kind: NagiIOSSettings.choice([("system", "システムに合わせる"), ("light", "ライト"), ("dark", "ダーク")]),
+            isSimple: true, defaultValue: .string("system")),
+        NagiIOSSettingDef(
+            key: Key.keyboardAccent, group: "キーボード", label: "アクセントカラー",
+            description: "確定キーや選択中の候補などの色です。",
+            kind: NagiIOSSettings.choice([
+                ("blue", "ブルー"), ("green", "グリーン"), ("orange", "オレンジ"), ("pink", "ピンク"), ("gray", "グレー"),
+            ]),
+            isSimple: true, defaultValue: .string("blue")),
+        NagiIOSSettingDef(
+            key: Key.candbarPasteButton, group: "キーボード", label: "候補バーに「貼り付け」を出す",
+            description: "入力中でなく、クリップボードに文字があるときだけ、候補バーの左端に出します。押したときだけクリップボードを読みます（iOS の貼り付け許可の確認が出ることがあります）。",
+            kind: .bool, isSimple: false, defaultValue: .bool(true)),
     ]
 
     private static let definitionsByKey: [String: NagiIOSSettingDef] =
@@ -226,6 +254,12 @@ struct NagiIOSSettings: Codable, Equatable {
         static let flickLongPressMs = "flick.long_press_ms"
         static let keyRepeatDelayMs = "touch.key_repeat_delay_ms"
         static let keyRepeatMs = "touch.key_repeat_ms"
+        static let spaceSwipe = "touch.space_swipe"
+        static let spaceSwipeStepPt = "touch.space_swipe_step_pt"
+        static let backspaceSwipe = "touch.backspace_swipe"
+        static let keyboardTheme = "keyboard.theme"
+        static let keyboardAccent = "keyboard.accent"
+        static let candbarPasteButton = "candbar.paste_button"
         static let keyboardHeight = "keyboard.height"
         static let keyboardHeightScale = "keyboard.height_scale"
         static let keyboardOneHanded = "keyboard.one_handed"
@@ -302,6 +336,12 @@ struct NagiIOSSettings: Codable, Equatable {
     var oneHandedWidth: Double { double(Key.keyboardOneHandedWidth) }
     var haptic: String { string(Key.keyboardHaptic) }
     var soundEnabled: Bool { string(Key.keyboardSound) == "system" }
+    var spaceSwipe: Bool { bool(Key.spaceSwipe) }
+    var spaceSwipeStepPt: Double { double(Key.spaceSwipeStepPt) }
+    var backspaceSwipe: Bool { bool(Key.backspaceSwipe) }
+    var theme: String { string(Key.keyboardTheme) }
+    var accent: String { string(Key.keyboardAccent) }
+    var pasteButton: Bool { bool(Key.candbarPasteButton) }
 
     /// フリックと判定する移動量（pt）。感度が高いほど短い
     var flickThresholdPoints: Double {

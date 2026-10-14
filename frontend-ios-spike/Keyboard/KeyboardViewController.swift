@@ -35,6 +35,12 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         model?.focusIn()
         // focusIn で読み直した設定の高さを反映する
         heightConstraint?.constant = CGFloat(NagiKeyMetrics.totalHeight)
+        applyTheme()
+    }
+
+    /// 設定 `keyboard.theme` の外観を反映する（system は端末に従う）
+    private func applyTheme() {
+        hostingController?.overrideUserInterfaceStyle = NagiTheme.interfaceStyle(NagiKeyMetrics.current.theme)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -75,6 +81,7 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
             hostView.view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
         ])
         hostView.didMove(toParent: self)
+        applyTheme()
 
         // キーボードの高さ（候補バー 44 + キー 4 行）。優先度を下げて OS の制約と衝突しないようにする
         let height = view.heightAnchor.constraint(equalToConstant: CGFloat(NagiKeyMetrics.totalHeight))

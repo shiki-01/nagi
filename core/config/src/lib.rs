@@ -452,6 +452,25 @@ impl Default for PredictSection {
     }
 }
 
+/// Rewriter セクション（決定的な表記変換の候補）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RewriterSection {
+    /// 読みから絵文字の候補を出すかどうか。既定: true。
+    pub emoji: bool,
+    /// 読みから顔文字の候補を出すかどうか。既定: true。
+    pub kaomoji: bool,
+}
+
+impl Default for RewriterSection {
+    fn default() -> Self {
+        RewriterSection {
+            emoji: true,
+            kaomoji: true,
+        }
+    }
+}
+
 /// キーマップセクション。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -512,6 +531,8 @@ pub struct Config {
     pub learning: LearningSection,
     /// 予測変換セクション。
     pub predict: PredictSection,
+    /// Rewriter セクション。
+    pub rewriter: RewriterSection,
     /// ユーザー辞書セクション。
     pub userdict: UserdictSection,
     /// スニペットセクション。
@@ -721,6 +742,7 @@ const KNOWN_KEYS: &[&str] = &[
     "ranking",
     "learning",
     "predict",
+    "rewriter",
     "userdict",
     "snippet",
     "keymap",
@@ -757,6 +779,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "disabled_apps",
         ],
         "predict" => &["enabled", "min_chars", "next_word", "next_word_count"],
+        "rewriter" => &["emoji", "kaomoji"],
         "userdict" | "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],

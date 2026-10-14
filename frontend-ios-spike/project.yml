@@ -181,6 +181,8 @@ targets:
       - path: Shared/LayoutURL.swift
       - path: Keyboard/KanaKeyTable.swift
       - path: Keyboard/CandidateKind.swift
+      - path: Keyboard/TouchLogic.swift
+      - path: Keyboard/KeyboardTheme.swift
       # コアのプロトコルの型（typeshare で生成）
       - path: ../frontend-macos/Sources/Generated
       # 同梱レイアウト（JSON）の検証用。バンドル内の presets/ フォルダとして入る
