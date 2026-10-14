@@ -7,15 +7,17 @@ class NagiEngine {
     private let queue = DispatchQueue(label: "com.shiki.nagi.engine")
 
     /// エンジンを生成。失敗時は nil を返す
-    init?(dataDir: String, userDir: String? = nil, noLLM: Bool = false) {
+    /// - memoryBudgetMB: このプロセスが OS から課されているメモリ上限（MB）。キーボード拡張では
+    ///   `MemoryProbe.processBudgetMB()`。上限が小さい場合、コアは LLM を読み込まず辞書のみで動く
+    init?(dataDir: String, userDir: String? = nil, noLLM: Bool = false, memoryBudgetMB: UInt64 = 0) {
         let noLLMFlag: Int32 = noLLM ? 1 : 0
         self.handle = dataDir.withCString { (dataDirPtr: UnsafePointer<CChar>) -> OpaquePointer? in
             if let userDir = userDir {
                 return userDir.withCString { (userDirPtr: UnsafePointer<CChar>) -> OpaquePointer? in
-                    nagi_server_new(dataDirPtr, userDirPtr, noLLMFlag)
+                    nagi_server_new_with_budget(dataDirPtr, userDirPtr, noLLMFlag, memoryBudgetMB)
                 }
             }
-            return nagi_server_new(dataDirPtr, nil, noLLMFlag)
+            return nagi_server_new_with_budget(dataDirPtr, nil, noLLMFlag, memoryBudgetMB)
         }
 
         guard handle != nil else { return nil }

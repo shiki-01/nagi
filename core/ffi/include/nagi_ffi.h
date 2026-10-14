@@ -30,6 +30,18 @@ typedef struct NagiServerHandle_ *NagiServerHandle;
 ///         失敗時（UTF-8 デコード失敗等）は NULL。
 NagiServerHandle nagi_server_new(const char *data_dir, const char *user_dir, int no_llm);
 
+/// サーバーを初期化して返す（プロセスのメモリ上限を指定する版）。
+///
+/// @param data_dir データディレクトリのパス（UTF-8, NULL で未指定）
+/// @param user_dir ユーザーデータディレクトリのパス（UTF-8, NULL で未指定）
+/// @param no_llm 0 以外なら LLM を無効化
+/// @param memory_budget_mb このプロセスが OS から課されているメモリ上限（MB）。0 は指定なし。
+///        iOS のキーボード拡張では phys_footprint + os_proc_available_memory() を渡す。
+///        LLM に必要な量（150MB）未満なら、LLM を読み込まず辞書のみで動く。
+///
+/// @return 成功時は不透明なハンドル（nagi_server_free で解放必須）、失敗時は NULL。
+NagiServerHandle nagi_server_new_with_budget(const char *data_dir, const char *user_dir, int no_llm, uint64_t memory_budget_mb);
+
 // ---- JSON-RPC 処理 ----
 
 /// JSON-RPC リクエスト行を処理し、応答行を返す。

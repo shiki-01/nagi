@@ -46,3 +46,19 @@ fn null_handle_is_safe() {
         nagi_string_free(p);
     }
 }
+
+#[test]
+fn handle_with_memory_budget_roundtrip() {
+    let dir = std::env::temp_dir().join("nagi-ffi-smoke-budget");
+    let dir_c = CString::new(dir.to_str().unwrap()).unwrap();
+    for budget in [0u64, 100, 3072] {
+        unsafe {
+            let handle = nagi_server_new_with_budget(dir_c.as_ptr(), dir_c.as_ptr(), 0, budget);
+            assert!(!handle.is_null(), "budget={budget}");
+            send(handle, INIT);
+            let key = send(handle, KEY_A);
+            assert!(key.contains("\"result\""), "budget={budget}: {key}");
+            nagi_server_free(handle);
+        }
+    }
+}

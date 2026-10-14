@@ -25,5 +25,6 @@ pub use pipeline::Pipeline;
 pub use runtime::{Effective, Event, Runtime, Tunables};
 pub use server::Server;
 pub use setup::{
-    Built, DEFAULT_MODEL_FILE, ModelLoader, ServerOptions, build, build_with_loader, parse_args,
+    Built, DEFAULT_MODEL_FILE, MIN_MEMORY_BUDGET_FOR_LLM_MB, ModelLoader, ServerOptions, build,
+    build_with_loader, parse_args,
 };

@@ -834,3 +834,13 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - **UTF-8 検査は参照時**: 表記プール全体の検査は mmap の全ページを触るため読み込み時には行わず、`surface()` で都度検査する（壊れたデータでは空文字。panic しない）。オフセット表の単調性・ID の範囲検査は従来どおり読み込み時に行う
 - **運用上の注意**: マップ中のファイルを同じ inode のまま書き換え・短縮すると SIGBUS になる。辞書の更新は一時ファイルに書いて rename で置き換えること
 - テスト: 既存の往復・破損データに加え、ファイルからの `load`（unlink 後も参照可）、全長での切り詰め拒否を追加。実辞書（real_data）での検証と、実機での footprint の実測は未実施
+
+### H-8. プロセスのメモリ上限による LLM 読み込みの抑止（2026-10-14、要レビュー）
+
+背景: iOS のキーボード拡張は搭載メモリ（iPhone 16e で 8GB）に関係なく、プロセスごとの上限（同機で約 177MB）が課される。`nagi-profile` の判定は搭載メモリ（`SystemInfo.total_memory_mb`）を見るため、このままでは上限の小さい環境でも LLM を読み込んでしまう。
+
+- **フロントエンドが上限を注入する**: `ServerOptions.memory_budget_mb`（`--memory-budget-mb`）と、C ABI の `nagi_server_new_with_budget(.., memory_budget_mb)`（0 は指定なし）。iOS では `phys_footprint + os_proc_available_memory()`（Swift: `MemoryProbe.processBudgetMB()`）を渡す。コアは OS の API を直接呼ばない原則（設計書 §4.7、mobile-design §3）に沿う。既存の `nagi_server_new` は上限なしで従来どおり
+- **`MIN_MEMORY_BUDGET_FOR_LLM_MB` = 150（暫定）未満なら LLM を読み込まない**。読み込み前に判定し、`notes` に理由を残す（プロファイルは `minimal`）。根拠は iPhone 16e の拡張で xsmall + 辞書が上限 177MB に対しピーク 124MB に収まった実測（H-6）。辞書の mmap 化（H-7）で余裕が増える見込みのため、実測後に下げる余地がある
+- **モデルの選択（xsmall / small）は今回の対象外**: 現状はフロントエンド（または `config.toml` の `conversion.model`）が決める。上限が大きい環境で small を選ぶ判断は、small の拡張外での実測（メモリ・速度）が揃ってから設計する
+- 上限は起動時の 1 回のみ判定する。実行中の逼迫は従来どおり `set_environment` の `memory_pressure` で扱う（フロントが `os_proc_available_memory` の残量から報告する）
+- 未実施: 実製品のキーボード（変換エンジンを実際に使うもの）が無いため、`processBudgetMB()` はまだ呼び出し元が無い（Probe は計測のため上限判定なしで生成する）。他機種での上限の実測

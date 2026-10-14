@@ -23,6 +23,11 @@ use std::time::{Instant, SystemTime};
 /// 既定の変換モデルのファイル名（`<data_dir>/models/` 下。`cargo xtask fetch-model` の出力）
 pub const DEFAULT_MODEL_FILE: &str = "zenz-v3.1-small-Q5_K_M.gguf";
 
+/// LLM を読み込むために必要な、プロセスのメモリ上限（MB）の最小値。これ未満なら LLM を読み込まず
+/// 辞書のみで動く。iPhone 16e のキーボード拡張（上限 約 177MB）で xsmall（20MB）+ 辞書が
+/// ピーク 124MB に収まった実測（decisions.md H-6）に余裕を持たせた暫定値で、他機種の実測で見直す
+pub const MIN_MEMORY_BUDGET_FOR_LLM_MB: u64 = 150;
+
 /// 起動オプション
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -41,6 +46,10 @@ pub struct ServerOptions {
     /// 返り、読み込み中は辞書のみで動く。`false`（既定）なら読み込み完了まで `build` が返らない
     /// （`nagi-eval` など、起動直後からモデルを使う利用側向け）
     pub async_model_load: bool,
+    /// このプロセスが OS から課されているメモリ上限（MB。`--memory-budget-mb`）。iOS のキーボード拡張など、
+    /// 搭載メモリより上限がはるかに小さい環境で、フロントエンドが `phys_footprint + 残り` として渡す。
+    /// [`MIN_MEMORY_BUDGET_FOR_LLM_MB`] 未満なら LLM を読み込まない。`None` なら上限なし（デスクトップなど）
+    pub memory_budget_mb: Option<u64>,
 }
 
 impl Default for ServerOptions {
@@ -52,11 +61,13 @@ impl Default for ServerOptions {
             use_llm: true,
             sync_budget_ms: None,
             async_model_load: false,
+            memory_budget_mb: None,
         }
     }
 }
 
-/// 引数から起動オプションを作る（`--data-dir` `--user-dir` `--config` `--no-llm` `--sync-budget-ms`、
+/// 引数から起動オプションを作る（`--data-dir` `--user-dir` `--config` `--no-llm` `--sync-budget-ms`
+/// `--memory-budget-mb`、
 /// 環境変数 `NAGI_DATA_DIR`）
 pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<ServerOptions, String> {
     let mut options = ServerOptions {
@@ -78,6 +89,13 @@ pub fn parse_args<I: Iterator<Item = String>>(mut args: I) -> Result<ServerOptio
                 options.sync_budget_ms = Some(
                     v.parse()
                         .map_err(|_| format!("--sync-budget-ms が数値ではありません: {v}"))?,
+                );
+            }
+            "--memory-budget-mb" => {
+                let v = value("--memory-budget-mb")?;
+                options.memory_budget_mb = Some(
+                    v.parse()
+                        .map_err(|_| format!("--memory-budget-mb が数値ではありません: {v}"))?,
                 );
             }
             other => return Err(format!("不明な引数: {other}")),
@@ -364,7 +382,15 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
                     dict_path.display()
                 ));
                 dict = Some(d);
-                if options.use_llm {
+                let llm_blocked_by_memory = options
+                    .memory_budget_mb
+                    .filter(|&mb| mb < MIN_MEMORY_BUDGET_FOR_LLM_MB);
+                if let (true, Some(mb)) = (options.use_llm, llm_blocked_by_memory) {
+                    notes.push(format!(
+                        "メモリ上限 {mb}MB では LLM に {MIN_MEMORY_BUDGET_FOR_LLM_MB}MB 以上必要なため、\
+                         LLM を読み込みません（辞書のみで起動します）"
+                    ));
+                } else if options.use_llm {
                     let loader = loader.unwrap_or_else(|| {
                         let dir = dir.clone();
                         let setting = config.conversion.model.clone();

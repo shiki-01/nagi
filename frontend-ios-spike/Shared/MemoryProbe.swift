@@ -39,6 +39,12 @@ class MemoryProbe {
         return Double(availableMemory) / 1024.0 / 1024.0
     }
 
+    /// このプロセスが OS から課されているメモリ上限（MB）の推定: 現在の footprint + 残り。
+    /// コアの `nagi_server_new_with_budget` に渡す（キーボード拡張は約 177MB、ホストアプリは数 GB）
+    static func processBudgetMB() -> UInt64 {
+        UInt64(max(0, getPhysFootprintMB() + getAvailableMemoryMB()))
+    }
+
     /// メモリ統計を取得
     static func getStats() -> MemoryStats {
         return MemoryStats(

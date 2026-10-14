@@ -19,12 +19,15 @@ pub type NagiServerHandle = *mut ServerHandle;
 
 // ---- 初期化 ----
 
-/// サーバーを初期化して返す。
+/// サーバーを初期化して返す。プロセスのメモリ上限を指定できる版。
 ///
 /// # Arguments
 /// - `data_dir`: データディレクトリのパス（UTF-8 C 文字列、NULL で未指定）
 /// - `user_dir`: ユーザーデータディレクトリのパス（UTF-8 C 文字列、NULL で未指定）
 /// - `no_llm`: 0 以外なら LLM を無効化（--no-llm オプション相当）
+/// - `memory_budget_mb`: このプロセスが OS から課されているメモリ上限（MB）。0 は指定なし。
+///   iOS のキーボード拡張では `phys_footprint + os_proc_available_memory()` を渡す。
+///   コアが LLM に必要な量（`MIN_MEMORY_BUDGET_FOR_LLM_MB`）未満なら、LLM を読み込まず辞書のみで動く
 ///
 /// # Returns
 /// 成功時は不透明なハンドル（`nagi_server_free` で解放必須）、
@@ -35,10 +38,11 @@ pub type NagiServerHandle = *mut ServerHandle;
 /// - 返されたハンドルは `nagi_server_free` で解放すること。
 /// - 返されたハンドルを複数のスレッドから同時にアクセスしないこと（Server 内部は Mutex でロックしている）。
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nagi_server_new(
+pub unsafe extern "C" fn nagi_server_new_with_budget(
     data_dir: *const c_char,
     user_dir: *const c_char,
     no_llm: i32,
+    memory_budget_mb: u64,
 ) -> NagiServerHandle {
     // SAFETY: C 呼び出し側の責務：data_dir / user_dir は NULL-terminated UTF-8 文字列
     let result = catch_unwind(|| {
@@ -67,6 +71,12 @@ pub unsafe extern "C" fn nagi_server_new(
         // no_llm を引数に追加
         if no_llm != 0 {
             args.push("--no-llm".to_string());
+        }
+
+        // メモリ上限（0 は指定なし）
+        if memory_budget_mb != 0 {
+            args.push("--memory-budget-mb".to_string());
+            args.push(memory_budget_mb.to_string());
         }
 
         // parse_args を呼ぶ
@@ -100,6 +110,20 @@ pub unsafe extern "C" fn nagi_server_new(
         Ok(Ok(handle)) => Box::into_raw(Box::new(handle)),
         _ => std::ptr::null_mut(),
     }
+}
+
+/// サーバーを初期化して返す（メモリ上限の指定なし。`nagi_server_new_with_budget` の `memory_budget_mb` = 0）。
+///
+/// # Safety
+/// `nagi_server_new_with_budget` と同じ。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nagi_server_new(
+    data_dir: *const c_char,
+    user_dir: *const c_char,
+    no_llm: i32,
+) -> NagiServerHandle {
+    // SAFETY: 引数の条件は `nagi_server_new_with_budget` と同じで、呼び出し側が満たす
+    unsafe { nagi_server_new_with_budget(data_dir, user_dir, no_llm, 0) }
 }
 
 // ---- JSON-RPC 処理 ----
