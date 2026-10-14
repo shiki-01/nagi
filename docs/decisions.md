@@ -996,3 +996,11 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - 所見 4（レイテンシ）: この環境（4 コア Xeon）で small は p50 66〜90ms、p95 約 150ms。**p95 が約 150ms で頭打ちなのは `sync_budget_ms` による打ち切り**で、長い文では LLM の結果が間に合わず辞書の結果になっている可能性がある（打ち切り率は未計測）。xsmall は p95 40〜50ms で余裕がある。iPhone 16e の実測（H-9: small の Space 応答 p50 155ms・p95 318ms、xsmall 103/309ms）の方が現実に近く、いずれも同期経路では目標（p95 150ms）に収まらない
 - **xsmall を iOS 既定とする判断の妥当性**: 速度・メモリ（H-9: 差はほぼない）の面では xsmall が有利だが、**精度の面では small が明確に上**（特に全文変換）。H-9 の「暫定の iOS 既定は small（存在しなければ xsmall）」は、この結果とは矛盾しない。xsmall を既定にする根拠は「小さい・速い」のみで、精度を優先するなら small を既定にし、同期の待ち時間は非同期の候補差し替え（`update_candidates`）で隠すのが筋。**ただし**この環境の CPU は iPhone と違い、small が `light` でも p50 90ms かかる点（実機は H-9 の値）を、最終判断の前に実機で再確認する必要がある
 - 限界・未実施: (1) `left_context` なし（文脈の効果は未評価）、(2) 1 条件 1 回の測定（ばらつき未評価）、(3) 評価セットは Mozc の Conversion 系 609 件のみで、期待値の一部（異体字・数字）は精度の比較に不向き、(4) `segment_candidates` のレイテンシ・同期打ち切り率は未計測、(5) 量子化違い（Q8 等）・他サイズ・SudachiDict との組み合わせは未比較、(6) iPhone 相当の CPU での計測。**`nagi-eval` で auto を使う比較は降格の影響を受けるため、固定プロファイル（`profile.mode`）で行うこと**。再現用の設定は `config.toml` に `[profile] mode = "balanced"` と `[conversion] model = "<gguf の絶対パス>"` を書いた `--user-dir` を渡す
+
+
+### H-18. キーボード拡張の RequestsOpenAccess を true にする（2026-10-14、実機で判明）
+
+- `RequestsOpenAccess: false` のままでは、設定アプリにフルアクセスのトグルが出ず、ホストアプリのセットアップ状況が『未検出』のままになる（ユーザー報告）。`true` に変更した。
+- フルアクセスの用途は、App Group 共有領域の辞書・モデルの読み取りと、拡張から App Group への書き込み（セットアップ状況のマーカー、設定の反映）。入力内容は端末外へ送信しない（プライバシーポリシー・サポートの文面と整合）。
+- 触覚フィードバックなど、フルアクセスが要る機能の可否は引き続き実機で確認する（`docs/ios-device-checklist.md`）。
+- App Store 審査では、フルアクセスを求める理由の説明が必要（`web/README.md` の申告メモ）。
