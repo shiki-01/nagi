@@ -30,6 +30,10 @@ struct ContentView: View {
                     // 辞書・モデル・メモリ・LLM の見込み（取り込みは下の「取り込み」）
                     NagiDataStatusSections(reloadToken: dataReloadToken)
 
+                    Section("ユーザー辞書") {
+                        NavigationLink("ユーザー辞書・スニペット") { NagiUserDictionaryView() }
+                    }
+
                     Section("取り込み") {
                         // ボタンごとに別の行にし、.borderless でボタン本体だけをタップ領域にする。
                         // 同じ行に複数の Button があると、List では行全体がタップ領域になり、

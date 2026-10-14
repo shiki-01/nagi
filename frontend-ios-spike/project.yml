@@ -155,3 +155,38 @@ targets:
     scheme:
       testTargets: []
       gatherCoverageData: false
+
+  # 論理の単体テスト（.github/workflows/ios-test.yml）。XCFramework（Rust）に依存しない純粋な Swift だけを
+  # テストバンドルへ直接コンパイルする（ホストアプリなしのロジックテスト）。
+  # NagiCore.swift / NagiSession.swift などコアへ接続する層は含めない
+  NagiSpikeTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.1"
+
+    sources:
+      - path: Tests
+      # テスト対象（外部リンクが要らないものだけ。SharedStore は AppGroupResolver / DataPaths に依存する）
+      - path: Shared/KeyboardLayout.swift
+      - path: Shared/IOSSettings.swift
+      - path: Shared/DiagLog.swift
+      - path: Shared/SharedStore.swift
+      - path: Shared/AppGroupResolver.swift
+      - path: Shared/DataPaths.swift
+      - path: Keyboard/KanaKeyTable.swift
+      # コアのプロトコルの型（typeshare で生成）
+      - path: ../frontend-macos/Sources/Generated
+      # 同梱レイアウト（JSON）の検証用。バンドル内の presets/ フォルダとして入る
+      - path: ../config/keyboard/presets
+        type: folder
+        buildPhase: resources
+
+    settings:
+      SWIFT_VERSION: "5"
+      GENERATE_INFOPLIST_FILE: YES
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki01.nagi.tests
+
+    scheme:
+      testTargets:
+        - NagiSpikeTests
+      gatherCoverageData: false
