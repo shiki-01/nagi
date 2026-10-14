@@ -57,6 +57,7 @@
   .brand {
     font-weight: 700;
     font-size: 1.125rem;
+    white-space: nowrap;
     color: var(--fg);
     text-decoration: none;
     padding: 6px 4px;

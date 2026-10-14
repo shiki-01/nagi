@@ -8,7 +8,7 @@ enum LayoutMode: String, Codable {
     case kana, alpha, number, symbol, emoji, custom
 }
 
-enum KeyKind: String, Codable {
+enum LayoutKeyKind: String, Codable {
     case text, flick, toggle, action, shortcut, layout, spacer
 }
 
@@ -46,7 +46,7 @@ struct LayoutKey: Codable {
     /// SF Symbols 名
     var icon: String?
     var style: KeyStyle
-    var kind: KeyKind
+    var kind: LayoutKeyKind
     // text
     var text: String?
     var shift: String?
@@ -77,7 +77,7 @@ struct LayoutKey: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        kind = try c.decode(KeyKind.self, forKey: .kind)
+        kind = try c.decode(LayoutKeyKind.self, forKey: .kind)
         // `spacer` などは id を省略できる（一意になるよう補う）
         id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
         width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 1
@@ -102,7 +102,7 @@ struct LayoutKey: Codable {
     }
 
     /// コードから作る最小のキー（最後の砦のレイアウト用）
-    init(id: String, kind: KeyKind, label: String?, action: String?, width: Double = 1, style: KeyStyle = .normal) {
+    init(id: String, kind: LayoutKeyKind, label: String?, action: String?, width: Double = 1, style: KeyStyle = .normal) {
         self.id = id
         self.width = width
         self.label = label
