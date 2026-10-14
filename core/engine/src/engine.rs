@@ -396,13 +396,26 @@ impl Engine {
                 if !matches!(mapped, Action::UndoCommit) {
                     sess.last_commit = None;
                 }
-                self.apply(&mut sess, mapped, &mut commit)
+                let consumed = self.apply(&mut sess, mapped, &mut commit);
+                // タッチ UI には候補バーがあるので、変換中は常に注目文節の候補の一覧を出す
+                // （キー操作では、2 回目の Space で候補ウィンドウが開き、文節を動かすと閉じる）
+                self.show_candidates(&mut sess);
+                consumed
             }
             None => false,
         };
         let result = self.finish(&mut sess, consumed, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
+    }
+
+    /// 変換中なら、注目文節の候補一覧を作って表示状態にする
+    fn show_candidates(&self, sess: &mut Session) {
+        if let State::Converting(conv) = &mut sess.state {
+            let focus = conv.focus;
+            self.ensure_candidates(&sess.left_context, conv, focus);
+            conv.visible = true;
+        }
     }
 
     /// タッチ操作を Action に写す。`None` は「消費しない」（未入力で意味の無い操作）

@@ -79,12 +79,18 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         textDocumentProxy.deleteBackward()
     }
 
-    func hostSetMarkedText(_ text: String) {
-        textDocumentProxy.setMarkedText(text, selectedRange: NSRange(location: text.utf16.count, length: 0))
+    func hostSetMarkedText(_ text: String, cursor: Int) {
+        let position = min(max(cursor, 0), text.utf16.count)
+        textDocumentProxy.setMarkedText(text, selectedRange: NSRange(location: position, length: 0))
     }
 
-    func hostUnmarkText() {
+    func hostClearMarkedText() {
+        textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
         textDocumentProxy.unmarkText()
+    }
+
+    func hostAdjustCursor(by offset: Int) {
+        textDocumentProxy.adjustTextPosition(byCharacterOffset: offset)
     }
 
     func hostAdvanceToNextInputMode() {

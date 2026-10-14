@@ -4,10 +4,19 @@ import SwiftUI
 protocol KeyboardHost: AnyObject {
     func hostInsertText(_ text: String)
     func hostDeleteBackward()
-    /// 変換中の文字列（下線付き）を表示する。空文字列なら表示を消す
-    func hostSetMarkedText(_ text: String)
-    func hostUnmarkText()
+    /// 変換中の文字列（下線付き）を表示する。`cursor` はその中のカーソル位置（UTF-16）
+    func hostSetMarkedText(_ text: String, cursor: Int)
+    /// 変換中の表示を消す（確定した文字列は別に `hostInsertText` で入れる）
+    func hostClearMarkedText()
+    /// 変換中でないときのカーソル移動（文字数単位）
+    func hostAdjustCursor(by offset: Int)
     func hostAdvanceToNextInputMode()
+}
+
+/// キーボードのレイアウト
+enum KeyboardLayout {
+    case kana
+    case qwerty
 }
 
 /// キーボードの状態と操作。ロジック（文字の決定・変換・確定）はコアが持ち、ここはキー操作をコアへ送り、
@@ -19,7 +28,9 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var candidates: [String] = []
     /// 選択中の候補（なければ -1）
     @Published private(set) var selectedCandidate = -1
-    @Published private(set) var mode: InputMode = .hiragana
+    @Published private(set) var layout: KeyboardLayout = .kana
+    /// QWERTY のシフト（1 文字ごとに解除）
+    @Published private(set) var isShifted = false
     /// 画面に出すメッセージ（辞書が無いなど）
     @Published private(set) var message: String?
     /// 動作はするが画面に出しておきたい注意（設定の保存先を作れないなど）
@@ -31,8 +42,9 @@ final class KeyboardModel: ObservableObject {
     /// 同じキーの連続タップでトグル入力にするか（false ならフリック入力で、タップは常に先頭の文字）
     private let toggleInput: Bool
     private var lastRevision: UInt32 = 0
-    /// ホストに表示している変換中の文字列
+    /// ホストに表示している変換中の文字列とカーソル位置
     private var shownMarked = ""
+    private var shownCursor = 0
 
     init(outcome: ProductSession.Outcome, toggleInput: Bool = false) {
         self.session = outcome.session
@@ -46,8 +58,10 @@ final class KeyboardModel: ObservableObject {
 
     var isAvailable: Bool { session != nil }
 
-    /// 変換中か（候補が出ている間は、空白で次の候補・確定ボタンで確定）
+    /// 入力中（変換前のかな、または変換中）か
     var hasPreedit: Bool { !preedit.isEmpty }
+    /// 変換中（注目文節がある）か。←/→ は、変換前はカーソル、変換中は注目文節の移動になる
+    @Published private(set) var isConverting = false
 
     // MARK: - キー操作
 
@@ -73,12 +87,34 @@ final class KeyboardModel: ObservableObject {
         if !send({ $0.perform(.backspace) }) { host?.hostDeleteBackward() }
     }
 
-    func moveCursor(_ direction: TouchDirection) {
-        send { $0.perform(.moveCursor(direction)) }
+    /// ←/→: 変換中は注目文節、変換前の入力中はカーソル、未入力ならホストの入力欄のカーソルを動かす
+    func arrow(_ direction: TouchDirection) {
+        if isConverting {
+            send { $0.perform(.moveFocus(direction)) }
+        } else if hasPreedit {
+            send { $0.perform(.moveCursor(direction)) }
+        } else {
+            host?.hostAdjustCursor(by: direction == .left ? -1 : 1)
+        }
     }
 
-    func toggleMode() {
-        send { $0.perform(.toggleMode) }
+    /// かな ⇄ 英字（QWERTY）。入力中の文字列は確定してから切り替える
+    func switchLayout() {
+        if hasPreedit, let session = session, let result = session.perform(.commit) {
+            apply(result)
+        }
+        layout = (layout == .kana) ? .qwerty : .kana
+        isShifted = false
+    }
+
+    func toggleShift() {
+        isShifted.toggle()
+    }
+
+    /// 英字・記号をそのままホストに入れる（変換は通さない）
+    func typeLetter(_ letter: String) {
+        host?.hostInsertText(isShifted ? letter.uppercased() : letter)
+        isShifted = false
     }
 
     func nextKeyboard() {
@@ -117,21 +153,21 @@ final class KeyboardModel: ObservableObject {
             for _ in 0..<n { host?.hostDeleteBackward() }
         }
         if let commit = result.commit, !commit.isEmpty {
-            // 変換中の表示を確定した文字列に置き換えてから、確定する
-            host?.hostSetMarkedText(commit)
-            host?.hostUnmarkText()
+            // 変換中の表示（下線）を消してから、確定した文字列を通常のテキストとして入れる
+            host?.hostClearMarkedText()
+            host?.hostInsertText(commit)
             shownMarked = ""
+            shownCursor = 0
         }
-        if let preedit = result.preedit { showPreedit(preedit.text) }
+        if let preedit = result.preedit { showPreedit(preedit) }
         if let candidates = result.candidates { showCandidates(candidates) }
-        if let mode = result.mode { self.mode = mode }
     }
 
     private func applyPreeditUpdate(_ update: UpdatePreeditParams) {
         // 古い通知は捨てる
         guard update.revision >= lastRevision else { return }
         lastRevision = update.revision
-        showPreedit(update.preedit.text)
+        showPreedit(update.preedit)
     }
 
     private func applyCandidatesUpdate(_ update: UpdateCandidatesParams) {
@@ -140,16 +176,18 @@ final class KeyboardModel: ObservableObject {
         showCandidates(update.candidates)
     }
 
-    private func showPreedit(_ text: String) {
-        preedit = text
-        guard text != shownMarked else { return }
-        if text.isEmpty {
-            host?.hostSetMarkedText("")
-            host?.hostUnmarkText()
+    private func showPreedit(_ view: PreeditView) {
+        preedit = view.text
+        isConverting = view.focus != nil
+        let cursor = Int(view.cursor)
+        guard view.text != shownMarked || cursor != shownCursor else { return }
+        if view.text.isEmpty {
+            host?.hostClearMarkedText()
         } else {
-            host?.hostSetMarkedText(text)
+            host?.hostSetMarkedText(view.text, cursor: cursor)
         }
-        shownMarked = text
+        shownMarked = view.text
+        shownCursor = cursor
     }
 
     private func showCandidates(_ view: CandidatesView) {

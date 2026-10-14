@@ -1,49 +1,65 @@
 import SwiftUI
 
-/// 製品版キーボードの画面: 候補バーと 12 キー（フリック入力）
+/// 製品版キーボードの画面: 候補バーと、かな（12 キー・フリック）または英字（QWERTY）のキー
 struct NagiKeyboardView: View {
     @ObservedObject var model: KeyboardModel
     /// 検証用の画面（Probe）を開く
     var onShowProbes: () -> Void
 
-    private let spacing: CGFloat = 6
-    private let keyHeight: CGFloat = 46
-
     var body: some View {
         VStack(spacing: 0) {
             CandidateBar(model: model, onShowProbes: onShowProbes)
-            HStack(alignment: .top, spacing: spacing) {
-                // 左の列
-                VStack(spacing: spacing) {
-                    FunctionKey(label: "←", height: keyHeight) { model.moveCursor(.left) }
-                    FunctionKey(label: "→", height: keyHeight) { model.moveCursor(.right) }
-                    FunctionKey(label: model.mode == .hiragana ? "あ" : "A", height: keyHeight) { model.toggleMode() }
-                    FunctionKey(label: "🌐", height: keyHeight) { model.nextKeyboard() }
+            Group {
+                switch model.layout {
+                case .kana:
+                    KanaPad(model: model)
+                case .qwerty:
+                    QwertyPad(model: model)
                 }
-                .frame(width: 54)
-                // かなキー（3 列 × 4 行）
-                VStack(spacing: spacing) {
-                    ForEach(0..<rows.count, id: \.self) { rowIndex in
-                        HStack(spacing: spacing) {
-                            ForEach(rows[rowIndex]) { spec in
-                                FlickKey(label: spec.label, hint: spec.hint, height: keyHeight) { gesture in
-                                    spec.action(model, gesture)
-                                }
-                            }
-                        }
-                    }
-                }
-                // 右の列
-                VStack(spacing: spacing) {
-                    FunctionKey(label: "⌫", height: keyHeight) { model.backspace() }
-                    FunctionKey(label: model.hasPreedit ? "変換" : "空白", height: keyHeight) { model.space() }
-                    FunctionKey(label: model.hasPreedit ? "確定" : "改行", height: keyHeight * 2 + spacing) { model.enter() }
-                }
-                .frame(width: 64)
             }
             .padding(6)
         }
         .background(Color(UIColor.systemGray6))
+    }
+}
+
+private let keySpacing: CGFloat = 6
+private let keyHeight: CGFloat = 46
+
+/// かなのキー: 12 キー（フリック入力）と機能キー
+private struct KanaPad: View {
+    @ObservedObject var model: KeyboardModel
+
+    var body: some View {
+        HStack(alignment: .top, spacing: keySpacing) {
+            // 左の列
+            VStack(spacing: keySpacing) {
+                FunctionKey(label: "←", height: keyHeight) { model.arrow(.left) }
+                FunctionKey(label: "→", height: keyHeight) { model.arrow(.right) }
+                FunctionKey(label: "A", height: keyHeight) { model.switchLayout() }
+                FunctionKey(label: "🌐", height: keyHeight) { model.nextKeyboard() }
+            }
+            .frame(width: 54)
+            // かなキー（3 列 × 4 行）
+            VStack(spacing: keySpacing) {
+                ForEach(0..<rows.count, id: \.self) { rowIndex in
+                    HStack(spacing: keySpacing) {
+                        ForEach(rows[rowIndex]) { spec in
+                            FlickKey(label: spec.label, hint: spec.hint, height: keyHeight) { gesture in
+                                spec.action(model, gesture)
+                            }
+                        }
+                    }
+                }
+            }
+            // 右の列
+            VStack(spacing: keySpacing) {
+                FunctionKey(label: "⌫", height: keyHeight) { model.backspace() }
+                FunctionKey(label: model.hasPreedit ? "変換" : "空白", height: keyHeight) { model.space() }
+                FunctionKey(label: model.hasPreedit ? "確定" : "改行", height: keyHeight * 2 + keySpacing) { model.enter() }
+            }
+            .frame(width: 64)
+        }
     }
 
     private var rows: [[KeySpec]] {
@@ -53,6 +69,54 @@ struct NagiKeyboardView: View {
             [.kana("ま", .ma), .kana("や", .ya), .kana("ら", .ra)],
             [.variant, .kana("わ", .wa), .kana("、。？！", .punct)],
         ]
+    }
+}
+
+/// 英字のキー（QWERTY）。変換は通さず、押した文字をそのままホストに入れる
+private struct QwertyPad: View {
+    @ObservedObject var model: KeyboardModel
+
+    private let letterRows = [
+        ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+        ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
+        ["z", "x", "c", "v", "b", "n", "m"],
+    ]
+
+    var body: some View {
+        VStack(spacing: keySpacing) {
+            letterRow(0)
+            letterRow(1).padding(.horizontal, 14)
+            HStack(spacing: keySpacing) {
+                FunctionKey(label: model.isShifted ? "⇪" : "⇧", height: keyHeight) { model.toggleShift() }
+                    .frame(width: 44)
+                letterRow(2)
+                FunctionKey(label: "⌫", height: keyHeight) { model.backspace() }
+                    .frame(width: 44)
+            }
+            HStack(spacing: keySpacing) {
+                FunctionKey(label: "あ", height: keyHeight) { model.switchLayout() }
+                    .frame(width: 54)
+                FunctionKey(label: "🌐", height: keyHeight) { model.nextKeyboard() }
+                    .frame(width: 54)
+                FunctionKey(label: ",", height: keyHeight) { model.typeLetter(",") }
+                    .frame(width: 40)
+                FunctionKey(label: "空白", height: keyHeight) { model.space() }
+                FunctionKey(label: ".", height: keyHeight) { model.typeLetter(".") }
+                    .frame(width: 40)
+                FunctionKey(label: "改行", height: keyHeight) { model.enter() }
+                    .frame(width: 64)
+            }
+        }
+    }
+
+    private func letterRow(_ index: Int) -> some View {
+        HStack(spacing: keySpacing) {
+            ForEach(letterRows[index], id: \.self) { letter in
+                FunctionKey(label: model.isShifted ? letter.uppercased() : letter, height: keyHeight) {
+                    model.typeLetter(letter)
+                }
+            }
+        }
     }
 }
 

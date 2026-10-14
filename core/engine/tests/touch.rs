@@ -163,3 +163,20 @@ fn mode_actions_work_in_direct_state() {
     e.perform_action("s", &TouchAction::ToggleMode);
     assert_eq!(e.snapshot("s").unwrap().mode, InputMode::Hiragana);
 }
+
+#[test]
+fn space_shows_the_candidate_list_immediately() {
+    let mut e = engine();
+    e.insert_reading("s", &ReadingInput::Text("かな".into()));
+    let r = e.perform_action("s", &TouchAction::Space);
+    let candidates = r.candidates.expect("変換を始めたら候補が出る");
+    assert!(candidates.visible);
+    assert!(!candidates.items.is_empty());
+    // 変換中の ←/→ は注目文節の移動（カーソルではない）として使える
+    let r = e.perform_action("s", &TouchAction::MoveFocus(TouchDirection::Right));
+    assert!(r.consumed);
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+    // 注目文節を動かしても、候補の一覧は出たまま（閉じない）
+    let shown = e.snapshot("s").unwrap().candidates;
+    assert!(shown.visible);
+}
