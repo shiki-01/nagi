@@ -550,7 +550,7 @@ struct LLMLoadProbe: ProbeRunner {
         switch DataPaths.modelStatus(appGroupId: appGroupId) {
         case .noContainer:
             note = "(a) App Group コンテナが取得できません（appgroup プローブで Resolved ID を確認。"
-                + "SideStore で再署名した後に App Group が無効になっていないか確認してください）"
+                + "署名・エンタイトルメントで App Group が有効になっているか確認してください）"
             return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)
         case .noModelsDir(let path):
             note = "(b) App Group コンテナはありますが \(path) がありません（モデル未インポート）。\(modelsDirHint)"

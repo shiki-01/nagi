@@ -4,57 +4,12 @@
 > 配布は SideStore ではなく TestFlight / App Store です（`docs/decisions.md` H-15）。ビルド・署名・アップロードは
 > GitHub Actions `ios-testflight`（`gh workflow run ios-testflight.yml --ref main -f llama=true`）で行います。
 > bundle id は `com.shiki01.nagi`（ホスト）/ `com.shiki01.nagi.keyboard`（拡張）、App Group は `group.com.shiki01.nagi`。
-> 以下の SideStore・未署名 IPA・手動ビルドの手順は、当初のスパイク向けの記述として残しています。
 > 実機の確認結果と実装の経緯は `docs/decisions.md` の H-6〜H-15 を参照してください。
 >
 > ホストアプリには、ホーム（辞書・モデルの取り込み）、Probes（計測）、結果、入力テスト（キーボードの動作確認用の入力欄）のタブがあります。
 > キーボード拡張は、製品版の 12 キー（フリック）と英字（QWERTY）が既定で、候補バー右端の「検証」ボタンで Probe の画面に切り替えられます。
 
 
-
-Nagi（日本語IME）の iOS 実機上での動作検証用スパイク実装。メモリ使用量、レイテンシ、LLM ロード、システム状態などを測定できます。
-
-## クイックスタート（推奨：GitHub Actions 経由）
-
-### 1. CI ビルド（未署名 IPA）を取得
-
-GitHub Actions ワークフロー `.github/workflows/ios-spike.yml` を実行：
-
-1. GitHub リポジトリの **Actions** タブを開く
-2. **iOS Spike Build** ワークフローを選択
-3. **Run workflow** → **Dispatch** で実行
-4. 完了後、**Artifacts** から `NagiSpike-unsigned.ipa` をダウンロード
-
-### 2. 実機に導入（SideStore 使用）
-
-- **SideStore** アプリをインストール（App Store）
-- SideStore を開き、ダウンロードした IPA を「Add IPA」で追加
-- 実機を接続して、SideStore から NagiSpike をインストール
-
-これで実機検証が可能です。
-
-#### App Group 動作確認（SideStore で App Group ID が書き換わるかテスト）
-
-SideStore は署名時に App Group ID を書き換える可能性があります。以下の手順でアプリの App Group 解決機能を検証してください：
-
-1. **Sideloadly 版があれば削除**: 異なる署名者のアプリは上書きできないため、事前に削除（設定 > 一般 > iPhone ストレージ > NagiSpike を削除）
-2. **SideStore から IPA をインストール**: IPA ファイルを「Add IPA」で追加して導入
-3. **ホストアプリで App Group 状態を確認**:
-   - ホームタブの「App Group」セクションで「Resolved ID」と「Candidates」を確認
-   - 署名者が App Group ID を書き換えた場合、複数の候補が表示されます
-4. **キーボード拡張を追加**: 設定 > 一般 > キーボード > 新しいキーボード で NagiSpike Keyboard を有効化
-5. **相互通信テスト**: ホームタブの Probes から「appgroup」を実行
-   - App Group が利用可能なら、結果に「Resolved ID」と「I/O test: OK」が表示されます
-   - 相手プロセス（キーボード拡張）の最新実行時刻も表示されます
-6. **キーボード拡張でも実行**: テキスト入力フィールドでキーボード拡張を開き、appgroup プローブを実行
-   - App Group が使えるなら、相手プロセス（ホストアプリ）の結果が見えるはずです
-
-**無料 Apple ID での制約**: 
-- アプリ上限: 3 個（SideStore のアプリ枠も含む）
-- App ID 作成上限: 週 10 個（拡張ごとに消費）
-- 有効期限: 7 日間（定期的に再署名が必要）
-
----
 
 ## ローカル Mac での手動ビルド
 
@@ -139,7 +94,7 @@ Xcode の署名設定：
 
 | 表示 | 意味 / 対処 |
 | --- | --- |
-| (a) App Group コンテナが取得できません | 再署名で App Group が外れた。`appgroup` プローブで確認し、SideStore で再インストール |
+| (a) App Group コンテナが取得できません | 再署名で App Group が外れた。`appgroup` プローブで確認し、アプリを再インストール |
 | (b) `data/models` がありません | モデル未インポート。上記手順 3 |
 | (c) `.gguf` がありません | ディレクトリはあるが空。上記手順 3 |
 | (d) LLM のロードに失敗（コアの応答: …） | ファイルはあるがロード失敗。応答文言（ファイル破損・メモリ不足・llama 非対応ビルドなど）を確認。「LLM 非対応ビルド」と出る場合は CI を `llama=true` で実行して IPA を作り直す |

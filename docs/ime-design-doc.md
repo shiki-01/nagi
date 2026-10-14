@@ -13,7 +13,7 @@
 - プロトコルを「同期応答で差分を返す」方式に再設計（§3.2）
 - 環境プロファイル（ハードウェアに応じた精度/軽さの自動調整）を追加（§4.7）
 - 辞書のみで動く `minimal` 経路を Phase 1 に前倒し（モデル無しでも常に動く）
-- 配布・アップデート方式（Apple Developer Program 非加入前提）を追加（§5.2, §8）
+- 配布・アップデート方式（当初は Apple Developer Program 非加入前提。H-15 で加入済みに変更）を追加（§5.2, §8）
 
 ---
 
@@ -437,8 +437,8 @@ model = "style"              # style | 専用GGUFパス
 - Secure Input検知で学習停止フラグを送る
 - preedit 属性の各アプリでの反映範囲は Phase 0 で実機確認
 - 既知の罠（karukan README等より）: ログイン再認識、TextInputMenuAgentのキャッシュ、スリープ時のパイプ破棄 → 設計に織込み済み
-- 配布（macOS は Apple Developer Program 非加入前提のまま。**iOS は加入済みで TestFlight / App Store、H-15**）:
-  - ad-hoc 署名のみ
+- 配布（Apple Developer Program 加入済み。**iOS は TestFlight / App Store、H-15**。macOS は現状 ad-hoc 署名で、Developer ID 署名 + 公証への変更を検討可能）:
+  - 現状は ad-hoc 署名のみ
   - 主導線: `curl -fsSL https://shiki-01.com/nagi/install.sh | sh` で `~/Library/Input Methods` へ配置（curl 取得物には quarantine 属性が付かず Gatekeeper 警告が出ない。配布元の信頼が前提）
   - 手動用 zip + 手順書（Gatekeeper の「このまま開く」手順を含む）
   - アンインストールスクリプトも同梱

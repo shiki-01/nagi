@@ -27,7 +27,7 @@
 | 候補表示 | 独自ウィンドウ | キーボード上部の候補バー | キーボード上部の候補バー |
 | データ（辞書・モデル） | ユーザー領域に取得 | 本体アプリが取得し App Group 共有コンテナ経由で参照。**拡張からの参照には「フルアクセス」許可が必要** | アプリ専用領域に取得 |
 | パスワード欄 | secure input 検知で学習停止 | OS がシステムキーボードへ強制切替（Nagi は呼ばれない） | `EditorInfo.inputType` のパスワード種別・`IME_FLAG_NO_PERSONALIZED_LEARNING` で学習停止 |
-| 配布 | ad-hoc 署名 + スクリプト | TestFlight / App Store（§6。当初は SideStore の想定だったが H-15 で変更） | APK 直接配布（§6） |
+| 配布 | ad-hoc 署名 + スクリプト | TestFlight / App Store（§6） | APK 直接配布（§6） |
 | アップデート | 自前確認 + ed25519 検証 | 本体アプリで確認。データは直接更新、アプリ本体は TestFlight / App Store の更新（§6.3） | 本体アプリで確認・APK を取得して上書きインストール（§6.3） |
 
 ## 3. デスクトップ開発中から守る制約（今から適用）
@@ -108,7 +108,6 @@
 - フルアクセス未許可時: ひらがな・カタカナ変換のみで動作し、許可を促す表示を出す（入力は失わない）
 - メモリ上限への対応: 辞書は mmap（§3-3）、モデルは量子化版 + mmap。上限を超える端末では LLM を使わない
 - 外付けキーボードの入力はキーボード拡張に届かないため、物理キーボードでの利用はサポート外（OS 標準 IME を使う）
-- ~~SideStore 配布に伴う要検証事項（Phase M0）~~ → TestFlight 配布に変更したため不要（H-15）。元の記述: キーボード拡張と App Group の entitlement が SideStore の再署名で維持されるか、無料 Apple ID の制限（有効アプリ数・App ID 数）に拡張がどう数えられるか
 
 ### 5.3 Android
 
@@ -120,15 +119,12 @@
 
 ## 6. 配布と更新
 
-**【H-15 で変更】iOS は Apple Developer Program に加入済みで、TestFlight / App Store で配布する。以下の §6.1（SideStore）は、当初の案として残している。** Android は公式ストアを使わず APK 直接配布の方針のまま。
+iOS は Apple Developer Program（加入済み）の TestFlight / App Store で配布する（H-15）。SideStore は使わない。Android は公式ストアを使わず APK 直接配布とする。
 
-（当初の記述）デスクトップと同じく、公式ストアと有料の開発者プログラムを使わない（Apple Developer Program 非加入の方針を維持）。
+### 6.1 iOS: TestFlight / App Store
 
-### 6.1 iOS: SideStore（当初の案。H-15 で TestFlight / App Store に変更）
-
-- 未署名の `.ipa` を `shiki-01.com` と GitHub Releases で配布し、ユーザーが SideStore で自分の Apple ID で署名してインストールする
-- SideStore のソース（AltStore 互換のソース JSON）を `shiki-01.com` に置き、SideStore 上で更新を配信する
-- 無料 Apple ID の署名は 7 日で失効するため、SideStore の自動更新（再署名）に任せる。失効してもキーボードは OS 標準に戻るだけで入力は失われない。本体アプリで失効が近いことを表示する（方法は要検証）
+- ビルド・署名・アップロードは GitHub Actions（`ios-testflight`）で行う。開発中は TestFlight（内部テスト → 外部テスト）、公開は App Store
+- コードの更新は App Store / TestFlight の更新で配信される。キーボード拡張が失効して使えなくなることはない
 
 ### 6.2 Android: APK 直接配布
 
@@ -142,7 +138,7 @@
 | 更新対象 | iOS | Android |
 | --- | --- | --- |
 | データ資産（辞書・モデル・プリセット・ローマ字テーブル） | 本体アプリが取得・検証して App Group に配置。**再インストール不要** | 本体アプリが取得・検証してアプリ領域に配置。**再インストール不要** |
-| アプリ本体（コード） | 本体アプリが新版を通知し、SideStore の更新へ誘導（URL スキームで SideStore を開けるかは要検証）。iOS は署名済みでないコードを実行できないため、コードの更新は SideStore の再署名が必須 | 本体アプリが APK を取得・検証し、`PackageInstaller` で上書きインストール（`REQUEST_INSTALL_PACKAGES`。初回はユーザー確認が必要） |
+| アプリ本体（コード） | App Store / TestFlight が配信する（本体アプリは更新確認を行わない） | 本体アプリが APK を取得・検証し、`PackageInstaller` で上書きインストール（`REQUEST_INSTALL_PACKAGES`。初回はユーザー確認が必要） |
 
 - データ資産は「アプリ本体のバージョンとの互換範囲」をマニフェストに持ち、非互換なデータは取得しない
 - 取得中・検証失敗時は旧データのまま動作を続ける（入力を失わない）
@@ -150,14 +146,14 @@
 
 ## 7. ロードマップ（案）
 
-デスクトップ版 Phase 1〜6 の後に着手する。**Android 先行を推奨**（メモリ上限・フルアクセス・再署名の制約がなく、分離設計の検証に向くため）。
+デスクトップ版 Phase 1〜6 の後に着手する。**Android 先行を推奨**（メモリ上限・フルアクセスの制約がなく、分離設計の検証に向くため）。
 
 | Phase | 内容 | DoD |
 | --- | --- | --- |
-| M0 | 技術検証: コアの iOS/Android クロスビルド、FFI 最小実装、iOS 拡張内のメモリ実測（辞書 mmap・モデル量子化別）、端末別の推論レイテンシ、SideStore でのキーボード拡張・App Group の動作、azooKey の仕様調査 | 実測値・iOS の LLM 可否・SideStore 可否・仕様表を `decisions.md` に記録 |
+| M0 | 技術検証: コアの iOS/Android クロスビルド、FFI 最小実装、iOS 拡張内のメモリ実測（辞書 mmap・モデル量子化別）、端末別の推論レイテンシ、azooKey の仕様調査 | 実測値・iOS の LLM 可否・仕様表を `decisions.md` に記録 |
 | M1 | Android MVP: QWERTY ローマ字 + 文全体/文節変換 + 候補バー + セグメント列 + 更新確認（§6.3） | 自分の Android 端末で常用可能。コア側の変更は FFI 層と §4.2 のみ |
 | M2 | フリック入力 + 学習・ユーザー辞書 + 範囲操作 | フリックで1週間常用 |
-| M3 | iOS（TestFlight / App Store 配布。当初は SideStore） | 自分の iPhone で常用可能 |
+| M3 | iOS（TestFlight / App Store 配布） | 自分の iPhone で常用可能 |
 | M4 | スタイル変換・設定 GUI のモバイル対応 | デスクトップと同等の機能 |
 
 ## 8. リスク
@@ -166,7 +162,6 @@
 | --- | --- | --- |
 | iOS 拡張のメモリ上限で LLM が載らない | 高 | `minimal` の品質を保つ。M0 で実測し、不可なら iOS は辞書 + 学習のみ |
 | フルアクセス要求によるユーザーの不信 | 中 | 用途の明示、未許可でも入力できる縮退動作、ネットワーク不使用の明記 |
-| ~~SideStore でキーボード拡張・App Group が動かない、または 7 日失効が運用負担になる~~（H-15 で TestFlight に変更し解消） | 低 | M0 で検証。失効時も OS 標準キーボードに戻るだけで入力は失われない |
 | Android のサイドロード規制の強化 | 中 | 動向を確認し、必要なら開発者認証を検討 |
 | タッチでの範囲操作の操作性 | 中 | セグメント列 UI を M1 で試作し、実利用で調整 |
 | デスクトップ実装中に §3 の制約が破られる | 中 | レビュー観点に追加。M0 前に mobile ターゲットの `cargo check` を CI に入れることを検討 |
