@@ -70,6 +70,12 @@ struct KeyboardSwiftUIView: View {
     @State private var isRunning = false
     @State private var showInsertResultsAlert = false
     @State private var hasRunAutoProbe = false
+    /// 画面に出す診断ログ（保存や挿入に失敗しても状況が見えるようにする）
+    @State private var logLines: [String] = []
+    @State private var runningProbe: String?
+
+    /// 実行中の Probe 名を保存するキー。次回起動時に残っていれば、実行中に強制終了されたと判断する
+    private static let runningMarkerKey = "nagi.keyboard.runningProbe"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,13 +83,31 @@ struct KeyboardSwiftUIView: View {
             VStack {
                 Text("Nagi Keyboard Probe")
                     .font(.headline)
-                Text("各ボタンで検証項目を実行")
+                Text(runningProbe.map { "実行中: \($0)" } ?? "各ボタンで検証項目を実行")
                     .font(.caption)
+                    .foregroundColor(.gray)
+                Text(statusLine())
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.gray)
             }
             .frame(maxWidth: .infinity)
             .padding()
             .background(Color(.systemGray6))
+
+            // 診断ログ（直近 8 行）
+            if !logLines.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(logLines.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+                .background(Color(.systemYellow).opacity(0.25))
+            }
 
             // Probe ボタン
             ScrollView {
@@ -180,31 +204,80 @@ struct KeyboardSwiftUIView: View {
             .padding()
         }
         .onAppear {
+            reportPreviousTermination()
             loadResults()
             autoRunBaselineMemory()
+        }
+    }
+
+    // MARK: - 診断
+
+    private func appendLog(_ line: String) {
+        logLines.append(line)
+        if logLines.count > 8 { logLines.removeFirst(logLines.count - 8) }
+    }
+
+    private func statusLine() -> String {
+        let stats = MemoryProbe.getStats()
+        let group = store.containerURL != nil ? "AppGroup:OK" : "AppGroup:NG"
+        return String(format: "%@ footprint=%.0fMB available=%.0fMB", group, stats.physFootprintMB, stats.availableMemoryMB)
+    }
+
+    private func setRunningMarker(_ probeId: String?) {
+        let defaults = UserDefaults.standard
+        if let probeId {
+            defaults.set(probeId, forKey: Self.runningMarkerKey)
+        } else {
+            defaults.removeObject(forKey: Self.runningMarkerKey)
+        }
+        defaults.synchronize()
+    }
+
+    /// 前回の実行が終わらないまま拡張が終了していれば、その Probe 名を表示する
+    private func reportPreviousTermination() {
+        let defaults = UserDefaults.standard
+        if let probeId = defaults.string(forKey: Self.runningMarkerKey) {
+            appendLog("前回 \(probeId) の実行中に終了（メモリ超過の疑い）")
+            defaults.removeObject(forKey: Self.runningMarkerKey)
+            defaults.synchronize()
+        }
+    }
+
+    /// Probe を 1 件実行し、開始・終了・保存失敗を画面ログに残す
+    private func execute(_ probeId: String, context: ProbeContext) async {
+        runningProbe = probeId
+        setRunningMarker(probeId)
+        appendLog("開始: \(probeId)")
+        let result: ProbeResult
+        if probeId == "memory_ramp" {
+            result = await MemoryRampProbe(maxLimitMB: 1024).run(context: context)
+        } else if let probeRunner = allProbes[probeId] {
+            result = await probeRunner(context)
+        } else {
+            appendLog("未知の Probe: \(probeId)")
+            setRunningMarker(nil)
+            runningProbe = nil
+            return
+        }
+        setRunningMarker(nil)
+        runningProbe = nil
+        let metrics = result.metrics
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(String(format: "%.1f", $0.value))" }
+            .joined(separator: " ")
+        appendLog("\(result.ok ? "OK" : "NG"): \(probeId) \(metrics)")
+        do {
+            try store.append(result: result)
+        } catch {
+            appendLog("保存失敗: \(error.localizedDescription)")
         }
     }
 
     private func runProbe(_ probeId: String) {
         isRunning = true
         Task {
-            let context = ProbeContext(
-                store: store,
-                processType: "keyboard",
-                engine: nil
-            )
-            let result: ProbeResult
-
-            if probeId == "memory_ramp" {
-                result = await MemoryRampProbe(maxLimitMB: 1024).run(context: context)
-            } else if let probeRunner = allProbes[probeId] {
-                result = await probeRunner(context)
-            } else {
-                isRunning = false
-                return
-            }
-
-            try? store.append(result: result)
+            let context = ProbeContext(store: store, processType: "keyboard", engine: nil)
+            await execute(probeId, context: context)
             loadResults()
             isRunning = false
         }
@@ -213,14 +286,9 @@ struct KeyboardSwiftUIView: View {
     private func runAllProbes() {
         isRunning = true
         Task {
-            for (probeId, probeRunner) in allProbesExcludingMemoryRamp.sorted(by: { $0.key < $1.key }) {
-                let context = ProbeContext(
-                    store: store,
-                    processType: "keyboard",
-                    engine: nil
-                )
-                let result = await probeRunner(context)
-                try? store.append(result: result)
+            for probeId in allProbesExcludingMemoryRamp.keys.sorted() {
+                let context = ProbeContext(store: store, processType: "keyboard", engine: nil)
+                await execute(probeId, context: context)
             }
             loadResults()
             isRunning = false
@@ -232,13 +300,13 @@ struct KeyboardSwiftUIView: View {
         hasRunAutoProbe = true
 
         Task {
-            let context = ProbeContext(
-                store: store,
-                processType: "keyboard",
-                engine: nil
-            )
+            let context = ProbeContext(store: store, processType: "keyboard", engine: nil)
             let result = await BaselineMemoryProbe().run(context: context)
-            try? store.append(result: result)
+            do {
+                try store.append(result: result)
+            } catch {
+                appendLog("保存失敗(baseline): \(error.localizedDescription)")
+            }
             loadResults()
         }
     }
@@ -257,7 +325,7 @@ struct KeyboardSwiftUIView: View {
             return "\(result.id) | \(result.process) | \(status) | \(metricsStr)"
         }
 
-        let insertText = resultLines.joined(separator: "\n")
+        let insertText = (logLines + resultLines).joined(separator: "\n")
         if !insertText.isEmpty {
             // テキスト入力（行が長い場合は複数行に分割）
             let lines = insertText.split(separator: "\n", omittingEmptySubsequences: true)
