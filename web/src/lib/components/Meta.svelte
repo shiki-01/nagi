@@ -16,8 +16,8 @@
   <meta property="og:title" content={full} />
   <meta property="og:description" content={description} />
   <meta property="og:url" content={url} />
-  <meta property="og:image" content={`${SITE_URL}/og.svg`} />
-  <meta name="twitter:card" content="summary" />
+  <meta property="og:image" content={`${SITE_URL}/og.png`} />
+  <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content={full} />
   <meta name="twitter:description" content={description} />
 </svelte:head>
