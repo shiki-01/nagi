@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "id": "flick-kana",
+  "name": "12キー（かな）",
+  "mode": "kana",
+  "rows": [
+    {"keys": [
+      {"id": "left", "kind": "action", "action": "moveLeft", "style": "function", "label": "←", "width": 0.7},
+      {"id": "a", "kind": "flick", "kana": "あ", "label": "あ"},
+      {"id": "ka", "kind": "flick", "kana": "か", "label": "か"},
+      {"id": "sa", "kind": "flick", "kana": "さ", "label": "さ"},
+      {"id": "bs", "kind": "action", "action": "backspace", "style": "function", "label": "⌫", "width": 0.85}
+    ]},
+    {"keys": [
+      {"id": "right", "kind": "action", "action": "moveRight", "style": "function", "label": "→", "width": 0.7},
+      {"id": "ta", "kind": "flick", "kana": "た", "label": "た"},
+      {"id": "na", "kind": "flick", "kana": "な", "label": "な"},
+      {"id": "ha", "kind": "flick", "kana": "は", "label": "は"},
+      {"id": "space", "kind": "action", "action": "space", "style": "function", "label": "空白", "width": 0.85}
+    ]},
+    {"keys": [
+      {"id": "mode", "kind": "action", "action": "modeSwitch", "style": "function", "label": "A", "width": 0.7},
+      {"id": "ma", "kind": "flick", "kana": "ま", "label": "ま"},
+      {"id": "ya", "kind": "flick", "kana": "や", "label": "や"},
+      {"id": "ra", "kind": "flick", "kana": "ら", "label": "ら"},
+      {"id": "enter", "kind": "action", "action": "enter", "style": "function", "label": "改行", "width": 0.85}
+    ]},
+    {"keys": [
+      {"id": "globe", "kind": "action", "action": "globe", "style": "function", "label": "🌐", "width": 0.7},
+      {"id": "dakuten", "kind": "action", "action": "dakuten", "label": "゛゜小"},
+      {"id": "wa", "kind": "flick", "kana": "わ", "label": "わ"},
+      {"id": "punct", "kind": "flick", "kana": "、", "label": "、。？！"},
+      {"id": "num", "kind": "layout", "target": "numbers", "label": "☆123", "style": "function", "width": 0.85}
+    ]}
+  ]
+}

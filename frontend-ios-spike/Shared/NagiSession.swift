@@ -24,6 +24,13 @@ final class NagiSession {
         let params: P
     }
 
+    /// 応答を返さない通知（`id` なし）
+    private struct NotificationMessage<P: Encodable>: Encodable {
+        let jsonrpc = "2.0"
+        let method: String
+        let params: P
+    }
+
     private struct Response<R: Decodable>: Decodable {
         let result: R?
     }
@@ -70,6 +77,18 @@ final class NagiSession {
         return result
     }
 
+    /// 応答のない通知をコアへ送る。同じ呼び出しに続いて返った通知は、コールバックに渡す
+    func notify<P: Encodable>(_ method: String, _ params: P) {
+        guard let data = try? encoder.encode(NotificationMessage(method: method, params: params)),
+              let line = String(data: data, encoding: .utf8) else { return }
+        for response in engine.send(line: line) {
+            guard let bytes = response.data(using: .utf8),
+                  let header = try? decoder.decode(Header.self, from: bytes),
+                  let name = header.method else { continue }
+            dispatchNotification(name, bytes)
+        }
+    }
+
     private func dispatchNotification(_ method: String, _ bytes: Data) {
         switch method {
         case "update_preedit":
@@ -114,6 +133,18 @@ final class NagiSession {
 
     func selectCandidate(_ index: Int) -> ProcessKeyResult? {
         request("select_candidate", SelectCandidateParams(session_id: sessionId, index: UInt32(index)))
+    }
+
+    /// 直前のテキスト（カーソル手前）を LLM の文脈として渡す。`before` が nil なら文脈を渡さない。
+    /// `secure` のときコアは文脈を消し、学習・ログを止める
+    func setContext(before: String?, secure: Bool) {
+        let surrounding = before.map { SurroundingText(text: $0, cursor: UInt32($0.utf16.count)) }
+        notify("set_context", SetContextParams(
+            session_id: sessionId,
+            surrounding_text: surrounding,
+            app_id: nil,
+            secure_input: secure
+        ))
     }
 
     func focusIn() -> ProcessKeyResult? {

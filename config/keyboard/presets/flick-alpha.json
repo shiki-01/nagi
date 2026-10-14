@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "id": "flick-alpha",
+  "name": "12キー（英字）",
+  "mode": "alpha",
+  "rows": [
+    {"keys": [
+      {"id": "left", "kind": "action", "action": "moveLeft", "style": "function", "label": "←", "width": 0.7},
+      {"id": "sym", "kind": "flick", "label": "@#/&_", "center": {"text": "@"}, "left": {"text": "#"}, "up": {"text": "/"}, "right": {"text": "&"}, "down": {"text": "_"}},
+      {"id": "abc", "kind": "flick", "label": "ABC", "center": {"text": "a"}, "left": {"text": "b"}, "up": {"text": "c"}},
+      {"id": "def", "kind": "flick", "label": "DEF", "center": {"text": "d"}, "left": {"text": "e"}, "up": {"text": "f"}},
+      {"id": "bs", "kind": "action", "action": "backspace", "style": "function", "label": "⌫", "width": 0.85}
+    ]},
+    {"keys": [
+      {"id": "right", "kind": "action", "action": "moveRight", "style": "function", "label": "→", "width": 0.7},
+      {"id": "ghi", "kind": "flick", "label": "GHI", "center": {"text": "g"}, "left": {"text": "h"}, "up": {"text": "i"}},
+      {"id": "jkl", "kind": "flick", "label": "JKL", "center": {"text": "j"}, "left": {"text": "k"}, "up": {"text": "l"}},
+      {"id": "mno", "kind": "flick", "label": "MNO", "center": {"text": "m"}, "left": {"text": "n"}, "up": {"text": "o"}},
+      {"id": "space", "kind": "action", "action": "space", "style": "function", "label": "空白", "width": 0.85}
+    ]},
+    {"keys": [
+      {"id": "mode", "kind": "action", "action": "modeSwitch", "style": "function", "label": "あ", "width": 0.7},
+      {"id": "pqrs", "kind": "flick", "label": "PQRS", "center": {"text": "p"}, "left": {"text": "q"}, "up": {"text": "r"}, "right": {"text": "s"}},
+      {"id": "tuv", "kind": "flick", "label": "TUV", "center": {"text": "t"}, "left": {"text": "u"}, "up": {"text": "v"}},
+      {"id": "wxyz", "kind": "flick", "label": "WXYZ", "center": {"text": "w"}, "left": {"text": "x"}, "up": {"text": "y"}, "right": {"text": "z"}},
+      {"id": "enter", "kind": "action", "action": "enter", "style": "function", "label": "改行", "width": 0.85}
+    ]},
+    {"keys": [
+      {"id": "globe", "kind": "action", "action": "globe", "style": "function", "label": "🌐", "width": 0.7},
+      {"id": "shift", "kind": "action", "action": "shift", "style": "function", "label": "a/A"},
+      {"id": "quote", "kind": "flick", "label": "'\"()", "center": {"text": "'"}, "left": {"text": "\""}, "up": {"text": "("}, "right": {"text": ")"}},
+      {"id": "punct", "kind": "flick", "label": ".,?!", "center": {"text": "."}, "left": {"text": ","}, "up": {"text": "?"}, "right": {"text": "!"}},
+      {"id": "num", "kind": "layout", "target": "numbers", "label": "☆123", "style": "function", "width": 0.85}
+    ]}
+  ]
+}

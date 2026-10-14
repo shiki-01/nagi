@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "id": "qwerty-kana",
+  "name": "QWERTY（かな・ローマ字入力）",
+  "mode": "kana",
+  "rows": [
+    {"keys": [
+      {"id": "q", "kind": "text", "text": "q"},
+      {"id": "w", "kind": "text", "text": "w"},
+      {"id": "e", "kind": "text", "text": "e"},
+      {"id": "r", "kind": "text", "text": "r"},
+      {"id": "t", "kind": "text", "text": "t"},
+      {"id": "y", "kind": "text", "text": "y"},
+      {"id": "u", "kind": "text", "text": "u"},
+      {"id": "i", "kind": "text", "text": "i"},
+      {"id": "o", "kind": "text", "text": "o"},
+      {"id": "p", "kind": "text", "text": "p"}
+    ]},
+    {"keys": [
+      {"id": "sl", "kind": "spacer", "width": 0.5},
+      {"id": "a", "kind": "text", "text": "a"},
+      {"id": "s", "kind": "text", "text": "s"},
+      {"id": "d", "kind": "text", "text": "d"},
+      {"id": "f", "kind": "text", "text": "f"},
+      {"id": "g", "kind": "text", "text": "g"},
+      {"id": "h", "kind": "text", "text": "h"},
+      {"id": "j", "kind": "text", "text": "j"},
+      {"id": "k", "kind": "text", "text": "k"},
+      {"id": "l", "kind": "text", "text": "l"},
+      {"id": "sr", "kind": "spacer", "width": 0.5}
+    ]},
+    {"keys": [
+      {"id": "k_2d", "kind": "text", "text": "-", "label": "ー", "width": 1.5},
+      {"id": "z", "kind": "text", "text": "z"},
+      {"id": "x", "kind": "text", "text": "x"},
+      {"id": "c", "kind": "text", "text": "c"},
+      {"id": "v", "kind": "text", "text": "v"},
+      {"id": "b", "kind": "text", "text": "b"},
+      {"id": "n", "kind": "text", "text": "n"},
+      {"id": "m", "kind": "text", "text": "m"},
+      {"id": "bs", "kind": "action", "action": "backspace", "style": "function", "label": "⌫", "width": 1.5}
+    ]},
+    {"keys": [
+      {"id": "mode", "kind": "action", "action": "modeSwitch", "style": "function", "label": "A", "width": 1.2},
+      {"id": "num", "kind": "layout", "target": "numbers", "label": "☆123", "style": "function", "width": 1.2},
+      {"id": "globe", "kind": "action", "action": "globe", "style": "function", "label": "🌐"},
+      {"id": "space", "kind": "action", "action": "space", "style": "normal", "label": "空白", "width": 3.2},
+      {"id": "k_3001", "kind": "text", "text": "、", "width": 0.8},
+      {"id": "k_3002", "kind": "text", "text": "。", "width": 0.8},
+      {"id": "enter", "kind": "action", "action": "enter", "style": "function", "label": "改行", "width": 1.6}
+    ]}
+  ]
+}

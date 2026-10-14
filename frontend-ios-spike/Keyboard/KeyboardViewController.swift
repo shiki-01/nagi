@@ -101,6 +101,33 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     func hostAdvanceToNextInputMode() {
         advanceToNextInputMode()
     }
+
+    func hostDismissKeyboard() {
+        dismissKeyboard()
+    }
+
+    func hostContextBeforeInput() -> String? {
+        textDocumentProxy.documentContextBeforeInput
+    }
+
+    func hostIsSecure() -> Bool {
+        let proxy = textDocumentProxy
+        if proxy.isSecureTextEntry ?? false { return true }
+        // パスワード・ワンタイムコードの入力欄（secure でなくても文脈・学習の対象にしない）
+        let type = proxy.textContentType
+        return type == UITextContentType.password
+            || type == UITextContentType.newPassword
+            || type == UITextContentType.oneTimeCode
+    }
+
+    // MARK: - ホストの入力欄の変化
+
+    /// 入力欄の内容やカーソルが変わった（外部からの変更、カーソル移動、自分の操作の結果）。
+    /// 変換中でなければ、直前のテキストを文脈としてコアに渡し直す
+    override func textDidChange(_ textInput: UITextInput?) {
+        super.textDidChange(textInput)
+        model?.hostTextChanged()
+    }
 }
 
 /// 製品版キーボードと検証用の画面を切り替えるルート

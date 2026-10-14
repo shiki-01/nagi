@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nagi.shiki-01.com/schemas/keyboard-layout-1.json",
+  "title": "Nagi キーボードレイアウト",
+  "description": "docs/ios-keyboard-layout.md (v0 draft) のスキーマ。JSON Schema だけでは表せない検証（行内の幅の合計 1〜20、キー id の一意性、layout.target の存在）は web/src/lib/keyboard/validate.ts と各実装が追加で行う。",
+  "type": "object",
+  "required": ["schema", "id", "name", "mode", "rows"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string", "description": "エディタ補完用。省略可。" },
+    "schema": { "const": 1, "description": "スキーマバージョン。" },
+    "id": { "$ref": "#/$defs/layoutId" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 64, "description": "表示名。" },
+    "mode": {
+      "enum": ["kana", "alpha", "number", "symbol", "emoji", "custom"],
+      "description": "変換エンジンの扱いが変わる入力モード。"
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/row" },
+      "description": "行（1〜8）。"
+    }
+  },
+  "$defs": {
+    "layoutId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "description": "レイアウトの識別子（ファイル名 <id>.json にも使う）。"
+    },
+    "keyId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+      "description": "レイアウト内で一意なキー id。"
+    },
+    "shortText": { "type": "string", "minLength": 1, "maxLength": 16 },
+    "row": {
+      "type": "object",
+      "required": ["keys"],
+      "additionalProperties": false,
+      "properties": {
+        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 4, "default": 1, "description": "行の高さの比。" },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "items": { "$ref": "#/$defs/key" },
+          "description": "行内のキー。width の合計は 1〜20（スキーマ外で検証）。"
+        }
+      }
+    },
+    "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 20, "default": 1, "description": "行内の幅の比。" },
+    "style": { "enum": ["normal", "function", "accent"], "default": "normal", "description": "色はテーマ側で決める。" },
+    "action": {
+      "type": "string",
+      "pattern": "^[a-zA-Z][a-zA-Z0-9]{0,31}$",
+      "examples": [
+        "space", "enter", "backspace", "shift", "capslock", "convert", "moveLeft", "moveRight",
+        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss"
+      ],
+      "description": "コアの TouchAction 名。ここに挙げた以外（ほか）も許容し、未知の action の扱いは実装側で決める。"
+    },
+    "visible": {
+      "type": "object",
+      "required": ["field", "in"],
+      "additionalProperties": false,
+      "properties": {
+        "field": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "in": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "type": "string", "maxLength": 32 } }
+      },
+      "description": "表示条件。例: {\"field\":\"returnKeyType\",\"in\":[\"search\"]}。v1 では省略可。"
+    },
+    "step": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["action"],
+          "additionalProperties": false,
+          "properties": { "action": { "$ref": "#/$defs/action" } }
+        },
+        {
+          "type": "object",
+          "required": ["text"],
+          "additionalProperties": false,
+          "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 256 } }
+        }
+      ]
+    },
+    "steps": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/step" } },
+    "flickCell": {
+      "type": "object",
+      "required": ["text"],
+      "additionalProperties": false,
+      "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 16 } }
+    },
+    "keyBase": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/keyId" },
+        "width": { "$ref": "#/$defs/width" },
+        "label": { "type": "string", "maxLength": 16, "description": "表示文字列。" },
+        "icon": { "type": "string", "maxLength": 64, "description": "SF Symbols 名または文字列。" },
+        "style": { "$ref": "#/$defs/style" },
+        "longPress": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/popupKey" },
+          "description": "長押しで出るポップアップのキー定義。"
+        },
+        "visible": { "$ref": "#/$defs/visible" }
+      }
+    },
+    "key": {
+      "oneOf": [
+        { "$ref": "#/$defs/textKey" },
+        { "$ref": "#/$defs/flickKey" },
+        { "$ref": "#/$defs/toggleKey" },
+        { "$ref": "#/$defs/actionKey" },
+        { "$ref": "#/$defs/shortcutKey" },
+        { "$ref": "#/$defs/layoutKey" },
+        { "$ref": "#/$defs/spacerKey" }
+      ]
+    },
+    "textKey": {
+      "allOf": [{ "$ref": "#/$defs/keyBase" }],
+      "required": ["kind", "text"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "const": "text" },
+        "text": { "$ref": "#/$defs/shortText" },
+        "shift": { "$ref": "#/$defs/shortText" }
+      }
+    },
+    "flickKey": {
+      "allOf": [{ "$ref": "#/$defs/keyBase" }],
+      "required": ["kind", "center"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "const": "flick" },
+        "center": { "$ref": "#/$defs/flickCell" },
+        "up": { "$ref": "#/$defs/flickCell" },
+        "down": { "$ref": "#/$defs/flickCell" },
+        "left": { "$ref": "#/$defs/flickCell" },
+        "right": { "$ref": "#/$defs/flickCell" },
+        "kana": { "type": "string", "minLength": 1, "maxLength": 4, "description": "12 キー名（例: あ）。指定するとコアのトグル・フリック・濁点循環に任せる。" }
+      }
+    },
+    "toggleKey": {
+      "allOf": [{ "$ref": "#/$defs/keyBase" }],
+      "required": ["kind", "cycle"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "const": "toggle" },
+        "cycle": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/shortText" } }
+      }
+    },
+    "actionKey": {
+      "allOf": [{ "$ref": "#/$defs/keyBase" }],
+      "required": ["kind", "action"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "const": "action" },
+        "action": { "$ref": "#/$defs/action" }
+      }
+    },
+    "shortcutKey": {
+      "allOf": [{ "$ref": "#/$defs/keyBase" }],
+      "required": ["kind", "steps"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "const": "shortcut" },
+        "steps": { "$ref": "#/$defs/steps" }
+      }
+    },
+    "layoutKey": {
+      "allOf": [{ "$ref": "#/$defs/keyBase" }],
+      "required": ["kind", "target"],
+      "unevaluatedProperties": false,
+      "properties": {
+        "kind": { "const": "layout" },
+        "target": { "$ref": "#/$defs/layoutId", "description": "切り替え先。存在するレイアウトまたは組み込み名（スキーマ外で検証）。" }
+      }
+    },
+    "spacerKey": {
+      "allOf": [{ "$ref": "#/$defs/keyBase" }],
+      "required": ["kind"],
+      "unevaluatedProperties": false,
+      "properties": { "kind": { "const": "spacer" } }
+    },
+    "popupKey": {
+      "oneOf": [
+        { "$ref": "#/$defs/popupText" },
+        { "$ref": "#/$defs/popupAction" },
+        { "$ref": "#/$defs/popupShortcut" }
+      ]
+    },
+    "popupBase": {
+      "type": "object",
+      "required": ["label", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/keyId" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 16 }
+      }
+    },
+    "popupText": {
+      "allOf": [{ "$ref": "#/$defs/popupBase" }],
+      "required": ["kind", "text"],
+      "unevaluatedProperties": false,
+      "properties": { "kind": { "const": "text" }, "text": { "$ref": "#/$defs/shortText" } }
+    },
+    "popupAction": {
+      "allOf": [{ "$ref": "#/$defs/popupBase" }],
+      "required": ["kind", "action"],
+      "unevaluatedProperties": false,
+      "properties": { "kind": { "const": "action" }, "action": { "$ref": "#/$defs/action" } }
+    },
+    "popupShortcut": {
+      "allOf": [{ "$ref": "#/$defs/popupBase" }],
+      "required": ["kind", "steps"],
+      "unevaluatedProperties": false,
+      "properties": { "kind": { "const": "shortcut" }, "steps": { "$ref": "#/$defs/steps" } }
+    }
+  }
+}

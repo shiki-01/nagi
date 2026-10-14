@@ -93,6 +93,10 @@ targets:
       - path: Keyboard
       - path: Shared
       - path: ../frontend-macos/Sources/Generated
+      # 既定のキーボードレイアウト（JSON）。バンドル内の presets/ フォルダとして同梱する
+      - path: ../config/keyboard/presets
+        type: folder
+        buildPhase: resources
       - path: Resources/data
         type: folder
         optional: true

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 製品版キーボードの画面: 候補バーと、かな（12 キー・フリック）または英字（QWERTY）のキー
+/// 製品版キーボードの画面: 候補バーと、レイアウト（JSON。`Shared/KeyboardLayout.swift`）から描くキー
 struct NagiKeyboardView: View {
     @ObservedObject var model: KeyboardModel
     /// 検証用の画面（Probe）を開く
@@ -13,12 +13,7 @@ struct NagiKeyboardView: View {
                 if model.isExpanded {
                     ExpandedCandidates(model: model)
                 } else {
-                    switch model.layout {
-                    case .kana:
-                        KanaPad(model: model)
-                    case .qwerty:
-                        QwertyPad(model: model)
-                    }
+                    LayoutPad(model: model)
                 }
             }
             .padding(6)
@@ -30,144 +25,378 @@ struct NagiKeyboardView: View {
 private let keySpacing: CGFloat = 6
 private let keyHeight: CGFloat = 46
 
-/// かなのキー: 12 キー（フリック入力）と機能キー
-private struct KanaPad: View {
-    @ObservedObject var model: KeyboardModel
-
-    var body: some View {
-        HStack(alignment: .top, spacing: keySpacing) {
-            // 左の列
-            VStack(spacing: keySpacing) {
-                FunctionKey(label: "←", height: keyHeight) { model.arrow(.left) }
-                FunctionKey(label: "→", height: keyHeight) { model.arrow(.right) }
-                FunctionKey(label: "A", height: keyHeight) { model.switchLayout() }
-                FunctionKey(label: "🌐", height: keyHeight) { model.nextKeyboard() }
-            }
-            .frame(width: 54)
-            // かなキー（3 列 × 4 行）
-            VStack(spacing: keySpacing) {
-                ForEach(0..<rows.count, id: \.self) { rowIndex in
-                    HStack(spacing: keySpacing) {
-                        ForEach(rows[rowIndex]) { spec in
-                            FlickKey(label: spec.label, hint: spec.hint, height: keyHeight) { gesture in
-                                spec.action(model, gesture)
-                            }
-                        }
-                    }
-                }
-            }
-            // 右の列
-            VStack(spacing: keySpacing) {
-                FunctionKey(label: "⌫", height: keyHeight) { model.backspace() }
-                FunctionKey(label: model.hasPreedit ? "変換" : "空白", height: keyHeight) { model.space() }
-                FunctionKey(label: model.hasPreedit ? "確定" : "改行", height: keyHeight * 2 + keySpacing) { model.enter() }
-            }
-            .frame(width: 64)
-        }
-    }
-
-    private var rows: [[KeySpec]] {
-        [
-            [.kana("あ", .a), .kana("か", .ka), .kana("さ", .sa)],
-            [.kana("た", .ta), .kana("な", .na), .kana("は", .ha)],
-            [.kana("ま", .ma), .kana("や", .ya), .kana("ら", .ra)],
-            [.variant, .kana("わ", .wa), .kana("、。？！", .punct)],
-        ]
-    }
+/// キー領域の高さ。絵文字は一覧を含め、キー 4 行分に揃える
+private func padHeight(_ def: KeyboardLayoutDef) -> CGFloat {
+    let base = keyHeight * 4 + keySpacing * 3
+    if def.mode == .emoji { return base }
+    let rows = def.rows.reduce(CGFloat(0)) { $0 + keyHeight * CGFloat($1.height) }
+    return rows + keySpacing * CGFloat(max(def.rows.count - 1, 0))
 }
 
-/// 英字のキー（QWERTY）。変換は通さず、押した文字をそのままホストに入れる
-private struct QwertyPad: View {
-    @ObservedObject var model: KeyboardModel
+/// キー領域の高さ（行だけ）
+private func rowsHeight(_ def: KeyboardLayoutDef) -> CGFloat {
+    let rows = def.rows.reduce(CGFloat(0)) { $0 + keyHeight * CGFloat($1.height) }
+    return rows + keySpacing * CGFloat(max(def.rows.count - 1, 0))
+}
 
-    private let letterRows = [
-        ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
-        ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
-        ["z", "x", "c", "v", "b", "n", "m"],
-    ]
+// MARK: - レイアウトの描画
+
+/// レイアウトの行とキーを描く
+private struct LayoutPad: View {
+    @ObservedObject var model: KeyboardModel
+    /// 押下中のキー（"行:列"）。ポップアップが下の行に隠れないよう、その行を手前に出す
+    @State private var pressedKey: String?
 
     var body: some View {
         VStack(spacing: keySpacing) {
-            letterRow(0)
-            letterRow(1).padding(.horizontal, 14)
-            HStack(spacing: keySpacing) {
-                FunctionKey(label: model.isShifted ? "⇪" : "⇧", height: keyHeight) { model.toggleShift() }
-                    .frame(width: 44)
-                letterRow(2)
-                FunctionKey(label: "⌫", height: keyHeight) { model.backspace() }
-                    .frame(width: 44)
+            if model.layoutDef.mode == .emoji {
+                EmojiGrid(
+                    model: model,
+                    height: padHeight(model.layoutDef) - rowsHeight(model.layoutDef) - keySpacing
+                )
             }
-            HStack(spacing: keySpacing) {
-                FunctionKey(label: "あ", height: keyHeight) { model.switchLayout() }
-                    .frame(width: 54)
-                FunctionKey(label: "🌐", height: keyHeight) { model.nextKeyboard() }
-                    .frame(width: 54)
-                FunctionKey(label: ",", height: keyHeight) { model.typeLetter(",") }
-                    .frame(width: 40)
-                FunctionKey(label: "空白", height: keyHeight) { model.space() }
-                FunctionKey(label: ".", height: keyHeight) { model.typeLetter(".") }
-                    .frame(width: 40)
-                FunctionKey(label: "改行", height: keyHeight) { model.enter() }
-                    .frame(width: 64)
+            ForEach(Array(model.layoutDef.rows.enumerated()), id: \.offset) { rowIndex, row in
+                RowView(row: row, rowIndex: rowIndex, model: model, pressedKey: $pressedKey)
+                    .zIndex((pressedKey ?? "").hasPrefix("\(rowIndex):") ? 1 : 0)
             }
         }
     }
+}
 
-    private func letterRow(_ index: Int) -> some View {
-        HStack(spacing: keySpacing) {
-            ForEach(letterRows[index], id: \.self) { letter in
-                FunctionKey(label: model.isShifted ? letter.uppercased() : letter, height: keyHeight) {
-                    model.typeLetter(letter)
+/// 1 行。幅の比（`width`）で按分する
+private struct RowView: View {
+    let row: LayoutRow
+    let rowIndex: Int
+    @ObservedObject var model: KeyboardModel
+    @Binding var pressedKey: String?
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(spacing: keySpacing) {
+                ForEach(Array(row.keys.enumerated()), id: \.offset) { index, key in
+                    KeyCell(key: key, model: model, height: rowHeight) { pressed in
+                        pressedKey = pressed ? "\(rowIndex):\(index)" : nil
+                    }
+                    .frame(width: cellWidth(key, total: geo.size.width), height: rowHeight)
                 }
             }
         }
+        .frame(height: rowHeight)
+    }
+
+    private var rowHeight: CGFloat {
+        keyHeight * CGFloat(row.height)
+    }
+
+    private func cellWidth(_ key: LayoutKey, total: CGFloat) -> CGFloat {
+        let weights = row.keys.reduce(0.0) { $0 + $1.width }
+        guard weights > 0 else { return 0 }
+        let available = total - keySpacing * CGFloat(max(row.keys.count - 1, 0))
+        return max(0, available * CGFloat(key.width / weights))
     }
 }
 
-/// かなキー 1 つの定義
-private struct KeySpec: Identifiable {
-    let id: String
-    let label: String
-    let hint: String?
-    let action: (KeyboardModel, KeyGesture) -> Void
+/// キー 1 つ。種類ごとに描き分ける（toggle / longPress は段階 2 で未実装。toggle は押しても何もしない）
+private struct KeyCell: View {
+    let key: LayoutKey
+    @ObservedObject var model: KeyboardModel
+    let height: CGFloat
+    let onPress: (Bool) -> Void
 
-    static func kana(_ label: String, _ key: KanaKey) -> KeySpec {
-        KeySpec(id: label, label: label, hint: nil) { model, gesture in model.key(key, gesture) }
-    }
-
-    static var variant: KeySpec {
-        KeySpec(id: "variant", label: "゛゜小", hint: nil) { model, gesture in
-            // フリックでも、タップと同じ濁点・小書きの循環にする
-            _ = gesture
-            model.variant()
+    var body: some View {
+        switch key.kind {
+        case .spacer:
+            Color.clear
+        case .flick:
+            FlickKeyView(
+                key: key,
+                content: KeyFaceContent(text: key.label ?? key.kana ?? key.center?.text, icon: key.icon),
+                chars: FlickChars(key: key),
+                onPress: onPress,
+                onGesture: { gesture in model.flick(key, gesture) }
+            )
+        case .action where key.action == "backspace":
+            RepeatKeyView(
+                content: faceContent(key, model),
+                style: key.style,
+                action: { model.backspace() }
+            )
+        default:
+            TapKeyView(
+                content: faceContent(key, model),
+                style: key.style,
+                active: key.action == "shift" && model.shiftState == .caps,
+                fontSize: fontSize(key),
+                action: { activate(key, model) }
+            )
         }
     }
 }
 
-/// フリックできるキー。タップは `.tap`、一定以上動かして離すと動かした向きのフリック
-private struct FlickKey: View {
-    let label: String
-    let hint: String?
-    let height: CGFloat
-    let onGesture: (KeyGesture) -> Void
+/// キーの表示（文字か SF Symbols）
+private struct KeyFaceContent {
+    var text: String?
+    var icon: String?
+}
+
+private func fontSize(_ key: LayoutKey) -> CGFloat {
+    let count = (key.label ?? key.text ?? "").count
+    if count > 2 { return 16 }
+    return (key.kind == .text) ? 20 : 17
+}
+
+/// 状態（変換中か・シフトか）に応じて表示を決める
+private func faceContent(_ key: LayoutKey, _ model: KeyboardModel) -> KeyFaceContent {
+    if key.kind == .action {
+        switch key.action ?? "" {
+        case "space":
+            return KeyFaceContent(text: model.hasPreedit ? "変換" : (key.label ?? "空白"), icon: nil)
+        case "enter":
+            return KeyFaceContent(text: model.hasPreedit ? "確定" : (key.label ?? "改行"), icon: nil)
+        case "shift":
+            // ラベルが無ければ状態で記号を変える（小文字 / 次の 1 文字だけ大文字 / Caps Lock）
+            if let label = key.label { return KeyFaceContent(text: label, icon: nil) }
+            let icon: String
+            switch model.shiftState {
+            case .off: icon = "shift"
+            case .once: icon = "shift.fill"
+            case .caps: icon = "capslock.fill"
+            }
+            return KeyFaceContent(text: nil, icon: icon)
+        default:
+            break
+        }
+    }
+    if key.kind == .text, model.layoutDef.mode != .kana, model.shiftState != .off {
+        return KeyFaceContent(text: key.shift ?? (key.label ?? key.text ?? "").uppercased(), icon: nil)
+    }
+    return KeyFaceContent(text: key.label ?? key.text, icon: key.icon)
+}
+
+/// タップしたときの動作
+private func activate(_ key: LayoutKey, _ model: KeyboardModel) {
+    switch key.kind {
+    case .text:
+        model.inputText(key.text ?? key.label ?? "", shift: key.shift)
+    case .action:
+        if let action = key.action { model.perform(action: action) }
+    case .layout:
+        if let target = key.target { model.switchLayout(target: target) }
+    case .shortcut:
+        model.shortcut(key.steps ?? [])
+    case .flick, .toggle, .spacer:
+        break
+    }
+}
+
+/// キーの見た目
+private struct KeyFace: View {
+    let content: KeyFaceContent
+    let style: KeyStyle
+    let active: Bool
+    let pressed: Bool
+    let fontSize: CGFloat
+
+    var body: some View {
+        label
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(RoundedRectangle(cornerRadius: 6).fill(fill.opacity(pressed ? 0.6 : 1)))
+            .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if let icon = content.icon {
+            Image(systemName: icon)
+                .font(.system(size: 17))
+                .foregroundColor(foreground)
+        } else {
+            Text(content.text ?? "")
+                .font(.system(size: fontSize))
+                .foregroundColor(foreground)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+    }
+
+    private var isAccent: Bool { active || style == .accent }
+
+    private var fill: Color {
+        if isAccent { return Color.accentColor }
+        switch style {
+        case .function: return Color(UIColor.systemGray4)
+        default: return Color(UIColor.systemBackground)
+        }
+    }
+
+    private var foreground: Color {
+        isAccent ? Color.white : Color(UIColor.label)
+    }
+}
+
+/// タップだけのキー
+private struct TapKeyView: View {
+    let content: KeyFaceContent
+    let style: KeyStyle
+    let active: Bool
+    let fontSize: CGFloat
+    let action: () -> Void
 
     @GestureState private var isPressed = false
 
     var body: some View {
-        Text(label)
-            .font(.system(size: label.count > 2 ? 16 : 22))
-            .foregroundColor(Color(UIColor.label))
-            .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(UIColor.systemBackground).opacity(isPressed ? 0.6 : 1))
-            )
-            .contentShape(Rectangle())
+        KeyFace(content: content, style: style, active: active, pressed: isPressed, fontSize: fontSize)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .updating($isPressed) { _, state, _ in state = true }
-                    .onEnded { value in onGesture(Self.gesture(for: value.translation)) }
+                    .onEnded { value in
+                        // 指を大きく動かして離した場合は、押した扱いにしない
+                        if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
+                            action()
+                        }
+                    }
             )
+    }
+}
+
+/// ⌫ のキー: 押した瞬間に 1 文字消し、押し続けると連打（時間とともに加速）、離すと止まる。
+/// 1 回ごとに `action`（入力中ならコアの backspace、そうでなければホストの 1 文字削除）を呼ぶ
+private struct RepeatKeyView: View {
+    let content: KeyFaceContent
+    let style: KeyStyle
+    let action: () -> Void
+
+    @GestureState private var isPressed = false
+    @State private var isDown = false
+    @State private var repeatTask: Task<Void, Never>?
+
+    /// 連打を始めるまでの待ち（ナノ秒）
+    private let initialDelay: UInt64 = 450_000_000
+    /// 最初の間隔と、加速の下限（ナノ秒）
+    private let startInterval: UInt64 = 110_000_000
+    private let minInterval: UInt64 = 35_000_000
+    /// 暴走防止（離したイベントが届かなかった場合に、無限に消し続けない）
+    private let maxRepeats = 600
+
+    var body: some View {
+        KeyFace(content: content, style: style, active: false, pressed: isPressed, fontSize: 17)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !isDown else { return }
+                        isDown = true
+                        action()
+                        startRepeat()
+                    }
+                    .updating($isPressed) { _, state, _ in state = true }
+                    .onEnded { _ in stopRepeat() }
+            )
+            .onDisappear { stopRepeat() }
+    }
+
+    private func startRepeat() {
+        repeatTask?.cancel()
+        let step = action
+        let delay = initialDelay
+        let first = startInterval
+        let floor = minInterval
+        let limit = maxRepeats
+        repeatTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delay)
+            var interval = first
+            var count = 0
+            while !Task.isCancelled && count < limit {
+                step()
+                count += 1
+                if count % 4 == 0 && interval > floor {
+                    interval = max(floor, interval * 85 / 100)
+                }
+                try? await Task.sleep(nanoseconds: interval)
+            }
+        }
+    }
+
+    private func stopRepeat() {
+        repeatTask?.cancel()
+        repeatTask = nil
+        isDown = false
+    }
+}
+
+/// フリックキーの 5 つの文字（中央・左・上・右・下）。ポップアップの表示用
+private struct FlickChars {
+    var center: String?
+    var left: String?
+    var up: String?
+    var right: String?
+    var down: String?
+
+    var hasAny: Bool {
+        center != nil || left != nil || up != nil || right != nil || down != nil
+    }
+
+    /// レイアウトが文字を直接指定していればそれを、`kana` だけなら表示用の表（`KanaKeyTable`）を使う
+    init(key: LayoutKey) {
+        if key.center != nil || key.left != nil || key.up != nil || key.right != nil || key.down != nil {
+            center = key.center?.text
+            left = key.left?.text
+            up = key.up?.text
+            right = key.right?.text
+            down = key.down?.text
+        } else if let kana = key.kana, let entry = KanaKeyTable.entry(forName: kana), entry.chars.count == 5 {
+            center = entry.chars[0]
+            left = entry.chars[1]
+            up = entry.chars[2]
+            right = entry.chars[3]
+            down = entry.chars[4]
+        }
+    }
+}
+
+/// フリックできるキー。タップは `.tap`、一定以上動かして離すと動かした向きのフリック。
+/// 押している間は、上下左右の文字をポップアップで案内する
+private struct FlickKeyView: View {
+    let key: LayoutKey
+    let content: KeyFaceContent
+    let chars: FlickChars
+    let onPress: (Bool) -> Void
+    let onGesture: (KeyGesture) -> Void
+
+    /// 押している間の移動量（押していなければ nil）
+    @GestureState private var drag: CGSize? = nil
+    @State private var reported = false
+
+    var body: some View {
+        KeyFace(
+            content: content,
+            style: key.style,
+            active: false,
+            pressed: drag != nil,
+            fontSize: (content.text ?? "").count > 2 ? 16 : 22
+        )
+        .overlay(
+            GeometryReader { geo in
+                if let drag = drag, chars.hasAny {
+                    FlickPopup(chars: chars, selected: Self.gesture(for: drag), size: geo.size)
+                }
+            }
+            .allowsHitTesting(false)
+        )
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !reported {
+                        reported = true
+                        onPress(true)
+                    }
+                }
+                .updating($drag) { value, state, _ in state = value.translation }
+                .onEnded { value in
+                    reported = false
+                    onPress(false)
+                    onGesture(Self.gesture(for: value.translation))
+                }
+        )
     }
 
     /// 移動量から操作を決める（小さな移動はタップ）
@@ -183,34 +412,63 @@ private struct FlickKey: View {
     }
 }
 
-/// 機能キー（タップのみ）
-private struct FunctionKey: View {
-    let label: String
-    let height: CGFloat
-    let action: () -> Void
-
-    @GestureState private var isPressed = false
+/// フリックの押下ポップアップ: 押したキーの位置に中央の文字、上下左右に各方向の文字を出す
+private struct FlickPopup: View {
+    let chars: FlickChars
+    let selected: KeyGesture
+    let size: CGSize
 
     var body: some View {
-        Text(label)
-            .font(.system(size: 17))
-            .foregroundColor(Color(UIColor.label))
-            .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(UIColor.systemGray4).opacity(isPressed ? 0.6 : 1))
-            )
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .updating($isPressed) { _, state, _ in state = true }
-                    .onEnded { value in
-                        // 指を大きく動かして離した場合は、押した扱いにしない
-                        if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
-                            action()
-                        }
+        ZStack {
+            cell(chars.center, .tap, 0, 0)
+            cell(chars.left, .flickLeft, -1, 0)
+            cell(chars.up, .flickUp, 0, -1)
+            cell(chars.right, .flickRight, 1, 0)
+            cell(chars.down, .flickDown, 0, 1)
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    @ViewBuilder
+    private func cell(_ text: String?, _ gesture: KeyGesture, _ dx: CGFloat, _ dy: CGFloat) -> some View {
+        if let text = text {
+            let isSelected = (selected == gesture)
+            Text(text)
+                .font(.system(size: 22))
+                .foregroundColor(isSelected ? Color.white : Color(UIColor.label))
+                .frame(width: size.width, height: size.height)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isSelected ? Color.accentColor : Color(UIColor.secondarySystemBackground))
+                )
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(UIColor.separator), lineWidth: 0.5))
+                .position(
+                    x: size.width / 2 + dx * (size.width + 2),
+                    y: size.height / 2 + dy * (size.height + 2)
+                )
+        }
+    }
+}
+
+/// 絵文字の一覧（静的。スクロールできる）
+private struct EmojiGrid: View {
+    @ObservedObject var model: KeyboardModel
+    let height: CGFloat
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 8), spacing: 2) {
+                ForEach(Array(EmojiData.all.enumerated()), id: \.offset) { _, emoji in
+                    Button(action: { model.inputText(emoji, shift: nil) }) {
+                        Text(emoji)
+                            .font(.system(size: 26))
+                            .frame(maxWidth: .infinity, minHeight: 40)
                     }
-            )
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(height: height)
     }
 }
 
@@ -316,7 +574,7 @@ private struct ExpandedCandidates: View {
                 }
             }
         }
-        // キー 4 行分の高さに合わせる
-        .frame(height: keyHeight * 4 + keySpacing * 3)
+        // 現在のレイアウトのキー領域の高さに合わせる
+        .frame(height: padHeight(model.layoutDef))
     }
 }
