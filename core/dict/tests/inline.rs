@@ -223,6 +223,38 @@ fn binary_round_trip_preserves_behavior() {
 }
 
 #[test]
+fn load_from_file_matches_in_memory_dictionary() {
+    // 非 Windows ではファイルを mmap して読む経路（Windows では全量読み込み）
+    let d = build(ConnectionLayout::RidMajor);
+    let dir = std::env::temp_dir().join(format!("nagi-dict-load-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("nagi-dict.bin");
+    std::fs::write(&path, d.to_bytes()).unwrap();
+    let loaded = Dictionary::load(&path).unwrap();
+    for s in ["きょうはいいてんきです", "おちゃ", "ぬ"] {
+        assert_eq!(loaded.convert(s), d.convert(s));
+        assert_eq!(loaded.segment_candidates(s, 5), d.segment_candidates(s, 5));
+    }
+    assert_eq!(loaded.to_bytes(), d.to_bytes());
+    // 読み込み後にファイルが消えても（unlink）、マップ済みの内容は参照できる
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(loaded.convert("おちゃ"), d.convert("おちゃ"));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(Dictionary::load(&dir.join("missing.bin")).is_err());
+}
+
+#[test]
+fn truncated_binaries_are_rejected_at_every_length() {
+    let bytes = build(ConnectionLayout::RidMajor).to_bytes();
+    for len in 0..bytes.len() {
+        assert!(
+            Dictionary::from_bytes(&bytes[..len]).is_err(),
+            "長さ {len} が受理された"
+        );
+    }
+}
+
+#[test]
 fn corrupt_binaries_are_rejected() {
     let bytes = build(ConnectionLayout::RidMajor).to_bytes();
     let mut bad_magic = bytes.clone();

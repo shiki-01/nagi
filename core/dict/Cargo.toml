@@ -12,5 +12,14 @@ authors.workspace = true
 fst = "0.4.7"
 thiserror = { workspace = true }
 
-[lints]
-workspace = true
+# 非 Windows ではマップ中のファイルの置換に制約が無いため mmap を使う（dictionary.rs 先頭の注意）
+[target.'cfg(not(windows))'.dependencies]
+memmap2 = "0.9"
+
+[lints.rust]
+# ワークスペース既定は forbid（G-2）。辞書ファイルの mmap（dictionary.rs の map_file 1 箇所）だけ解禁する
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

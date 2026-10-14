@@ -18,14 +18,26 @@
 //!  10. pos_ids       u16 × 語数                品詞 ID（`pos_defs` の行番号への参照。連接コスト
 //!                                              ID（lid/rid）とは独立。Mozc 辞書では pos_id = lid）
 //! ```
+//!
+//! 読み込みは、ファイル全体を 1 つのバイト列（`Backing`）として保持し、各セクションはその範囲
+//! （オフセット）として参照するだけにする。配列は要素ごとにリトルエンディアンで読むため
+//! アラインメントを要求せず、形式（version 2）は変えていない。非 Windows の [`Dictionary::load`] は
+//! ファイルを mmap するので、触れたページだけが物理メモリに載り、約 60MB の全量コピーを避けられる
+//! （iOS キーボード拡張のメモリ上限対策。decisions.md H-3 / H-6）。
+//!
+//! 注意: mmap 中のファイルを同じ inode のまま書き換え・短縮するとアクセス時に SIGBUS になる。
+//! 辞書の更新は一時ファイルに書いてから rename（別 inode）で置き換えること。Windows ではマップ中の
+//! ファイルを置換できないため、[`Dictionary::load`] は mmap を使わず全量を読む。
 
 use crate::error::DictError;
 use crate::pos::{Pos, PosClass, PosSub};
 use fst::Map;
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 const MAGIC: &[u8; 8] = b"NAGIDICT";
 const VERSION: u32 = 2;
+const SECTION_COUNT: usize = 10;
 
 /// 辞書の 1 語
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,20 +65,52 @@ pub(crate) struct FallbackIds {
     pub bracket_close: u16,
 }
 
+/// 辞書ファイル全体のバイト列の持ち主（メモリ上の `Vec` か、mmap）
+enum Backing {
+    Owned(Vec<u8>),
+    #[cfg(not(windows))]
+    Mapped(memmap2::Mmap),
+}
+
+impl Backing {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Backing::Owned(v) => v,
+            #[cfg(not(windows))]
+            Backing::Mapped(m) => m,
+        }
+    }
+}
+
+/// `Backing` の一部分（fst の `Map` に渡すためのデータ参照）
+struct SharedSlice {
+    backing: Arc<Backing>,
+    range: Range<usize>,
+}
+
+impl AsRef<[u8]> for SharedSlice {
+    fn as_ref(&self) -> &[u8] {
+        &self.backing.as_slice()[self.range.clone()]
+    }
+}
+
 /// 読み込み済みの辞書（不変。`Send + Sync`）
 pub struct Dictionary {
-    trie_bytes: Vec<u8>,
-    trie: Map<Vec<u8>>,
-    group_offsets: Vec<u32>,
-    lids: Vec<u16>,
-    rids: Vec<u16>,
-    costs: Vec<u16>,
-    surf_offsets: Vec<u32>,
-    surf_pool: String,
+    backing: Arc<Backing>,
+    trie: Map<SharedSlice>,
+    /// 各配列セクションの `backing` 上の範囲（`u16` / `u32` はリトルエンディアン）
+    group_offsets: Range<usize>,
+    lids: Range<usize>,
+    rids: Range<usize>,
+    costs: Range<usize>,
+    surf_offsets: Range<usize>,
+    surf_pool: Range<usize>,
+    conn: Range<usize>,
+    pos_ids: Range<usize>,
+    n_entries: usize,
+    n_groups: usize,
     pos_defs: Vec<String>,
     pos: Vec<Pos>,
-    conn: Vec<u16>,
-    pos_ids: Vec<u16>,
     conn_n: usize,
     fallback: FallbackIds,
     /// 逆引き索引（表記 → 読み）。`reverse_convert` で最初に使われた時に構築し、以降キャッシュする
@@ -79,8 +123,8 @@ pub struct Dictionary {
 impl std::fmt::Debug for Dictionary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Dictionary")
-            .field("entries", &self.lids.len())
-            .field("groups", &self.group_offsets.len().saturating_sub(1))
+            .field("entries", &self.n_entries)
+            .field("groups", &self.n_groups)
             .field("pos_ids", &self.conn_n)
             .finish()
     }
@@ -128,28 +172,73 @@ fn u32s_to_bytes(v: &[u32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
-fn bytes_to_u16s(b: &[u8]) -> Result<Vec<u16>, DictError> {
-    if b.len() % 2 != 0 {
-        return Err(DictError::Format("u16 配列の長さが不正".into()));
+/// セクション列を辞書のバイナリ形式に並べる
+fn assemble(sections: &[Vec<u8>; SECTION_COUNT]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(sections.iter().map(|s| s.len() + 8).sum::<usize>() + 12);
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&VERSION.to_le_bytes());
+    for s in sections {
+        out.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        out.extend_from_slice(s);
     }
-    Ok(b.chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect())
+    out
 }
 
-fn bytes_to_u32s(b: &[u8]) -> Result<Vec<u32>, DictError> {
-    if b.len() % 4 != 0 {
-        return Err(DictError::Format("u32 配列の長さが不正".into()));
+/// ヘッダを検査し、各セクションの範囲を返す
+fn parse_sections(bytes: &[u8]) -> Result<[Range<usize>; SECTION_COUNT], DictError> {
+    let mut pos = 0usize;
+    let mut take = |n: usize| -> Result<Range<usize>, DictError> {
+        let end = pos
+            .checked_add(n)
+            .filter(|&end| end <= bytes.len())
+            .ok_or_else(|| DictError::Format("データが途中で終わっています".into()))?;
+        let range = pos..end;
+        pos = end;
+        Ok(range)
+    };
+    if &bytes[take(8)?] != MAGIC {
+        return Err(DictError::Format("マジックが一致しません".into()));
     }
-    Ok(b.chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    let version = u32::from_le_bytes(bytes[take(4)?].try_into().expect("4 バイト"));
+    if version != VERSION {
+        return Err(DictError::Format(format!("未対応のバージョン {version}")));
+    }
+    let mut sections: Vec<Range<usize>> = Vec::with_capacity(SECTION_COUNT);
+    for _ in 0..SECTION_COUNT {
+        let len = u64::from_le_bytes(bytes[take(8)?].try_into().expect("8 バイト"));
+        let len = usize::try_from(len)
+            .map_err(|_| DictError::Format("セクションが大きすぎます".into()))?;
+        sections.push(take(len)?);
+    }
+    Ok(sections.try_into().expect("セクション数は固定"))
+}
+
+fn u16_at(bytes: &[u8], section: &Range<usize>, index: usize) -> u16 {
+    let p = section.start + index * 2;
+    u16::from_le_bytes([bytes[p], bytes[p + 1]])
+}
+
+fn u32_at(bytes: &[u8], section: &Range<usize>, index: usize) -> u32 {
+    let p = section.start + index * 4;
+    u32::from_le_bytes([bytes[p], bytes[p + 1], bytes[p + 2], bytes[p + 3]])
+}
+
+/// 昇順（単調非減少）か。先頭から末尾まで 1 回舐める
+fn offsets_monotonic(bytes: &[u8], section: &Range<usize>, count: usize) -> bool {
+    let mut prev = 0u32;
+    for i in 0..count {
+        let v = u32_at(bytes, section, i);
+        if v < prev {
+            return false;
+        }
+        prev = v;
+    }
+    true
 }
 
 impl Dictionary {
     pub(crate) fn from_parts(p: RawParts) -> Result<Dictionary, DictError> {
         let n_entries = p.lids.len();
-        let n_groups = p.group_offsets.len().saturating_sub(1);
         if p.rids.len() != n_entries
             || p.costs.len() != n_entries
             || p.surf_offsets.len() != n_entries + 1
@@ -159,137 +248,147 @@ impl Dictionary {
         {
             return Err(DictError::Format("セクションの長さが整合しません".into()));
         }
-        if p.group_offsets.windows(2).any(|w| w[0] > w[1])
-            || p.surf_offsets.windows(2).any(|w| w[0] > w[1])
-            || p.surf_offsets.last().copied().unwrap_or(0) as usize != p.surf_pool.len()
+        let sections: [Vec<u8>; SECTION_COUNT] = [
+            p.trie_bytes,
+            u32s_to_bytes(&p.group_offsets),
+            u16s_to_bytes(&p.lids),
+            u16s_to_bytes(&p.rids),
+            u16s_to_bytes(&p.costs),
+            u32s_to_bytes(&p.surf_offsets),
+            p.surf_pool.into_bytes(),
+            p.pos_defs.join("\n").into_bytes(),
+            u16s_to_bytes(&p.conn),
+            u16s_to_bytes(&p.pos_ids),
+        ];
+        Dictionary::from_vec(assemble(&sections))
+    }
+
+    /// バイナリ辞書ファイルを読み込む。非 Windows では mmap し、失敗したら全量を読む
+    pub fn load(path: &std::path::Path) -> Result<Dictionary, DictError> {
+        #[cfg(not(windows))]
+        if let Some(mapped) = map_file(path) {
+            return Dictionary::from_backing(Backing::Mapped(mapped));
+        }
+        Dictionary::from_vec(std::fs::read(path)?)
+    }
+
+    /// バイナリ辞書をバイト列から読み込む（バイト列をコピーして保持する）
+    pub fn from_bytes(bytes: &[u8]) -> Result<Dictionary, DictError> {
+        Dictionary::from_vec(bytes.to_vec())
+    }
+
+    /// バイナリ辞書を所有するバイト列から読み込む
+    pub fn from_vec(bytes: Vec<u8>) -> Result<Dictionary, DictError> {
+        Dictionary::from_backing(Backing::Owned(bytes))
+    }
+
+    fn from_backing(backing: Backing) -> Result<Dictionary, DictError> {
+        let backing = Arc::new(backing);
+        let bytes = backing.as_slice();
+        let [
+            trie,
+            group_offsets,
+            lids,
+            rids,
+            costs,
+            surf_offsets,
+            surf_pool,
+            pos_defs,
+            conn,
+            pos_ids,
+        ] = parse_sections(bytes)?;
+
+        let multiple = |section: &Range<usize>, size: usize, what: &str| {
+            if section.len() % size == 0 {
+                Ok(section.len() / size)
+            } else {
+                Err(DictError::Format(format!("{what} 配列の長さが不正")))
+            }
+        };
+        let n_entries = multiple(&lids, 2, "u16")?;
+        let n_group_offsets = multiple(&group_offsets, 4, "u32")?;
+        let n_surf_offsets = multiple(&surf_offsets, 4, "u32")?;
+        let n_conn = multiple(&conn, 2, "u16")?;
+        let n_rids = multiple(&rids, 2, "u16")?;
+        let n_costs = multiple(&costs, 2, "u16")?;
+        let n_pos_ids = multiple(&pos_ids, 2, "u16")?;
+        // pos_defs の行数（品詞の種類数）と conn_n（連接コストIDの数）は独立しているため、
+        // conn_n は conn 配列の長さ（N×N）から復元する。完全平方数でなければ不正データ
+        let conn_n = n_conn.isqrt();
+        if n_rids != n_entries
+            || n_costs != n_entries
+            || n_surf_offsets != n_entries + 1
+            || (n_group_offsets == 0 && n_entries != 0)
+            || (n_group_offsets > 0
+                && u32_at(bytes, &group_offsets, n_group_offsets - 1) as usize != n_entries)
+            || conn_n * conn_n != n_conn
+            || n_pos_ids != n_entries
+        {
+            return Err(DictError::Format("セクションの長さが整合しません".into()));
+        }
+        if !offsets_monotonic(bytes, &group_offsets, n_group_offsets)
+            || !offsets_monotonic(bytes, &surf_offsets, n_surf_offsets)
+            || u32_at(bytes, &surf_offsets, n_entries) as usize != surf_pool.len()
         {
             return Err(DictError::Format("オフセット表が不正です".into()));
         }
-        if p.lids
-            .iter()
-            .chain(p.rids.iter())
-            .any(|&id| id as usize >= p.conn_n)
-        {
+        if (0..n_entries).any(|i| {
+            u16_at(bytes, &lids, i) as usize >= conn_n || u16_at(bytes, &rids, i) as usize >= conn_n
+        }) {
             return Err(DictError::Format("品詞 ID が範囲外です".into()));
         }
-        if p.pos_ids.iter().any(|&id| id as usize >= p.pos_defs.len()) {
-            return Err(DictError::Format("品詞 ID が範囲外です".into()));
-        }
-        let _ = n_groups;
-        let pos = p.pos_defs.iter().map(|d| Pos::parse(d)).collect();
-        let fallback = find_fallback(&p.pos_defs);
-        Ok(Dictionary {
-            trie: Map::new(p.trie_bytes.clone())
-                .map_err(|e| DictError::Format(format!("trie が不正です: {e}")))?,
-            trie_bytes: p.trie_bytes,
-            group_offsets: p.group_offsets,
-            lids: p.lids,
-            rids: p.rids,
-            costs: p.costs,
-            surf_offsets: p.surf_offsets,
-            surf_pool: p.surf_pool,
-            pos_defs: p.pos_defs,
-            pos,
-            conn: p.conn,
-            conn_n: p.conn_n,
-            pos_ids: p.pos_ids,
-            fallback,
-            reverse: Mutex::new(None),
-        })
-    }
 
-    /// バイナリ辞書ファイルを読み込む
-    pub fn load(path: &std::path::Path) -> Result<Dictionary, DictError> {
-        Dictionary::from_bytes(&std::fs::read(path)?)
-    }
-
-    /// バイナリ辞書をバイト列から読み込む
-    pub fn from_bytes(bytes: &[u8]) -> Result<Dictionary, DictError> {
-        let mut rest = bytes;
-        let mut take = |n: usize| -> Result<&[u8], DictError> {
-            if rest.len() < n {
-                return Err(DictError::Format("データが途中で終わっています".into()));
-            }
-            let (head, tail) = rest.split_at(n);
-            rest = tail;
-            Ok(head)
-        };
-        if take(8)? != MAGIC {
-            return Err(DictError::Format("マジックが一致しません".into()));
-        }
-        let version = u32::from_le_bytes(take(4)?.try_into().expect("4 バイト"));
-        if version != VERSION {
-            return Err(DictError::Format(format!("未対応のバージョン {version}")));
-        }
-        let mut sections: Vec<&[u8]> = Vec::with_capacity(10);
-        for _ in 0..10 {
-            let len = u64::from_le_bytes(take(8)?.try_into().expect("8 バイト"));
-            let len = usize::try_from(len)
-                .map_err(|_| DictError::Format("セクションが大きすぎます".into()))?;
-            sections.push(take(len)?);
-        }
-        let text = |b: &[u8]| -> Result<String, DictError> {
-            String::from_utf8(b.to_vec()).map_err(|_| DictError::Format("UTF-8 が不正です".into()))
-        };
-        let pos_defs_text = text(sections[7])?;
+        let pos_defs_text = std::str::from_utf8(&bytes[pos_defs])
+            .map_err(|_| DictError::Format("UTF-8 が不正です".into()))?;
         let pos_defs: Vec<String> = if pos_defs_text.is_empty() {
             Vec::new()
         } else {
             pos_defs_text.split('\n').map(str::to_string).collect()
         };
-        let conn = bytes_to_u16s(sections[8])?;
-        // pos_defs の行数（品詞の種類数）と conn_n（連接コストIDの数）は独立しているため、
-        // conn_n は conn 配列の長さ（N×N）から復元する。conn.len() が完全平方数でなければ
-        // 後続の RawParts バリデーション（conn.len() != conn_n * conn_n）で不正データとして弾かれる
-        let conn_n = conn.len().isqrt();
-        let pos_ids = bytes_to_u16s(sections[9])?;
-        Dictionary::from_parts(RawParts {
-            trie_bytes: sections[0].to_vec(),
-            group_offsets: bytes_to_u32s(sections[1])?,
-            lids: bytes_to_u16s(sections[2])?,
-            rids: bytes_to_u16s(sections[3])?,
-            costs: bytes_to_u16s(sections[4])?,
-            surf_offsets: bytes_to_u32s(sections[5])?,
-            surf_pool: text(sections[6])?,
-            pos_defs,
+        if (0..n_entries).any(|i| u16_at(bytes, &pos_ids, i) as usize >= pos_defs.len()) {
+            return Err(DictError::Format("品詞 ID が範囲外です".into()));
+        }
+        let pos = pos_defs.iter().map(|d| Pos::parse(d)).collect();
+        let fallback = find_fallback(&pos_defs);
+        let trie = Map::new(SharedSlice {
+            backing: Arc::clone(&backing),
+            range: trie,
+        })
+        .map_err(|e| DictError::Format(format!("trie が不正です: {e}")))?;
+        Ok(Dictionary {
+            backing,
+            trie,
+            group_offsets,
+            lids,
+            rids,
+            costs,
+            surf_offsets,
+            surf_pool,
             conn,
-            conn_n,
             pos_ids,
+            n_entries,
+            n_groups: n_group_offsets.saturating_sub(1),
+            pos_defs,
+            pos,
+            conn_n,
+            fallback,
+            reverse: Mutex::new(None),
         })
     }
 
-    /// バイナリ辞書にシリアライズする
+    /// バイナリ辞書にシリアライズする（読み込んだバイト列と同一の内容）
     pub fn to_bytes(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 10] = [
-            self.trie_bytes.clone(),
-            u32s_to_bytes(&self.group_offsets),
-            u16s_to_bytes(&self.lids),
-            u16s_to_bytes(&self.rids),
-            u16s_to_bytes(&self.costs),
-            u32s_to_bytes(&self.surf_offsets),
-            self.surf_pool.clone().into_bytes(),
-            self.pos_defs.join("\n").into_bytes(),
-            u16s_to_bytes(&self.conn),
-            u16s_to_bytes(&self.pos_ids),
-        ];
-        let mut out = Vec::with_capacity(sections.iter().map(|s| s.len() + 8).sum::<usize>() + 12);
-        out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&VERSION.to_le_bytes());
-        for s in &sections {
-            out.extend_from_slice(&(s.len() as u64).to_le_bytes());
-            out.extend_from_slice(s);
-        }
-        out
+        self.backing.as_slice().to_vec()
     }
 
     /// 語数
     pub fn entry_count(&self) -> usize {
-        self.lids.len()
+        self.n_entries
     }
 
     /// 読みの種類数（trie のキー数）
     pub fn reading_count(&self) -> usize {
-        self.group_offsets.len().saturating_sub(1)
+        self.n_groups
     }
 
     /// 品詞 ID の数（連接コスト表の一辺）
@@ -298,46 +397,55 @@ impl Dictionary {
     }
 
     pub(crate) fn entry(&self, index: usize) -> Entry {
-        let a = self.surf_offsets[index] as usize;
-        let b = self.surf_offsets[index + 1] as usize;
         Entry {
-            surface: self.surf_pool[a..b].to_string(),
-            lid: self.lids[index],
-            rid: self.rids[index],
-            pos_id: self.pos_ids[index],
-            cost: self.costs[index],
+            surface: self.surface(index).to_string(),
+            lid: self.lid_of(index),
+            rid: self.rid_of(index),
+            pos_id: self.pos_id_of(index),
+            cost: self.cost_of(index),
         }
     }
 
     pub(crate) fn surface(&self, index: usize) -> &str {
-        let a = self.surf_offsets[index] as usize;
-        let b = self.surf_offsets[index + 1] as usize;
-        &self.surf_pool[a..b]
+        let bytes = self.backing.as_slice();
+        let a = u32_at(bytes, &self.surf_offsets, index) as usize;
+        let b = u32_at(bytes, &self.surf_offsets, index + 1) as usize;
+        let pool = &bytes[self.surf_pool.clone()];
+        // 全量の UTF-8 検査は mmap のページを全て触るため読み込み時には行わず、参照時に検査する。
+        // ビルダーが生成した辞書では常に成功し、壊れたファイルでも panic せず空文字になる
+        std::str::from_utf8(&pool[a..b]).unwrap_or("")
     }
 
     pub(crate) fn group_range(&self, group: u32) -> std::ops::Range<usize> {
-        self.group_offsets[group as usize] as usize..self.group_offsets[group as usize + 1] as usize
+        let bytes = self.backing.as_slice();
+        let g = group as usize;
+        u32_at(bytes, &self.group_offsets, g) as usize
+            ..u32_at(bytes, &self.group_offsets, g + 1) as usize
     }
 
     pub(crate) fn lid_of(&self, index: usize) -> u16 {
-        self.lids[index]
+        u16_at(self.backing.as_slice(), &self.lids, index)
     }
 
     pub(crate) fn rid_of(&self, index: usize) -> u16 {
-        self.rids[index]
+        u16_at(self.backing.as_slice(), &self.rids, index)
     }
 
     pub(crate) fn cost_of(&self, index: usize) -> u16 {
-        self.costs[index]
+        u16_at(self.backing.as_slice(), &self.costs, index)
     }
 
     pub(crate) fn pos_id_of(&self, index: usize) -> u16 {
-        self.pos_ids[index]
+        u16_at(self.backing.as_slice(), &self.pos_ids, index)
     }
 
     /// 連接コスト（前の語の右 ID, 次の語の左 ID）
     pub(crate) fn connection(&self, rid: u16, lid: u16) -> i32 {
-        i32::from(self.conn[rid as usize * self.conn_n + lid as usize])
+        i32::from(u16_at(
+            self.backing.as_slice(),
+            &self.conn,
+            rid as usize * self.conn_n + lid as usize,
+        ))
     }
 
     pub(crate) fn pos_of(&self, id: u16) -> Pos {
@@ -405,4 +513,14 @@ impl Dictionary {
         }
         found
     }
+}
+
+/// 辞書ファイルを mmap する。失敗（ファイルシステム非対応など）したら `None`（呼び出し側が全量読み込みに戻す）
+#[cfg(not(windows))]
+#[allow(unsafe_code)]
+fn map_file(path: &std::path::Path) -> Option<memmap2::Mmap> {
+    let file = std::fs::File::open(path).ok()?;
+    // SAFETY: 辞書ファイルは読み取り専用で開く。マップ中に同じ inode が書き換え・短縮されると
+    // アクセス時に SIGBUS になりうるため、更新は別 inode への rename で行う運用とする（モジュール先頭の注意）
+    unsafe { memmap2::Mmap::map(&file) }.ok()
 }
