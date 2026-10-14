@@ -208,6 +208,7 @@
   }
   .sel {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 2px;
     font-size: 0.875rem;
     color: var(--muted);
@@ -216,6 +217,10 @@
   }
   .sel select {
     color: var(--fg);
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    text-overflow: ellipsis;
   }
   .sep {
     flex: 0 0 8px;
