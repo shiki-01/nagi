@@ -121,6 +121,17 @@ jobs:
           printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/AuthKey.p8"
           chmod 600 "$RUNNER_TEMP/asc/AuthKey.p8"
 
+      # CI の Mac は毎回まっさらで、署名の自動管理が開発証明書を毎回新しく作る。残ると上限に達して
+      # アーカイブが失敗するため、"Created via API" の開発証明書だけを失効させる（人が作った証明書は対象外）。
+      # 権限不足などで失敗しても、ビルド自体は続ける
+      - name: CI 用の古い開発証明書を失効
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/asc/AuthKey.p8
+        run: python3 .github/scripts/ios-revoke-ci-certs.py
+
       - name: アーカイブ（署名あり）
         working-directory: frontend-ios-spike
         env:
@@ -182,6 +193,15 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             | tee build/xcodebuild-export.log | tail -n 40
+
+      - name: CI 用の開発証明書を後始末
+        if: always()
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/asc/AuthKey.p8
+        run: python3 .github/scripts/ios-revoke-ci-certs.py
 
       - name: API キーを削除
         if: always()
