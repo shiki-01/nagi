@@ -49,8 +49,12 @@ targets:
         # 独自の暗号化を使わない（TestFlight の輸出コンプライアンス質問を省略する）
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        # iPad のマルチタスクに対応するには 4 方向すべての宣言が必要（App Store Connect の検証）
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         ALTAppGroups:
           - group.com.shiki01.nagi
 
