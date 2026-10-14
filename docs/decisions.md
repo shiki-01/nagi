@@ -972,3 +972,27 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **`get_key_table`**: 12 キーの文字表（`center/left/up/right/down`・`toggle` の循環）と濁点・小書きの循環（`variants`）を返す。エンジンの `touch.rs` の表から作る（単一の情報源）。iOS の `KanaKeyTable.swift` の複製表はこれで置き換えられる
 - **D-4**: `initialize.params.capabilities`（任意。`input_method: touch|physical`、`environment`＝`set_environment` と同じ項目）と `set_environment.memory_budget_mb`（任意）を追加。プロファイル判定（`nagi_profile::initial_profile_with_budget`）はメモリ上限に従う: **150MB 未満は Minimal、1024MB 未満は Light まで、2048MB 未満は Balanced まで**（暫定値。実機で見直す）。`profile.mode` での固定は上限より優先。`input_method` は記録するのみで、現状は挙動を変えない
 - **Swift の追従が必要**: 生成された `InitializeParams` / `SetEnvironmentParams` のメモリワイズ init に引数が増えたため、既存の呼び出し（macOS `EngineSupervisor.swift`、iOS `NagiSession.swift`・`NagiEnvironment.swift`）に `capabilities: nil` / `memory_budget_mb: nil` が要る
+
+### H-17. Phase 0: モデル比較の一次結果（zenz-v3.1 xsmall / small、2026-10-14、要レビュー）
+
+`nagi-eval`（Mozc `evaluation.tsv` の Conversion 系 609 件、`left_context=""`、Mozc OSS 辞書）で、辞書のみ・xsmall・small を比較した。**G-36 の「small は xsmall と同等以下」は、`nagi-eval` 中の環境プロファイル自動降格（`minimal` 化）の影響を受けた値で、プロファイルを固定すると逆転する**ことが分かった。
+
+- 測定環境: Linux x86_64（Intel Xeon 2.8GHz・4 コア・RAM 16GB）、release ビルド、`--features llama`、モデルは `zenz-v3.1-{small,xsmall}-Q5_K_M.gguf`（SHA-256 検証済み）。**iPhone / Apple Silicon とは CPU 性能が異なるため、レイテンシは参考値**。各条件 1 回の測定（ばらつきは未評価）。`user_dir` は空の一時ディレクトリ（学習なし）。モデル指定は `config.toml` の `conversion.model`、プロファイル固定は `profile.mode`
+- 取得: この環境では `cargo xtask fetch-*` の HTTP クライアント（ureq）がプロキシ経由・追加 CA に対応せず TLS 検証に失敗するため、同一 URL を curl（CA は環境のバンドル）で取得し、`cargo xtask fetch-dict` / `fetch-model` を再実行して SHA-256 一致を確認した（xtask のコードは未変更）
+
+| 条件 | モデルサイズ | 精度（TOTAL） | Expected（全文） | Expected N（文節候補） | Match | convert_sentence p50 / p95 / max |
+| --- | --- | --- | --- | --- | --- | --- |
+| 辞書のみ | - | 66.2%（403/609） | 66.9% | 59.0% | 71.7% | 0.0 / 0.1 / 0.4ms |
+| xsmall・balanced 固定 | 20.0MB | 68.1%（415/609） | 65.6% | 64.5% | 77.4% | 15.5 / 40.4 / 154ms |
+| xsmall・light 固定 | 20.0MB | 68.3%（416/609） | 65.9% | 64.5% | 77.4% | 25.7 / 49.8 / 151ms |
+| xsmall・auto | 20.0MB | 68.5%（417/609） | 65.9% | 65.0% | 77.4% | 18.0 / 40.7 / 126ms |
+| small・balanced 固定 | 70.4MB | **75.0%**（457/609） | 76.8% | 65.0% | 90.6% | 65.8 / 150.8 / 351ms |
+| small・light 固定 | 70.4MB | 72.7%（443/609） | 74.8% | 65.0% | 79.2% | 90.2 / 150.5 / 155ms |
+| small・auto | 70.4MB | 66.2%（403/609） | 66.9% | 59.0% | 69.8% | 0.0 / 110.3 / 154ms |
+
+- 所見 1（auto の small は辞書のみと同値）: auto では small がレイテンシ超過で降格し、辞書のみと全く同じ結果（403/609）になる。G-36 で修正した定期プロービングの後も、連続変換のベンチではほぼ常時降格している。**small の本来の精度は固定プロファイルでしか測れない**。G-36 の表（small 66.3%）はこの現象で、small のモデル自体の精度ではなかった
+- 所見 2（small と xsmall の差）: 固定プロファイルで small は xsmall より全体で +4.4〜6.9pt（balanced 75.0% / light 72.7% vs 68.1〜68.3%）。差の主因は全文変換（Expected: 76.8% vs 65.6%、light でも 74.8%）と Match（90.6% vs 77.4%）。文節候補（Expected N）はどちらも 65% で差がない（辞書列挙が支配的）。xsmall は辞書のみに対し全文 Expected でむしろ -1.3pt（65.6% vs 66.9%）で、改善は文節候補と Match が中心。Expected の失敗数は xsmall 43 件のみ・small 9 件のみ（キー=読み+期待値で比較）
+- 所見 3（誤変換の傾向）: xsmall のみ誤り・small は正解の例は、あおぞらぎんこう（xsmall: 青空銀行、期待: あおぞら銀行）、いっきょうたじゃく（一強多弱、期待: 一強他弱 ※small は正解）、いちまん（１万、期待: 一万）、いいごえんがあれば（良いご縁があれば）。固有名詞・慣用句・数字表記で、モデル容量の差が出やすい。small のみ誤りの例は、きかいがとまる（機会が止まる、期待: 機械が止まる）、くうぐんしょうこう（空軍商工）、へんきんまち、ゆうせんでもむせんでも。同音異義語の文脈判定でも small が全勝ではない。両者とも誤る例は、千円・五百円札などの数詞（9000円/500円札と算用数字が優先される）、新字体でない異体字（残置・接続などの Mozc 期待値）で、モデルの問題ではなく評価データ・数字の扱い方針の問題
+- 所見 4（レイテンシ）: この環境（4 コア Xeon）で small は p50 66〜90ms、p95 約 150ms。**p95 が約 150ms で頭打ちなのは `sync_budget_ms` による打ち切り**で、長い文では LLM の結果が間に合わず辞書の結果になっている可能性がある（打ち切り率は未計測）。xsmall は p95 40〜50ms で余裕がある。iPhone 16e の実測（H-9: small の Space 応答 p50 155ms・p95 318ms、xsmall 103/309ms）の方が現実に近く、いずれも同期経路では目標（p95 150ms）に収まらない
+- **xsmall を iOS 既定とする判断の妥当性**: 速度・メモリ（H-9: 差はほぼない）の面では xsmall が有利だが、**精度の面では small が明確に上**（特に全文変換）。H-9 の「暫定の iOS 既定は small（存在しなければ xsmall）」は、この結果とは矛盾しない。xsmall を既定にする根拠は「小さい・速い」のみで、精度を優先するなら small を既定にし、同期の待ち時間は非同期の候補差し替え（`update_candidates`）で隠すのが筋。**ただし**この環境の CPU は iPhone と違い、small が `light` でも p50 90ms かかる点（実機は H-9 の値）を、最終判断の前に実機で再確認する必要がある
+- 限界・未実施: (1) `left_context` なし（文脈の効果は未評価）、(2) 1 条件 1 回の測定（ばらつき未評価）、(3) 評価セットは Mozc の Conversion 系 609 件のみで、期待値の一部（異体字・数字）は精度の比較に不向き、(4) `segment_candidates` のレイテンシ・同期打ち切り率は未計測、(5) 量子化違い（Q8 等）・他サイズ・SudachiDict との組み合わせは未比較、(6) iPhone 相当の CPU での計測。**`nagi-eval` で auto を使う比較は降格の影響を受けるため、固定プロファイル（`profile.mode`）で行うこと**。再現用の設定は `config.toml` に `[profile] mode = "balanced"` と `[conversion] model = "<gguf の絶対パス>"` を書いた `--user-dir` を渡す

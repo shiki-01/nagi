@@ -44,7 +44,7 @@
 2. ~~**予測変換**（Phase 2）~~ → 実装済み（G-23）
 3. ~~**環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化~~ → 実装済み（G-13）。残るは `quality` で使う大きいモデル・reranker（Laya 評価。Phase 0 の比較が必要）
 4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。~~`update.auto_check` の実装~~ → 実装済み（G-19。起動時の自動確認・notify のみ。実サーバー（`nagi.shiki-01.com/updates/latest.json`）は未整備なので機能するにはサーバー側の用意が必要）。**設定の残り**: 設定 GUI（Phase 4）
-5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測
+5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測。**一次結果（H-17、2026-10-14）**: zenz-v3.1 small と xsmall を固定プロファイルで比較し、small が xsmall より +4〜7pt（75.0% vs 68.1%、balanced）。G-36 の「xsmall が有力」は auto 降格の影響で、撤回。残り: left_context ありの評価、他の量子化・サイズ、SudachiDict、iPhone/M1 相当の実測
 6. ~~辞書形式を mmap 可能な形式へ変更~~ → 実装済み（H-7）。形式（version 2）は変えず、セクションを要素ごとのリトルエンディアン読み出し（アラインメント不要）にして `Dictionary::load` を mmap 化（非 Windows）。実機（iPhone 16e 拡張）で辞書の footprint は +61MB → +0.2MB、xsmall 併用のピークは 124MB → 71MB（H-7）
 7. ~~`insert_reading` / `perform_action` のプロトコル設計を core/protocol に追加~~ → 実装済み（H-11。12 キーのトグル・フリック・濁点循環をコアで解決、Swift 型生成済み）。残るのはレイアウトの設定化・`initialize` の capability 拡張
 8. **iOS 拡張のメモリ上限実測と LLM 可否判定**（M0 最優先）: `nagi-infer` を iOS 環境でビルド・実行し、メモリ上限（Apple 公式ドキュメントの記載値・実測値）と LLM ロードのコストを測定。実測が出るまで iOS の品質基準は `minimal`（辞書+Viterbi）。**一次実測あり**（H-6: 拡張の上限は約 177MB、辞書の全量読み込みで +61MB。zenz small は載らない見込み。xsmall + 辞書は iPhone 16e の拡張内で連続変換 20 回に耐えた（残量最小 52.8MB）。他機種・CPU のみ・mmap 辞書での成立可否は未確認）。メモリ上限による LLM 読み込みの抑止（`--memory-budget-mb`、150MB 未満は辞書のみ）は実装済み（H-8）
@@ -91,7 +91,7 @@
 - G-33 LLM のビームサーチ（infer 単体、Stage 1。アルゴリズム・`kv_unified` の必要性・実測・未実装の統合作業）
 - G-34 LLM のビームサーチ（server/engine 統合、Stage 2。`Effective::beam_width`・`Pipeline::sentence_candidates`・候補ウィンドウの sentence モード・既知の限界）
 - G-35 Phase 0: SudachiDict 対応（辞書内部の pos_id 分離・CSV/matrix.def パーサー）
-- G-36 Phase 0: モデル比較（zenz-v3.1 small/xsmall。xsmall が有力）と、環境プロファイル不可逆降格バグの発見・修正
+- G-36 Phase 0: モデル比較（zenz-v3.1 small/xsmall。当時は xsmall が有力としたが H-17 で固定プロファイル比較により small が上と訂正）と、環境プロファイル不可逆降格バグの発見・修正
 - G-37 macOS の bundle id を `com.shiki.inputmethod.Nagi` に変更
 - G-38 imserver のモデル読み込みを非同期化（`initialize` を即時応答）
 - G-39・G-40 ライブ変換中の Enter は表示中の変換結果を確定 / 「ん」重複（`nn` + 子音）の修正
