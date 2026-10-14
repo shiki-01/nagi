@@ -96,6 +96,10 @@ pub struct Tunables {
     pub live_conversion_delay_ms: u64,
     /// `conversion.live_conversion_min_key_length`
     pub live_conversion_min_key_length: usize,
+    /// `userdict.enabled`
+    pub userdict_enabled: bool,
+    /// `snippet.enabled`
+    pub snippet_enabled: bool,
 }
 
 /// 出所名（`ranking.source_order` の要素）を出所に直す
@@ -151,6 +155,8 @@ impl Tunables {
             live_conversion_enabled: config.conversion.live_conversion,
             live_conversion_delay_ms: config.conversion.live_conversion_delay_ms,
             live_conversion_min_key_length: config.conversion.live_conversion_min_key_length,
+            userdict_enabled: config.userdict.enabled,
+            snippet_enabled: config.snippet.enabled,
         }
     }
 }
@@ -188,6 +194,9 @@ pub struct Runtime {
     learner: Mutex<Learner>,
     learn_path: Option<PathBuf>,
     last_flush: Mutex<Instant>,
+    /// 読み込んだユーザー辞書そのもの（件数の表示と、設定変更時の作り直しに使う）
+    overlay_raw: RwLock<Arc<Overlay>>,
+    /// 変換に使うオーバーレイ（`userdict.enabled` / `snippet.enabled` で絞ったもの）
     overlay: RwLock<Arc<Overlay>>,
     events: Mutex<Vec<Event>>,
     /// ライブ変換等の非同期な preedit 更新（`update_preedit` 通知になる）
@@ -244,6 +253,7 @@ impl Runtime {
             learner: Mutex::new(learner),
             learn_path,
             last_flush: Mutex::new(Instant::now()),
+            overlay_raw: RwLock::new(Arc::new(Overlay::default())),
             overlay: RwLock::new(Arc::new(Overlay::default())),
             events: Mutex::new(Vec::new()),
             preedit_updates: Mutex::new(Vec::new()),
@@ -704,6 +714,7 @@ impl Runtime {
         if let Ok(mut t) = self.tunables.write() {
             *t = tunables;
         }
+        self.refresh_overlay();
         self.recompute_profile(true);
     }
 
@@ -777,8 +788,31 @@ impl Runtime {
 
     /// ユーザー辞書を差し替える
     pub fn set_overlay(&self, overlay: Overlay) {
-        if let Ok(mut o) = self.overlay.write() {
+        if let Ok(mut o) = self.overlay_raw.write() {
             *o = Arc::new(overlay);
+        }
+        self.refresh_overlay();
+    }
+
+    /// 読み込んだユーザー辞書から、設定（語・スニペットの使用の有無）に合わせた変換用の
+    /// オーバーレイを作り直す
+    fn refresh_overlay(&self) {
+        let (words, snippets) = self
+            .tunables
+            .read()
+            .map_or((true, true), |t| (t.userdict_enabled, t.snippet_enabled));
+        let raw = self
+            .overlay_raw
+            .read()
+            .map(|o| o.clone())
+            .unwrap_or_default();
+        let effective = if words && snippets {
+            raw
+        } else {
+            Arc::new(raw.filtered(words, snippets))
+        };
+        if let Ok(mut o) = self.overlay.write() {
+            *o = effective;
         }
     }
 
@@ -898,7 +932,11 @@ impl Runtime {
 
     /// `get_status` の結果
     pub fn status(&self) -> StatusResult {
-        let overlay = self.overlay();
+        let overlay = self
+            .overlay_raw
+            .read()
+            .map(|o| o.clone())
+            .unwrap_or_default();
         let e = self.effective();
         StatusResult {
             profile: self.profile().as_str().to_string(),

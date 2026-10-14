@@ -197,6 +197,12 @@ impl SettingDef {
         self
     }
 
+    /// 出すプラットフォームを限る
+    fn platforms(mut self, platforms: SettingPlatforms) -> Self {
+        self.platforms = platforms;
+        self
+    }
+
     /// 反映に再起動が要る項目にする
     fn restart(mut self) -> Self {
         self.requires_restart = true;
@@ -365,6 +371,17 @@ pub fn definitions() -> Vec<SettingDef> {
         )
         .simple(),
         def(
+            "input.dakuten_cycle",
+            "入力",
+            "濁点・小書きキーの順序",
+            "フリック入力の「゛゜小」キーを押したときに文字が変わる順序です（タッチ入力のみ）。「つ」「う」で「っ」「ぅ」と「づ」「ゔ」のどちらを先に出すかが変わります。",
+            choice(&[
+                ("small_first", "小書きを先に（つ→っ→づ）"),
+                ("dakuten_first", "濁点を先に（つ→づ→っ）"),
+            ]),
+        )
+        .platforms(SettingPlatforms::Ios),
+        def(
             "learning.enabled",
             "学習",
             "学習する",
@@ -412,6 +429,20 @@ pub fn definitions() -> Vec<SettingDef> {
             "読みがこの文字数以上になったら予測を表示します。",
             int(1, 20, 1),
         ),
+        def(
+            "userdict.enabled",
+            "ユーザー辞書",
+            "ユーザー辞書を使う",
+            "登録した単語を変換・予測の候補に使います。オフにしても登録内容は消えません。",
+            SettingKind::Bool,
+        ),
+        def(
+            "snippet.enabled",
+            "ユーザー辞書",
+            "スニペットを使う",
+            "短い読みから定型文を候補に出します。オフにしても登録内容は消えません。",
+            SettingKind::Bool,
+        ),
         update_check,
     ]
 }
@@ -454,6 +485,9 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
             let p = &config.input.punctuation;
             Some(Text(format!("{}{}", p.comma, p.period)))
         }
+        "input.dakuten_cycle" => Some(Text(config.input.dakuten_cycle.as_str().to_string())),
+        "userdict.enabled" => Some(Bool(config.userdict.enabled)),
+        "snippet.enabled" => Some(Bool(config.snippet.enabled)),
         "learning.enabled" => Some(Bool(config.learning.enabled)),
         "learning.max_entries" => Some(n(config.learning.max_entries)),
         "learning.strength" => Some(Float(config.learning.strength)),
@@ -781,6 +815,36 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         assert_eq!(c.learning.strength, 1.5);
         assert_eq!(c.learning.forget_days, 90);
+    }
+
+    #[test]
+    fn userdict_snippet_dakuten_definitions() {
+        let defs = definitions();
+        let get = |k: &str| defs.iter().find(|d| d.key == k).unwrap();
+        for key in ["userdict.enabled", "snippet.enabled"] {
+            assert_eq!(get(key).level, SettingLevel::Detail, "{key}");
+            assert_eq!(get(key).platforms, SettingPlatforms::Both, "{key}");
+        }
+        assert_eq!(get("input.dakuten_cycle").platforms, SettingPlatforms::Ios);
+        let r = apply_changes(
+            None,
+            &[
+                set("userdict.enabled", SettingValue::Bool(false)),
+                set("snippet.enabled", SettingValue::Bool(false)),
+                set(
+                    "input.dakuten_cycle",
+                    SettingValue::Text("dakuten_first".into()),
+                ),
+                set("input.dakuten_cycle", SettingValue::Text("bogus".into())),
+            ],
+        )
+        .unwrap();
+        assert_eq!(r.applied.len(), 3);
+        assert_eq!(r.errors.len(), 1);
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(!c.userdict.enabled && !c.snippet.enabled);
+        assert_eq!(c.input.dakuten_cycle, crate::DakutenCycle::DakutenFirst);
     }
 
     #[test]

@@ -223,3 +223,23 @@ fn align_with_overlay_uses_user_words() {
     // オーバーレイ無しでも未知の連続部分として整列できる（読みの割り当ては同じになるとは限らない）
     assert!(d.align("ふじさわはいく", "藤澤は行く").is_some());
 }
+
+#[test]
+fn overlay_filtered_drops_words_or_snippets_only() {
+    let d = dict();
+    let (user, _) = parse(&format!(
+        "ふじさわ\t藤澤\t人名\nひなた\t拝啓\\n敬具\t{SNIPPET_POS}\n"
+    ));
+    let overlay = d.make_overlay(&user);
+    let no_words = overlay.filtered(false, true);
+    assert_eq!((no_words.word_count(), no_words.snippet_count()), (0, 1));
+    assert_eq!(no_words.max_reading_chars(), 0);
+    let no_snippets = overlay.filtered(true, false);
+    assert_eq!(
+        (no_snippets.word_count(), no_snippets.snippet_count()),
+        (1, 0)
+    );
+    assert_eq!(no_snippets.max_reading_chars(), 4);
+    // 元は変わらない
+    assert_eq!((overlay.word_count(), overlay.snippet_count()), (1, 1));
+}

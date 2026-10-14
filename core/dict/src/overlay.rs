@@ -78,6 +78,19 @@ impl Overlay {
         self.snippets.values().map(Vec::len).sum()
     }
 
+    /// 語・スニペットのうち使わない方を除いた複製（`userdict.enabled` / `snippet.enabled`）
+    pub fn filtered(&self, words: bool, snippets: bool) -> Overlay {
+        let mut o = self.clone();
+        if !words {
+            o.by_reading.clear();
+            o.max_reading_chars = 0;
+        }
+        if !snippets {
+            o.snippets.clear();
+        }
+        o
+    }
+
     /// 空か
     pub fn is_empty(&self) -> bool {
         self.by_reading.is_empty() && self.snippets.is_empty()

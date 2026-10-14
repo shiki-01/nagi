@@ -146,6 +146,32 @@ impl fmt::Display for ShiftLetter {
     }
 }
 
+/// フリック入力の濁点・半濁点・小書きキー（゛゜小）の循環順（タッチ入力のみ）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DakutenCycle {
+    /// 小書きを先にする（既定。つ→っ→づ、う→ぅ→ゔ。iOS 標準と同じ）。
+    SmallFirst,
+    /// 濁点を先にする（つ→づ→っ、う→ゔ→ぅ）。
+    DakutenFirst,
+}
+
+impl DakutenCycle {
+    /// 文字列表現を返す。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DakutenCycle::SmallFirst => "small_first",
+            DakutenCycle::DakutenFirst => "dakuten_first",
+        }
+    }
+}
+
+impl fmt::Display for DakutenCycle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// 句読点の種類。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Punctuation {
@@ -302,6 +328,8 @@ pub struct InputSection {
     /// 句読点の種類。既定: 、。。
     #[serde(with = "punct_serde")]
     pub punctuation: Punctuation,
+    /// 濁点・小書きキーの循環順（タッチ入力のみ）。既定: SmallFirst（従来の動作）。
+    pub dakuten_cycle: DakutenCycle,
 }
 
 impl Default for InputSection {
@@ -309,7 +337,36 @@ impl Default for InputSection {
         InputSection {
             shift_letter: ShiftLetter::LiteralContinue,
             punctuation: Punctuation::default(),
+            dakuten_cycle: DakutenCycle::SmallFirst,
         }
+    }
+}
+
+/// ユーザー辞書セクション。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserdictSection {
+    /// ユーザー辞書の語を使うかどうか（無効でも登録内容は消えない）。既定: true。
+    pub enabled: bool,
+}
+
+impl Default for UserdictSection {
+    fn default() -> Self {
+        UserdictSection { enabled: true }
+    }
+}
+
+/// スニペットセクション。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnippetSection {
+    /// スニペット（短い読みで定型文）を使うかどうか。既定: true。
+    pub enabled: bool,
+}
+
+impl Default for SnippetSection {
+    fn default() -> Self {
+        SnippetSection { enabled: true }
     }
 }
 
@@ -449,6 +506,10 @@ pub struct Config {
     pub learning: LearningSection,
     /// 予測変換セクション。
     pub predict: PredictSection,
+    /// ユーザー辞書セクション。
+    pub userdict: UserdictSection,
+    /// スニペットセクション。
+    pub snippet: SnippetSection,
     /// キーマップセクション。
     pub keymap: KeymapSection,
     /// アップデートセクション。
@@ -646,6 +707,8 @@ const KNOWN_KEYS: &[&str] = &[
     "ranking",
     "learning",
     "predict",
+    "userdict",
+    "snippet",
     "keymap",
     "update",
 ];
@@ -670,7 +733,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "live_conversion_delay_ms",
             "live_conversion_min_key_length",
         ],
-        "input" => &["shift_letter", "punctuation"],
+        "input" => &["shift_letter", "punctuation", "dakuten_cycle"],
         "ranking" => &["source_order"],
         "learning" => &[
             "enabled",
@@ -680,6 +743,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "disabled_apps",
         ],
         "predict" => &["enabled", "min_chars"],
+        "userdict" | "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
         _ => &[],
@@ -1410,6 +1474,19 @@ min_chars = 3
                 .iter()
                 .any(|e| e.contains("predict.min_chars") && e.contains("20"))
         );
+    }
+
+    #[test]
+    fn test_userdict_snippet_dakuten_sections() {
+        let d = Config::default();
+        assert!(d.userdict.enabled && d.snippet.enabled);
+        assert_eq!(d.input.dakuten_cycle, DakutenCycle::SmallFirst);
+        let source = "[userdict]\nenabled = false\n[snippet]\nenabled = false\n[input]\ndakuten_cycle = \"dakuten_first\"\n";
+        let (c, issues) = parse(source).expect("parse");
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(!c.userdict.enabled && !c.snippet.enabled);
+        assert_eq!(c.input.dakuten_cycle, DakutenCycle::DakutenFirst);
+        assert_eq!(format!("{}", DakutenCycle::SmallFirst), "small_first");
     }
 
     #[test]

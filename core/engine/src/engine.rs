@@ -68,6 +68,8 @@ pub struct EngineConfig {
     /// 文全体N-bestの候補数の起点（`conversion.beam_width`。既定値のみ。実行時のプロファイル
     /// 反映は `Effective.beam_width`（`nagi-server`）が別に持つ）
     pub beam_width: usize,
+    /// 濁点・小書きキーの循環順（`input.dakuten_cycle`。タッチ入力のみ）
+    pub dakuten_order: touch::DakutenOrder,
 }
 
 impl Default for EngineConfig {
@@ -83,6 +85,7 @@ impl Default for EngineConfig {
             composing_chunk_len: 30,
             initial_view: InitialView::Sentence,
             beam_width: 3,
+            dakuten_order: touch::DakutenOrder::default(),
         }
     }
 }
@@ -545,7 +548,7 @@ impl Engine {
                         if let Some(next) = sess
                             .composer
                             .char_before_cursor()
-                            .and_then(touch::next_variant)
+                            .and_then(|c| touch::next_variant(c, self.config.dakuten_order))
                         {
                             sess.composer.replace_before_cursor(next);
                             sess.live_conversion = None;

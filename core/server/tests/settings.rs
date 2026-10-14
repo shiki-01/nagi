@@ -90,7 +90,15 @@ fn get_settings_returns_defaults_and_not_explicit() {
         item(&snap, "conversion.n_threads")["requires_restart"],
         true
     );
-    assert!(items.iter().all(|i| i["platforms"] == "both"));
+    // タッチ入力のみの項目（濁点の循環順）以外は両方
+    assert!(items.iter().all(|i| {
+        let expected = if i["key"] == "input.dakuten_cycle" {
+            "ios"
+        } else {
+            "both"
+        };
+        i["platforms"] == expected
+    }));
     assert_eq!(item(&snap, "conversion.model")["value"], Value::Null);
     let mode = item(&snap, "profile.mode");
     assert_eq!(mode["value"], json!({"type":"text","value":"auto"}));

@@ -276,3 +276,53 @@ fn no_composing_candidates_while_romaji_is_pending_or_for_literals() {
     e.process_key("s", &parse_key("1").unwrap());
     assert!(e.composing_candidate_reading("s").is_none());
 }
+
+#[test]
+fn dakuten_order_decides_tsu_and_u_cycles() {
+    use nagi_engine::touch::DakutenOrder;
+    let run = |order, key, gesture, expected: &[&str]| {
+        let mut e = Engine::new(
+            Arc::new(KanaBackend),
+            EngineConfig {
+                dakuten_order: order,
+                ..EngineConfig::default()
+            },
+        );
+        key12(&mut e, key, gesture);
+        for want in expected {
+            e.insert_reading("s", &ReadingInput::Variant);
+            assert_eq!(text(&mut e), *want, "{order:?}");
+        }
+    };
+    // 既定（小書き先）: つ→っ→づ→つ
+    run(
+        DakutenOrder::SmallFirst,
+        KanaKey::Ta,
+        KeyGesture::FlickUp,
+        &["っ", "づ", "つ"],
+    );
+    // 濁点先: つ→づ→っ→つ、う→ゔ→ぅ
+    run(
+        DakutenOrder::DakutenFirst,
+        KanaKey::Ta,
+        KeyGesture::FlickUp,
+        &["づ", "っ", "つ"],
+    );
+    run(
+        DakutenOrder::DakutenFirst,
+        KanaKey::A,
+        KeyGesture::FlickUp,
+        &["ゔ", "ぅ", "う"],
+    );
+    // 小書きのない文字は同じ
+    run(
+        DakutenOrder::DakutenFirst,
+        KanaKey::Ha,
+        KeyGesture::Tap,
+        &["ば", "ぱ", "は"],
+    );
+    assert_eq!(
+        EngineConfig::default().dakuten_order,
+        DakutenOrder::SmallFirst
+    );
+}

@@ -563,3 +563,51 @@ fn broken_user_dictionary_lines_are_reported_but_do_not_break_loading() {
     assert_eq!(status(&mut s)["user_dict_entries"], 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `userdict.enabled` / `snippet.enabled` を設定で切り替える（登録内容は消さない）
+#[test]
+fn userdict_and_snippet_can_be_disabled_by_config() {
+    let dir = temp_dir("userdict-off");
+    let ud = dir.join("user_dict");
+    std::fs::create_dir_all(&ud).unwrap();
+    std::fs::write(
+        ud.join("mine.txt"),
+        "こうえん\t公苑\t名詞\t自宅の最寄り\nひなた\t拝啓\\n敬具\tスニペット\n",
+    )
+    .unwrap();
+    let snippet_shown = |s: &mut Server, session: &str| {
+        type_str(s, session, "hinata");
+        press(s, session, "Space");
+        let r = press(s, session, "Space");
+        let shown = r["candidates"]["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|i| i["surface"] == "拝啓\n敬具"));
+        press(s, session, "Escape");
+        press(s, session, "Escape");
+        shown
+    };
+    let mut s = server_in(&dir);
+    initialize(&mut s);
+    assert_eq!(convert_kouen(&mut s, "a"), "公苑");
+    assert!(snippet_shown(&mut s, "a2"));
+
+    // 語だけ無効: 変換は LLM 結果に戻り、スニペットは残る。登録件数の表示は変わらない
+    std::fs::write(dir.join("config.toml"), "[userdict]\nenabled = false\n").unwrap();
+    let r = send(&mut s, "reload_config", json!({}));
+    assert_eq!(r.response["result"]["ok"], true);
+    assert_eq!(convert_kouen(&mut s, "b"), "公園");
+    assert!(snippet_shown(&mut s, "b2"));
+    assert_eq!(status(&mut s)["user_dict_entries"], 2);
+
+    // スニペットだけ無効
+    std::fs::write(dir.join("config.toml"), "[snippet]\nenabled = false\n").unwrap();
+    send(&mut s, "reload_config", json!({}));
+    assert_eq!(convert_kouen(&mut s, "c"), "公苑");
+    assert!(!snippet_shown(&mut s, "c2"));
+
+    // 設定を消せば元に戻る
+    std::fs::write(dir.join("config.toml"), "").unwrap();
+    send(&mut s, "reload_config", json!({}));
+    assert!(snippet_shown(&mut s, "d"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

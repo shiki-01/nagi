@@ -40,7 +40,7 @@ pub(crate) fn key_chars(key: KanaKey) -> [char; 5] {
 /// 12 キーの文字表と濁点・小書きの循環を返す（`get_key_table`）。`key_chars` / `VARIANT_CYCLES` /
 /// `gesture_index` と同じ表から作るので、`insert_reading` の実際の挙動と食い違わない（単一の情報源）。
 /// トグルの循環は、連続タップで進む順（`key_chars` の先頭から末尾、末尾の次は先頭）
-pub fn key_table() -> KeyTableResult {
+pub fn key_table(order: DakutenOrder) -> KeyTableResult {
     let keys = ALL_KEYS
         .iter()
         .map(|&key| {
@@ -57,8 +57,7 @@ pub fn key_table() -> KeyTableResult {
             }
         })
         .collect();
-    let variants = VARIANT_CYCLES
-        .iter()
+    let variants = cycles(order)
         .map(|cycle| cycle.iter().map(char::to_string).collect())
         .collect();
     KeyTableResult { keys, variants }
@@ -108,9 +107,36 @@ const VARIANT_CYCLES: &[&[char]] = &[
     &['わ', 'ゎ'],
 ];
 
+/// 濁点・小書きキーの循環順（`input.dakuten_cycle`）。小書きと濁点の両方を持つ文字（つ・う）だけが違う
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DakutenOrder {
+    /// 小書きを先にする（つ→っ→づ。`VARIANT_CYCLES` の並び。既定）
+    #[default]
+    SmallFirst,
+    /// 濁点を先にする（つ→づ→っ）
+    DakutenFirst,
+}
+
+/// `DakutenFirst` のときに `VARIANT_CYCLES` の同じ文字の循環と置き換える循環
+const DAKUTEN_FIRST_CYCLES: &[&[char]] = &[&['つ', 'づ', 'っ'], &['う', 'ゔ', 'ぅ']];
+
+/// 順序に応じた循環の一覧（`VARIANT_CYCLES` の該当する循環を置き換えたもの）
+fn cycles(order: DakutenOrder) -> impl Iterator<Item = &'static [char]> {
+    VARIANT_CYCLES.iter().map(move |&cycle| {
+        match order {
+            DakutenOrder::SmallFirst => None,
+            DakutenOrder::DakutenFirst => {
+                DAKUTEN_FIRST_CYCLES.iter().find(|alt| alt[0] == cycle[0])
+            }
+        }
+        .copied()
+        .unwrap_or(cycle)
+    })
+}
+
 /// `c` の次の濁点・半濁点・小書きの形。循環に含まれない文字は `None`
-pub(crate) fn next_variant(c: char) -> Option<char> {
-    VARIANT_CYCLES.iter().find_map(|cycle| {
+pub(crate) fn next_variant(c: char, order: DakutenOrder) -> Option<char> {
+    cycles(order).find_map(|cycle| {
         let i = cycle.iter().position(|&x| x == c)?;
         Some(cycle[(i + 1) % cycle.len()])
     })
@@ -122,18 +148,35 @@ mod tests {
 
     #[test]
     fn variant_cycles_wrap_around() {
-        assert_eq!(next_variant('か'), Some('が'));
-        assert_eq!(next_variant('が'), Some('か'));
-        assert_eq!(next_variant('は'), Some('ば'));
-        assert_eq!(next_variant('ば'), Some('ぱ'));
-        assert_eq!(next_variant('ぱ'), Some('は'));
-        assert_eq!(next_variant('つ'), Some('っ'));
-        assert_eq!(next_variant('っ'), Some('づ'));
-        assert_eq!(next_variant('づ'), Some('つ'));
-        assert_eq!(next_variant('う'), Some('ぅ'));
-        assert_eq!(next_variant('ゔ'), Some('う'));
-        assert_eq!(next_variant('ん'), None);
-        assert_eq!(next_variant('a'), None);
+        assert_eq!(next_variant('か', DakutenOrder::SmallFirst), Some('が'));
+        assert_eq!(next_variant('が', DakutenOrder::SmallFirst), Some('か'));
+        assert_eq!(next_variant('は', DakutenOrder::SmallFirst), Some('ば'));
+        assert_eq!(next_variant('ば', DakutenOrder::SmallFirst), Some('ぱ'));
+        assert_eq!(next_variant('ぱ', DakutenOrder::SmallFirst), Some('は'));
+        assert_eq!(next_variant('つ', DakutenOrder::SmallFirst), Some('っ'));
+        assert_eq!(next_variant('っ', DakutenOrder::SmallFirst), Some('づ'));
+        assert_eq!(next_variant('づ', DakutenOrder::SmallFirst), Some('つ'));
+        assert_eq!(next_variant('う', DakutenOrder::SmallFirst), Some('ぅ'));
+        assert_eq!(next_variant('ゔ', DakutenOrder::SmallFirst), Some('う'));
+        assert_eq!(next_variant('ん', DakutenOrder::SmallFirst), None);
+        assert_eq!(next_variant('a', DakutenOrder::SmallFirst), None);
+    }
+
+    #[test]
+    fn dakuten_first_swaps_only_tsu_and_u() {
+        use DakutenOrder::DakutenFirst as D;
+        assert_eq!(next_variant('つ', D), Some('づ'));
+        assert_eq!(next_variant('づ', D), Some('っ'));
+        assert_eq!(next_variant('っ', D), Some('つ'));
+        assert_eq!(next_variant('う', D), Some('ゔ'));
+        assert_eq!(next_variant('ゔ', D), Some('ぅ'));
+        assert_eq!(next_variant('ぅ', D), Some('う'));
+        // 他の循環は変わらない
+        assert_eq!(next_variant('は', D), Some('ば'));
+        assert_eq!(next_variant('あ', D), Some('ぁ'));
+        let table = key_table(D);
+        assert!(table.variants.iter().any(|c| c == &["つ", "づ", "っ"]));
+        assert_eq!(table.variants.len(), VARIANT_CYCLES.len());
     }
 
     #[test]
@@ -148,7 +191,7 @@ mod tests {
 
     #[test]
     fn key_table_matches_resolution_tables() {
-        let table = key_table();
+        let table = key_table(DakutenOrder::SmallFirst);
         assert_eq!(table.keys.len(), 11);
         let ka = table.keys.iter().find(|e| e.key == KanaKey::Ka).unwrap();
         assert_eq!(
@@ -171,7 +214,12 @@ mod tests {
             for (i, s) in cycle.iter().enumerate() {
                 let next = &cycle[(i + 1) % cycle.len()];
                 let c = s.chars().next().unwrap();
-                assert_eq!(next_variant(c).map(String::from).as_deref(), Some(&**next));
+                assert_eq!(
+                    next_variant(c, DakutenOrder::SmallFirst)
+                        .map(String::from)
+                        .as_deref(),
+                    Some(&**next)
+                );
             }
         }
     }

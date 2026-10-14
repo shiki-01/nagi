@@ -34,7 +34,7 @@
 | `input.mode` | 入力方式 | choice: `flick`（12 キー）/ `qwerty_kana`（ローマ字）/ `qwerty_alpha` | `flick` | S | kbd | 新規(iOS) | 起動時に開く既定レイアウト。実際の割当は `keyboard.layout_*` |
 | `input.toggle_input` | トグル入力（同じキーの連続タップで次の文字） | bool | false | S | kbd+core | 既存(iOS) | 現状 `KeyboardModel` のコンストラクタ引数 `toggleInput`。タップを `toggle` ジェスチャでコアへ送る。false のときタップは先頭の文字 |
 | `input.toggle_timeout_ms` | トグル確定までの時間 | int 200–3000, step 50 | 1000 | D | kbd+core | 新規(core) | 現状コアにタイムアウトの概念があるか要確認。無ければ「他のキーで確定」のみ |
-| `input.dakuten_cycle` | 濁点・小書き循環キーの順序 | choice: `dakuten_first`（清→濁→半濁→小）/ `small_first` | `dakuten_first` | D | core:input.dakuten_cycle | 新規(core) | 現状は固定表（`engine/tests/touch.rs` の variant 循環） |
+| `input.dakuten_cycle` | 濁点・小書き循環キーの順序 | choice: `small_first`（つ→っ→づ）/ `dakuten_first`（つ→づ→っ） | `small_first` | D | core:input.dakuten_cycle | 既存(GUI)（platforms=ios） | 従来の固定表の動作を既定にするため既定値と名前を変更（違いは「つ」「う」のみ）。`get_key_table` の `variants` にも反映 |
 | `input.dakuten_key_enabled` | 濁点キーを出す | bool | true | D | kbd | 新規(iOS) | OFF にすると、濁点はフリック・長押しのみ |
 | `input.shift_letter` | Shift + 英字の動作 | choice: `literal_continue` / `single_upper` | `literal_continue` | D | core:input.shift_letter | 既存(GUI) | QWERTY のみ有効 |
 | `input.punctuation` | 句読点の種類 | choice: `、。` / `，．` / `，。` | `、。` | S | core:input.punctuation | 既存(GUI) | 12 キーの「、。?!」キーの先頭にも反映 |
@@ -109,12 +109,12 @@
 
 | ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `userdict.enabled` | ユーザー辞書を使う | bool | true | D | core:userdict.enabled | 新規(core) | 現状はディレクトリがあれば常に使用。無効化スイッチを追加 |
+| `userdict.enabled` | ユーザー辞書を使う | bool | true | D | core:userdict.enabled | 既存(GUI) | 語を変換・予測に使うかどうか。登録内容と件数表示は保持 |
 | `userdict.entries` | 単語の登録・編集・削除 | 操作（読み・語・品詞・コメント） | - | S | app→core（`user_dict/` のファイル） | 既存(core) | ファイルは Mozc TSV 互換。ホストアプリが App Group の `user_dict/` に書く |
 | `userdict.import` | 取り込み（Mozc TSV） | 操作 | - | D | app | 既存(core) | 形式エラーは行番号つきで表示 |
 | `userdict.export` | 書き出し（Mozc TSV） | 操作 | - | D | app | 既存(core) | |
 | `userdict.register_from_selection` | 選択テキストから登録（共有シート / ショートカット） | 操作 | - | D | app | 新規(iOS) | 共有拡張またはショートカットアプリ連携。段階 3 以降 |
-| `snippet.enabled` | スニペット（短い読みで定型文） | bool | true | D | core:snippet.enabled | 新規(core) | 候補の出所は `user_dict` の一種として扱う |
+| `snippet.enabled` | スニペット（短い読みで定型文） | bool | true | D | core:snippet.enabled | 既存(GUI) | 候補の出所は `user_dict` の一種として扱う |
 | `snippet.entries` | スニペットの登録・編集 | 操作（読み・本文・改行可） | - | D | app→core | 新規(core) | 本文は 256 文字以内（レイアウト仕様の `shortcut` と同じ上限を暫定採用） |
 | `userdict.max_entries` | 登録の上限 | int 100–100000 | 10000 | - | core:userdict.max_entries | 新規(core) | 読み込みメモリの保護 |
 

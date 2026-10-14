@@ -6,11 +6,14 @@
 
 use crate::pipeline::Pipeline;
 use crate::runtime::{Event, Runtime, Tunables};
-use nagi_config::{Config, InitialView as ConfigInitialView, Issue, Severity, ShiftLetter};
+use nagi_config::{
+    Config, DakutenCycle, InitialView as ConfigInitialView, Issue, Severity, ShiftLetter,
+};
 use nagi_dict::{Dictionary, UserDictionary};
 use nagi_engine::EngineConfig;
 use nagi_engine::InitialView;
 use nagi_engine::KeyContext;
+use nagi_engine::touch::DakutenOrder;
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_protocol::methods::NotifyLevel;
@@ -154,6 +157,10 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
                 .conversion
                 .beam_width
                 .unwrap_or(EngineConfig::default().beam_width),
+            dakuten_order: match config.input.dakuten_cycle {
+                DakutenCycle::SmallFirst => DakutenOrder::SmallFirst,
+                DakutenCycle::DakutenFirst => DakutenOrder::DakutenFirst,
+            },
         },
         events,
     )
@@ -609,6 +616,20 @@ pub fn user_dict_events(issues: &[nagi_dict::UserDictIssue]) -> Vec<Event> {
 mod tests {
     use super::*;
     use nagi_engine::{Action, parse_key};
+
+    #[test]
+    fn engine_config_from_maps_dakuten_cycle() {
+        let mut config = Config::default();
+        assert_eq!(
+            engine_config_from(&config).0.dakuten_order,
+            DakutenOrder::SmallFirst
+        );
+        config.input.dakuten_cycle = DakutenCycle::DakutenFirst;
+        assert_eq!(
+            engine_config_from(&config).0.dakuten_order,
+            DakutenOrder::DakutenFirst
+        );
+    }
 
     #[test]
     fn engine_config_from_applies_keymap_overrides_and_reports_warnings() {

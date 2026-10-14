@@ -506,7 +506,10 @@ impl Server {
             }
             method::GET_KEY_TABLE => {
                 self.require_initialized()?;
-                to_value(nagi_engine::touch::key_table())
+                to_value({
+                    let order = self.engine_lock().config().dakuten_order;
+                    nagi_engine::touch::key_table(order)
+                })
             }
             method::UNLOAD_MODEL => {
                 self.require_initialized()?;

@@ -100,6 +100,12 @@ shift_letter = "literal_continue"
 # "，。" = 句点「。」読点「，」
 punctuation = "、。"
 
+# 濁点・半濁点・小書きキー（゛゜小）の循環順（タッチ入力のみ。物理キーボードには影響しない）
+# "small_first": 小書きを先にする（既定）。つ→っ→づ、う→ぅ→ゔ（iOS 標準と同じ）
+# "dakuten_first": 濁点を先にする。つ→づ→っ、う→ゔ→ぅ
+# （か→が、は→ば→ぱ など、小書きのない文字はどちらでも同じ）
+dakuten_cycle = "small_first"
+
 [ranking]
 # 候補の優先順序（候補の出所）
 # 設定された順序で候補を並べ替える
@@ -157,6 +163,18 @@ enabled = true
 # 1-20 の範囲で指定
 # 既定: 1
 min_chars = 1
+
+[userdict]
+# ユーザー辞書の語を変換・予測に使うかどうか
+# false にしても登録内容は消えない（スニペットは [snippet] で別に切り替える）
+# 既定: true
+enabled = true
+
+[snippet]
+# スニペット（短い読みで定型文）を候補に出すかどうか
+# false にしても登録内容は消えない
+# 既定: true
+enabled = true
 
 [keymap]
 # キーマップのプリセット
