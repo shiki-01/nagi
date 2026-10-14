@@ -176,6 +176,7 @@ targets:
       - path: Shared/SharedStore.swift
       - path: Shared/AppGroupResolver.swift
       - path: Shared/DataPaths.swift
+      - path: Shared/ModelRecommendation.swift
       # ProductSession / コアに依存しない純粋な処理（Mozc TSV の解析、nagi://layout の URL）
       - path: Shared/MozcTSV.swift
       - path: Shared/LayoutURL.swift

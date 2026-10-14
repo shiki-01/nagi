@@ -41,7 +41,8 @@ struct NagiDataSnapshot {
             files = found
             used = DataPaths.selectModel(
                 from: found,
-                preferredName: DataPaths.preferredModelName(appGroupId: store.appGroupId)
+                preferredName: DataPaths.preferredModelName(appGroupId: store.appGroupId),
+                budgetMB: DataPaths.selectionBudgetMB(appGroupId: store.appGroupId)
             )
         }
         return NagiDataSnapshot(
@@ -128,6 +129,14 @@ struct NagiDataStatusSections: View {
                             .foregroundColor(.secondary)
                     }
                 }
+                // 拡張のメモリ予算（拡張が一度でも起動していれば記録済みの値、なければ実測に基づく仮定値）で計算する。
+                // ホストアプリ自身の上限（数 GB）ではない。Picker で明示選択した場合は選択が優先される
+                Text(NagiModelRecommendation.summary(
+                    budgetMB: DataPaths.selectionBudgetMB(appGroupId: SharedStore.shared.appGroupId),
+                    available: snapshot.modelFiles
+                ))
+                .font(.caption)
+                .foregroundColor(.secondary)
                 if case .found(let dir, _, let source) = snapshot.modelStatus {
                     statusRow("読み込み元", sourceLabel(source))
                     pathText(dir)

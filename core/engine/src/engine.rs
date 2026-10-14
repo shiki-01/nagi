@@ -74,6 +74,8 @@ pub struct EngineConfig {
     pub beam_width: usize,
     /// 濁点・小書きキーの循環順（`input.dakuten_cycle`。タッチ入力のみ）
     pub dakuten_order: touch::DakutenOrder,
+    /// Backspace で残った未変換のローマ字を保留に戻すか（`input.romaji_carryover`。H-22）
+    pub romaji_carryover: bool,
 }
 
 impl Default for EngineConfig {
@@ -92,6 +94,7 @@ impl Default for EngineConfig {
             initial_view: InitialView::Sentence,
             beam_width: 3,
             dakuten_order: touch::DakutenOrder::default(),
+            romaji_carryover: true,
         }
     }
 }
@@ -331,6 +334,7 @@ impl Engine {
         for sess in self.sessions.values_mut() {
             sess.composer
                 .reconfigure(self.table.clone(), config.shift_letter);
+            sess.composer.set_carryover(config.romaji_carryover);
             sess.sent.candidates.page_size = config.page_size as u32;
         }
         self.keymap = config.keymap.clone();
@@ -358,11 +362,13 @@ impl Engine {
     }
 
     fn new_session(&self) -> Session {
+        let mut composer = Composer::new(self.table.clone(), self.config.shift_letter);
+        composer.set_carryover(self.config.romaji_carryover);
         Session {
             id: String::new(),
             mode: self.config.initial_mode,
             state: State::Direct,
-            composer: Composer::new(self.table.clone(), self.config.shift_letter),
+            composer,
             left_context: String::new(),
             app_id: None,
             secure_input: false,

@@ -349,7 +349,11 @@ struct ContentView: View {
             modelFiles = []
         case .found(let dir, let files, let source):
             let preferred = DataPaths.preferredModelName(appGroupId: store.appGroupId)
-            let used = DataPaths.selectModel(from: files, preferredName: preferred)
+            let used = DataPaths.selectModel(
+                from: files,
+                preferredName: preferred,
+                budgetMB: DataPaths.selectionBudgetMB(appGroupId: store.appGroupId)
+            )
             status += "モデル: あり (\(files.count) 個) [\(source)]\n  \(dir)\n"
             for file in files {
                 status += "  - \(file.name) (\(formatBytes(file.sizeBytes)))\(file.name == used?.name ? " ← llm_load で使用" : "")\n"

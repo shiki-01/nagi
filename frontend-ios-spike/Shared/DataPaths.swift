@@ -174,20 +174,45 @@ struct DataPaths {
         return .noContainer
     }
 
-    /// 使用するモデルの選び方: 設定で選んだファイル名 → （未選択のときだけ）xsmall
-    /// （iOS の既定。decisions.md H-10）→ 既定名 → 最大サイズ。
+    /// 使用するモデルの選び方: 設定で選んだファイル名 → 端末の予算に合う推奨モデル
+    /// （`NagiModelRecommendation`。decisions.md H-22）→ 既定名 → 最大サイズ。
+    /// 予算が分かっていて推奨が無い（どれも載らない）ときは、もっとも小さいモデルにする。
+    /// `budgetMB` が nil（予算を測れない）なら推奨を使わず、既定名（small）→ 最大サイズの順。
     /// ホームの「使用中」表示・Picker と、拡張が実際に読むモデルを一致させるため、全員がこの関数を使う
-    static func selectModel(from files: [ModelFile], preferredName: String?) -> ModelFile? {
+    static func selectModel(from files: [ModelFile], preferredName: String?, budgetMB: UInt64? = nil) -> ModelFile? {
         if let preferredName = preferredName, let hit = files.first(where: { $0.name == preferredName }) {
             return hit
         }
-        if preferredName == nil, let xsmall = files.first(where: { $0.name.contains("xsmall") }) {
-            return xsmall
+        if let budgetMB = budgetMB {
+            if let recommended = NagiModelRecommendation.recommend(budgetMB: budgetMB, available: files) {
+                return recommended
+            }
+            return files.min { $0.sizeBytes < $1.sizeBytes }
         }
         if let hit = files.first(where: { $0.name == defaultModelFileName }) {
             return hit
         }
         return files.max { $0.sizeBytes < $1.sizeBytes }
+    }
+
+    // MARK: - 拡張のメモリ予算（推奨モデルの計算用）
+
+    private static let extensionBudgetKey = "extension_budget_mb"
+
+    /// キーボード拡張が自分の予算（`MemoryProbe.processBudgetMB()`）を記録する。
+    /// ホストアプリは数 GB と報告するため、拡張に載せるモデルの推奨にはこの値を使う。0 は記録しない
+    static func recordExtensionBudgetMB(_ mb: UInt64, appGroupId: String = "group.com.shiki01.nagi") {
+        guard mb > 0 else { return }
+        UserDefaults(suiteName: appGroupId)?.set(Int(clamping: mb), forKey: extensionBudgetKey)
+    }
+
+    /// モデル選択に使う予算（MB）: 拡張が記録した値 → 実測に基づく仮定値（H-6 の約 177MB）。
+    /// ホストアプリ・Probes（ホスト側）はこちらを使う
+    static func selectionBudgetMB(appGroupId: String = "group.com.shiki01.nagi") -> UInt64 {
+        if let stored = UserDefaults(suiteName: appGroupId)?.object(forKey: extensionBudgetKey) as? Int, stored > 0 {
+            return UInt64(stored)
+        }
+        return NagiModelRecommendation.assumedExtensionBudgetMB
     }
 
     private static let modelPreferenceKey = "llm_model_file"

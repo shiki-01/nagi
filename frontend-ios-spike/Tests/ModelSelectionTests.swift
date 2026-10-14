@@ -9,22 +9,33 @@ final class ModelSelectionTests: XCTestCase {
     private let small = "zenz-v3.1-small-Q5_K_M.gguf"
     private let xsmall = "zenz-v3.1-xsmall-Q5_K_M.gguf"
 
-    /// 未選択のときは xsmall を優先する
-    func testUnselectedPrefersXSmall() {
-        let files = [file(small, size: 70), file(xsmall, size: 30)]
-        XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: nil)?.name, xsmall)
+    private let mb: Int64 = 1024 * 1024
+
+    /// 未選択で予算に余裕があれば small（推奨）
+    func testUnselectedUsesRecommendedSmall() {
+        let files = [file(small, size: 70 * mb), file(xsmall, size: 20 * mb)]
+        XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: nil, budgetMB: 177)?.name, small)
     }
 
-    /// ユーザーが small を選んでいれば、xsmall があっても small
-    func testUserSelectionWinsOverXSmall() {
-        let files = [file(small, size: 70), file(xsmall, size: 30)]
-        XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: small)?.name, small)
+    /// 未選択で予算が小さければ xsmall、どれも載らなければもっとも小さいもの
+    func testUnselectedFallsToXSmallOnSmallBudget() {
+        let files = [file(small, size: 70 * mb), file(xsmall, size: 20 * mb)]
+        XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: nil, budgetMB: 110)?.name, xsmall)
+        XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: nil, budgetMB: 50)?.name, xsmall)
     }
 
-    /// 選択したファイルが無くなっていたら（選択が残っているだけ）、既定の選び方に落ちる
+    /// ユーザーが明示選択していれば、推奨に関係なくそれを使う
+    func testUserSelectionWinsOverRecommendation() {
+        let files = [file(small, size: 70 * mb), file(xsmall, size: 20 * mb)]
+        XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: xsmall, budgetMB: 177)?.name, xsmall)
+        XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: small, budgetMB: 110)?.name, small)
+    }
+
+    /// 選択したファイルが無くなっていたら（選択が残っているだけ）、推奨（予算なしなら既定名）に落ちる
     func testMissingSelectionFallsBackToDefault() {
-        let files = [file(small, size: 70), file(xsmall, size: 30)]
+        let files = [file(small, size: 70 * mb), file(xsmall, size: 20 * mb)]
         XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: "gone.gguf")?.name, small)
+        XCTAssertEqual(DataPaths.selectModel(from: files, preferredName: "gone.gguf", budgetMB: 110)?.name, xsmall)
     }
 
     func testDefaultNameThenLargest() {

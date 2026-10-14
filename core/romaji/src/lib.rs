@@ -259,6 +259,17 @@ impl RomajiConverter {
         &self.buffer
     }
 
+    /// 保留を `pending` に置き換える（Backspace で残った未変換の断片を保留に戻す。履歴は破棄）
+    fn restore_pending(&mut self, pending: &str) {
+        self.buffer = pending.to_string();
+        self.last = None;
+    }
+
+    /// `input` が、より長いエントリが存在する有効な接頭辞か（保留として続きを待てるか）
+    fn is_pending_prefix(&self, input: &str) -> bool {
+        !input.is_empty() && self.table.has_longer_prefix(input)
+    }
+
     /// 何かバッファにあるかを確認
     pub fn has_pending(&self) -> bool {
         !self.buffer.is_empty()
@@ -344,9 +355,13 @@ pub struct Piece {
 pub struct Composer {
     converter: RomajiConverter,
     shift_letter: ShiftLetterMode,
-    chars: Vec<(char, PieceKind)>,
+    /// (文字, 種別, ローマ字の取りこぼしか)。3 つ目は、テーブルに当たらず素通しされた ASCII 小文字
+    /// （Shift 入力や数字・literal モードの英字ではない）。Backspace の引き継ぎ（H-22）で使う
+    chars: Vec<(char, PieceKind, bool)>,
     cursor: usize,
     literal_mode: bool, // Shift+英字で開始した literal モード
+    /// Backspace 後に残った未変換のローマ字を保留に戻すか（`input.romaji_carryover`）
+    carryover: bool,
 }
 
 impl Composer {
@@ -358,7 +373,13 @@ impl Composer {
             chars: Vec::new(),
             cursor: 0,
             literal_mode: false,
+            carryover: true,
         }
+    }
+
+    /// Backspace で残った未変換のローマ字を保留に戻すか（既定 true。H-22）
+    pub fn set_carryover(&mut self, enabled: bool) {
+        self.carryover = enabled;
     }
 
     /// 設定の再読み込み用: Shift+英字の扱いと、ローマ字テーブルを差し替える。
@@ -410,7 +431,7 @@ impl Composer {
         self.cursor
             .checked_sub(1)
             .and_then(|i| self.chars.get(i))
-            .map(|&(c, _)| c)
+            .map(|&(c, _, _)| c)
     }
 
     /// カーソル直前の 1 文字を、日本語の文字 `ch` に置き換える（タッチ入力のトグル・濁点循環用）。
@@ -423,7 +444,7 @@ impl Composer {
         let Some(slot) = self.chars.get_mut(i) else {
             return false;
         };
-        *slot = (ch, PieceKind::Japanese);
+        *slot = (ch, PieceKind::Japanese, false);
         true
     }
 
@@ -458,8 +479,39 @@ impl Composer {
                     return false;
                 }
                 self.cursor -= 1;
-                self.chars.remove(self.cursor);
+                let (_, kind, _) = self.chars.remove(self.cursor);
+                if self.carryover && kind == PieceKind::Japanese {
+                    self.carry_over_fragment();
+                }
                 true
+            }
+        }
+    }
+
+    /// カーソル直前に残った未変換のローマ字（取りこぼしの ASCII 小文字）のうち、
+    /// 有効な接頭辞になる最長の末尾を保留に戻す（`kypu`→BS で `ky` が保留に戻り、`ou` で「きょう」。H-22）。
+    /// 無効な断片（続きのエントリが無い）は何もしない
+    fn carry_over_fragment(&mut self) {
+        let run = self.chars[..self.cursor]
+            .iter()
+            .rev()
+            .take_while(|&&(_, _, raw)| raw)
+            .count();
+        if run == 0 {
+            return;
+        }
+        let fragment: Vec<char> = self.chars[self.cursor - run..self.cursor]
+            .iter()
+            .map(|&(c, _, _)| c)
+            .collect();
+        for start in 0..fragment.len() {
+            let candidate: String = fragment[start..].iter().collect();
+            if self.converter.is_pending_prefix(&candidate) {
+                let n = fragment.len() - start;
+                self.cursor -= n;
+                self.chars.drain(self.cursor..self.cursor + n);
+                self.converter.restore_pending(&candidate);
+                return;
             }
         }
     }
@@ -509,7 +561,7 @@ impl Composer {
     /// 保留を除いたバッファを、同種の連続ごとにまとめた Piece 列で返す
     pub fn pieces(&self) -> Vec<Piece> {
         let mut pieces: Vec<Piece> = Vec::new();
-        for &(ch, kind) in &self.chars {
+        for &(ch, kind, _) in &self.chars {
             match pieces.last_mut() {
                 Some(last) if last.kind == kind => last.text.push(ch),
                 _ => pieces.push(Piece {
@@ -529,7 +581,7 @@ impl Composer {
         self.literal_mode = false;
         self.chars = pieces
             .iter()
-            .flat_map(|p| p.text.chars().map(move |c| (c, p.kind)))
+            .flat_map(|p| p.text.chars().map(move |c| (c, p.kind, false)))
             .collect();
         self.cursor = cursor.min(self.chars.len());
     }
@@ -546,7 +598,7 @@ impl Composer {
 
     /// バッファのテキスト（保留を除く）
     pub fn text(&self) -> String {
-        self.chars.iter().map(|&(c, _)| c).collect()
+        self.chars.iter().map(|&(c, _, _)| c).collect()
     }
 
     /// バッファの文字数（保留を除く）
@@ -578,7 +630,11 @@ impl Composer {
     }
 
     fn insert_at_cursor(&mut self, ch: char, kind: PieceKind) {
-        self.chars.insert(self.cursor, (ch, kind));
+        self.insert_marked(ch, kind, false);
+    }
+
+    fn insert_marked(&mut self, ch: char, kind: PieceKind, raw: bool) {
+        self.chars.insert(self.cursor, (ch, kind, raw));
         self.cursor += 1;
     }
 
@@ -596,7 +652,7 @@ impl Composer {
                     } else {
                         PieceKind::Japanese
                     };
-                    self.insert_at_cursor(c, kind);
+                    self.insert_marked(c, kind, c.is_ascii_lowercase());
                 }
             }
         }
@@ -1823,6 +1879,80 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- ローマ字の引き継ぎ（H-22） ---
+
+    #[test]
+    fn test_carryover_restores_prefix_after_deleting_kana() {
+        // kypu: ky は不一致で素通しされ、pu が「ぷ」。BS で「ぷ」を消すと ky が保留に戻る
+        assert_eq!(
+            after_backspaces("kypu", 0),
+            ("kyぷ".to_string(), "".to_string())
+        );
+        assert_eq!(
+            after_backspaces("kypu", 1),
+            ("".to_string(), "ky".to_string())
+        );
+        // 続けて ou で「きょう」
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "kypu");
+        composer.backspace();
+        insert_string(&mut composer, "ou");
+        assert_eq!(text_after_flush(&mut composer), "きょう");
+        // さらに BS は保留を 1 文字ずつ消す（G-49 と整合）
+        assert_eq!(
+            after_backspaces("kypu", 2),
+            ("".to_string(), "k".to_string())
+        );
+        assert_eq!(
+            after_backspaces("kypu", 3),
+            ("".to_string(), "".to_string())
+        );
+        // 前に文字があっても、直前の断片だけを戻す
+        assert_eq!(
+            after_backspaces("aikypu", 1),
+            ("あい".to_string(), "ky".to_string())
+        );
+    }
+
+    #[test]
+    fn test_carryover_keeps_invalid_fragment_and_other_inputs() {
+        // 無効な接頭辞（続きのエントリが無い）は従来どおり固定のまま
+        let table = Arc::new(RomajiTable::from_tsv("ka\tか\n").unwrap());
+        let mut composer = Composer::new(table, ShiftLetterMode::LiteralContinue);
+        insert_string(&mut composer, "zka");
+        composer.backspace();
+        assert_eq!((composer.text().as_str(), composer.pending()), ("z", ""));
+        // Shift 入力（Literal）は戻さない
+        assert_eq!(after_backspaces("Kyあ", 1).1, "");
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "Kyka");
+        composer.backspace();
+        assert_eq!((composer.text().as_str(), composer.pending()), ("Kyk", ""));
+        // 数字も戻さない
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "1ka");
+        composer.backspace();
+        assert_eq!((composer.text().as_str(), composer.pending()), ("1", ""));
+    }
+
+    #[test]
+    fn test_carryover_mid_cursor_and_disabled() {
+        // 文中: かなの途中でも、直前が未変換の断片なら保留に戻す
+        let (mut composer, _) = setup_composer();
+        insert_string(&mut composer, "kypuあ");
+        composer.move_left();
+        composer.backspace();
+        assert_eq!(composer.text(), "あ");
+        assert_eq!(composer.pending(), "ky");
+        assert_eq!(composer.cursor(), 0);
+        // 設定オフは従来どおり
+        let (mut composer, _) = setup_composer();
+        composer.set_carryover(false);
+        insert_string(&mut composer, "kypu");
+        composer.backspace();
+        assert_eq!((composer.text().as_str(), composer.pending()), ("ky", ""));
     }
 
     #[test]

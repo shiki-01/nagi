@@ -330,6 +330,8 @@ pub struct InputSection {
     pub punctuation: Punctuation,
     /// 濁点・小書きキーの循環順（タッチ入力のみ）。既定: SmallFirst（従来の動作）。
     pub dakuten_cycle: DakutenCycle,
+    /// Backspace で文字を消したとき、残った未変換のローマ字を保留に戻して続けて入力できるようにする（H-22）。既定: true。
+    pub romaji_carryover: bool,
 }
 
 impl Default for InputSection {
@@ -338,6 +340,7 @@ impl Default for InputSection {
             shift_letter: ShiftLetter::LiteralContinue,
             punctuation: Punctuation::default(),
             dakuten_cycle: DakutenCycle::SmallFirst,
+            romaji_carryover: true,
         }
     }
 }
@@ -769,7 +772,12 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "live_conversion_delay_ms",
             "live_conversion_min_key_length",
         ],
-        "input" => &["shift_letter", "punctuation", "dakuten_cycle"],
+        "input" => &[
+            "shift_letter",
+            "punctuation",
+            "dakuten_cycle",
+            "romaji_carryover",
+        ],
         "ranking" => &["source_order"],
         "learning" => &[
             "enabled",
@@ -1518,6 +1526,7 @@ min_chars = 3
         let d = Config::default();
         assert!(d.userdict.enabled && d.snippet.enabled);
         assert_eq!(d.input.dakuten_cycle, DakutenCycle::SmallFirst);
+        assert!(d.input.romaji_carryover);
         let source = "[userdict]\nenabled = false\n[snippet]\nenabled = false\n[input]\ndakuten_cycle = \"dakuten_first\"\n";
         let (c, issues) = parse(source).expect("parse");
         assert!(issues.is_empty(), "{issues:?}");

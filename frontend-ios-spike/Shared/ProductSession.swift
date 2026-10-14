@@ -23,13 +23,16 @@ enum ProductSession {
             return Outcome(session: nil, message: "辞書が見つかりません。Nagi アプリを開いて辞書をコピーしてください")
         }
         // 設定の保存先が作れなくても、変換は使える（設定と学習は既定値・保存なし）。理由は画面に出す
-        let prepared = prepareUserDir(store: store, modelPath: preferredModelPath(store: store))
+        // この拡張のメモリ予算（footprint + 残り）。モデルの推奨に使い、ホストアプリの表示用にも記録する（H-22）
+        let budgetMB = MemoryProbe.processBudgetMB()
+        DataPaths.recordExtensionBudgetMB(budgetMB, appGroupId: store.appGroupId)
+        let prepared = prepareUserDir(store: store, modelPath: preferredModelPath(store: store, budgetMB: budgetMB))
         // 上限が小さい端末では、コアが LLM を読み込まず辞書のみで動く（decisions.md H-8）
         guard let engine = NagiEngine(
             dataDir: dataDir,
             userDir: prepared.path,
             noLLM: noLLM,
-            memoryBudgetMB: MemoryProbe.processBudgetMB()
+            memoryBudgetMB: budgetMB
         ), let session = NagiSession(engine: engine) else {
             return Outcome(session: nil, message: "変換エンジンを起動できませんでした（保存先: \(prepared.path ?? "なし")）")
         }
@@ -40,16 +43,20 @@ enum ProductSession {
         return Outcome(session: session, message: nil, warning: warning, configURL: configURL)
     }
 
-    /// 使うモデルのパス。ユーザーの選択（`preferredModelName`）を優先し、未選択なら xsmall
-    /// （待ち時間内に結果が返り、差し替えのちらつきが無い。H-10）、無ければ既定の選び方で選ぶ
-    static func preferredModelPath(store: SharedStore) -> String? {
+    /// 使うモデルのパス。ユーザーの選択（`preferredModelName`）を優先し、未選択なら端末の予算に合う
+    /// 推奨モデル（`NagiModelRecommendation`。精度優先で、余裕があれば small。H-22）。
+    /// `budgetMB` は拡張のメモリ予算。省略（ホストアプリ・設定画面など）なら拡張が記録した値、無ければ仮定値
+    /// （`DataPaths.selectionBudgetMB`）。0（測れなかった）のときは推奨を使わず既定の選び方（small）になる
+    static func preferredModelPath(store: SharedStore, budgetMB: UInt64? = nil) -> String? {
         guard case .found(_, let files, _) = DataPaths.modelStatus(appGroupId: store.appGroupId) else {
             return nil
         }
-        // 未選択のときだけ xsmall が優先される（`DataPaths.selectModel`。ホームの表示と同じ決め方）
+        let budgetMB = budgetMB ?? DataPaths.selectionBudgetMB(appGroupId: store.appGroupId)
+        // `DataPaths.selectModel` はホームの表示と同じ決め方（ホストは記録済みの拡張の予算で同じ計算をする）
         return DataPaths.selectModel(
             from: files,
-            preferredName: DataPaths.preferredModelName(appGroupId: store.appGroupId)
+            preferredName: DataPaths.preferredModelName(appGroupId: store.appGroupId),
+            budgetMB: budgetMB > 0 ? budgetMB : nil
         )?.path
     }
 

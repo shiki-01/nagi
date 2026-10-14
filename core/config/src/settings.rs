@@ -382,6 +382,13 @@ pub fn definitions() -> Vec<SettingDef> {
         )
         .platforms(SettingPlatforms::Ios),
         def(
+            "input.romaji_carryover",
+            "入力",
+            "消したローマ字を引き継ぐ",
+            "文字を消したあとに残った未変換のローマ字（例: kypu の pu を消したときの ky）を入力中の状態に戻し、続けて入力できるようにします（例: ou で「きょう」）。",
+            SettingKind::Bool,
+        ),
+        def(
             "learning.enabled",
             "学習",
             "学習する",
@@ -514,6 +521,7 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
             Some(Text(format!("{}{}", p.comma, p.period)))
         }
         "input.dakuten_cycle" => Some(Text(config.input.dakuten_cycle.as_str().to_string())),
+        "input.romaji_carryover" => Some(Bool(config.input.romaji_carryover)),
         "rewriter.emoji" => Some(Bool(config.rewriter.emoji)),
         "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
         "userdict.enabled" => Some(Bool(config.userdict.enabled)),

@@ -327,3 +327,64 @@
     - {key: "Right"}
     - key: "BackSpace"
       expect: {preedit: "へんk", pending: ""}
+
+# ローマ字の引き継ぎ（H-22）: 不一致で素通しされた ky が、直後のかなを消すと保留に戻る
+- name: composing-carryover-kypu-backspace-ou
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "p"}
+    - key: "u"
+      expect: {preedit: "kyぷ", pending: ""}
+    - key: "BackSpace"
+      expect: {preedit: "ky", pending: "ky", state: composing}
+    - {key: "o"}
+    - key: "u"
+      expect: {preedit: "きょう", pending: "", segments: ["きょう"]}
+
+- name: composing-carryover-pending-deleted-one_by_one
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "p"}
+    - {key: "u"}
+    - {key: "BackSpace"}
+    - key: "BackSpace"
+      expect: {preedit: "k", pending: "k"}
+    - key: "BackSpace"
+      expect: {preedit: "", pending: "", state: direct}
+
+# 大文字（Shift 入力の Literal）は戻さない
+- name: composing-carryover-skips-shift-literal
+  steps:
+    - {key: "Shift+k"}
+    - {key: "y"}
+    - {key: "k"}
+    - {key: "a"}
+    - key: "BackSpace"
+      expect: {preedit: "Kyk", pending: ""}
+
+# 戻した後に続きが無効なら従来どおり確定される
+- name: composing-carryover-then-invalid-key
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "p"}
+    - {key: "u"}
+    - {key: "BackSpace"}
+    - key: "p"
+      expect: {preedit: "kyp", pending: "p"}
+
+# 設定オフでは従来どおり固定のまま
+- name: composing-carryover-disabled
+  config: {romaji_carryover: false}
+  steps:
+    - {key: "k"}
+    - {key: "y"}
+    - {key: "p"}
+    - {key: "u"}
+    - key: "BackSpace"
+      expect: {preedit: "ky", pending: ""}
+    - {key: "o"}
+    - key: "u"
+      expect: {preedit: "kyおう", pending: ""}

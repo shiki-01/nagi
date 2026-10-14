@@ -60,6 +60,7 @@ struct ConfigSpec {
     punctuation: Option<String>,
     page_size: Option<usize>,
     mode: Option<String>,
+    romaji_carryover: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,6 +206,9 @@ fn build_engine(case: &Case) -> Engine {
         }
         if let Some(m) = &c.mode {
             config.initial_mode = parse_mode(m);
+        }
+        if let Some(b) = c.romaji_carryover {
+            config.romaji_carryover = b;
         }
     }
     let backend: Arc<dyn nagi_engine::ConversionBackend> = match case.backend.as_deref() {

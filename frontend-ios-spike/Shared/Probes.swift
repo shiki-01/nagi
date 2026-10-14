@@ -564,7 +564,8 @@ struct LLMLoadProbe: ProbeRunner {
 
         guard let model = DataPaths.selectModel(
             from: found.files,
-            preferredName: DataPaths.preferredModelName(appGroupId: appGroupId)
+            preferredName: DataPaths.preferredModelName(appGroupId: appGroupId),
+            budgetMB: DataPaths.selectionBudgetMB(appGroupId: appGroupId)
         ) else {
             note = "(c) .gguf を選べませんでした"
             return makeResult(id: id, name: name, ok: false, metrics: metrics, note: note, process: context.processType)

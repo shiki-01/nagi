@@ -17,6 +17,7 @@
     punctuation: "、。"              # | "，．" | "，。"
     page_size: 9
     mode: hiragana                   # | alphanumeric（初期モード）
+    romaji_carryover: true           # | false（Backspace でのローマ字の引き継ぎ。H-22）
   session: s1              # 任意
   steps:
     - key: "k"             # `Ctrl+Shift+Right` 形式。または {text: "😀"}

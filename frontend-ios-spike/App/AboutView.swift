@@ -81,9 +81,12 @@ struct NagiAboutView<Developer: View>: View {
                         .foregroundColor(.secondary)
                 }
 
-                Section("開発者向け") {
-                    NavigationLink("端末情報・App Group・Probes・結果") {
-                        developer
+                // 検証用の画面（Probes・結果）は TestFlight・開発用ビルドだけ（App Store 版では隠す。H-22）
+                if DiagLog.isTestBuild {
+                    Section("開発者向け") {
+                        NavigationLink("端末情報・App Group・Probes・結果") {
+                            developer
+                        }
                     }
                 }
             }

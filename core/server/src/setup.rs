@@ -163,6 +163,7 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
                 DakutenCycle::SmallFirst => DakutenOrder::SmallFirst,
                 DakutenCycle::DakutenFirst => DakutenOrder::DakutenFirst,
             },
+            romaji_carryover: config.input.romaji_carryover,
         },
         events,
     )
