@@ -52,6 +52,13 @@ enum KanaKeyTable {
         fetched = table
     }
 
+    /// 取得済みの表と取得済みフラグを初期状態（フォールバックのみ）に戻す。テストが `install` で入れた表を
+    /// 後始末するためのもの（製品のコードからは呼ばない）
+    static func resetForTesting() {
+        fetched = nil
+        fetchAttempted = false
+    }
+
     /// コアの `KanaKey` から項目を返す（コアが使えないときに、押されたキーの文字を直接入れるため）
     static func entry(for key: KanaKey) -> Entry? {
         fetched?[key] ?? fallback[key]

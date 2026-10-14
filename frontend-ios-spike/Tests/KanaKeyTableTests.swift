@@ -1,9 +1,19 @@
 import XCTest
 
-/// KanaKeyTable のフォールバック表（コアの `get_key_table` が取れないときの複製）。
-/// `install` はグローバル状態を変えるので、このファイルでは「フォールバックと同じ内容」の表しか入れない
+/// KanaKeyTable のフォールバック表（コアの `get_key_table` が取れないときの複製）と `install`。
+/// `install` はグローバル状態を変えるので、各テストの前後で `resetForTesting` によりフォールバックへ戻す
 /// （他のテストの結果が実行順で変わらないように）
 final class KanaKeyTableTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        KanaKeyTable.resetForTesting()
+    }
+
+    override func tearDown() {
+        KanaKeyTable.resetForTesting()
+        super.tearDown()
+    }
+
     private let expected: [(KanaKey, String, [String])] = [
         (.a, "あ", ["あ", "い", "う", "え", "お"]),
         (.ka, "か", ["か", "き", "く", "け", "こ"]),
@@ -75,16 +85,33 @@ final class KanaKeyTableTests: XCTestCase {
         XCTAssertEqual(KanaKeyTable.entry(for: .a)?.chars, ["あ", "い", "う", "え", "お"])
     }
 
-    /// コアの表は 中央・左・上・右・下 の順で `chars` に入る。内容はフォールバックと同じにしておく
+    /// コアの表は 中央・左・上・右・下 の順で `chars` に入る。フォールバックと区別できるよう、別の文字を入れる
     func testInstallMapsFieldsInOrder() {
-        let keys = expected.map { key, _, chars in
-            KeyTableEntry(key: key, center: chars[0], left: chars[1], up: chars[2], right: chars[3], down: chars[4], toggle: chars)
-        }
+        let installed = ["A", "L", "U", "R", "D"]
+        let keys = [KeyTableEntry(
+            key: .a, center: installed[0], left: installed[1], up: installed[2],
+            right: installed[3], down: installed[4], toggle: installed)]
         KanaKeyTable.install(KeyTableResult(keys: keys, variants: [["は", "ば", "ぱ"]]))
         XCTAssertTrue(KanaKeyTable.fetchAttempted)
-        for (key, _, chars) in expected {
-            XCTAssertEqual(KanaKeyTable.entry(for: key)?.chars, chars, "\(key)")
-        }
+        XCTAssertEqual(KanaKeyTable.entry(for: .a)?.chars, installed)
+        XCTAssertEqual(KanaKeyTable.char(for: .a, gesture: .tap), "A")
+        XCTAssertEqual(KanaKeyTable.char(for: .a, gesture: .flickLeft), "L")
+        XCTAssertEqual(KanaKeyTable.char(for: .a, gesture: .flickUp), "U")
+        XCTAssertEqual(KanaKeyTable.char(for: .a, gesture: .flickRight), "R")
+        XCTAssertEqual(KanaKeyTable.char(for: .a, gesture: .flickDown), "D")
+        XCTAssertEqual(KanaKeyTable.entry(forName: "あ")?.chars, installed)
+        // 表に無いキーはフォールバックのまま
+        XCTAssertEqual(KanaKeyTable.entry(for: .ka)?.chars, ["か", "き", "く", "け", "こ"])
+    }
+
+    func testResetRestoresFallback() {
+        let keys = [KeyTableEntry(
+            key: .a, center: "A", left: "L", up: "U", right: "R", down: "D", toggle: ["A"])]
+        KanaKeyTable.install(KeyTableResult(keys: keys, variants: []))
+        XCTAssertEqual(KanaKeyTable.char(for: .a, gesture: .tap), "A")
+        KanaKeyTable.resetForTesting()
+        XCTAssertFalse(KanaKeyTable.fetchAttempted)
+        XCTAssertEqual(KanaKeyTable.entry(for: .a)?.chars, ["あ", "い", "う", "え", "お"])
     }
 
     // 注意: 濁点循環（゛゜小）の表は `KeyTableResult.variants` としてコアが持ち、KanaKeyTable はそれを保持しない
