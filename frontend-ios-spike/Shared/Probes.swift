@@ -659,6 +659,48 @@ struct LLMLoadProbe: ProbeRunner {
         metrics["first_space_ms"] = Date().timeIntervalSince(spaceStart) * 1000.0
         let surface = spaceResponse.compactMap { extractFirstCandidateSurface(from: $0) }.first ?? "(候補なし)"
 
+        // 連続変換（実使用に近い負荷）。推論中のメモリ増加と Space 応答時間を見る。
+        // 途中で強制終了された場合は、拡張の診断ログ（前回 llm_load の実行中に終了）で分かる
+        func keyRequest(id: Int, session: String, keysym: Int, keycode: Int, text: String) -> String {
+            "{\"jsonrpc\":\"2.0\",\"id\":\(id),\"method\":\"process_key\",\"params\":{\"session_id\":\"\(session)\",\"keysym\":\(keysym),\"keycode\":\(keycode),\"text\":\"\(text)\",\"modifiers\":{\"shift\":false,\"ctrl\":false,\"alt\":false,\"meta\":false},\"kind\":\"down\"}}"
+        }
+        let loopSentences = [
+            "kyouhaiitenkidesune",
+            "watashihagakkoudeheikouwosuru",
+            "konnitiwasekai",
+            "asitanoyoteiwonaosu",
+            "nihongonohenkanwotesutosimasu"
+        ]
+        let loopRounds = 20
+        var loopSpaceTimes: [Double] = []
+        var peakFootprint = afterStats.physFootprintMB
+        var minAvailable = afterStats.availableMemoryMB
+        for round in 0..<loopRounds {
+            let session = "llm_loop_\(round)"
+            for ch in loopSentences[round % loopSentences.count] {
+                let code = ch.asciiValue.map { Int($0) } ?? 0
+                nextId += 1
+                _ = engine.send(line: keyRequest(id: nextId, session: session, keysym: code, keycode: 0, text: String(ch)))
+            }
+            nextId += 1
+            let start = Date()
+            _ = engine.send(line: keyRequest(id: nextId, session: session, keysym: 32, keycode: 49, text: " "))
+            loopSpaceTimes.append(Date().timeIntervalSince(start) * 1000.0)
+            nextId += 1
+            _ = engine.send(line: keyRequest(id: nextId, session: session, keysym: 65293, keycode: 36, text: ""))
+
+            let stats = MemoryProbe.getStats()
+            peakFootprint = max(peakFootprint, stats.physFootprintMB)
+            minAvailable = min(minAvailable, stats.availableMemoryMB)
+        }
+        loopSpaceTimes.sort()
+        metrics["loop_rounds"] = Double(loopRounds)
+        metrics["loop_space_p50_ms"] = loopSpaceTimes[loopSpaceTimes.count / 2]
+        metrics["loop_space_p95_ms"] = loopSpaceTimes[min(loopSpaceTimes.count - 1, Int(Double(loopSpaceTimes.count) * 0.95))]
+        metrics["loop_space_max_ms"] = loopSpaceTimes.last ?? 0
+        metrics["loop_footprint_peak_mb"] = peakFootprint
+        metrics["loop_available_min_mb"] = minAvailable
+
         ok = true
         note = "LLM ロード成功 実行元: \(runner) モデル: \(modelDesc) | 変換結果: kyouhaiitenkidesune → \(surface)"
         #else
