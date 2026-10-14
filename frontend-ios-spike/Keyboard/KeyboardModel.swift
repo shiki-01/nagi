@@ -9,6 +9,8 @@ protocol KeyboardHost: AnyObject {
     /// 変換中の表示を消す（確定した文字列は別に `hostInsertText` で入れる）
     func hostClearMarkedText()
     func hostReplaceMarkedAndCommit(_ text: String)
+    /// 変換中の範囲を確定扱いにする（文字は消さない）
+    func hostUnmarkText()
     /// 変換中でないときのカーソル移動（文字数単位）
     func hostAdjustCursor(by offset: Int)
     func hostAdvanceToNextInputMode()
@@ -375,6 +377,15 @@ final class KeyboardModel: ObservableObject {
             // 変換中の表示（下線）を消してから、確定した文字列を通常のテキストとして入れる
             if shownMarked.isEmpty {
                 hostInsert(commit)
+            } else if let rest = result.preedit?.text, !rest.isEmpty {
+                // 部分確定（確定と残りの入力中が同時に来る）。ホスト側の変換中の範囲の追跡に頼ると
+                // 実機で範囲がずれて二重になるため、本文を確定的に直す:
+                // 範囲を確定扱いにして、表示中の文字数だけ戻して消し、確定文字列を入れる
+                // （残りは直後の showPreedit が新しい変換中として入れる）
+                DiagLog.log("host partialCommit \(logText(commit)) delete=\(shownMarked.count) shownMarked=\(logText(shownMarked))")
+                host?.hostUnmarkText()
+                for _ in 0..<shownMarked.count { host?.hostDeleteBackward() }
+                host?.hostInsertText(commit)
             } else {
                 // 変換中の範囲を確定文字列で置き換えて確定する（残りの入力中の文字列が
                 // 平文として残らないよう、挿入ではなく置換で扱う）
