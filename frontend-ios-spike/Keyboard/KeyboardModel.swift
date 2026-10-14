@@ -47,6 +47,8 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var preedit = ""
     /// 候補
     @Published private(set) var candidates: [CandidateItem] = []
+    /// 候補が確定直後の次語予測か（候補バーで薄く区別し、展開パネルは開かない）
+    @Published private(set) var isNextWordCandidates = false
     /// 候補の一覧を広げているか（候補が無くなれば自動で閉じる）
     @Published var isExpanded = false
     /// 選択中の候補（なければ -1）
@@ -277,6 +279,7 @@ final class KeyboardModel: ObservableObject {
         preedit = ""
         isConverting = false
         candidates = []
+        isNextWordCandidates = false
         selectedCandidate = -1
         isExpanded = false
     }
@@ -696,6 +699,7 @@ final class KeyboardModel: ObservableObject {
         preedit = ""
         isConverting = false
         candidates = []
+        isNextWordCandidates = false
         selectedCandidate = -1
         isExpanded = false
         lastSentContext = nil
@@ -844,11 +848,19 @@ final class KeyboardModel: ObservableObject {
     }
 
     private func showCandidates(_ view: CandidatesView) {
-        candidates = view.items.enumerated().map { index, item in
-            CandidateItem(id: index, surface: item.surface, covers: item.covers.map { Int($0) })
+        let kind = classifyCandidates(view, hasPreedit: hasPreedit)
+        if kind == .hidden {
+            // visible = false（次語候補が入力の開始などで消える）も、候補なしと同じに片付ける
+            candidates = []
+        } else {
+            candidates = view.items.enumerated().map { index, item in
+                CandidateItem(id: index, surface: item.surface, covers: item.covers.map { Int($0) })
+            }
         }
+        isNextWordCandidates = (kind == .nextWord)
         selectedCandidate = candidates.isEmpty ? -1 : Int(view.selected)
-        if candidates.isEmpty { isExpanded = false }
+        // 次語候補は選ぶまで確定しない候補ではないので、展開パネルは開かない
+        if candidates.isEmpty || isNextWordCandidates { isExpanded = false }
     }
 
     // MARK: - ホストへの操作（ログ付き）

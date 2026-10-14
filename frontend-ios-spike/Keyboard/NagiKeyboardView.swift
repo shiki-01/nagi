@@ -767,13 +767,16 @@ private struct CandidateBar: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(model.candidates) { item in
-                            CandidateButton(item: item, selected: item.id == model.selectedCandidate) {
+                            CandidateButton(item: item,
+                                            selected: item.id == model.selectedCandidate && !model.isNextWordCandidates,
+                                            nextWord: model.isNextWordCandidates) {
                                 model.selectCandidate(item.id)
                             }
                         }
                     }
                 }
-                if !model.candidates.isEmpty {
+                // 次語予測は展開パネルを使わない（候補数が少なく、選ぶとそのまま挿入される）
+                if !model.candidates.isEmpty && !model.isNextWordCandidates {
                     Button(action: { model.isExpanded.toggle() }) {
                         Text(model.isExpanded ? "︿" : "﹀")
                             .font(.system(size: 16))
@@ -796,6 +799,8 @@ private struct CandidateBar: View {
 private struct CandidateButton: View {
     let item: CandidateItem
     let selected: Bool
+    /// 確定直後の次語予測（背景を薄くして、入力中の候補と区別する）
+    var nextWord = false
     let action: () -> Void
 
     var body: some View {
@@ -807,7 +812,8 @@ private struct CandidateButton: View {
                 .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(selected ? Color.accentColor.opacity(0.25) : Color(UIColor.systemBackground))
+                        .fill(selected ? Color.accentColor.opacity(0.25)
+                              : Color(UIColor.systemBackground).opacity(nextWord ? 0.55 : 1))
                 )
         }
         .buttonStyle(.plain)

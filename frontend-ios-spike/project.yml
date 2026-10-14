@@ -177,6 +177,7 @@ targets:
       - path: Shared/AppGroupResolver.swift
       - path: Shared/DataPaths.swift
       - path: Keyboard/KanaKeyTable.swift
+      - path: Keyboard/CandidateKind.swift
       # コアのプロトコルの型（typeshare で生成）
       - path: ../frontend-macos/Sources/Generated
       # 同梱レイアウト（JSON）の検証用。バンドル内の presets/ フォルダとして入る
