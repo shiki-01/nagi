@@ -62,3 +62,40 @@ fn handle_with_memory_budget_roundtrip() {
         }
     }
 }
+
+#[test]
+fn waker_and_poll_roundtrip() {
+    use std::os::raw::c_void;
+    unsafe extern "C" fn noop(_user_data: *mut c_void) {}
+
+    let dir = std::env::temp_dir().join("nagi-ffi-smoke-waker");
+    let dir_c = CString::new(dir.to_str().unwrap()).unwrap();
+    unsafe {
+        let handle = nagi_server_new(dir_c.as_ptr(), dir_c.as_ptr(), 1);
+        assert!(!handle.is_null());
+
+        // initialize の前は通知を取り出さず、空文字列
+        let p = nagi_poll_notifications(handle);
+        assert!(CStr::from_ptr(p).to_bytes().is_empty());
+        nagi_string_free(p);
+
+        nagi_set_waker(handle, Some(noop), std::ptr::null_mut());
+        send(handle, INIT);
+        let p = nagi_poll_notifications(handle);
+        // 通知が無ければ空（あっても JSON-RPC の通知行であること）
+        let text = CStr::from_ptr(p).to_str().unwrap().to_string();
+        assert!(text.is_empty() || text.contains("\"jsonrpc\""), "{text}");
+        nagi_string_free(p);
+
+        // 登録解除と NULL ハンドルは安全
+        nagi_set_waker(handle, None, std::ptr::null_mut());
+        nagi_set_waker(std::ptr::null_mut(), Some(noop), std::ptr::null_mut());
+        let p = nagi_poll_notifications(std::ptr::null_mut());
+        assert!(CStr::from_ptr(p).to_bytes().is_empty());
+        nagi_string_free(p);
+
+        // コールバックを登録したまま解放しても安全
+        nagi_set_waker(handle, Some(noop), std::ptr::null_mut());
+        nagi_server_free(handle);
+    }
+}

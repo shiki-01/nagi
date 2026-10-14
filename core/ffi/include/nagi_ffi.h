@@ -54,6 +54,31 @@ NagiServerHandle nagi_server_new_with_budget(const char *data_dir, const char *u
 ///         handle が NULL またはエラーの場合は、空文字列を返す。
 char *nagi_handle_line(NagiServerHandle handle, const char *line);
 
+// ---- 非同期通知 ----
+
+/// 通知が取り出せるようになったときに呼ばれるコールバックの型。
+typedef void (*NagiWakeCallback)(void *user_data);
+
+/// 通知（update_preedit / update_candidates / notify）が取り出せるようになったときに呼ばれる
+/// コールバックを登録する。LLM が同期の待ち時間（conversion.sync_budget_ms）を超えた分の完了や
+/// ライブ変換の結果など、次のリクエストを待たずに届けるべき通知のために使う。
+///
+/// コールバックは任意のスレッドから、handle のロック内で呼ばれる。中で nagi_* を呼ばず、
+/// 呼び出し側のキューに nagi_poll_notifications の呼び出しを積んですぐに戻ること。
+/// user_data は nagi_server_free が返るまで有効であること（解放後は呼ばれない）。
+///
+/// @param handle nagi_server_new から返されたハンドル
+/// @param callback コールバック。NULL なら登録を解除する
+/// @param user_data コールバックにそのまま渡す値
+void nagi_set_waker(NagiServerHandle handle, NagiWakeCallback callback, void *user_data);
+
+/// 次のリクエストを待たずに配信すべき通知の行を取り出す。
+///
+/// @return 通知行（改行区切りの JSON-RPC 通知）。なければ空文字列。nagi_string_free で解放必須。
+///         initialize の前は通知を取り出さず、空文字列を返す。
+///         nagi_handle_line と同時に呼ばないこと（同一のキューで直列に呼ぶ）。
+char *nagi_poll_notifications(NagiServerHandle handle);
+
 // ---- 解放 ----
 
 /// UTF-8 C 文字列を解放する。

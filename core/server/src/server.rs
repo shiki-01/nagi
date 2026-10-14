@@ -96,6 +96,30 @@ impl Server {
         self.shutdown
     }
 
+    /// 次のリクエストを待たずに配信すべき通知（`notify`・`update_preedit`・`update_candidates`）の行を
+    /// 取り出す。`run` の Wake 処理と同じもの。`run` を使わず自前のループを持つ呼び出し側（C ABI の
+    /// iOS フロントエンドなど）が、[`Self::set_wake_callback`] で起こされたあとに呼ぶ。
+    /// 初期化前は通知を取り出さず、積んだままにする
+    pub fn poll_notifications(&mut self) -> Vec<String> {
+        if !self.initialized {
+            return Vec::new();
+        }
+        let mut lines = self.notifications();
+        lines.extend(self.async_notifications());
+        lines
+    }
+
+    /// 配信すべき通知が積まれたときに呼ばれるコールバックを設定する。**任意のスレッドから呼ばれる**
+    /// ため、コールバックの中で `Server` を触らず、呼び出し側のキューに積み直して
+    /// [`Self::poll_notifications`] を呼ぶこと（`run` はチャンネルへの送信で同じことをしている）
+    pub fn set_wake_callback(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        let for_events = Arc::clone(&wake);
+        // Runtime にイベント（設定再読み込み・ライブ変換等）が積まれたら起こす
+        self.runtime.set_event_hook(Box::new(move || for_events()));
+        // バックエンドの非同期完了（LLM の sync_budget 超過分）が積まれたら起こす
+        self.engine_lock().set_backend_waker(wake);
+    }
+
     /// 1 行の入力を処理し、出力する行（0 行以上）を返す。応答のあとに、積まれた `notify` 通知が続く
     pub fn handle_line(&mut self, line: &str) -> Vec<String> {
         let line = line.trim();
@@ -484,16 +508,10 @@ impl Server {
 
         let (tx, rx) = std::sync::mpsc::channel::<Msg>();
 
-        // Runtime にイベントが積まれたら Wake を送る
+        // 通知（Runtime のイベント・バックエンドの非同期完了）が積まれたら Wake を送る
         let tx_wake = tx.clone();
-        self.runtime.set_event_hook(Box::new(move || {
+        self.set_wake_callback(Arc::new(move || {
             let _ = tx_wake.send(Msg::Wake);
-        }));
-
-        // バックエンドの非同期完了（LLM の sync_budget 超過分）が積まれたら Wake を送る
-        let tx_wake_backend = tx.clone();
-        self.engine_lock().set_backend_waker(Arc::new(move || {
-            let _ = tx_wake_backend.send(Msg::Wake);
         }));
 
         // 標準入力（等）を読む専用スレッド
@@ -540,15 +558,12 @@ impl Server {
                 }
                 Ok(Msg::Wake) => {
                     // 初期化前は通知を出さない（handle_line と同じ方針）。溜めたままにする
-                    if self.initialized {
-                        let mut lines = self.notifications();
-                        lines.extend(self.async_notifications());
-                        for out in lines {
-                            output.write_all(out.as_bytes())?;
-                            output.write_all(b"\n")?;
-                        }
-                        output.flush()?;
+                    let lines = self.poll_notifications();
+                    for out in lines {
+                        output.write_all(out.as_bytes())?;
+                        output.write_all(b"\n")?;
                     }
+                    output.flush()?;
                 }
                 Ok(Msg::Eof) => break Ok(()),
                 Ok(Msg::IoErr(e)) => break Err(e),

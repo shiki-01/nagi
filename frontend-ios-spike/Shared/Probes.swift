@@ -529,6 +529,8 @@ struct LLMLoadProbe: ProbeRunner {
     var probeId = "llm_load"
     /// 固定する環境プロファイル（`balanced` / `light`）。連続変換の応答時間とメモリが変わる
     var profile = "balanced"
+    /// LLM の推論を同期で待つ最長時間（ms）。超えた分は辞書の結果で先に応答し、完了を非同期通知で差し替える
+    var syncBudgetMs = 30
 
     func run(context: ProbeContext) async -> ProbeResult {
         let id = probeId
@@ -593,7 +595,7 @@ struct LLMLoadProbe: ProbeRunner {
             try FileManager.default.createDirectory(at: probeUserDir, withIntermediateDirectories: true)
             // プロファイルを固定する。自動切替だと、最初の変換が遅いと minimal に落ちて、以降の変換で
             // LLM が動かず、推論中のメモリが測れない（連続変換の計測を LLM 有効のまま行うため）
-            let config = "[conversion]\nmodel = '\(model.path)'\n\n[profile]\nmode = \"\(profile)\"\nauto_switch = false\n"
+            let config = "[conversion]\nmodel = '\(model.path)'\nsync_budget_ms = \(syncBudgetMs)\n\n[profile]\nmode = \"\(profile)\"\nauto_switch = false\n"
             try config.write(to: probeUserDir.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
         } catch {
             note = "(d) 設定ファイルの作成に失敗: \(error.localizedDescription) [\(modelDesc)]"
@@ -679,6 +681,13 @@ struct LLMLoadProbe: ProbeRunner {
             "nihongonohenkanwotesutosimasu"
         ]
         let loopRounds = 20
+        // 同期の待ち時間を超えた推論の完了通知（update_preedit / update_candidates）が届くかを数える
+        let updateCounter = NotificationCounter()
+        engine.startNotifications { lines in
+            updateCounter.add(lines.filter {
+                $0.contains("\"update_preedit\"") || $0.contains("\"update_candidates\"")
+            }.count)
+        }
         var loopSpaceTimes: [Double] = []
         var peakFootprint = afterStats.physFootprintMB
         var minAvailable = afterStats.availableMemoryMB
@@ -700,6 +709,22 @@ struct LLMLoadProbe: ProbeRunner {
             peakFootprint = max(peakFootprint, stats.physFootprintMB)
             minAvailable = min(minAvailable, stats.availableMemoryMB)
         }
+        // 裏で続いている推論の完了通知を待つ（件数が増えなくなるまで、最長 10 秒）
+        var lastUpdateCount = -1
+        var waitedMs = 0
+        while waitedMs < 10_000 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            waitedMs += 500
+            let count = updateCounter.count
+            if count == lastUpdateCount { break }
+            lastUpdateCount = count
+        }
+        engine.stopNotifications()
+        let afterWait = MemoryProbe.getStats()
+        peakFootprint = max(peakFootprint, afterWait.physFootprintMB)
+        minAvailable = min(minAvailable, afterWait.availableMemoryMB)
+        metrics["loop_async_updates"] = Double(updateCounter.count)
+        metrics["loop_async_wait_ms"] = Double(waitedMs)
         loopSpaceTimes.sort()
         metrics["loop_rounds"] = Double(loopRounds)
         metrics["loop_space_p50_ms"] = loopSpaceTimes[loopSpaceTimes.count / 2]
@@ -841,3 +866,21 @@ let allProbesExcludingMemoryRamp: [String: (ProbeContext) async -> ProbeResult] 
     "llm_load_light": allProbes["llm_load_light"]!,
     "thermal_battery": allProbes["thermal_battery"]!
 ]
+
+/// 通知の件数を別スレッドから数える（`NagiEngine.startNotifications` のハンドラ用）
+final class NotificationCounter {
+    private let lock = NSLock()
+    private var value = 0
+
+    func add(_ n: Int) {
+        lock.lock()
+        value += n
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}

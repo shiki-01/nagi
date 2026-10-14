@@ -326,6 +326,75 @@ fn late_llm_result_is_pushed_as_update_preedit() {
     assert!(params["revision"].as_u64().unwrap() > space_revision);
 }
 
+/// 自前のループを持つ呼び出し側（C ABI）向け: LLM の完了でコールバックが呼ばれ、
+/// 次のリクエストを待たずに `poll_notifications` で `update_preedit` を取り出せる
+#[test]
+fn wake_callback_and_poll_notifications_deliver_late_llm_result() {
+    use nagi_engine::EngineConfig;
+    use nagi_server::Server;
+    use serde_json::{Value, json};
+    use std::sync::{Arc, mpsc};
+
+    let mut model = FakeModel::new(&[("こうえん", "講演")]);
+    model.delay = Duration::from_millis(300);
+    let mut server = Server::new(
+        Arc::new(backend(model, 30)),
+        "balanced",
+        EngineConfig::default(),
+    );
+    let (wake_tx, wake_rx) = mpsc::channel::<()>();
+    let wake_tx = std::sync::Mutex::new(wake_tx);
+    server.set_wake_callback(Arc::new(move || {
+        let _ = wake_tx.lock().unwrap().send(());
+    }));
+
+    // 初期化前は通知を取り出さない
+    assert!(server.poll_notifications().is_empty());
+
+    let send = |server: &mut Server, request: Value| -> Vec<Value> {
+        server
+            .handle_line(&request.to_string())
+            .iter()
+            .map(|l| serde_json::from_str(l).expect("JSON"))
+            .collect()
+    };
+    send(
+        &mut server,
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocol_version":1,"client_name":"t","client_version":"0","os":"test"}}),
+    );
+    let mut last = Vec::new();
+    for (i, c) in "kouenn ".chars().enumerate() {
+        last = send(
+            &mut server,
+            json!({"jsonrpc":"2.0","id":10 + i as i64,"method":"process_key","params":{
+            "session_id":"s","keysym":c as u32,"keycode":0,"text":c.to_string(),
+            "modifiers":{},"kind":"down"}}),
+        );
+    }
+    assert_eq!(
+        last[0]["result"]["preedit"]["text"], "公園",
+        "予算超過時は辞書の結果"
+    );
+
+    // LLM の完了でコールバックが呼ばれる（リクエストは送らない）
+    wake_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("コールバックが呼ばれない");
+    let lines: Vec<Value> = server
+        .poll_notifications()
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("JSON"))
+        .collect();
+    let update = lines
+        .iter()
+        .find(|l| l["method"] == "update_preedit")
+        .expect("update_preedit が取り出せる");
+    assert_eq!(update["params"]["preedit"]["text"], "講演");
+    // 取り出したあとは空
+    assert!(server.poll_notifications().is_empty());
+}
+
 // ---- 文全体の N-best（sentence_candidates、ビームサーチの Pipeline への統合） ----
 
 #[test]

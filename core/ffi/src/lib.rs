@@ -1,10 +1,25 @@
 //! Nagi コアエンジンの C ABI ラッパー（iOS キーボード拡張等での利用）
 
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 use std::panic::catch_unwind;
+use std::sync::{Arc, Mutex};
 
 use nagi_server::{Server, build, parse_args};
+
+/// 通知待ちコールバックの呼び出し先（`nagi_set_waker` で登録したもの）
+struct WakeTarget {
+    callback: unsafe extern "C" fn(*mut c_void),
+    user_data: *mut c_void,
+}
+
+// SAFETY: `user_data` は呼び出し側（C / Swift）が、任意のスレッドから `callback` に渡されても
+// よいものとして登録する責務を負う（`nagi_set_waker` の契約）。このクレートは中身を参照しない
+unsafe impl Send for WakeTarget {}
+
+/// 登録されたコールバック。`nagi_server_free` が空にしてから `Server` を捨てるので、解放後に
+/// バックグラウンドスレッドから `user_data` が使われることはない
+type WakeSlot = Arc<Mutex<Option<WakeTarget>>>;
 
 /// Server と初期化時の診断情報を保持する不透明なハンドル
 pub struct ServerHandle {
@@ -12,6 +27,8 @@ pub struct ServerHandle {
     pub server: Server,
     /// 初期化時の診断情報（notes + profile 情報）
     pub notes: String,
+    /// 通知待ちコールバック
+    wake: WakeSlot,
 }
 
 /// `nagi_server_new` から返されるハンドルのポインタ型。
@@ -103,6 +120,7 @@ pub unsafe extern "C" fn nagi_server_new_with_budget(
         Ok::<ServerHandle, String>(ServerHandle {
             server,
             notes: notes_str,
+            wake: Arc::new(Mutex::new(None)),
         })
     });
 
@@ -180,6 +198,79 @@ pub unsafe extern "C" fn nagi_handle_line(
     }
 }
 
+// ---- 非同期通知 ----
+
+/// 通知（`update_preedit`・`update_candidates`・`notify`）が取り出せるようになったときに呼ばれる
+/// コールバックを登録する。LLM が同期の待ち時間（`conversion.sync_budget_ms`）を超えた分の完了や、
+/// ライブ変換の結果など、次のリクエストを待たずに届けるべき通知のために使う。
+///
+/// # Arguments
+/// - `handle`: `nagi_server_new` から返されたハンドル
+/// - `callback`: コールバック。NULL なら登録を解除する
+/// - `user_data`: コールバックにそのまま渡す値
+///
+/// # Safety
+/// - `callback` は **任意のスレッドから、`handle` のロック内で** 呼ばれる。中で `nagi_*` を呼ばず、
+///   呼び出し側のキューに `nagi_poll_notifications` の呼び出しを積んですぐに戻ること。
+/// - `user_data` は `nagi_server_free` が返るまで有効であること（解放後は呼ばれない）。
+/// - `nagi_handle_line` / `nagi_poll_notifications` と同時に呼ばないこと。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nagi_set_waker(
+    handle: NagiServerHandle,
+    callback: Option<unsafe extern "C" fn(*mut c_void)>,
+    user_data: *mut c_void,
+) {
+    let _ = catch_unwind(|| {
+        if handle.is_null() {
+            return;
+        }
+        // SAFETY: C 呼び出し側の責務で handle は有効なポインタ
+        let handle_ref = unsafe { &mut *handle };
+        if let Ok(mut slot) = handle_ref.wake.lock() {
+            *slot = callback.map(|callback| WakeTarget {
+                callback,
+                user_data,
+            });
+        }
+        // 登録の有無にかかわらず、Server 側のフックは常に同じ 1 つ（スロットを見て呼ぶ）
+        let slot = Arc::clone(&handle_ref.wake);
+        handle_ref.server.set_wake_callback(Arc::new(move || {
+            if let Ok(slot) = slot.lock()
+                && let Some(target) = slot.as_ref()
+            {
+                // SAFETY: 登録した呼び出し側が、user_data を有効に保つ契約（nagi_set_waker）
+                unsafe { (target.callback)(target.user_data) };
+            }
+        }));
+    });
+}
+
+/// 次のリクエストを待たずに配信すべき通知の行を取り出す。`nagi_set_waker` のコールバックで
+/// 起こされたあとに呼ぶ。
+///
+/// # Returns
+/// 通知行（改行区切りの JSON-RPC 通知）を UTF-8 C 文字列で返す。なければ空文字列。
+/// `nagi_string_free` で解放必須。handle が NULL の場合も空文字列。
+/// `initialize` の前は、通知を取り出さずに（積んだまま）空文字列を返す。
+///
+/// # Safety
+/// - `handle` は `nagi_server_new` から返された有効なハンドルであること。
+/// - `nagi_handle_line` と同時に呼ばないこと（同一のキューで直列に呼ぶ）。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nagi_poll_notifications(handle: NagiServerHandle) -> *mut c_char {
+    let result = catch_unwind(|| {
+        if handle.is_null() {
+            return String::new();
+        }
+        // SAFETY: C 呼び出し側の責務で handle は有効なポインタ
+        let handle_ref = unsafe { &mut *handle };
+        handle_ref.server.poll_notifications().join("\n")
+    });
+    CString::new(result.unwrap_or_default())
+        .unwrap_or_default()
+        .into_raw()
+}
+
 // ---- 解放 ----
 
 /// UTF-8 C 文字列を解放する。
@@ -210,7 +301,12 @@ pub unsafe extern "C" fn nagi_string_free(s: *mut c_char) {
 pub unsafe extern "C" fn nagi_server_free(handle: NagiServerHandle) {
     if !handle.is_null() {
         // SAFETY: C 呼び出し側の責務で handle は Box::into_raw から返されたポインタ
-        let _ = unsafe { Box::from_raw(handle) };
+        let handle = unsafe { Box::from_raw(handle) };
+        // 先にコールバックの登録を外す（実行中のコールバックがあれば終わるまで待つ）。
+        // この後にバックグラウンドスレッドが起こそうとしても、何も呼ばれない
+        if let Ok(mut slot) = handle.wake.lock() {
+            *slot = None;
+        }
     }
 }
 

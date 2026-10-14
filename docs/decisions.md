@@ -879,3 +879,14 @@ mmap 辞書（H-7）の実機で、small（`zenz-v3.1-small-Q5_K_M.gguf`、70.4M
 - **応答時間の読み方（要注意）**: p50 が 0.3ms で、最初の 1 回だけ遅い。0.3ms で LLM 推論が終わることはないため、2 回目以降の多くは LLM が同期経路で使われていない。原因の候補は、(a) 同期の待ち時間（`sync_budget_ms`）を超えた推論が裏で続いていて、次の変換では LLM が使用中のため辞書のみになる、(b) 同じ 5 文の繰り返しによるキャッシュ（balanced では p50 が 100〜155ms だったため、これだけでは説明できない）。どちらかは未切り分けで、`update_candidates` の実装と合わせて調べる
 - **暫定の iOS 既定**: モデルは small（存在しなければ xsmall）、プロファイルは `light`。根拠はメモリに余裕があること、small の方が変換精度が高い見込みであること。最初の変換の遅さ（155ms、モデルのページ読み込みと見られる）は、起動時のウォームアップで隠す。**精度は未比較**（zenz small と xsmall の変換精度の差は Phase 0 の比較項目）
 
+### H-10. 非同期通知の C ABI 配信と、同期の待ち時間（2026-10-14、要レビュー）
+
+H-9 の応答時間の謎の原因: `conversion.sync_budget_ms` の既定が 150ms。balanced の p50 が 100〜155ms・p95 が約 310ms だったのは、LLM が予算（150ms）に収まらず、毎回 150ms 待ってから辞書の結果を返していたため。light で p50 が 0.3ms になったのは、最初の 1 回の推論が裏で走り続けている間、バックエンドが使用中で LLM を使わず辞書のみで返していたため（上限 150ms が p95 / max に出る）。つまり**待つ時間を短くし、LLM の結果は非同期で差し替える**構成（既に実装済みの G-11）が、iOS の応答時間の解になる。
+
+- **課題**: 非同期の差し替え通知（`update_preedit` / `update_candidates` / `notify`）は、stdio の `run` ループでは Wake で配信されるが、C ABI には取り出す手段が無く、次のリクエストを待つ必要があった
+- **`Server::poll_notifications` / `Server::set_wake_callback`（新設）**: `run` の Wake 処理を取り出した公開 API。`run` もこれを使う（挙動は同じ）
+- **C ABI**: `nagi_set_waker(handle, callback, user_data)`（通知が取り出せるときに任意のスレッドから呼ばれる）と `nagi_poll_notifications(handle)`（通知行を返す。`initialize` の前は積んだまま空）。`nagi_server_free` は先にコールバックを外し、実行中のコールバックの完了を待ってから `Server` を捨てるため、解放後に `user_data` が使われない
+- **Swift**: `NagiEngine` の呼び出しをすべて 1 本の直列キューで行う（C ABI はハンドルの同時アクセス不可）。`startNotifications { lines in .. }` でメインキューに通知を渡す。ハンドラの中から `send` を呼ばないこと（デッドロック。メインに積み直す）
+- **`llm_load` Probe**: `sync_budget_ms = 30` に変更し、連続変換のあと非同期通知（`update_preedit` / `update_candidates`）が届いた件数（`loop_async_updates`）と待ち時間（`loop_async_wait_ms`）を記録する。以前の数値（既定 150ms）とは条件が違う
+- 未実施: iOS 製品の既定 `sync_budget_ms` の決定（30ms は計測用。実測で決める）、`update_candidates`（候補ウィンドウの差し替え）の実機での確認
+

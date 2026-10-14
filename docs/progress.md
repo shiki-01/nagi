@@ -26,7 +26,7 @@
 
 優先順:
 
-1. **LLM 接続の残り**: ~~非同期通知（`update_preedit`）でのライブ変換結果差し替え~~ → 実装済み（G-25・G-26）。~~ビームサーチによる文全体の N-best~~ → 辞書ベースのk-best Viterbi（G-30）に加え、実LLMでの本物のビームサーチも infer/server/engine とも実装済み（G-33・G-34。別セッションでの実装）。~~KV キャッシュの再利用~~ → 当初見送り（G-21）だったが後日実装（G-32）。`update_candidates` の非同期送出（スタイル変換等。未着手）。~~ライブ変換のチャンク処理~~ → 実装済み（G-27。`composing_chunk_len` による固定長分割。「編集されたチャンクのみ再変換」というキャッシュ最適化は未着手）。~~数詞の表記ゆれ~~ → Rewriter で実装済み（G-16・G-20）。残るのはキーマップでの sentence モード専用割当と `nagi-eval` でのビームサーチ込み精度計測（優先度低）
+1. **LLM 接続の残り**: ~~非同期通知（`update_preedit`）でのライブ変換結果差し替え~~ → 実装済み（G-25・G-26）。~~ビームサーチによる文全体の N-best~~ → 辞書ベースのk-best Viterbi（G-30）に加え、実LLMでの本物のビームサーチも infer/server/engine とも実装済み（G-33・G-34。別セッションでの実装）。~~KV キャッシュの再利用~~ → 当初見送り（G-21）だったが後日実装（G-32）。~~`update_candidates` の非同期送出~~ → 配信手段を C ABI にも追加（H-10: `nagi_set_waker` / `nagi_poll_notifications`）。スタイル変換等からの新規送出は未着手。~~ライブ変換のチャンク処理~~ → 実装済み（G-27。`composing_chunk_len` による固定長分割。「編集されたチャンクのみ再変換」というキャッシュ最適化は未着手）。~~数詞の表記ゆれ~~ → Rewriter で実装済み（G-16・G-20）。残るのはキーマップでの sentence モード専用割当と `nagi-eval` でのビームサーチ込み精度計測（優先度低）
 2. ~~**予測変換**（Phase 2）~~ → 実装済み（G-23）
 3. ~~**環境プロファイルの残り**: モデルの解放（minimal・メモリ逼迫時）、`light` でのスレッド数削減、GPU 検出、キャリブレーション結果の永続化~~ → 実装済み（G-13）。残るは `quality` で使う大きいモデル・reranker（Laya 評価。Phase 0 の比較が必要）
 4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。~~`update.auto_check` の実装~~ → 実装済み（G-19。起動時の自動確認・notify のみ。実サーバー（`nagi.shiki-01.com/updates/latest.json`）は未整備なので機能するにはサーバー側の用意が必要）。**設定の残り**: 設定 GUI（Phase 4）
