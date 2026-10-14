@@ -16,7 +16,7 @@ name: ios-testflight
 # 表示バージョン（CFBundleShortVersionString）の決まり方:
 #   1. タグ ios-vX.Y.Z の push で起動した場合は、そのタグの X.Y.Z
 #   2. 手動実行で marketing_version を入力した場合は、その値
-#   3. 手動実行で空欄の場合は、最新の ios-v* タグの X.Y.Z（タグが無ければ 0.1.0）
+#   3. 手動実行で空欄の場合は、最新の ios-v* タグの X.Y.Z（タグが無ければ 1.0.0）
 # ビルド番号（CFBundleVersion）は github.run_number で常に自動採番する。
 # リリース手順: git tag ios-v0.2.0 && git push origin ios-v0.2.0
 
@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       marketing_version:
-        description: "表示バージョン（空欄なら最新の ios-v* タグ、無ければ 0.1.0）"
+        description: "表示バージョン（空欄なら最新の ios-v* タグ、無ければ 1.0.0）"
         type: string
         default: ""
       llama:
@@ -62,7 +62,7 @@ jobs:
           else
             latest=$(git tag --list 'ios-v*' --sort=-v:refname | head -n 1)
             v="${latest#ios-v}"
-            v="${v:-0.1.0}"
+            v="${v:-1.0.0}"
           fi
           echo "MARKETING_VERSION=${v}" >> "$GITHUB_ENV"
           echo "表示バージョン: ${v} / ビルド番号: ${{ github.run_number }}"

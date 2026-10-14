@@ -9,6 +9,9 @@ options:
 settings:
   PROVISIONING_PROFILE_SPECIFIER: ""
   DEVELOPMENT_TEAM: ""
+  # CI（ios-testflight.yml）がコマンドラインで上書きする。ローカルビルド用の既定値
+  MARKETING_VERSION: "1.0.0"
+  CURRENT_PROJECT_VERSION: "1"
 
 attributes:
   ORGANIZATIONNAME: Shiki
@@ -46,6 +49,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Nagi Spike
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # 独自の暗号化を使わない（TestFlight の輸出コンプライアンス質問を省略する）
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
@@ -112,6 +117,8 @@ targets:
       path: Keyboard/Info.plist
       properties:
         CFBundleDisplayName: Nagi Spike Keyboard
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         ALTAppGroups:
           - group.com.shiki01.nagi
         NSExtension:
