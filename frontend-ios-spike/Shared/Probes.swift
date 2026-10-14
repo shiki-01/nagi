@@ -525,9 +525,14 @@ struct ColdstartProbe: ProbeRunner {
 // MARK: - 7. LLM Load Probe
 
 struct LLMLoadProbe: ProbeRunner {
+    /// Probe の ID（`llm_load` / `llm_load_light`）
+    var probeId = "llm_load"
+    /// 固定する環境プロファイル（`balanced` / `light`）。連続変換の応答時間とメモリが変わる
+    var profile = "balanced"
+
     func run(context: ProbeContext) async -> ProbeResult {
-        let id = "llm_load"
-        let name = "LLM Load"
+        let id = probeId
+        let name = "LLM Load (\(profile))"
         var metrics: [String: Double] = [:]
         var note = ""
         var ok = false
@@ -588,7 +593,7 @@ struct LLMLoadProbe: ProbeRunner {
             try FileManager.default.createDirectory(at: probeUserDir, withIntermediateDirectories: true)
             // プロファイルを固定する。自動切替だと、最初の変換が遅いと minimal に落ちて、以降の変換で
             // LLM が動かず、推論中のメモリが測れない（連続変換の計測を LLM 有効のまま行うため）
-            let config = "[conversion]\nmodel = '\(model.path)'\n\n[profile]\nmode = \"balanced\"\nauto_switch = false\n"
+            let config = "[conversion]\nmodel = '\(model.path)'\n\n[profile]\nmode = \"\(profile)\"\nauto_switch = false\n"
             try config.write(to: probeUserDir.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
         } catch {
             note = "(d) 設定ファイルの作成に失敗: \(error.localizedDescription) [\(modelDesc)]"
@@ -821,6 +826,7 @@ let allProbes: [String: (ProbeContext) async -> ProbeResult] = [
     "memory_ramp": { await MemoryRampProbe(maxLimitMB: $0.processType == "keyboard" ? 1024 : 3072).run(context: $0) },
     "coldstart": { await ColdstartProbe().run(context: $0) },
     "llm_load": { await LLMLoadProbe().run(context: $0) },
+    "llm_load_light": { await LLMLoadProbe(probeId: "llm_load_light", profile: "light").run(context: $0) },
     "thermal_battery": { await ThermalBatteryProbe().run(context: $0) }
 ]
 
@@ -832,5 +838,6 @@ let allProbesExcludingMemoryRamp: [String: (ProbeContext) async -> ProbeResult] 
     "latency": allProbes["latency"]!,
     "coldstart": allProbes["coldstart"]!,
     "llm_load": allProbes["llm_load"]!,
+    "llm_load_light": allProbes["llm_load_light"]!,
     "thermal_battery": allProbes["thermal_battery"]!
 ]
