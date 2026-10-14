@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import Meta from '$lib/components/Meta.svelte'
   import ErrorList from '$lib/components/ErrorList.svelte'
   import JsonPanel from '$lib/components/JsonPanel.svelte'
   import KeyForm from '$lib/components/KeyForm.svelte'
@@ -56,10 +57,11 @@
   }
 </script>
 
-<svelte:head>
-  <title>キーボードレイアウト編集 - Nagi</title>
-  <meta name="description" content="Nagi の iOS キーボードの配置とキーの動作を、ブラウザ上で編集して JSON に書き出します。" />
-</svelte:head>
+<Meta
+  title="キーボードレイアウト編集"
+  path="/custom-keyboard"
+  description="Nagi の iOS キーボードの配置とキーの動作を、ブラウザ上で編集して JSON に書き出します。"
+/>
 <svelte:window {onkeydown} />
 
 <main class="wrap">

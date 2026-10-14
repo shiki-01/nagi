@@ -449,10 +449,13 @@ final class NagiSettingsModel: ObservableObject {
             } else if let dir = self.userDirPath {
                 // コアに繋がらないときは、学習ファイルを直接消す
                 let path = (dir as NSString).appendingPathComponent("learning.tsv")
-                if FileManager.default.fileExists(atPath: path) {
-                    ok = (try? FileManager.default.removeItem(atPath: path)) != nil
-                } else {
-                    ok = true
+                // コアの flush / load と同じロック（`learning.lock` の flock）を取ってから消す。
+                // 拡張が書き出している最中に消して、書きかけのファイルが残るのを避ける
+                ok = NagiFileLock.withExclusive(path: (dir as NSString).appendingPathComponent("learning.lock")) {
+                    if FileManager.default.fileExists(atPath: path) {
+                        return (try? FileManager.default.removeItem(atPath: path)) != nil
+                    }
+                    return true
                 }
             }
             if ok { NagiLearningClearSignal.raise() }

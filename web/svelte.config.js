@@ -6,7 +6,7 @@ export default {
   preprocess: vitePreprocess(),
   compilerOptions: { runes: true },
   kit: {
-    adapter: adapter({ pages: 'build', assets: 'build', precompress: false, strict: true }),
+    adapter: adapter({ pages: 'build', assets: 'build', precompress: false, strict: true, fallback: '404.html' }),
     alias: { $config: '../config' }
   }
 }

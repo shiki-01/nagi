@@ -16,7 +16,8 @@ enum ProductSession {
     /// （decisions.md H-10。xsmall は収まり、small は約 0.6 秒後に差し替わる）
     static let syncBudgetMs = 30
 
-    static func make(store: SharedStore) -> Outcome {
+    /// - noLLM: true なら LLM を読み込まず辞書のみで動く（メモリ警告のあとの作り直しに使う）
+    static func make(store: SharedStore, noLLM: Bool = false) -> Outcome {
         let (dataDirPath, _) = store.dataDir()
         guard let dataDir = dataDirPath else {
             return Outcome(session: nil, message: "辞書が見つかりません。Nagi アプリを開いて辞書をコピーしてください")
@@ -27,7 +28,7 @@ enum ProductSession {
         guard let engine = NagiEngine(
             dataDir: dataDir,
             userDir: prepared.path,
-            noLLM: false,
+            noLLM: noLLM,
             memoryBudgetMB: MemoryProbe.processBudgetMB()
         ), let session = NagiSession(engine: engine) else {
             return Outcome(session: nil, message: "変換エンジンを起動できませんでした（保存先: \(prepared.path ?? "なし")）")

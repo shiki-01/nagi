@@ -28,6 +28,23 @@ enum KanaKeyTable {
         "、": Entry(key: .punct, chars: ["、", "。", "？", "！", "…"]),
     ]
 
+    /// コアの `KanaKey` から項目を返す（コアが使えないときに、押されたキーの文字を直接入れるため）
+    static func entry(for key: KanaKey) -> Entry? {
+        entries.values.first { $0.key == key }
+    }
+
+    /// ジェスチャに対応する文字（`chars` は 中央・左・上・右・下 の順）
+    static func char(for key: KanaKey, gesture: KeyGesture) -> String? {
+        guard let chars = entry(for: key)?.chars else { return nil }
+        switch gesture {
+        case .tap, .toggle: return chars[0]
+        case .flickLeft: return chars[1]
+        case .flickUp: return chars[2]
+        case .flickRight: return chars[3]
+        case .flickDown: return chars[4]
+        }
+    }
+
     /// キー名（先頭の 1 文字で引く）から項目を返す
     static func entry(forName name: String) -> Entry? {
         guard let first = name.first else { return nil }

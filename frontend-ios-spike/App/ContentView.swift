@@ -6,6 +6,8 @@ struct ContentView: View {
     @State private var store = SharedStore.shared
     @State private var deviceInfo = ""
     @State private var dataStatus = ""
+    /// ホームのデータ状況の再読み込みの合図（取り込み・モデル選択のあとに増やす）
+    @State private var dataReloadToken = 0
     @State private var showingDocumentPicker = false
     @State private var copyingDict = false
     @State private var modelFiles: [DataPaths.ModelFile] = []
@@ -20,61 +22,18 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            // Tab 1: ホーム・設定
+            // Tab 1: ホーム（セットアップ・データの状況と取り込み。端末情報・App Group は About の開発者向け）
             NavigationStack {
                 List {
                     NagiSetupStatusSection(onShowGuide: { showingOnboarding = true })
 
-                    Section("端末情報") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(deviceInfo).font(.system(.body, design: .monospaced))
-                        }
-                        .onAppear { updateDeviceInfo() }
-                    }
+                    // 辞書・モデル・メモリ・LLM の見込み（取り込みは下の「取り込み」）
+                    NagiDataStatusSections(reloadToken: dataReloadToken)
 
-                    Section("App Group") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            let resolution = store.appGroupResolution
-                            if let resolvedID = resolution.resolvedID {
-                                Text("✓ 利用可能: \(resolvedID)").foregroundColor(.green)
-                            } else {
-                                Text("✗ 利用不可（無料アカウント？）").foregroundColor(.red)
-                            }
-
-                            Divider()
-
-                            Text("解決結果").font(.caption).fontWeight(.semibold)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Candidates: \(resolution.candidates.joined(separator: ", "))")
-                                    .font(.caption2)
-                                    .textSelection(.enabled)
-
-                                if !resolution.provisionGroups.isEmpty {
-                                    Text("Provision: \(resolution.provisionGroups.joined(separator: ", "))")
-                                        .font(.caption2)
-                                        .textSelection(.enabled)
-                                }
-
-                                if !resolution.altGroups.isEmpty {
-                                    Text("ALT: \(resolution.altGroups.joined(separator: ", "))")
-                                        .font(.caption2)
-                                        .textSelection(.enabled)
-                                }
-
-                                Text("Provision readable: \(resolution.provisionReadable)")
-                                    .font(.caption2)
-                            }
-                        }
-                    }
-
-                    Section("データ") {
+                    Section("取り込み") {
                         // ボタンごとに別の行にし、.borderless でボタン本体だけをタップ領域にする。
                         // 同じ行に複数の Button があると、List では行全体がタップ領域になり、
                         // 無効なボタンを押しても同じ行の有効なボタンが発火するため
-                        Text(dataStatus)
-                            .font(.system(.body, design: .monospaced))
-                            .onAppear { updateDataStatus() }
-
                         if store.containerURL == nil {
                             Text("App Group コンテナが取得できていません。辞書はバンドルのものを自動的に使います。モデルはこのアプリ専用の領域（Application Support）にインポートされ、キーボード拡張からは見えません")
                                 .font(.caption)
@@ -122,6 +81,7 @@ struct ContentView: View {
                     }
                 }
                 .navigationTitle("ホーム")
+                .onAppear { updateDataStatus() }
                 .fileImporter(
                     isPresented: $showingDocumentPicker,
                     // .gguf は未登録の拡張子なので、動的型に加えて .data も許可し、拡張子は importModel で検査する
@@ -142,30 +102,24 @@ struct ContentView: View {
             }
             .tag(0)
 
-            // Tab 4: キーボードの入力テスト
+            // Tab 2: キーボードの入力テスト
             KeyboardTestView()
                 .tabItem {
                     Label("入力テスト", systemImage: "keyboard")
                 }
                 .tag(3)
 
-            // Tab 5: 設定
+            // Tab 3: 設定
             SettingsView()
                 .tabItem {
                     Label("設定", systemImage: "gearshape")
                 }
                 .tag(4)
 
-            // Tab 6: データ（辞書・モデルの状況。取り込みはホームタブ）
-            NagiDataStatusView(onOpenImport: { selectedTab = 0 })
-                .tabItem {
-                    Label("データ", systemImage: "externaldrive")
-                }
-                .tag(20)
-
+            // Tab 4: レイアウト
             LayoutManagerView().tabItem { Label("レイアウト", systemImage: "square.grid.2x2") }.tag(22)
 
-            // Tab 7: About（検証用の Probes・結果は「開発者向け」から）
+            // Tab 5: About（端末情報・App Group・Probes・結果は「開発者向け」から）
             NagiAboutView { developerView }
                 .tabItem {
                     Label("About", systemImage: "info.circle")
@@ -180,7 +134,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingOnboarding, onDismiss: { onboardingCompleted = true }) {
             NagiOnboardingView(
                 onClose: { showingOnboarding = false },
-                onOpenData: { selectedTab = 20 },
+                onOpenData: { selectedTab = 0 },
                 onOpenInputTest: { selectedTab = 3 }
             )
         }
@@ -193,12 +147,61 @@ struct ContentView: View {
 
     private var developerView: some View {
         List {
+            Section("端末情報") {
+                Text(deviceInfo).font(.system(.body, design: .monospaced))
+            }
+
+            Section("App Group") {
+                VStack(alignment: .leading, spacing: 8) {
+                    let resolution = store.appGroupResolution
+                    if let resolvedID = resolution.resolvedID {
+                        Text("✓ 利用可能: \(resolvedID)").foregroundColor(.green)
+                    } else {
+                        Text("✗ 利用不可（無料アカウント？）").foregroundColor(.red)
+                    }
+
+                    Divider()
+
+                    Text("解決結果").font(.caption).fontWeight(.semibold)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Candidates: \(resolution.candidates.joined(separator: ", "))")
+                            .font(.caption2)
+                            .textSelection(.enabled)
+
+                        if !resolution.provisionGroups.isEmpty {
+                            Text("Provision: \(resolution.provisionGroups.joined(separator: ", "))")
+                                .font(.caption2)
+                                .textSelection(.enabled)
+                        }
+
+                        if !resolution.altGroups.isEmpty {
+                            Text("ALT: \(resolution.altGroups.joined(separator: ", "))")
+                                .font(.caption2)
+                                .textSelection(.enabled)
+                        }
+
+                        Text("Provision readable: \(resolution.provisionReadable)")
+                            .font(.caption2)
+                    }
+                }
+            }
+
+            Section("データの配置") {
+                Text(dataStatus)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+
             Section("検証") {
                 NavigationLink("Probes") { probesView }
                 NavigationLink("結果") { resultsView }
             }
         }
-        .navigationTitle("検証")
+        .navigationTitle("開発者向け")
+        .onAppear {
+            updateDeviceInfo()
+            updateDataStatus()
+        }
     }
 
     private var probesView: some View {
@@ -348,6 +351,7 @@ struct ContentView: View {
         }
 
         dataStatus = status
+        dataReloadToken += 1
     }
 
     private func canCopyDict() -> Bool {

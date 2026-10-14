@@ -65,7 +65,17 @@ final class KeyboardModel: ObservableObject {
 
     weak var host: KeyboardHost?
 
-    private let session: NagiSession?
+    /// コアのセッション。メモリ警告やコアの異常で作り直す・手放すことがあるので var。nil のときはキーを直接ホストへ入れる
+    private var session: NagiSession?
+    private let store = SharedStore.shared
+    /// OS の電源・熱・メモリ逼迫の状態をコアへ渡す
+    private let environment = NagiEnvironmentReporter()
+    /// メモリ警告で LLM を手放した（このプロセスの間は辞書のみで動く）
+    private var dictionaryOnly = false
+    /// コアが続けて応答しなかった回数（応答すれば 0 に戻る）
+    private var consecutiveFailures = 0
+    /// コアを作り直した回数（上限を超えたら直接入力に倒す）
+    private var coreRestarts = 0
     /// 同じキーの連続タップでトグル入力にするか（false ならフリック入力で、タップは常に先頭の文字）。
     /// 設定（`input.toggle_input`）で決まる
     private var toggleInput: Bool
@@ -119,10 +129,104 @@ final class KeyboardModel: ObservableObject {
         self.lastLearningClearSignal = NagiLearningClearSignal.current()
         self.appliedAssignment = (kana: LayoutAssignment.id(for: .kana), alpha: LayoutAssignment.id(for: .alpha))
         self.layoutDef = LayoutLoader.loadAssigned(mode: .kana)
+        attachSession()
+        environment.onChange = { [weak self] in self?.reportEnvironment(reason: "os change") }
+        environment.start()
+        reloadIOSSettings()
+    }
+
+    /// 現在のセッションに通知の受け取りを付け、実行環境を報告する（生成時・作り直し時）
+    private func attachSession() {
         session?.onPreeditUpdate = { [weak self] update in self?.applyPreeditUpdate(update) }
         session?.onCandidatesUpdate = { [weak self] update in self?.applyCandidatesUpdate(update) }
         session?.startNotifications()
-        reloadIOSSettings()
+        reportEnvironment(reason: "attach")
+    }
+
+    /// 電源・熱・メモリ逼迫の状態をコアへ渡す（focusIn、OS の変化通知、メモリ警告、セッション生成時）
+    private func reportEnvironment(reason: String) {
+        guard let session = session else { return }
+        let params = environment.snapshot()
+        session.setEnvironment(params)
+        DiagLog.log("set_environment (\(reason)) \(NagiEnvironmentReporter.describe(params))")
+    }
+
+    // MARK: - 堅牢性（メモリ警告・コアの異常）
+
+    /// OS のメモリ警告（`didReceiveMemoryWarning`）。拡張はメモリ上限を超えると強制終了されるので、
+    /// 入力を確定してから LLM を手放し（辞書のみで動くコアに作り直す）、画面側のキャッシュを捨てる。
+    /// コアには LLM だけを解放する API が無いため、エンジンごと作り直す（要望は報告に記載）
+    func handleMemoryWarning() {
+        let stats = MemoryProbe.getStats()
+        DiagLog.log("memory warning footprint=\(Int(stats.physFootprintMB))MB available=\(Int(stats.availableMemoryMB))MB dictOnly=\(dictionaryOnly)")
+        environment.noteMemoryWarning(availableMB: stats.availableMemoryMB)
+        // 画面側のキャッシュ（読み込み済みレイアウト・展開中の候補一覧）を捨てる。
+        // 入力中の候補はコアの状態と対応しているので消さない
+        layoutCache.removeAll()
+        isExpanded = false
+        guard session != nil else { return }
+        reportEnvironment(reason: "memory warning")
+        guard !dictionaryOnly else { return }
+        // LLM を使っていないなら解放するものがない（状態が取れなければ使っているとみなす）
+        if let status = session?.getStatus(), !status.llm { return }
+        restartCore(noLLM: true, reason: "memory warning")
+    }
+
+    /// コアを作り直す。入力中の文字列はホストの入力欄に残した上で（失わない）、古いセッションを手放してから
+    /// 新しく作る（二重に持ってメモリを増やさない）。作り直せなければ session は nil になり、
+    /// キーは直接ホストへ入る
+    private func restartCore(noLLM: Bool, reason: String) {
+        DiagLog.log("restart core noLLM=\(noLLM) reason=\(reason)")
+        if let old = session {
+            // 応答するなら、focusOut で入力中の文字列を確定する（学習の書き出しもここで行われる）
+            if let result = old.focusOut() { apply(result, origin: "response(focus_out before restart)") }
+            old.stopNotifications()
+        }
+        keepPreeditInHost()
+        session = nil
+        if noLLM { dictionaryOnly = true }
+        let outcome = ProductSession.make(store: store, noLLM: dictionaryOnly)
+        session = outcome.session
+        message = outcome.message
+        warning = dictionaryOnly && outcome.session != nil
+            ? "メモリ不足のため、変換を簡易モード（辞書のみ）に切り替えました"
+            : outcome.warning
+        consecutiveFailures = 0
+        lastSentContext = nil
+        attachSession()
+        if session != nil { scheduleContextUpdate(delay: 0.1) }
+    }
+
+    /// 変換中の文字列をホストの入力欄に残す（下線を外して確定扱いにする）。表示も空にする
+    private func keepPreeditInHost() {
+        if !shownMarked.isEmpty {
+            DiagLog.log("keep preedit in host len=\(shownMarked.count)")
+            host?.hostUnmarkText()
+        }
+        shownMarked = ""
+        shownCursor = 0
+        preedit = ""
+        isConverting = false
+        candidates = []
+        selectedCandidate = -1
+        isExpanded = false
+    }
+
+    /// コアが応答しなかった。続けて失敗したらコアを作り直す（2 回まで）。それでも直らなければ直接入力に倒す
+    private func noteCoreFailure(_ label: String) {
+        consecutiveFailures += 1
+        guard consecutiveFailures >= 3 else { return }
+        consecutiveFailures = 0
+        if coreRestarts < 2 {
+            coreRestarts += 1
+            restartCore(noLLM: dictionaryOnly, reason: "no response x3 (\(label))")
+        } else {
+            DiagLog.log("core unavailable: direct input mode")
+            session?.stopNotifications()
+            keepPreeditInHost()
+            session = nil
+            message = "変換エンジンが応答しません。直接入力に切り替えました"
+        }
     }
 
     private static func modificationDate(_ url: URL?) -> Date? {
@@ -302,8 +406,12 @@ final class KeyboardModel: ObservableObject {
         toggleState = nil
         // フリック入力では、タップは常に先頭の文字。トグル入力では連続タップを置き換えにする
         let effective: KeyGesture = (gesture == .tap && toggleInput) ? .toggle : gesture
-        send("key12 \(key.rawValue) \(effective.rawValue)") {
+        let consumed = send("key12 \(key.rawValue) \(effective.rawValue)") {
             $0.insert(.key12(ReadingInputKey12Inner(key: key, gesture: effective)))
+        }
+        // コアが使えないときは、押されたキーの文字をそのままホストへ入れる（入力を失わない）
+        if !consumed, let char = KanaKeyTable.char(for: key, gesture: effective) {
+            hostInsert(char)
         }
     }
 
@@ -432,6 +540,7 @@ final class KeyboardModel: ObservableObject {
         toggleState = nil
         reloadIOSSettings()
         applyCoreSettingsChanges()
+        reportEnvironment(reason: "focusIn")
         // レイアウトのファイルが変わっていても追随する（ホストアプリでの割り当て・取り込み）
         layoutCache.removeAll()
         if let fresh = cachedLayout(id: layoutDef.id) { layoutDef = fresh }
@@ -522,10 +631,16 @@ final class KeyboardModel: ObservableObject {
     /// コアに要求を送り、結果を反映する。コアが操作を消費したら true（セッションが無ければ false）
     @discardableResult
     private func send(_ label: String, _ call: (NagiSession) -> ProcessKeyResult?) -> Bool {
-        guard let session = session, let result = call(session) else {
-            DiagLog.log("send \(label) -> no result")
+        guard let session = session else {
+            DiagLog.log("send \(label) -> no session")
             return false
         }
+        guard let result = call(session) else {
+            DiagLog.log("send \(label) -> no result")
+            noteCoreFailure(label)
+            return false
+        }
+        consecutiveFailures = 0
         DiagLog.log("send \(label)")
         apply(result, origin: "response")
         return result.consumed

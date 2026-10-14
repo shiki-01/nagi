@@ -127,7 +127,7 @@ struct NagiSetupStatusRow: View {
 struct NagiOnboardingView: View {
     /// 閉じる（初回表示済みとして記録するのは呼び出し側）
     let onClose: () -> Void
-    /// 手順 3: データタブへ移動
+    /// 手順 3: ホームのデータ欄へ移動
     let onOpenData: () -> Void
     /// 手順 4: 入力テストタブへ移動
     let onOpenInputTest: () -> Void
@@ -173,10 +173,10 @@ struct NagiOnboardingView: View {
                 Section("手順 3  辞書とモデルを確認する") {
                     NagiSetupStatusRow(title: "辞書", state: data.hasDict ? .ok : .ng)
                     NagiSetupStatusRow(title: "モデル", state: data.hasModel ? .ok : .ng)
-                    Text("足りないものは、データ画面から取り込み方法を確認できます。")
+                    Text("足りないものは、ホームのデータ欄から取り込めます。")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    Button("データ画面を開く") {
+                    Button("ホームを開く") {
                         onOpenData()
                         onClose()
                     }

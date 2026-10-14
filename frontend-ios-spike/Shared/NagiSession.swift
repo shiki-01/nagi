@@ -155,6 +155,18 @@ final class NagiSession {
         request("focus_out", SessionParams(session_id: sessionId))
     }
 
+    // MARK: - 環境・状態
+
+    /// 実行環境（低電力モード・サーマル・メモリ逼迫）をコアへ報告する。コアはこれに応じてプロファイルを切り替える
+    func setEnvironment(_ params: SetEnvironmentParams) {
+        notify("set_environment", params)
+    }
+
+    /// 現在のプロファイル・LLM の使用有無など
+    func getStatus() -> StatusResult? {
+        request("get_status", EmptyResult())
+    }
+
     // MARK: - 設定・学習
 
     /// 設定項目の記述子と現在値（`config.toml` を読む）

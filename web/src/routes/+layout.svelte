@@ -5,7 +5,8 @@
   let { children } = $props()
   const nav = [
     { href: '/', label: 'Nagi について' },
-    { href: '/custom-keyboard', label: 'キーボード編集' },
+    { href: '/support', label: 'サポート' },
+    { href: '/custom-keyboard', label: 'カスタムキーボード' },
     { href: '/privacy', label: 'プライバシー' }
   ]
 </script>
@@ -36,7 +37,10 @@
 <footer class="site-footer">
   <div class="inner px:16px py:24px">
     <p>Nagi は個人で開発中のオープンソースの日本語入力システムです（コードは MIT OR Apache-2.0）。</p>
-    <p><a href="/privacy">プライバシーポリシー</a></p>
+    <p>
+      <a href="/support">サポート</a> / <a href="/privacy">プライバシーポリシー</a> /
+      <a href="https://github.com/shiki-01/nagi" rel="noopener">GitHub</a>
+    </p>
   </div>
 </footer>
 

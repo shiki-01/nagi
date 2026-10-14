@@ -135,6 +135,14 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
             || type == UITextContentType.oneTimeCode
     }
 
+    // MARK: - メモリ警告
+
+    /// OS からのメモリ警告。入力を確定して LLM を手放し、キャッシュを捨てる（強制終了される前に軽くする）
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        model?.handleMemoryWarning()
+    }
+
     // MARK: - ホストの入力欄の変化
 
     /// 入力欄の内容やカーソルが変わった（外部からの変更、カーソル移動、自分の操作の結果）。

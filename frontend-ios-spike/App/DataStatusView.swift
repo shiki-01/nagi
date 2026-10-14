@@ -1,7 +1,7 @@
 import SwiftUI
 
-// データタブ。辞書・モデルの有無とサイズ・場所、メモリ状況、LLM が使える見込みを表示する。
-// 取り込み操作はホームタブの既存機能（辞書のコピー・モデルのインポート）にあり、ここでは重複して持たず誘導する。
+// ホームタブのデータ状況。辞書・モデルの有無とサイズ・場所、メモリ状況、LLM が使える見込みを表示する。
+// 取り込み操作はホームタブの「取り込み」セクション（辞書のコピー・モデルのインポート）にある。
 // 学習データ・ユーザー辞書の場所と全削除は設定タブ側にある。
 
 /// バイト数の表示用整形（ContentView の private な formatBytes と重複させない別名）
@@ -15,7 +15,7 @@ enum NagiFormat {
     }
 }
 
-/// 辞書・モデルの配置状況のスナップショット（オンボーディングとデータタブで共有）
+/// 辞書・モデルの配置状況のスナップショット（オンボーディングとホームのデータ欄で共有）
 struct NagiDataSnapshot {
     var dictPath: String?
     var dictSource: String
@@ -64,9 +64,10 @@ struct NagiDataSnapshot {
     }
 }
 
-struct NagiDataStatusView: View {
-    /// ホームタブ（辞書・モデルの取り込み機能がある）へ切り替える
-    let onOpenImport: () -> Void
+/// ホームタブに埋め込む、辞書・モデル・メモリ・LLM の見込みのセクション群（List の中で使う）
+struct NagiDataStatusSections: View {
+    /// 値が変わったら再読み込みする（辞書のコピー・モデルのインポートのあとにホームが増やす）
+    let reloadToken: Int
 
     /// LLM を読み込める最低限のメモリ上限（MB）の目安
     private static let llmMinBudgetMB: UInt64 = 150
@@ -76,18 +77,14 @@ struct NagiDataStatusView: View {
     @State private var budgetMB = MemoryProbe.processBudgetMB()
 
     var body: some View {
-        NavigationStack {
-            List {
-                dictSection
-                modelSection
-                importSection
-                memorySection
-                llmSection
-            }
-            .navigationTitle("データ")
-            .onAppear { reload() }
-            .refreshable { reload() }
+        Group {
+            dictSection
+            modelSection
+            memorySection
+            llmSection
         }
+        .onAppear { reload() }
+        .onChange(of: reloadToken) { _ in reload() }
     }
 
     // MARK: - セクション
@@ -141,17 +138,6 @@ struct NagiDataStatusView: View {
                     }
                 }
             }
-        }
-    }
-
-    private var importSection: some View {
-        Section("取り込み方法") {
-            Text("辞書とモデルは、ホームタブの「データ」から取り込みます。モデルは「ファイル」アプリなどに置いた .gguf を選んでください。辞書はアプリに同梱のものをコピーできます。")
-                .font(.caption)
-            Button("ホームの取り込み機能を開く") {
-                onOpenImport()
-            }
-            .buttonStyle(.borderless)
         }
     }
 
@@ -215,11 +201,11 @@ struct NagiDataStatusView: View {
     private func modelMissingReason() -> String {
         switch snapshot.modelStatus {
         case .noContainer:
-            return "App Group コンテナが取得できません。ホームの「モデルをインポート」でこのアプリ専用の領域には置けますが、拡張からは見えません"
+            return "App Group コンテナが取得できません。「取り込み」の「モデルをインポート」でこのアプリ専用の領域には置けますが、拡張からは見えません"
         case .noModelsDir(let path):
-            return "\(path) がありません。ホームの「モデルをインポート」で .gguf を選んでください"
+            return "\(path) がありません。「取り込み」の「モデルをインポート」で .gguf を選んでください"
         case .noGGUF(let path):
-            return "\(path) に .gguf がありません。ホームの「モデルをインポート」で選んでください"
+            return "\(path) に .gguf がありません。「取り込み」の「モデルをインポート」で選んでください"
         case .found:
             return ""
         }

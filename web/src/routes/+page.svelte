@@ -1,10 +1,12 @@
-<svelte:head>
-  <title>Nagi - ローカル LLM による日本語入力</title>
-  <meta
-    name="description"
-    content="Nagi は、端末内で動く小型の言語モデルでかな漢字変換を行う日本語入力システムです。入力内容を外部に送信しません。macOS 先行、iOS は TestFlight で検証中。"
-  />
-</svelte:head>
+<script lang="ts">
+  import Meta from '$lib/components/Meta.svelte'
+</script>
+
+<Meta
+  title="Nagi"
+  path="/"
+  description="Nagi は、端末内で動く小型の言語モデルでかな漢字変換を行う日本語入力システムです。入力内容を外部に送信しません。macOS 先行、iOS は TestFlight で検証中。"
+/>
 
 <main class="page">
   <section class="hero" aria-labelledby="hero-title">
@@ -86,7 +88,7 @@
       <li>ログに入力内容を残しません（開発用ビルドで明示的に有効にした場合を除く）。</li>
       <li>学習データは端末内に保存し、ワンコマンドで全削除できるようにする方針です。</li>
     </ul>
-    <p>詳しくは<a href="/privacy">プライバシーポリシー</a>をご覧ください（現在は草案です）。</p>
+    <p>詳しくは<a href="/privacy">プライバシーポリシー</a>をご覧ください。使い方で困ったときは<a href="/support">サポート</a>をどうぞ。</p>
   </section>
 
   <section aria-labelledby="fullaccess">

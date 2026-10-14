@@ -63,7 +63,7 @@ struct NagiAboutView<Developer: View>: View {
                 }
 
                 Section("開発者向け") {
-                    NavigationLink("検証（Probes・結果）") {
+                    NavigationLink("端末情報・App Group・Probes・結果") {
                         developer
                     }
                 }
