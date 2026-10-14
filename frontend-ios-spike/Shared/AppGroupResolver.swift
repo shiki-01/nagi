@@ -60,7 +60,7 @@ class AppGroupResolver {
         }
 
         // (c) 固定値を候補に追加
-        let fixedID = "group.com.shiki.nagi.spike"
+        let fixedID = "group.com.shiki01.nagi"
         candidates.append(fixedID)
 
         // 重複排除（順序を保持）

@@ -5,7 +5,7 @@ import Foundation
 struct DataPaths {
     /// data_dir の解決と情報
     /// - Returns: (path: String?, source: String) source は "appgroup" / "bundle" / "none"
-    static func resolveDataDir(appGroupId: String = "group.com.shiki.nagi.spike") -> (path: String?, source: String) {
+    static func resolveDataDir(appGroupId: String = "group.com.shiki01.nagi") -> (path: String?, source: String) {
         let fileManager = FileManager.default
 
         // (a) App Group コンテナの data ディレクトリ（実在する場合）
@@ -31,7 +31,7 @@ struct DataPaths {
     /// user_dir の解決
     /// App Group が利用可能ならそのコンテナを使用。不可ならプロセス固有の Application Support を使用
     /// - Returns: path: String?
-    static func resolveUserDir(appGroupId: String = "group.com.shiki.nagi.spike") -> String? {
+    static func resolveUserDir(appGroupId: String = "group.com.shiki01.nagi") -> String? {
         let fileManager = FileManager.default
 
         // App Group コンテナが利用可能ならそれを使う
@@ -55,7 +55,7 @@ struct DataPaths {
 
     /// 辞書ファイルのパスを取得
     /// - Returns: (path: String?, source: String) source は "appgroup" / "bundle" / "none"
-    static func dictPath(appGroupId: String = "group.com.shiki.nagi.spike") -> (path: String?, source: String) {
+    static func dictPath(appGroupId: String = "group.com.shiki01.nagi") -> (path: String?, source: String) {
         let fileManager = FileManager.default
         let (dataDir, source) = resolveDataDir(appGroupId: appGroupId)
 
@@ -77,7 +77,7 @@ struct DataPaths {
 
     /// モデルディレクトリのパスを取得
     /// - Returns: (path: String?, source: String)
-    static func modelsDir(appGroupId: String = "group.com.shiki.nagi.spike") -> (path: String?, source: String) {
+    static func modelsDir(appGroupId: String = "group.com.shiki01.nagi") -> (path: String?, source: String) {
         let fileManager = FileManager.default
         let (dataDir, source) = resolveDataDir(appGroupId: appGroupId)
 
@@ -132,7 +132,7 @@ struct DataPaths {
 
     /// モデルの配置状況を調べる（App Group → このプロセス専用領域 → バンドルの順）。
     /// `resolveDataDir` と違い、data/ だけ無い場合や辞書の有無に影響されず、原因を区別できる
-    static func modelStatus(appGroupId: String = "group.com.shiki.nagi.spike") -> ModelStatus {
+    static func modelStatus(appGroupId: String = "group.com.shiki01.nagi") -> ModelStatus {
         let fileManager = FileManager.default
         let container = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)
 
@@ -188,11 +188,11 @@ struct DataPaths {
     private static let modelPreferenceKey = "llm_model_file"
 
     /// 使用するモデルのファイル名の選択（App Group の UserDefaults に保存し、ホストと拡張で共有）
-    static func preferredModelName(appGroupId: String = "group.com.shiki.nagi.spike") -> String? {
+    static func preferredModelName(appGroupId: String = "group.com.shiki01.nagi") -> String? {
         UserDefaults(suiteName: appGroupId)?.string(forKey: modelPreferenceKey)
     }
 
-    static func setPreferredModelName(_ name: String?, appGroupId: String = "group.com.shiki.nagi.spike") {
+    static func setPreferredModelName(_ name: String?, appGroupId: String = "group.com.shiki01.nagi") {
         UserDefaults(suiteName: appGroupId)?.set(name, forKey: modelPreferenceKey)
     }
 
@@ -209,7 +209,7 @@ struct DataPaths {
     /// コアは辞書が読めないと LLM を読み込まないため、モデルを置く前後に必要
     /// - Returns: 配置済み（または今回コピーした）なら true。バンドルにも無ければ false
     @discardableResult
-    static func ensureDictInAppGroup(appGroupId: String = "group.com.shiki.nagi.spike") throws -> Bool {
+    static func ensureDictInAppGroup(appGroupId: String = "group.com.shiki01.nagi") throws -> Bool {
         let fileManager = FileManager.default
         guard let container = fileManager.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
             return false

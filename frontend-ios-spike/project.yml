@@ -50,20 +50,20 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         ALTAppGroups:
-          - group.com.shiki.nagi.spike
+          - group.com.shiki01.nagi
 
     entitlements:
       path: App/NagiSpike.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.com.shiki.nagi.spike
+          - group.com.shiki01.nagi
 
     settings:
       SWIFT_VERSION: "5"
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_APP ${NAGI_LLM}"
       OTHER_LDFLAGS: "$(inherited) -lc++"
       CODE_SIGN_STYLE: Automatic
-      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.inputmethod.NagiSpike
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki01.nagi
 
     scheme:
       testTargets: []
@@ -99,14 +99,14 @@ targets:
       path: Keyboard/NagiSpikeKeyboard.entitlements
       properties:
         com.apple.security.application-groups:
-          - group.com.shiki.nagi.spike
+          - group.com.shiki01.nagi
 
     info:
       path: Keyboard/Info.plist
       properties:
         CFBundleDisplayName: Nagi Spike Keyboard
         ALTAppGroups:
-          - group.com.shiki.nagi.spike
+          - group.com.shiki01.nagi
         NSExtension:
           NSExtensionAttributes:
             PrimaryLanguage: ja-JP
@@ -120,7 +120,7 @@ targets:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_KEYBOARD ${NAGI_LLM}"
       OTHER_LDFLAGS: "$(inherited) -lc++"
       CODE_SIGN_STYLE: Automatic
-      PRODUCT_BUNDLE_IDENTIFIER: com.shiki.inputmethod.NagiSpike.Keyboard
+      PRODUCT_BUNDLE_IDENTIFIER: com.shiki01.nagi.keyboard
 
     scheme:
       testTargets: []

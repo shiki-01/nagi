@@ -211,7 +211,7 @@ Sideloadly + 無料 Apple ID での導入など、App Group が使えない環�
 - 各プローブの metrics には `data_dir_source` を記録（"appgroup" / "bundle" / "none"）
 
 ### 結果の記録場所
-- App Group が利用可能: `~/Library/Group Containers/group.com.shiki.nagi.spike/results.jsonl`
+- App Group が利用可能: `~/Library/Group Containers/group.com.shiki01.nagi/results.jsonl`
 - App Group が利用不可（無料アカウント）:
   - ホストアプリ: `~/Library/Application Support/com.shiki.nagi.spike/results.jsonl`
   - キーボード拡張: `~/Library/Application Support/com.shiki.nagi.spike/results.jsonl`（別プロセスなので別ファイル）
@@ -292,7 +292,7 @@ cargo xtask build-ios-xcframework
 ## 設定ファイル
 
 - アプリのユーザー設定: `~/Library/Application Support/Nagi/` 下に保存
-- App Group コンテナ: `~/Library/Group Containers/group.com.shiki.nagi.spike/`
+- App Group コンテナ: `~/Library/Group Containers/group.com.shiki01.nagi/`
 
 ## 参考
 

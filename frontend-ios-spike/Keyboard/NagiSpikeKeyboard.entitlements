@@ -4,7 +4,7 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.shiki.nagi.spike</string>
+		<string>group.com.shiki01.nagi</string>
 	</array>
 </dict>
 </plist>

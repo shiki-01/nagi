@@ -43,25 +43,25 @@ class SharedStore {
 
     /// 実際に使う App Group ID（解決できなければ既定値）
     var appGroupId: String {
-        resolution.resolvedID ?? "group.com.shiki.nagi.spike"
+        resolution.resolvedID ?? "group.com.shiki01.nagi"
     }
 
     /// 辞書ファイルのパス（優先順位: App Group → Bundle）
     /// - Returns: (path: String?, source: String) source は "appgroup" / "bundle" / "none"
     func dictPath() -> (path: String?, source: String) {
-        return DataPaths.dictPath(appGroupId: resolution.resolvedID ?? "group.com.shiki.nagi.spike")
+        return DataPaths.dictPath(appGroupId: resolution.resolvedID ?? "group.com.shiki01.nagi")
     }
 
     /// モデルディレクトリのパス（優先順位: App Group → Bundle）
     /// - Returns: (path: String?, source: String)
     func modelsDir() -> (path: String?, source: String) {
-        return DataPaths.modelsDir(appGroupId: resolution.resolvedID ?? "group.com.shiki.nagi.spike")
+        return DataPaths.modelsDir(appGroupId: resolution.resolvedID ?? "group.com.shiki01.nagi")
     }
 
     /// data ディレクトリのパス（優先順位: App Group → Bundle）
     /// - Returns: (path: String?, source: String)
     func dataDir() -> (path: String?, source: String) {
-        return DataPaths.resolveDataDir(appGroupId: resolution.resolvedID ?? "group.com.shiki.nagi.spike")
+        return DataPaths.resolveDataDir(appGroupId: resolution.resolvedID ?? "group.com.shiki01.nagi")
     }
 
     /// 結果を追記（同期的に fsync）
