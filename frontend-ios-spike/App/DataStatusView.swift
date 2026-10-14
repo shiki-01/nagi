@@ -162,7 +162,7 @@ struct NagiDataStatusSections: View {
                     .foregroundColor(verdict.ok ? .green : .orange)
                 Text(verdict.message).font(.callout)
             }
-            Text("判定: 辞書あり・モデルあり・メモリ上限の推定が \(Self.llmMinBudgetMB) MB 以上。実際に使えるかは、拡張が起動時に空きメモリを見て決めます。フルアクセスがオフだと拡張は辞書・モデルを読めず、ひらがな・カタカナ変換のみになります。")
+            Text("判定: 辞書あり・モデルあり・メモリ上限の推定が \(Self.llmMinBudgetMB) MB 以上。実際に使えるかは、拡張が起動時に空きメモリを見て決めます。フルアクセスがオフの場合の機能は端末により異なる場合があり、辞書とモデルの利用に許可が必要になる場合があります。")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }

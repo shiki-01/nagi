@@ -511,6 +511,8 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
         runtime.push_event(e);
     }
 
+    // feature `update-check` が無効（iOS 等）なら auto_check が true でも何もしない（通知もエラーも出さない）
+    #[cfg(feature = "update-check")]
     if config.update.auto_check {
         let runtime_for_update = runtime.clone();
         let url = config

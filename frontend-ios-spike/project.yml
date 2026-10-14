@@ -37,6 +37,11 @@ targets:
         type: folder
         optional: true
         buildPhase: resources
+      # アプリ内ライセンス表示用（About > ライセンス）。リポジトリルートのファイルをバンドル直下に同梱する
+      - path: ../NOTICE
+        buildPhase: resources
+      - path: ../THIRD_PARTY_LICENSES.md
+        buildPhase: resources
 
     dependencies:
       - target: NagiSpikeKeyboard
@@ -54,7 +59,7 @@ targets:
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: Nagi Spike
+        CFBundleDisplayName: Nagi
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # 独自の暗号化を使わない（TestFlight の輸出コンプライアンス質問を省略する）
@@ -71,8 +76,6 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        ALTAppGroups:
-          - group.com.shiki01.nagi
 
     entitlements:
       path: App/NagiSpike.entitlements
@@ -87,6 +90,7 @@ targets:
       CODE_SIGN_STYLE: Automatic
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       PRODUCT_BUNDLE_IDENTIFIER: com.shiki01.nagi
+      TARGETED_DEVICE_FAMILY: "1"
 
     scheme:
       testTargets: []
@@ -132,11 +136,9 @@ targets:
     info:
       path: Keyboard/Info.plist
       properties:
-        CFBundleDisplayName: Nagi Spike Keyboard
+        CFBundleDisplayName: Nagi
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        ALTAppGroups:
-          - group.com.shiki01.nagi
         NSExtension:
           NSExtensionAttributes:
             PrimaryLanguage: ja-JP
@@ -151,6 +153,7 @@ targets:
       OTHER_LDFLAGS: "$(inherited) -lc++"
       CODE_SIGN_STYLE: Automatic
       PRODUCT_BUNDLE_IDENTIFIER: com.shiki01.nagi.keyboard
+      TARGETED_DEVICE_FAMILY: "1"
 
     scheme:
       testTargets: []

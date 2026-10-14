@@ -406,8 +406,7 @@ fn read_next_file(path: &Path) -> Result<NextFileData, LearnError> {
         }
         match parse_next_line(&line) {
             Ok(row) => {
-                data.rows
-                    .insert((row.prev.clone(), row.next.clone()), row);
+                data.rows.insert((row.prev.clone(), row.next.clone()), row);
             }
             Err(_) => data.skipped_lines += 1,
         }

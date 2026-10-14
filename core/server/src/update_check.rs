@@ -3,9 +3,7 @@
 //! ダウンロード・インストールは行わない（確認のみ）。
 
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 use std::path::Path;
-use std::time::Duration;
 
 /// 既定のマニフェスト URL
 pub const DEFAULT_CHECK_URL: &str = "https://nagi.shiki-01.com/updates/latest.json";
@@ -103,8 +101,17 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
     )
 }
 
+/// マニフェストを実際に HTTP で取得する（既定のタイムアウト 5 秒）。
+/// feature `update-check` が無効なビルド（iOS の XCFramework 等）では常にエラー（= 確認しない）
+#[cfg(not(feature = "update-check"))]
+fn fetch_manifest(_url: &str) -> Result<Manifest, String> {
+    Err("update-check feature が無効です".to_string())
+}
+
 /// マニフェストを実際に HTTP で取得する（既定のタイムアウト 5 秒）
+#[cfg(feature = "update-check")]
 fn fetch_manifest(url: &str) -> Result<Manifest, String> {
+    use std::time::Duration;
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(5))
         .build();
@@ -151,7 +158,8 @@ fn verify_signature(data: &[u8], signature_hex: &str, public_key_hex: &str) -> R
 /// `public_key_hex` は呼び出し側が渡す（このプロジェクトの実際の公開鍵は
 /// [`UPDATE_PUBLIC_KEY_HEX`] を参照。埋め込み鍵を差し替える運用は README 等で管理する）。
 /// **ダウンロードしたバイト列をディスクへ書き込む・インストールする処理は含まない**
-/// （呼び出し側の責任。プラットフォームごとに異なるため）
+/// （呼び出し側の責任。プラットフォームごとに異なるため）。
+/// feature `update-check` が無効なビルドでは、マニフェストの検査後にエラーを返す（取得しない）
 pub fn download_verified(manifest: &Manifest, public_key_hex: &str) -> Result<Vec<u8>, String> {
     let url = manifest
         .download_url
@@ -166,6 +174,16 @@ pub fn download_verified(manifest: &Manifest, public_key_hex: &str) -> Result<Ve
         .as_deref()
         .ok_or_else(|| "マニフェストに sha256 がありません".to_string())?;
 
+    let bytes = http_get_bytes(url)?;
+    verify_download(&bytes, expected_sha256, signature, public_key_hex)?;
+    Ok(bytes)
+}
+
+/// 配布物のバイト列を HTTP で取得する（タイムアウト 30 秒）
+#[cfg(feature = "update-check")]
+fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::time::Duration;
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(30))
         .build();
@@ -184,15 +202,29 @@ pub fn download_verified(manifest: &Manifest, public_key_hex: &str) -> Result<Ve
         .into_reader()
         .read_to_end(&mut bytes)
         .map_err(|e| format!("配布物の読み取りに失敗: {e}"))?;
+    Ok(bytes)
+}
 
-    let actual_sha256 = sha256_hex(&bytes);
+/// feature `update-check` が無効なビルドでは取得しない
+#[cfg(not(feature = "update-check"))]
+fn http_get_bytes(_url: &str) -> Result<Vec<u8>, String> {
+    Err("update-check feature が無効です".to_string())
+}
+
+/// 取得したバイト列の SHA-256 と ed25519 署名を検証する（HTTP に依存しない）
+fn verify_download(
+    bytes: &[u8],
+    expected_sha256: &str,
+    signature_hex: &str,
+    public_key_hex: &str,
+) -> Result<(), String> {
+    let actual_sha256 = sha256_hex(bytes);
     if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
         return Err(format!(
             "SHA-256 が一致しません（期待 {expected_sha256}、実際 {actual_sha256}）"
         ));
     }
-    verify_signature(&bytes, signature, public_key_hex)?;
-    Ok(bytes)
+    verify_signature(bytes, signature_hex, public_key_hex)
 }
 
 /// バイト列の SHA-256 を16進数文字列で返す
@@ -353,6 +385,44 @@ mod tests {
     #[test]
     fn verify_signature_rejects_malformed_signature_length() {
         assert!(verify_signature(TEST_MESSAGE, "abcd", TEST_PUBLIC_KEY_HEX).is_err());
+    }
+
+    #[test]
+    fn verify_download_checks_sha256_before_signature() {
+        let err = verify_download(
+            TEST_MESSAGE,
+            &"0".repeat(64),
+            TEST_SIGNATURE_HEX,
+            TEST_PUBLIC_KEY_HEX,
+        )
+        .unwrap_err();
+        assert!(err.contains("SHA-256"), "{err}");
+        let good_sha = sha256_hex(TEST_MESSAGE);
+        verify_download(
+            TEST_MESSAGE,
+            &good_sha,
+            TEST_SIGNATURE_HEX,
+            TEST_PUBLIC_KEY_HEX,
+        )
+        .unwrap();
+    }
+
+    /// feature 無効時は、確認が安全に no-op（`None`。パニックもエラー通知もしない）になる
+    #[cfg(not(feature = "update-check"))]
+    #[test]
+    fn check_is_noop_without_update_check_feature() {
+        assert!(check_once("https://example.invalid/latest.json", "0.0.1").is_none());
+        assert!(
+            check_with_throttle("https://example.invalid/latest.json", "0.0.1", None).is_none()
+        );
+        let manifest = Manifest {
+            version: "9.9.9".to_string(),
+            notes_url: None,
+            download_url: Some("https://example.invalid/x".to_string()),
+            sha256: Some("00".to_string()),
+            signature: Some("00".to_string()),
+        };
+        assert!(download_verified(&manifest, TEST_PUBLIC_KEY_HEX).is_err());
     }
 
     #[test]

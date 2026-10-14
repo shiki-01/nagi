@@ -511,6 +511,114 @@ fn predict_respects_min_chars() {
     assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
 }
 
+// ---- 確定直後の次語予測 ----
+
+fn next_word_engine(enabled: bool) -> (Engine, Arc<Recorder>) {
+    let backend = MockBackend::new()
+        .with_sentence(
+            "きょうはいい",
+            vec![
+                ("きょうは", vec!["今日は", "京は"]),
+                ("いい", vec!["いい", "良い"]),
+            ],
+        )
+        .with_next_words("いい", vec!["天気", "感じ"]);
+    let mut e = Engine::new(
+        Arc::new(backend),
+        EngineConfig {
+            next_word_enabled: enabled,
+            next_word_count: 5,
+            ..EngineConfig::default()
+        },
+    );
+    let rec = Arc::new(Recorder::default());
+    e.set_commit_observer(rec.clone());
+    (e, rec)
+}
+
+fn convert_and_commit(e: &mut Engine, session: &str) -> nagi_protocol::methods::ProcessKeyResult {
+    type_str(e, session, "kyouhaii");
+    press(e, session, "Space");
+    press(e, session, "Enter")
+}
+
+#[test]
+fn next_words_appear_after_commit_and_vanish_on_input() {
+    let (mut e, rec) = next_word_engine(true);
+    let r = convert_and_commit(&mut e, "s");
+    assert_eq!(r.commit.as_deref(), Some("今日はいい"));
+    let c = r.candidates.expect("確定直後に次語候補が差分に含まれる");
+    assert!(c.visible);
+    assert_eq!(
+        c.items
+            .iter()
+            .map(|i| i.surface.as_str())
+            .collect::<Vec<_>>(),
+        ["天気", "感じ"]
+    );
+    assert_eq!(c.items[0].sources, [CandidateSource::Learned]);
+    // バイグラムの「直前の語」が observer へ渡る（先頭は空、2 つ目以降は前の文節の表記）
+    let commits = rec.commits.lock().unwrap();
+    let prevs: Vec<&str> = commits[0].3.iter().map(|s| s.prev_word.as_str()).collect();
+    assert_eq!(prevs, ["", "今日は"]);
+    drop(commits);
+    // 入力が始まったら消える
+    let r = press(&mut e, "s", "a");
+    let c = r.candidates.expect("候補が消える差分");
+    assert!(!c.visible && c.items.is_empty());
+}
+
+#[test]
+fn next_words_are_off_when_disabled() {
+    let (mut e, _rec) = next_word_engine(false);
+    let r = convert_and_commit(&mut e, "s");
+    assert!(r.candidates.is_none_or(|c| c.items.is_empty()));
+}
+
+#[test]
+fn next_words_not_shown_after_plain_hiragana_commit_or_secure_input() {
+    let (mut e, _rec) = next_word_engine(true);
+    // 変換を経ないひらがな確定は文脈にならない
+    type_str(&mut e, "s", "ii");
+    let r = press(&mut e, "s", "Enter");
+    assert_eq!(r.commit.as_deref(), Some("いい"));
+    assert!(r.candidates.is_none_or(|c| c.items.is_empty()));
+    // secure input 中は出さない
+    e.set_context(
+        "t",
+        &nagi_protocol::methods::SetContextParams {
+            session_id: "t".into(),
+            secure_input: Some(true),
+            surrounding_text: None,
+            app_id: None,
+        },
+    );
+    let r = convert_and_commit(&mut e, "t");
+    assert!(r.candidates.is_none_or(|c| c.items.is_empty()));
+}
+
+#[test]
+fn selecting_a_next_word_commits_it_and_notifies_the_pair() {
+    let (mut e, rec) = next_word_engine(true);
+    convert_and_commit(&mut e, "s");
+    let r = e.select_candidate("s", 1);
+    assert_eq!(r.commit.as_deref(), Some("感じ"));
+    let commits = rec.commits.lock().unwrap();
+    let seg = &commits.last().unwrap().3[0];
+    assert_eq!(
+        (
+            seg.reading.as_str(),
+            seg.surface.as_str(),
+            seg.prev_word.as_str()
+        ),
+        ("", "感じ", "いい")
+    );
+    drop(commits);
+    // 範囲外・候補なしは何もしない
+    let r = e.select_candidate("s", 0);
+    assert!(r.commit.is_none());
+}
+
 // ---- ライブ変換（live_convert） ----
 
 #[test]

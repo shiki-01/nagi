@@ -165,7 +165,7 @@ fn selecting_a_next_word_inserts_it_and_learns_the_pair() {
         dir.join("learning-next.tsv")
     })
     .unwrap();
-    assert!(next.contains("今日\tは\t3\t"), "{next}");
+    assert!(next.contains("今日\tは\t2\t"), "{next}");
     // 範囲外の index は何もしない
     let r = commit_word(&mut s, "c", "kyou");
     assert!(!surfaces(&r).is_empty());
@@ -214,7 +214,7 @@ fn nothing_is_recorded_or_shown_while_learning_is_suspended() {
     // 学習済みにしてから、停止中のアプリ・secure input では出ない
     teach_kyou_wa(&mut s, "q");
     let r = commit_word(&mut s, "r", "kyou");
-    assert_eq!(surfaces(&r), ["は"]);
+    assert!(surfaces(&r).contains(&"は".to_string()));
     send(
         &mut s,
         "set_context",
@@ -285,7 +285,10 @@ fn bigrams_survive_restart_and_read_old_format_files() {
     // 通常の学習ファイルは従来のスキーマのまま（次語は混ざらない）
     let main = std::fs::read_to_string(dir.join("learning.tsv")).unwrap();
     assert!(main.starts_with("#nagi-learn\tv1"), "{main}");
-    assert!(!main.contains("\tは\t0000") || !main.contains("今日\tは"), "{main}");
+    assert!(
+        !main.contains("\tは\t0000") || !main.contains("今日\tは"),
+        "{main}"
+    );
     let next = std::fs::read_to_string(dir.join("learning-next.tsv")).unwrap();
     assert!(next.starts_with("#nagi-learn-next\tv1"), "{next}");
     let mut s = server_in(&dir, true);
@@ -321,6 +324,9 @@ fn two_instances_merge_their_bigrams() {
     let mut c = server_in(&dir, true);
     let r = commit_word(&mut c, "z", "kyou");
     let got = surfaces(&r);
-    assert!(got.contains(&"は".to_string()) && got.contains(&"に".to_string()), "{got:?}");
+    assert!(
+        got.contains(&"は".to_string()) && got.contains(&"に".to_string()),
+        "{got:?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

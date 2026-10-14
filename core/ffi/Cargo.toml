@@ -14,7 +14,8 @@ authors.workspace = true
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-nagi-server = { path = "../server" }
+# update-check（ureq/rustls/ring）を外す: docs/ios-release.md §0.2
+nagi-server = { path = "../server", default-features = false }
 serde_json = { workspace = true }
 
 [features]

@@ -36,7 +36,7 @@ struct NagiAboutView<Developer: View>: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("・変換・学習などの処理はすべて端末の中で行います。")
                         Text("・入力した内容を外部に送信しません。ネットワーク通信もしません。")
-                        Text("・フルアクセスは、辞書とモデルの共有領域をキーボードが読むためだけに使います。許可しなくても、ひらがな・カタカナ変換は使えます。")
+                        Text("・フルアクセスは、辞書とモデルの共有領域をキーボードが読むためだけに使います。許可しない場合の機能は端末により異なる場合があり、辞書とモデルの利用に許可が必要になる場合があります。")
                         Text("・パスワード欄などでは学習を止めます。入力内容をログに残しません。")
                     }
                     .font(.callout)
@@ -52,6 +52,20 @@ struct NagiAboutView<Developer: View>: View {
                     }
                     NavigationLink("辞書・モデルの出典") {
                         NagiThirdPartyNoticeView()
+                    }
+                    NavigationLink("ライセンス全文（NOTICE）") {
+                        NagiBundledTextView(
+                            title: "NOTICE",
+                            resourceName: "NOTICE",
+                            resourceExtension: nil
+                        )
+                    }
+                    NavigationLink("オープンソースライセンス") {
+                        NagiBundledTextView(
+                            title: "オープンソースライセンス",
+                            resourceName: "THIRD_PARTY_LICENSES",
+                            resourceExtension: "md"
+                        )
                     }
                 }
 
@@ -106,7 +120,7 @@ struct NagiThirdPartyNoticeView: View {
             }
 
             Section {
-                Text("ライセンス全文はリポジトリの NOTICE ファイルにあります。")
+                Text("ライセンス全文は、前の画面の「ライセンス全文（NOTICE）」で読めます（リポジトリの NOTICE ファイルと同じ内容です）。")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 if let url = URL(string: "https://github.com/shiki-01/nagi") {
@@ -116,6 +130,46 @@ struct NagiThirdPartyNoticeView: View {
             }
         }
         .navigationTitle("辞書・モデルの出典")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// アプリバンドルに同梱したテキストファイル（NOTICE など）をスクロール表示する。
+/// 同梱されていない・読めないときはフォールバックの案内文を出す。
+struct NagiBundledTextView: View {
+    let title: String
+    let resourceName: String
+    let resourceExtension: String?
+
+    private var text: String? {
+        guard let url = Bundle.main.url(forResource: resourceName, withExtension: resourceExtension),
+              let body = try? String(contentsOf: url, encoding: .utf8),
+              !body.isEmpty
+        else { return nil }
+        return body
+    }
+
+    var body: some View {
+        ScrollView {
+            if let text = text {
+                Text(text)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .textSelection(.enabled)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("ライセンス文書を読み込めませんでした。")
+                        .font(.callout)
+                    Text("全文は https://github.com/shiki-01/nagi の \(resourceName) ファイルで確認できます。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+            }
+        }
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
     }
 }

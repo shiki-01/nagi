@@ -1129,7 +1129,11 @@ impl Engine {
             let before: String = st.text.chars().take(end).collect();
             sess.left_context = tail_chars(&before, LEFT_CONTEXT_CHARS);
             // 直前のテキストが最後に確定した語で終わっていなければ、文脈は途切れている
-            if sess.last_word.as_ref().is_some_and(|w| !before.ends_with(w)) {
+            if sess
+                .last_word
+                .as_ref()
+                .is_some_and(|w| !before.ends_with(w))
+            {
                 sess.last_word = None;
             }
         }
@@ -1608,8 +1612,7 @@ impl Engine {
     /// 表示中の内容をすべて確定文字列へ移し、Direct に戻す
     fn commit_all(&self, sess: &mut Session, commit: &mut String) {
         let before_len = commit.len();
-        // 変換を経ない確定（ひらがなのまま等）は、次語予測の文脈を断つ
-        sess.last_word = None;
+        let mut notified = false;
         let pieces = match std::mem::replace(&mut sess.state, State::Direct) {
             State::Direct => None,
             State::Composing => {
@@ -1628,6 +1631,7 @@ impl Engine {
                     Some(v) if flushed_text.starts_with(&displayed_reading) => {
                         // 学習するのは変換済みの固定部分だけ（追記分は未変換のかな）
                         self.notify_commit(sess, &v.fixed);
+                        notified = true;
                         for s in v.fixed.iter().chain(&v.tail) {
                             commit.push_str(&s.surface);
                         }
@@ -1644,6 +1648,7 @@ impl Engine {
             }
             State::Converting(conv) => {
                 self.notify_commit(sess, &conv.segments);
+                notified = true;
                 let pieces: Vec<Piece> = conv
                     .segments
                     .iter()
@@ -1661,6 +1666,10 @@ impl Engine {
                 (!pieces.is_empty()).then_some(pieces)
             }
         };
+        if !notified {
+            // 変換を経ない確定（ひらがなのまま等）は、次語予測の文脈を断つ
+            sess.last_word = None;
+        }
         sess.composer.clear();
         sess.last_commit = pieces.map(|pieces| LastCommit {
             pieces,

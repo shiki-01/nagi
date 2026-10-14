@@ -131,6 +131,10 @@ pub struct CandidateView {
 }
 
 /// 候補ウィンドウの状態
+///
+/// 未入力（Direct）で `visible` かつ `items` があるときは、確定直後の次語予測
+/// （`predict.next_word`）。各候補は `select_candidate` で選ぶとそのまま挿入される
+/// （`commit`）。入力が始まるか別の操作をすると、`visible = false` の差分で消える
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct CandidatesView {

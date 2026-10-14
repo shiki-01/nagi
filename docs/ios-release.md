@@ -14,6 +14,8 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 
 ### 0.1 PrivacyInfo の宣言漏れ（Required Reason API）
 
+> **対応済み（ビルド確認待ち）: 両 PrivacyInfo に UserDefaults `CA92.1` を追加（`1C8F.1` は維持）。`AppleKeyboards` の読み取りは削除済み（§0.4 前の行参照）。他カテゴリの宣言の過不足は無し。ITMS-91053 メールでの最終確認は残る。**
+
 宣言の現状（`frontend-ios-spike/App/PrivacyInfo.xcprivacy` と `frontend-ios-spike/Keyboard/PrivacyInfo.xcprivacy` は同一内容）:
 `NSPrivacyTracking=false` / 収集データなし / UserDefaults `1C8F.1` / FileTimestamp `C617.1`。
 
@@ -23,7 +25,7 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 | --- | --- | --- | --- |
 | UserDefaults（App Group `suiteName:`） | `Keyboard/KeyboardViewController.swift:29`、`Shared/KeyboardLayout.swift:534`、`Shared/DataPaths.swift:192,196`、`Shared/DiagLog.swift:20`、`App/SettingsView.swift:72`、`App/OnboardingView.swift:38` | `1C8F.1`（同じ App Group 内での共有） | 適合 |
 | UserDefaults（**`.standard`**） | `Keyboard/KeyboardViewController.swift:355,366`（Probe の実行中マーカー `nagi.keyboard.runningProbe`）、`App/ContentView.swift:20`（`@AppStorage("nagi.onboarding.completed")`＝標準の UserDefaults） | `1C8F.1` のみ | **宣言漏れ**: アプリ自身だけが読み書きする値には `CA92.1` が必要。**ホストアプリ・キーボード拡張の両方**の PrivacyInfo に `CA92.1` を追加する（拡張側は `KeyboardViewController.swift:355,366` が根拠） |
-| UserDefaults（システムの設定の読み取り） | `App/OnboardingView.swift:41`（`UserDefaults.standard.array(forKey: "AppleKeyboards")`。設定アプリの有効キーボード一覧という**非公開キー**） | 該当する理由なし | **グレー**: 自アプリの値ではないので `CA92.1` の趣旨（アプリ自身の情報）に当たらない。審査で指摘されるリスクがある。`docs/ios-device-checklist.md` §3 でも「iOS 16 以降でも効くか」が未確認の補助判定なので、**削除してマーカー（`keyboardLastSeen` / `fullAccessLastSeen`）だけで判定する**のが安全（ユーザー判断） |
+| UserDefaults（システムの設定の読み取り） | `App/OnboardingView.swift:41`（**削除済み**。旧: `UserDefaults.standard.array(forKey: "AppleKeyboards")`。設定アプリの有効キーボード一覧という**非公開キー**） | 該当する理由なし | **グレー**: 自アプリの値ではないので `CA92.1` の趣旨（アプリ自身の情報）に当たらない。審査で指摘されるリスクがある。`docs/ios-device-checklist.md` §3 でも「iOS 16 以降でも効くか」が未確認の補助判定なので、**削除してマーカー（`keyboardLastSeen` / `fullAccessLastSeen`）だけで判定する**のが安全（ユーザー判断） |
 | File timestamp | `Keyboard/KeyboardModel.swift:301-303`（`attributesOfItem` の `.modificationDate`。config.toml の更新検知）、`Shared/UserDictStore.swift:369`（`setAttributes([.modificationDate:])`）。`attributesOfItem` の `.size` は `Shared/DataPaths.swift:162`、`App/DataStatusView.swift:35`、`App/ContentView.swift:330,436` | `C617.1`（アプリ／App Group コンテナ内のファイル） | 適合（対象は App Group・アプリのコンテナ内のファイルのみ）。**ただし** `App/UserDictionaryView.swift:209` の `resourceValues(forKeys:[.fileSizeKey])` はファイル App から選んだ外部ファイルが対象で、サイズのみ（タイムスタンプ API ではない）ので宣言不要と判断した |
 | システム起動時刻 / ディスク容量 / アクティブキーボード | grep（`systemUptime`・`mach_absolute_time`・`statfs`・`volumeAvailableCapacity`・`activeInputModes` など）で Swift 側のヒットなし | なし | 適合（Swift 側） |
 
@@ -46,6 +48,8 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 
 ### 0.3 「フルアクセス無しでは漢字変換できない」の説明が、コードと一致しない
 
+> **文面のみ対応済み（ビルド確認待ち）: `/privacy` `/support` `DataStatusView` `AboutView` `OnboardingView` の断定を「端末により異なる場合があり、辞書とモデルの利用に許可が必要になる場合がある」に弱めた。実機確認（4.4.1）は未了。トップページ `web/src/routes/+page.svelte:102` に同種の断定が残る。**
+
 `/privacy` §4、`/support`、`DataStatusView.swift:165`、本書 §1.4 の「許可しない場合はひらがな・カタカナ変換のみ」という説明について:
 
 - `Keyboard/KeyboardViewController.swift` は `hasFullAccess` を**マーカー書き込み（:32）にしか使わない**。変換機能をフルアクセスで切り替える分岐は無い
@@ -55,12 +59,16 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 
 ### 0.4 表示名・文面の不整合
 
+> **対応済み（ビルド確認待ち）: `CFBundleDisplayName` を両ターゲット `Nagi` に変更、`ALTAppGroups` を `project.yml` から削除（`AppGroupResolver` は固定 ID にフォールバック）、`TARGETED_DEVICE_FAMILY: "1"`（iPhone のみ）を両ターゲットに設定。`bundleIdPrefix` は未変更。**
+
 - `project.yml:57` `CFBundleDisplayName: Nagi Spike`、`project.yml:135` `Nagi Spike Keyboard`。ホーム画面・設定の「キーボード」一覧に出る名前が開発用のまま。`/support` は「一覧から「Nagi」を選びます」と書いているので不一致。提出前に `Nagi`（拡張は `Nagi` など、一覧で分かる名前）にする
 - `project.yml:74,138` `ALTAppGroups`（SideStore 用の名残。H-15 で SideStore は使わない）。`AppGroupResolver.swift:57` が読んでいる。無害だが、提出前に削除してよいか確認する
 - `project.yml:4` `bundleIdPrefix: com.shiki.inputmethod`（macOS 用の名残。ターゲットは `PRODUCT_BUNDLE_IDENTIFIER` で個別指定済みなので実害なし）
 - ターゲットデバイスは明示されておらず（XcodeGen の既定で iPhone + iPad）、`UISupportedInterfaceOrientations` は iPad のマルチタスク向けの 4 方向になっている。iPad のスクリーンショット（13 インチ）が必要になる。iPhone 専用にするか判断が要る（§5）
 
 ### 0.5 ライセンス表示の不足（配布物に辞書を同梱する場合）
+
+> **対応済み（ビルド確認待ち）: ルートの `NOTICE` と `THIRD_PARTY_LICENSES.md`（現状はプレースホルダー。別担当が生成）をホストアプリのリソースに同梱し、About > ライセンスからスクロール表示（`NagiBundledTextView`）。依存クレート・llama.cpp の一覧の中身は未生成。**
 
 - `App/AboutView.swift` の「辞書・モデルの出典」は**要約のみ**で、IPAdic の著作権表示（NAIST の Copyright 文）と免責条項、Mozc（BSD-3-Clause、Google の Copyright）の表示が無い。IPAdic は「著作権表示と免責条項を**すべての複製に含める**」ことが条件（`NOTICE`）。辞書を IPA に同梱して配布するなら、アプリ内から NOTICE の全文（少なくとも辞書・ローマ字表の部分）を読めるようにする
 - Rust 依存クレート・llama.cpp（MIT）のライセンス表示も、バイナリ配布の義務を満たすために一覧が要る（現状 `NOTICE` はデータ資産のみ。`cargo about` 等で生成する案。要確認）
