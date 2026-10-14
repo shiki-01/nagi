@@ -65,6 +65,7 @@ targets:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "NAGI_SPIKE_APP ${NAGI_LLM}"
       OTHER_LDFLAGS: "$(inherited) -lc++"
       CODE_SIGN_STYLE: Automatic
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       PRODUCT_BUNDLE_IDENTIFIER: com.shiki01.nagi
 
     scheme:
