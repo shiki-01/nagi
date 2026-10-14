@@ -289,13 +289,14 @@ fn reload_failure_continues_dictionary_only_without_retrying() {
         json!({"memory_pressure":"critical"}),
     );
     assert!(wait_until(|| !f.handles.active.load(Ordering::SeqCst)));
-    rpc(
-        &mut f.server,
-        "set_environment",
-        json!({"memory_pressure":"normal"}),
-    );
-    // 再読み込みを試みて失敗し、辞書のみで継続する（警告の通知が出る）
+    // 通知は set_environment 自身の応答の行に混ざることもあるため、その行も調べる
     let mut warned = false;
+    let lines = f.server.handle_line(
+        &json!({"jsonrpc":"2.0","id":3,"method":"set_environment","params":{"memory_pressure":"normal"}})
+            .to_string(),
+    );
+    warned |= lines.iter().any(|l| l.contains("llm_reload_failed"));
+    // 再読み込みを試みて失敗し、辞書のみで継続する（警告の通知が出る）
     assert!(wait_until(|| {
         let lines = f
             .server
