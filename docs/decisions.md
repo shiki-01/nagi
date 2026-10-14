@@ -815,6 +815,8 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 - アプリ側の `llm_load`（small、70MB）は footprint が増えず（mmap のため未計上と推測）、ロードに 17 秒。推論時のメモリは未測定
 
 判断（暫定）:
-- 拡張に zenz small は載せられない見込み。iOS の品質基準は `minimal`（辞書+Viterbi）を維持する
+- 拡張に zenz small は載せられない見込み。xsmall は載る可能性があるが、`latency` の切り分けが済むまで iOS の品質基準は `minimal`（辞書+Viterbi）を維持する
 - 辞書の mmap 化（progress.md 未完了項目 6）の優先度を上げる。全量読み込み（約 61MB）は上限の約 1/3 を占める
-- 未確認: xsmall（約 20MB）・CPU のみ（Metal 無効）・mmap 辞書での成立可否。拡張側の `llm_load` が実際に強制終了かの切り分け（Probe の個別実行、ログ追加）
+- **追試（同日）: xsmall（20.0MB）は拡張内で `llm_load` が成功**: footprint_after 119.4MB（増加 106.4MB）、残り 57.6MB（`available_after_mb`）、ロード 110ms、`first_space_ms` 76.1ms。small は拡張で完了記録がなく、載らない見込みは変わらない
+- 一方 `latency` は再び実行中に終了（一括実行時）。多数回の変換で残り約 58MB を超える可能性。単独実行・`llm_load` 後の実行での切り分けが必要
+- 未確認: `latency` を新規プロセスで単独実行した結果、CPU のみ（Metal 無効）での差、mmap 辞書での成立可否、`llm_load` の 119MB に辞書の 61MB が含まれるか
