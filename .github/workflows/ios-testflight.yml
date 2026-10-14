@@ -13,13 +13,23 @@ name: ios-testflight
 # 事前に Developer ポータルで App ID（com.shiki01.nagi / com.shiki01.nagi.keyboard）と
 # App Group（group.com.shiki01.nagi）を登録し、App Store Connect でアプリを作成しておくこと。
 
+# 表示バージョン（CFBundleShortVersionString）の決まり方:
+#   1. タグ ios-vX.Y.Z の push で起動した場合は、そのタグの X.Y.Z
+#   2. 手動実行で marketing_version を入力した場合は、その値
+#   3. 手動実行で空欄の場合は、最新の ios-v* タグの X.Y.Z（タグが無ければ 0.1.0）
+# ビルド番号（CFBundleVersion）は github.run_number で常に自動採番する。
+# リリース手順: git tag ios-v0.2.0 && git push origin ios-v0.2.0
+
 on:
+  push:
+    tags:
+      - "ios-v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
       marketing_version:
-        description: "表示バージョン（CFBundleShortVersionString）"
+        description: "表示バージョン（空欄なら最新の ios-v* タグ、無ければ 0.1.0）"
         type: string
-        default: "0.1.0"
+        default: ""
       llama:
         description: "LLM 推論（llama.cpp）を有効にしてビルドする"
         type: boolean
@@ -38,6 +48,24 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ios-v* タグを参照するため
+
+      - name: 表示バージョンを決定
+        env:
+          INPUT_VERSION: ${{ inputs.marketing_version }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            v="${GITHUB_REF_NAME#ios-v}"
+          elif [ -n "${INPUT_VERSION}" ]; then
+            v="${INPUT_VERSION}"
+          else
+            latest=$(git tag --list 'ios-v*' --sort=-v:refname | head -n 1)
+            v="${latest#ios-v}"
+            v="${v:-0.1.0}"
+          fi
+          echo "MARKETING_VERSION=${v}" >> "$GITHUB_ENV"
+          echo "表示バージョン: ${v} / ビルド番号: ${{ github.run_number }}"
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -114,7 +142,7 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Automatic \
-            MARKETING_VERSION="${{ inputs.marketing_version }}" \
+            MARKETING_VERSION="$MARKETING_VERSION" \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             | tee build/xcodebuild-archive.log | tail -n 40
 
