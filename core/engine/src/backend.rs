@@ -3,6 +3,7 @@
 //! 候補の供給元を差し替えられるように、状態機械は [`ConversionBackend`] だけを見る。
 //! 辞書との接続は `nagi-server` 側の実装が行う。
 
+use crate::observer::CommitContext;
 use nagi_protocol::view::CandidateSource;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -70,6 +71,20 @@ pub trait ConversionBackend: Send + Sync {
         Vec::new()
     }
 
+    /// 確定直後の次語予測（`predict.next_word`）: 直前に確定した語 `prev`（表記）の次に来そうな語
+    /// （良い順、最大 `limit` 件）。`ctx` は secure input・アプリの学習停止を判断するための状況で、
+    /// 学習を止める状況では空を返すこと。LLM による文脈予測もこの境界の裏に置ける。
+    /// 既定実装は非対応（空を返す）
+    fn predict_next(
+        &self,
+        ctx: &CommitContext<'_>,
+        prev: &str,
+        limit: usize,
+    ) -> Vec<BackendCandidate> {
+        let _ = (ctx, prev, limit);
+        Vec::new()
+    }
+
     /// 確定済みの表記（surface）から読みを推定し、文節に区切る（`reconvert` 用）。
     /// 辞書を持たないバックエンドは非対応でよい（既定実装は非対応。空を返す）
     fn reconvert(&self, surface: &str) -> Vec<BackendSegment> {
@@ -130,6 +145,7 @@ pub struct MockBackend {
     sentences: HashMap<String, Vec<(String, Vec<String>)>>,
     segments: HashMap<String, Vec<String>>,
     predictions: HashMap<String, Vec<String>>,
+    next_words: HashMap<String, Vec<String>>,
 }
 
 impl MockBackend {
@@ -155,6 +171,15 @@ impl MockBackend {
     pub fn with_segments(mut self, reading: &str, candidates: Vec<&str>) -> Self {
         self.segments.insert(
             reading.to_string(),
+            candidates.into_iter().map(str::to_string).collect(),
+        );
+        self
+    }
+
+    /// 次語予測の候補を登録する: 直前の語 → 次の語（テスト用）
+    pub fn with_next_words(mut self, prev: &str, candidates: Vec<&str>) -> Self {
+        self.next_words.insert(
+            prev.to_string(),
             candidates.into_iter().map(str::to_string).collect(),
         );
         self
@@ -209,6 +234,28 @@ impl ConversionBackend for MockBackend {
             .map(|surface| BackendCandidate {
                 surface,
                 sources: vec![CandidateSource::SystemDict],
+            })
+            .collect()
+    }
+
+    fn predict_next(
+        &self,
+        ctx: &CommitContext<'_>,
+        prev: &str,
+        limit: usize,
+    ) -> Vec<BackendCandidate> {
+        if ctx.secure_input {
+            return Vec::new();
+        }
+        self.next_words
+            .get(prev)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .take(limit)
+            .map(|surface| BackendCandidate {
+                surface,
+                sources: vec![CandidateSource::Learned],
             })
             .collect()
     }

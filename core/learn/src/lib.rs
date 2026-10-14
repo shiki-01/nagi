@@ -8,6 +8,9 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+pub mod next;
+pub use next::{NextRow, NextScored, NextWordLearner};
+
 /// 学習設定。
 #[derive(Clone, Debug)]
 pub struct LearnConfig {
@@ -160,7 +163,7 @@ struct FileData {
 }
 
 /// 現在時刻（unix 秒）。
-fn system_now() -> u64 {
+pub(crate) fn system_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -623,7 +626,7 @@ impl Learner {
 }
 
 /// TSV フィールドをエスケープ。バックスラッシュ・タブ・改行・CR を変換。
-fn escape_tsv_field(s: &str) -> String {
+pub(crate) fn escape_tsv_field(s: &str) -> String {
     s.chars()
         .flat_map(|c| match c {
             '\\' => vec!['\\', '\\'],
@@ -636,7 +639,7 @@ fn escape_tsv_field(s: &str) -> String {
 }
 
 /// TSV フィールドをアンエスケープ。
-fn unescape_tsv_field(s: &str) -> Result<String, &'static str> {
+pub(crate) fn unescape_tsv_field(s: &str) -> Result<String, &'static str> {
     let mut result = String::new();
     let mut chars = s.chars().peekable();
 
@@ -691,7 +694,7 @@ fn parse_tsv_line(line: &str) -> Result<(String, String, u64, u32, u64, String),
 }
 
 /// バックアップファイルを作成。既にあれば `.bak.1`, `.bak.2`, ... を試す。
-fn create_backup_file(path: &Path) -> Result<PathBuf, LearnError> {
+pub(crate) fn create_backup_file(path: &Path) -> Result<PathBuf, LearnError> {
     let mut backup_path = path.with_extension("bak");
 
     let mut counter = 1;
@@ -705,7 +708,7 @@ fn create_backup_file(path: &Path) -> Result<PathBuf, LearnError> {
 }
 
 /// ロックファイルを開く（作るだけで、truncate も削除もしない）。
-fn open_lock(path: &Path) -> io::Result<fs::File> {
+pub(crate) fn open_lock(path: &Path) -> io::Result<fs::File> {
     fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -812,7 +815,7 @@ fn write_file(path: &Path, generation: u64, rows: &[Row]) -> Result<(), LearnErr
 }
 
 /// スコアを計算。`ln(1 + count) × 0.5^(経過日数 / half_life_days)`
-fn calculate_score(count: u32, last_used: u64, now: u64, half_life_days: f64) -> f64 {
+pub(crate) fn calculate_score(count: u32, last_used: u64, now: u64, half_life_days: f64) -> f64 {
     let base = (1.0 + count as f64).ln();
 
     let elapsed_seconds = if now >= last_used {

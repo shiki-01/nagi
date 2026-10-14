@@ -7,7 +7,7 @@
 //! `preedit` / `candidates` / `mode` と、確定文字列）をまとめて返す。
 
 use crate::action::{Action, Direction};
-use crate::backend::{BackendSegment, Completion, ConversionBackend};
+use crate::backend::{BackendCandidate, BackendSegment, Completion, ConversionBackend};
 use crate::ir::{
     Candidate, CandidateSet, CandidateSource, CursorPos, Preedit, Segment, SegmentKind,
 };
@@ -60,6 +60,10 @@ pub struct EngineConfig {
     pub predict_enabled: bool,
     /// 予測変換を表示する最小の読みの文字数（`predict.min_chars`）
     pub predict_min_chars: usize,
+    /// 確定直後の次語予測を行うか（`predict.next_word`）
+    pub next_word_enabled: bool,
+    /// 次語予測の候補数（`predict.next_word_count`）
+    pub next_word_count: usize,
     /// ライブ変換のチャンク長（`conversion.composing_chunk_len`）。この文字数を超える
     /// Composing 中の1つの日本語入力は、この文字数ごとに分けて変換する
     pub composing_chunk_len: usize,
@@ -82,6 +86,8 @@ impl Default for EngineConfig {
             keymap: KeyMap::default_preset(),
             predict_enabled: true,
             predict_min_chars: 1,
+            next_word_enabled: false,
+            next_word_count: 5,
             composing_chunk_len: 30,
             initial_view: InitialView::Sentence,
             beam_width: 3,
@@ -189,6 +195,11 @@ struct Session {
     touch_toggle: Option<TouchToggle>,
     /// 入力中（変換前）の候補。バックグラウンドで作る（`refresh_composing_candidates`）
     composing_cands: Option<ComposingCands>,
+    /// 直前に確定した語（変換を経た最後の日本語の文節の表記）。次語予測の文脈と、
+    /// 次の確定で学習するバイグラムの「直前の語」になる。語以外の確定・フォーカス喪失で消える
+    last_word: Option<String>,
+    /// 確定直後（Direct）の次語候補。入力が始まる・別の操作が来ると消える
+    next_words: Vec<BackendCandidate>,
 }
 
 /// 入力中（変換前）の候補 1 つ
@@ -369,6 +380,8 @@ impl Engine {
             pending_delete_before: None,
             touch_toggle: None,
             composing_cands: None,
+            last_word: None,
+            next_words: Vec::new(),
         }
     }
 
@@ -574,6 +587,8 @@ impl Engine {
         sess.origins.clear();
         let mut commit = String::new();
         self.commit_all(&mut sess, &mut commit);
+        // フォーカスを離れたら文脈は続かない（次語予測を出さない）
+        sess.last_word = None;
         let result = self.finish(&mut sess, true, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
@@ -585,6 +600,7 @@ impl Engine {
         sess.origins.clear();
         sess.state = State::Direct;
         sess.composer.clear();
+        sess.last_word = None;
         let result = self.finish(&mut sess, true, String::new());
         self.sessions.insert(session_id.to_string(), sess);
         result
@@ -748,6 +764,28 @@ impl Engine {
         true
     }
 
+    /// 確定直後の次語候補を選ぶ: その語を確定文字列に足す。バイグラムを学習へ通知し
+    /// （`reading` が空の文節。学習側は単語の学習をせず、次語だけを記録する）、
+    /// 選んだ語を新しい「直前の語」にする（`finish` が続きの次語候補を作る）。
+    /// 候補が無い・範囲外なら何もしない
+    fn select_next_word(&self, sess: &mut Session, index: usize, commit: &mut String) {
+        let Some(item) = sess.next_words.get(index).cloned() else {
+            return;
+        };
+        self.notify_commit(
+            sess,
+            &[Segment {
+                reading: String::new(),
+                surface: item.surface.clone(),
+                kind: SegmentKind::Japanese,
+                candidates: None,
+                chunk_id: 0,
+            }],
+        );
+        commit.push_str(&item.surface);
+        sess.last_commit = None;
+    }
+
     /// `select_candidate` メソッド: 注目文節の候補一覧から絶対インデックスで選択する
     /// （マウス操作等。ページ相対の数字キー（`Action::SelectCand`）とは別経路）。
     /// Converting 状態でなければ何もしない。候補一覧が未生成なら作ってから選択する。
@@ -756,7 +794,10 @@ impl Engine {
         let mut sess = self.take_session(session_id);
         sess.origins.clear();
         let mut commit = String::new();
-        if matches!(sess.state, State::Composing) {
+        if matches!(sess.state, State::Direct) {
+            // 確定直後の次語候補: その語をそのまま挿入する
+            self.select_next_word(&mut sess, index as usize, &mut commit);
+        } else if matches!(sess.state, State::Composing) {
             // 入力中（変換前）の候補: 置き換える読みの部分を確定する
             self.select_composing(&mut sess, index as usize, &mut commit);
         } else if let State::Converting(conv) = &mut sess.state {
@@ -1077,6 +1118,8 @@ impl Engine {
             sess.secure_input = secure;
             if secure {
                 sess.left_context.clear();
+                sess.last_word = None;
+                sess.next_words.clear();
             }
         }
         if !sess.secure_input
@@ -1085,6 +1128,10 @@ impl Engine {
             let end = utf16::utf16_to_char_index(&st.text, st.cursor).unwrap_or(0);
             let before: String = st.text.chars().take(end).collect();
             sess.left_context = tail_chars(&before, LEFT_CONTEXT_CHARS);
+            // 直前のテキストが最後に確定した語で終わっていなければ、文脈は途切れている
+            if sess.last_word.as_ref().is_some_and(|w| !before.ends_with(w)) {
+                sess.last_word = None;
+            }
         }
         self.sessions.insert(session_id.to_string(), sess);
     }
@@ -1561,6 +1608,8 @@ impl Engine {
     /// 表示中の内容をすべて確定文字列へ移し、Direct に戻す
     fn commit_all(&self, sess: &mut Session, commit: &mut String) {
         let before_len = commit.len();
+        // 変換を経ない確定（ひらがなのまま等）は、次語予測の文脈を断つ
+        sess.last_word = None;
         let pieces = match std::mem::replace(&mut sess.state, State::Direct) {
             State::Direct => None,
             State::Composing => {
@@ -1582,7 +1631,12 @@ impl Engine {
                         for s in v.fixed.iter().chain(&v.tail) {
                             commit.push_str(&s.surface);
                         }
-                        commit.push_str(&flushed_text[displayed_reading.len()..]);
+                        let rest = &flushed_text[displayed_reading.len()..];
+                        if !rest.is_empty() || !v.tail.is_empty() {
+                            // 未変換のかなが続くので、最後の語は変換済みの語ではない
+                            sess.last_word = None;
+                        }
+                        commit.push_str(rest);
                     }
                     _ => commit.push_str(&flushed_text),
                 }
@@ -1629,18 +1683,30 @@ impl Engine {
     }
 
     /// 変換を経て確定した文節を observer（学習など）へ通知する
-    fn notify_commit(&self, sess: &Session, committed: &[Segment]) {
+    fn notify_commit(&self, sess: &mut Session, committed: &[Segment]) {
+        // 次語予測の文脈: 最後の文節が日本語ならその表記（observer が無くても追う）
+        let mut prev = sess.last_word.take().unwrap_or_default();
+        let mut with_prev: Vec<String> = Vec::with_capacity(committed.len());
+        for seg in committed {
+            with_prev.push(prev.clone());
+            prev = match seg.kind {
+                SegmentKind::Japanese => seg.surface.clone(),
+                _ => String::new(),
+            };
+        }
+        sess.last_word = (!prev.is_empty()).then_some(prev);
         let Some(observer) = &self.observer else {
             return;
         };
         let mut left = sess.left_context.clone();
         let mut segments = Vec::with_capacity(committed.len());
-        for seg in committed {
+        for (seg, prev_word) in committed.iter().zip(with_prev) {
             segments.push(CommittedSegment {
                 reading: seg.reading.clone(),
                 surface: seg.surface.clone(),
                 kind: seg.kind,
                 left_context: tail_chars(&left, LEFT_CONTEXT_CHARS),
+                prev_word,
             });
             left.push_str(&seg.surface);
         }
@@ -2254,6 +2320,23 @@ impl Engine {
 
     fn build_candidates(&self, sess: &Session) -> CandidatesView {
         let page_size = self.config.page_size as u32;
+        // 確定直後（Direct）の次語候補
+        if matches!(sess.state, State::Direct) && !sess.next_words.is_empty() {
+            return CandidatesView {
+                items: sess
+                    .next_words
+                    .iter()
+                    .map(|c| CandidateView {
+                        surface: c.surface.clone(),
+                        sources: c.sources.clone(),
+                        covers: None,
+                    })
+                    .collect(),
+                selected: 0,
+                page_size,
+                visible: true,
+            };
+        }
         if let State::Converting(conv) = &sess.state
             && conv.visible
             && let Some(set) = &conv.segments[conv.focus].candidates
@@ -2302,8 +2385,37 @@ impl Engine {
         }
     }
 
+    /// 確定直後の次語候補を更新する。Direct 以外（入力が始まった）・確定を伴わない操作・
+    /// secure input・学習停止中では消す。確定があったときだけ、直前の語から作り直す
+    fn refresh_next_words(&self, sess: &mut Session, consumed: bool, committed: bool) {
+        if !matches!(sess.state, State::Direct) || !(committed || consumed) {
+            sess.next_words.clear();
+            return;
+        }
+        if !committed {
+            // 確定のない消費（モード切替など）は候補をそのまま保つ
+            return;
+        }
+        sess.next_words.clear();
+        if !self.config.next_word_enabled || sess.secure_input {
+            return;
+        }
+        let Some(prev) = sess.last_word.clone() else {
+            return;
+        };
+        let ctx = CommitContext {
+            session_id: &sess.id,
+            app_id: sess.app_id.as_deref(),
+            secure_input: sess.secure_input,
+        };
+        let limit = self.config.next_word_count.clamp(1, 10);
+        sess.next_words = self.backend.predict_next(&ctx, &prev, limit);
+        sess.next_words.truncate(limit);
+    }
+
     /// 前回返した状態との差分を `ProcessKeyResult` にまとめる
     fn finish(&self, sess: &mut Session, consumed: bool, commit: String) -> ProcessKeyResult {
+        self.refresh_next_words(sess, consumed, !commit.is_empty());
         let preedit = self.build_preedit(sess).to_view();
         let candidates = self.build_candidates(sess);
         let mut result = ProcessKeyResult {

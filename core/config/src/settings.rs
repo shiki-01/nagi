@@ -430,6 +430,20 @@ pub fn definitions() -> Vec<SettingDef> {
             int(1, 20, 1),
         ),
         def(
+            "predict.next_word",
+            "予測変換",
+            "確定直後の次語予測",
+            "語を確定した直後に、これまでの入力から次に来そうな語を候補に出します。学習が有効なときだけ働きます。",
+            SettingKind::Bool,
+        ),
+        def(
+            "predict.next_word_count",
+            "予測変換",
+            "次語予測の候補数",
+            "確定直後に出す次語の候補の最大数です。",
+            int(1, 10, 1),
+        ),
+        def(
             "userdict.enabled",
             "ユーザー辞書",
             "ユーザー辞書を使う",
@@ -496,6 +510,8 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         )),
         "predict.enabled" => Some(Bool(config.predict.enabled)),
         "predict.min_chars" => Some(n(config.predict.min_chars)),
+        "predict.next_word" => Some(Bool(config.predict.next_word)),
+        "predict.next_word_count" => Some(n(config.predict.next_word_count)),
         "update.auto_check" => Some(Bool(config.update.auto_check)),
         _ => None,
     }
@@ -845,6 +861,34 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.userdict.enabled && !c.snippet.enabled);
         assert_eq!(c.input.dakuten_cycle, crate::DakutenCycle::DakutenFirst);
+    }
+
+    #[test]
+    fn next_word_definitions() {
+        let defs = definitions();
+        let get = |k: &str| defs.iter().find(|d| d.key == k).unwrap();
+        for key in ["predict.next_word", "predict.next_word_count"] {
+            assert_eq!(get(key).level, SettingLevel::Detail, "{key}");
+            assert_eq!(get(key).platforms, SettingPlatforms::Both, "{key}");
+        }
+        let c = crate::Config::default();
+        assert!(!c.predict.next_word);
+        assert_eq!(c.predict.next_word_count, 5);
+        assert!(validate_value(get("predict.next_word_count"), &SettingValue::Int(10)).is_ok());
+        assert!(validate_value(get("predict.next_word_count"), &SettingValue::Int(11)).is_err());
+        assert!(validate_value(get("predict.next_word_count"), &SettingValue::Int(0)).is_err());
+        let r = apply_changes(
+            None,
+            &[
+                set("predict.next_word", SettingValue::Bool(true)),
+                set("predict.next_word_count", SettingValue::Int(3)),
+            ],
+        )
+        .unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(c.predict.next_word);
+        assert_eq!(c.predict.next_word_count, 3);
     }
 
     #[test]

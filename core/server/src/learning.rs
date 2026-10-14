@@ -28,12 +28,19 @@ impl CommitObserver for LearningObserver {
             return;
         }
         for seg in segments {
-            if seg.kind == SegmentKind::Japanese && !seg.reading.is_empty() {
+            if seg.kind != SegmentKind::Japanese {
+                continue;
+            }
+            // reading が空なのは確定直後の次語候補をそのまま選んだ場合（単語の学習はしない）
+            if !seg.reading.is_empty() {
                 self.runtime.learn_record(
                     &seg.reading,
                     &seg.surface,
                     context_hash(&seg.left_context),
                 );
+            }
+            if !seg.prev_word.is_empty() && !seg.surface.is_empty() {
+                self.runtime.learn_record_next(&seg.prev_word, &seg.surface);
             }
         }
     }

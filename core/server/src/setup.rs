@@ -148,6 +148,8 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
             keymap,
             predict_enabled: config.predict.enabled,
             predict_min_chars: config.predict.min_chars,
+            next_word_enabled: config.predict.next_word,
+            next_word_count: config.predict.next_word_count,
             composing_chunk_len: config.conversion.composing_chunk_len,
             initial_view: match config.conversion.initial_view {
                 ConfigInitialView::Sentence => InitialView::Sentence,

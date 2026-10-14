@@ -6,7 +6,7 @@
 
 use nagi_config::{Config, ProfileMode};
 use nagi_dict::Overlay;
-use nagi_learn::{LearnConfig, Learner};
+use nagi_learn::{LearnConfig, Learner, NextWordLearner};
 use nagi_profile::{
     AutoConfig, Change, Controller, Decision, Environment, MIN_MEMORY_BUDGET_FOR_LLM_MB,
     MemoryPressure, Profile, SystemInfo, Thermal, initial_profile, initial_profile_with_budget,
@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 
 /// 学習ファイルを書き出す最短の間隔（設計書 §4.11: 5 分ごと）
 const FLUSH_INTERVAL: Duration = Duration::from_secs(300);
+/// 次語予測のバイグラムを保存するファイル名（学習ファイルと同じディレクトリ）
+const NEXT_WORD_FILE: &str = "learning-next.tsv";
 
 /// メモリ逼迫が解消（`normal`）してから、解放していた変換モデルを再読み込みするまでの待ち時間。
 /// 逼迫が短い間隔で繰り返されても、読み込みと解放を繰り返さないための猶予
@@ -84,6 +86,8 @@ pub struct Tunables {
     pub persona: String,
     /// `learning.enabled`
     pub learning_enabled: bool,
+    /// `predict.next_word`（確定直後の次語予測。バイグラムの記録と表示の両方を決める）
+    pub next_word_enabled: bool,
     /// 学習しないアプリの識別子
     pub disabled_apps: Vec<String>,
     /// 候補の出所の優先順（`ranking.source_order`）
@@ -144,6 +148,7 @@ impl Tunables {
             use_context: config.conversion.use_context,
             persona: config.profile.persona.clone(),
             learning_enabled: config.learning.enabled,
+            next_word_enabled: config.predict.next_word,
             disabled_apps: config.learning.disabled_apps.clone(),
             ranking: config
                 .ranking
@@ -193,6 +198,9 @@ pub struct Runtime {
     tunables: RwLock<Tunables>,
     learner: Mutex<Learner>,
     learn_path: Option<PathBuf>,
+    /// 次語予測のバイグラム（`learning-next.tsv`。`learn_path` と同じディレクトリ）
+    next_learner: Mutex<NextWordLearner>,
+    next_path: Option<PathBuf>,
     last_flush: Mutex<Instant>,
     /// 読み込んだユーザー辞書そのもの（件数の表示と、設定変更時の作り直しに使う）
     overlay_raw: RwLock<Arc<Overlay>>,
@@ -243,7 +251,23 @@ impl Runtime {
         let decision = Self::decide(&tunables, &system, has_llm, None, memory_budget_mb);
         let controller =
             Controller::new(decision, tunables.fixed_profile.is_some(), tunables.auto, 0);
-        Arc::new(Runtime {
+        // 次語予測の学習ファイルは通常の学習ファイルの隣。読めなければ空で始め、上書きしない
+        let mut next_path = learn_path
+            .as_ref()
+            .map(|p| p.with_file_name(NEXT_WORD_FILE));
+        let mut next_load_error = None;
+        let next_learner = match &next_path {
+            Some(path) => match NextWordLearner::load(path, learner.config().clone()) {
+                Ok((l, _)) => l,
+                Err(e) => {
+                    next_load_error = Some(e.to_string());
+                    next_path = None;
+                    NextWordLearner::new(learner.config().clone())
+                }
+            },
+            None => NextWordLearner::new(learner.config().clone()),
+        };
+        let runtime = Arc::new(Runtime {
             started: Instant::now(),
             system,
             controller: Mutex::new(controller),
@@ -252,6 +276,8 @@ impl Runtime {
             tunables: RwLock::new(tunables),
             learner: Mutex::new(learner),
             learn_path,
+            next_learner: Mutex::new(next_learner),
+            next_path,
             last_flush: Mutex::new(Instant::now()),
             overlay_raw: RwLock::new(Arc::new(Overlay::default())),
             overlay: RwLock::new(Arc::new(Overlay::default())),
@@ -268,7 +294,15 @@ impl Runtime {
             model: Mutex::new(ModelState::default()),
             model_control: Mutex::new(None),
             reload_delay: Mutex::new(MODEL_RELOAD_DELAY),
-        })
+        });
+        if let Some(e) = next_load_error {
+            runtime.push_event(Event {
+                level: NotifyLevel::Warning,
+                code: "next_word_load_failed",
+                message: format!("次語予測の学習データを読み込めませんでした: {e}"),
+            });
+        }
+        runtime
     }
 
     /// テスト・LLM なしの構成向けの既定（学習は空、ファイルへは書かない）
@@ -709,6 +743,9 @@ impl Runtime {
             lc.max_entries = config.learning.max_entries;
             lc.strength = config.learning.strength;
             lc.forget_days = config.learning.forget_days;
+            if let Ok(mut n) = self.next_learner.lock() {
+                n.set_config(lc.clone());
+            }
             learner.set_config(lc);
         }
         if let Ok(mut t) = self.tunables.write() {
@@ -859,6 +896,37 @@ impl Runtime {
             .unwrap_or_default()
     }
 
+    /// 次語予測のバイグラム（直前の語 → 次の語）を記録する。`predict.next_word` が無効なら何もしない
+    /// （呼び出し側が `learning_allowed` を確認済みであること）
+    pub fn learn_record_next(&self, prev: &str, next: &str) {
+        if !self.tunables.read().is_ok_and(|t| t.next_word_enabled) {
+            return;
+        }
+        if let Ok(mut l) = self.next_learner.lock() {
+            l.record(prev, next, Self::unix_now());
+        }
+    }
+
+    /// 確定直後の次語候補（スコア降順の (表記, スコア)）。次語予測・学習のどちらかが無効なら空
+    pub fn next_word_lookup(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
+        let enabled = self
+            .tunables
+            .read()
+            .is_ok_and(|t| t.next_word_enabled && t.learning_enabled);
+        if !enabled {
+            return Vec::new();
+        }
+        self.next_learner
+            .lock()
+            .map(|l| {
+                l.lookup(prev, Self::unix_now(), limit)
+                    .into_iter()
+                    .map(|s| (s.surface, s.score))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// 予測変換用: 学習済みの候補（スコア降順の (表記, スコア)）を前方一致で返す。学習が無効なら空
     pub fn learn_predict(
         &self,
@@ -887,7 +955,12 @@ impl Runtime {
             .learner
             .lock()
             .is_ok_and(|mut l| l.forget(reading, surface));
-        if forgot {
+        // その語を次語とするバイグラムも忘れる
+        let forgot_next = self
+            .next_learner
+            .lock()
+            .is_ok_and(|mut n| n.forget(surface));
+        if forgot || forgot_next {
             self.flush_learning(true);
         }
         forgot
@@ -897,6 +970,9 @@ impl Runtime {
     pub fn learn_clear(&self) {
         if let Ok(mut l) = self.learner.lock() {
             l.clear();
+        }
+        if let Ok(mut n) = self.next_learner.lock() {
+            n.clear();
         }
         self.flush_learning(true);
     }
@@ -918,8 +994,16 @@ impl Runtime {
             return;
         }
         let result = self.learner.lock().map(|mut l| l.flush(path));
+        let next_result = match &self.next_path {
+            Some(np) => self.next_learner.lock().map(|mut n| n.flush(np)),
+            None => Ok(Ok(false)),
+        };
         *last = Instant::now();
-        if let Ok(Err(e)) = result {
+        let error = match (result, next_result) {
+            (Ok(Err(e)), _) | (_, Ok(Err(e))) => Some(e),
+            _ => None,
+        };
+        if let Some(e) = error {
             self.push_event(Event {
                 level: NotifyLevel::Warning,
                 code: "learning_flush_failed",

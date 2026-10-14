@@ -435,6 +435,10 @@ pub struct PredictSection {
     pub enabled: bool,
     /// 予測変換を表示する最小の読みの文字数。既定: 1。
     pub min_chars: usize,
+    /// 確定直後の次語予測（学習した「直前の語 → 次の語」から候補を出す）。既定: false。
+    pub next_word: bool,
+    /// 次語予測の候補数。既定: 5。
+    pub next_word_count: usize,
 }
 
 impl Default for PredictSection {
@@ -442,6 +446,8 @@ impl Default for PredictSection {
         PredictSection {
             enabled: true,
             min_chars: 1,
+            next_word: false,
+            next_word_count: 5,
         }
     }
 }
@@ -622,6 +628,14 @@ impl Config {
             ));
         }
 
+        // predict.next_word_count: 1 <= next_word_count <= 10
+        if !(1..=10).contains(&self.predict.next_word_count) {
+            errors.push(format!(
+                "predict.next_word_count は 1 から 10 の間である必要があります: {}",
+                self.predict.next_word_count
+            ));
+        }
+
         // ranking.source_order: 既知の名前のみ、重複なし、空でない
         const KNOWN_SOURCES: &[&str] = &[
             "learned",
@@ -742,7 +756,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "forget_days",
             "disabled_apps",
         ],
-        "predict" => &["enabled", "min_chars"],
+        "predict" => &["enabled", "min_chars", "next_word", "next_word_count"],
         "userdict" | "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],

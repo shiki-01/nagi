@@ -27,6 +27,10 @@ pub struct CommittedSegment {
     pub kind: SegmentKind,
     /// この文節の左文脈（Surrounding Text + 前の文節の表記の末尾。変換時に backend へ渡したものと同じ）
     pub left_context: String,
+    /// 直前に確定した語（表記。変換を経た日本語の文節。前の文節、または直前の確定の最後の語）。
+    /// 無ければ空。次語予測のバイグラム（直前の語 → この語）の学習に使う。
+    /// 確定直後の次語候補をそのまま選んだときは `reading` が空で通知する
+    pub prev_word: String,
 }
 
 /// 確定の通知先

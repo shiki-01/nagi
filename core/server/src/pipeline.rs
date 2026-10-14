@@ -16,7 +16,7 @@
 use crate::runtime::{Effective, Event, ModelControl, Runtime};
 use nagi_dict::{Dictionary, Overlay};
 use nagi_engine::{
-    BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend,
+    BackendCandidate, BackendSegment, BackendSentence, CommitContext, Completion, ConversionBackend,
 };
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
@@ -838,6 +838,26 @@ impl ConversionBackend for Pipeline {
         let mut out = merge_by_order(&eff.ranking, groups);
         out.truncate(limit);
         out
+    }
+
+    fn predict_next(
+        &self,
+        ctx: &CommitContext<'_>,
+        prev: &str,
+        limit: usize,
+    ) -> Vec<BackendCandidate> {
+        // 学習を止める状況（設定・secure input・停止アプリ）では出さない
+        if prev.is_empty() || !self.runtime.learning_allowed(ctx.secure_input, ctx.app_id) {
+            return Vec::new();
+        }
+        self.runtime
+            .next_word_lookup(prev, limit)
+            .into_iter()
+            .map(|(surface, _)| BackendCandidate {
+                surface,
+                sources: vec![CandidateSource::Learned],
+            })
+            .collect()
     }
 
     fn predict(&self, prefix: &str, left_context: &str, limit: usize) -> Vec<BackendCandidate> {
