@@ -60,7 +60,8 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 ## 組み込みレイアウト（既定）
 
 `qwerty-kana`（QWERTY かな）/ `qwerty-alpha`（QWERTY 英字）/ `flick-kana`（12 キー かな）/ `flick-alpha`（12 キー 英字）/
-`symbols`（記号）/ `numbers`（数字）/ `emoji`（絵文字）。ユーザーは各モードにどのレイアウトを割り当てるかを設定で選ぶ。
+`symbols`（記号）/ `numbers`（数字）/ `emoji`（絵文字）。ユーザーは各モードにどのレイアウトを割り当てるかを設定で選ぶ（App Group の `keyboardLayoutKana` / `keyboardLayoutAlpha`）。
+`layout.target` の特別名 `kana` / `alpha` は「割り当て済みのかな / 英字レイアウト」を指す。
 
 ## 実装の段階
 
