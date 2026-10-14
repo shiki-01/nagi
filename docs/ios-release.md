@@ -38,6 +38,10 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 
 ### 0.2 輸出コンプライアンス（`ITSAppUsesNonExemptEncryption: false`）の根拠が弱い
 
+> **対応済み（コア側。選択肢 1 を採用）: `nagi-server` に cargo feature `update-check`（既定 ON。`ureq` と更新確認・配布物取得の HTTP 部分）を追加し、`nagi-ffi` は `default-features = false` で依存する。`cargo tree -p nagi-ffi -e normal`（`--target aarch64-apple-ios` 含む、`--features llama` あり・なし）に `ureq` / `rustls` / `ring` は含まれない。feature 無効時は `update.auto_check = true` でも何も起きない（更新確認スレッドを起動せず、通知もエラーも出さない）。更新確認が必要なら本体アプリ側で `URLSession`（OS の TLS）を使う。**
+>
+> **根拠メモ（バイナリに残る暗号関連クレート）**: `ed25519-dalek`（署名検証）と `sha2`（SHA-256）は、配布物・マニフェストの**認証とハッシュ**にだけ使う（データの暗号化・復号はしない）。Apple の輸出コンプライアンスの質問で「暗号化」に当たるかの最終判断は申告者（ユーザー）の責任で、免除区分の適用は提出時に要確認。TLS 実装が入らなくなったことで、`false` の根拠は「通信・データ暗号化の実装を持たない。残るのは認証・ハッシュ用途のみ」と説明できる。最終バイナリでの確認（`nm`/`strings` で `rustls`/`ring` が無いこと）は CI のビルド後に残る。
+
 - `frontend-ios-spike/project.yml:61` のコメントは「独自の暗号化を使わない」だが、`nagi-ffi` → `nagi-server`（`core/server/Cargo.toml`: `ureq`（rustls + ring の TLS）・`ed25519-dalek`・`sha2`）に依存しているため、**XCFramework に TLS 実装（rustls/ring）が静的リンクされうる**（`core/Cargo.lock` に `rustls` `ring` `ureq`）。使われるのは `core/server/src/update_check.rs`（更新確認）で、iOS では `ProductSession.swift:126` が生成する `config.toml` に `auto_check = false` を書いて**実行はしない**が、コードがバイナリに入るかどうかは別
 - Apple の質問は「OS の暗号機能のみ」なら免除、「OS 以外の標準暗号アルゴリズムを使う」場合は免除外（自己分類・年次報告が必要になりうる）。ed25519 署名検証・SHA-256 は認証・ハッシュ用途で、一般に免除の区分に入る可能性が高いが、TLS 実装の同梱は別問題。**詳細は要確認**
 - 取れる選択肢（ユーザー判断。コアの変更を伴うので本書では触っていない）:
@@ -68,7 +72,7 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 
 ### 0.5 ライセンス表示の不足（配布物に辞書を同梱する場合）
 
-> **対応済み（ビルド確認待ち）: ルートの `NOTICE` と `THIRD_PARTY_LICENSES.md`（現状はプレースホルダー。別担当が生成）をホストアプリのリソースに同梱し、About > ライセンスからスクロール表示（`NagiBundledTextView`）。依存クレート・llama.cpp の一覧の中身は未生成。**
+> **対応済み（ビルド確認待ち）: ルートの `NOTICE` と `THIRD_PARTY_LICENSES.md`（`cargo xtask gen-licenses` で生成。nagi-ffi の依存閉包 58 crates の名前・バージョン・SPDX・リポジトリ。依存を変えたら再生成してコミット）をホストアプリのリソースに同梱し、About > ライセンスからスクロール表示（`NagiBundledTextView`）。依存クレート・llama.cpp の一覧は生成済み（コア側）。**
 
 - `App/AboutView.swift` の「辞書・モデルの出典」は**要約のみ**で、IPAdic の著作権表示（NAIST の Copyright 文）と免責条項、Mozc（BSD-3-Clause、Google の Copyright）の表示が無い。IPAdic は「著作権表示と免責条項を**すべての複製に含める**」ことが条件（`NOTICE`）。辞書を IPA に同梱して配布するなら、アプリ内から NOTICE の全文（少なくとも辞書・ローマ字表の部分）を読めるようにする
 - Rust 依存クレート・llama.cpp（MIT）のライセンス表示も、バイナリ配布の義務を満たすために一覧が要る（現状 `NOTICE` はデータ資産のみ。`cargo about` 等で生成する案。要確認）

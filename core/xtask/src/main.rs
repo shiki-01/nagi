@@ -7,6 +7,7 @@ mod build_ios_xcframework;
 mod bundle_macos;
 mod fetch_dict;
 mod fetch_model;
+mod gen_licenses;
 mod http;
 mod types;
 
@@ -61,6 +62,8 @@ enum Task {
         #[arg(long)]
         out_dir: Option<std::path::PathBuf>,
     },
+    /// iOS 向け依存（nagi-ffi の閉包）のライセンス一覧を THIRD_PARTY_LICENSES.md に生成する
+    GenLicenses,
     /// iOS 用 XCFramework を生成する（nagi-ffi を aarch64-apple-ios/sim ターゲット向けにビルド）
     BuildIosXcframework {
         /// feature llama を有効化する
@@ -93,6 +96,7 @@ fn main() -> ExitCode {
             bundle_id,
             out_dir,
         }),
+        Task::GenLicenses => gen_licenses::run(),
         Task::BuildIosXcframework { llama, out_dir } => {
             build_ios_xcframework::run(build_ios_xcframework::Options { llama, out_dir })
         }

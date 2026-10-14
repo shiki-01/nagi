@@ -1006,3 +1006,15 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - フルアクセスの用途は、App Group 共有領域の辞書・モデルの読み取りと、拡張から App Group への書き込み（セットアップ状況のマーカー、設定の反映）。入力内容は端末外へ送信しない（プライバシーポリシー・サポートの文面と整合）。
 - 触覚フィードバックなど、フルアクセスが要る機能の可否は引き続き実機で確認する（`docs/ios-device-checklist.md`）。
 - App Store 審査では、フルアクセスを求める理由の説明が必要（`web/README.md` の申告メモ）。
+
+### H-19. 確定直後の次語予測（`predict.next_word`、軽量版、2026-10-14、要レビュー）
+
+モバイルの候補バー向け。確定直後（入力中の読みが空の Direct 状態）に、直前に確定した語から次に来そうな語を出す。**LLM は回さず**、学習したバイグラムを引くだけの軽量版にした。
+
+- **記録**: 変換を経て確定した日本語の文節ごとに「直前の語 → この語」（表記どうし）を記録する。直前の語は、同じ確定内の前の文節、または同じセッションで直前に確定した最後の語（`Session.last_word`）。ひらがなのままの確定・Literal・未変換のかなが続く確定・フォーカス喪失・`reset`・`set_context` の Surrounding Text が直前の語で終わっていないときは文脈を断つ。`CommittedSegment.prev_word` で observer に渡す
+- **ファイル**: 通常の学習ファイル `learning.tsv` は変えず、同じディレクトリの別ファイル **`learning-next.tsv`**（1 行目 `#nagi-learn-next\tv1\tgen=N`、行は `prev\tnext\tcount\tlast_used`）。旧版は `learning.tsv` しか読まないので壊れない。`nagi_learn::NextWordLearner` が D-5 と同じ流儀（`.lock` の flock・基準との 3 者マージ・世代・原子的置換）で flush する。ファイルが無い・世代なしでも読める。読めないファイルは上書きせず空で始め、`next_word_load_failed` を通知する。上限は `learning.max_entries`、`learning.forget_days`・半減期も共通
+- **表示**: `ConversionBackend::predict_next(ctx, prev, limit)`（既定は空。LLM 版はこの境界の裏に置く）。`Pipeline` は `learning_allowed`（設定・secure input・停止アプリ）と `predict.next_word` を確認して学習済みの上位を返す。engine は確定があったときだけ作り、既存の `candidates` 差分（`visible = true`、出所 `learned`、`covers` なし）で返す。入力が始まる・確定のない操作が来ると `visible = false` の差分で消える。**プロトコルの型は変更なし**（Direct で候補が出る点を `CandidatesView` の doc に追記）
+- **選択**: Direct 中の `select_candidate(index)` は、次語候補ならその語を `commit` として返し、バイグラム（`reading` が空の文節。単語の学習はしない）を記録して、選んだ語を新しい直前の語にする（続きの次語候補が出る）
+- **無効時**: `predict.next_word`（既定 false）が false の間は**記録もしない**（現状維持。有効にした時点から貯まる）。学習が無効・secure input・停止アプリでも記録・表示しない
+- **削除**: `clear_learning` は両ファイルを消す。候補ウィンドウの学習削除（`Ctrl+Delete`）は、その表記を次語とするバイグラムも消す（読みが違う同表記も消える。粗い扱いだが誤学習の除去を優先）
+- **暫定**: スコアは通常の学習と同じ `ln(1+count)` の指数減衰。`learning.strength` は次語の順位に影響しない（順序に効かないため）。Swift 側の追従: `docs/ios-settings.md` の `predict.next_word` / `predict.next_word_count` の設定 UI、Direct 状態の `candidates` を候補バーに出して `select_candidate` で挿入する処理

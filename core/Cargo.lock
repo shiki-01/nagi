@@ -1914,6 +1914,7 @@ dependencies = [
  "nagi-dict",
  "rustls",
  "rustls-pki-types",
+ "serde_json",
  "sha2",
  "ureq",
  "webpki-roots 0.26.11",

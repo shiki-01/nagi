@@ -84,7 +84,8 @@
 | `ios.llm_min_free_mb` | LLM を読み込む最小の空きメモリ | int 100–1500 | 実測で決定 | - | kbd | 新規(iOS) | これを下回ると辞書のみで起動。安全側のしきい値 |
 | `predict.enabled` | 予測変換 | bool | true | S | core:predict.enabled | 既存(GUI) | 学習キャッシュ・ユーザー辞書の前方一致。LLM による次語予測は別（`predict.next_word`） |
 | `predict.min_chars` | 予測を始める文字数 | int 1–20 | 1 | D | core:predict.min_chars | 既存(GUI) | |
-| `predict.next_word` | 確定直後の次語予測（文脈から） | bool | false | D | core:predict.next_word | 新規(core) | backlog 3 章の予測変換。LLM を使うため既定 OFF |
+| `predict.next_word` | 確定直後の次語予測（学習した直前の語から） | bool | false | D | core:predict.next_word | 既存(GUI) | LLM は回さず、学習した「直前の確定語 → 次の確定語」のバイグラム（`learning-next.tsv`）の上位を返す軽量版。学習が有効なときだけ記録・表示する。LLM 版は将来 `ConversionBackend::predict_next` の裏に追加 |
+| `predict.next_word_count` | 次語予測の候補数 | int 1–10 | 5 | D | core:predict.next_word_count | 既存(GUI) | 確定直後の候補バーに出す最大数 |
 | `ranking.source_order` | 候補の出所の優先順 | 配列（`learned` / `user_dict` / `llm` / `system_dict` / `kana` / `rewriter` の並べ替え） | デスクトップと同じ | D | core:ranking.source_order | 既存(toml) | 並べ替え UI が必要。記述子の型に「順序つき配列」が無いので追加が要る |
 | `convert.half_width_alnum` | 数字・英字を半角で確定 | choice: `half` / `full` / `follow_input` | `follow_input` | D | core:convert.half_width_alnum | 新規(core) | 全角/半角の相互変換（backlog 3 章）の基本設定 |
 | `convert.date_time` | 日付・時刻の候補（「きょう」「いま」） | bool | true | D | core:convert.date_time | 新規(core) | Rewriter の機能として実装 |

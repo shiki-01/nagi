@@ -59,7 +59,6 @@ fn commit_word(server: &mut Server, session: &str, romaji: &str) -> Value {
 }
 
 fn server_in(dir: &Path, next_word: bool) -> Server {
-    let config_path = dir.join("config.toml");
     let mut config = Config::default();
     config.predict.next_word = next_word;
     config.predict.next_word_count = 5;

@@ -112,7 +112,7 @@
 2026-09-27、ユーザーが回答した内容に基づき着手中・着手予定。**Mozkey**（`koyasi777/mozkey`。Mozc + ローカル Zenz 補正の fork。ユーザーが実際に使用しており「使いやすい」と評価）の実装を UX の参考にする方針（ユーザー指示）。
 
 - ~~**予測変換**~~ → 実装済み（G-23。Tab のみ（Down は Mozc でも予測選択に使われないため対象外）。`[predict]` で設定可能）
-- **iOS 設定項目（ios-settings.md 段階4）の一部**: `userdict.enabled` / `snippet.enabled`（ユーザー辞書の語・スニペットの使用の有無。登録内容は保持）と `input.dakuten_cycle`（タッチ入力の「゛゜小」キーの循環順。`small_first` が従来の動作）を実装済み。`predict.next_word` は未実装（確定直後の次語予測は LLM 生成が要り、既存の Tab 予測（前方一致）とは別機能のため）
+- **iOS 設定項目（ios-settings.md 段階4）の一部**: `userdict.enabled` / `snippet.enabled`（ユーザー辞書の語・スニペットの使用の有無。登録内容は保持）と `input.dakuten_cycle`（タッチ入力の「゛゜小」キーの循環順。`small_first` が従来の動作）を実装済み。`predict.next_word` / `predict.next_word_count`（確定直後の次語予測。LLM を使わない軽量版: 学習した「直前の語 → 次の語」のバイグラムを `learning-next.tsv` に記録し、確定直後（Direct）の候補として返す。H-19）を実装済み。LLM を使う版は未実装
 - ~~**ライブ変換**~~ → 実装済み（G-25・G-26。既定 ON、`live_conversion_delay_ms`＝228ms・`live_conversion_min_key_length`＝2文字は Mozkey の実測既定値。デバウンス完了時に `update_preedit` で配信）。**未対応**: ふりがな（reading）のルビ風オーバーレイ表示はプロトコル上は可能（`SegmentView.reading` が既に載っている）だが、フロント（macOS/Windows）側の描画実装がまだ無い。Enter は表示中のライブ変換結果を確定する（G-39）。Backspace の細かい挙動（ライブ変換結果からの部分確定・取消）は既存の Composing 用ロジックのまま（Mozkey との詳細比較は未実施）
 - ~~**非同期通知の配信基盤**~~ → 実装済み（G-24。`Server::run` の非同期化）。`update_preedit` の送出（ライブ変換）は実装済み（G-26）。**`update_candidates` の送出（スタイル変換等）はまだ無い**
 - ~~**ビームサーチ（文全体 N-best）**~~ → 実装済み（G-30。辞書ベースのk-best Viterbi。実LLMでの本物のビームサーチは本環境で検証不能なため未着手。候補選択時は選んだ分割へ丸ごと置き換える設計）
@@ -169,6 +169,11 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 ## CI
 
 （最終確認の結果を下に追記する）
+
+## iOS 向けコアの追加対応（2026-10-14）
+
+- `nagi-server` に feature `update-check`（既定 ON）を追加。`ureq` と更新確認・配布物取得の HTTP を裏に置き、`nagi-ffi` は `default-features = false` で依存する（iOS の XCFramework に TLS 実装を入れない。`docs/ios-release.md` §0.2）。無効時は `update.auto_check` が no-op。検証ロジック（ed25519・SHA-256）は feature 外
+- `cargo xtask gen-licenses`: nagi-ffi の依存閉包のライセンス一覧を `THIRD_PARTY_LICENSES.md` に生成（`docs/ios-release.md` §0.5）
 
 ## iOS の未完了項目（2026-10-14）
 
