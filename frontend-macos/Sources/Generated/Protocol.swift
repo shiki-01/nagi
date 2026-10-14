@@ -1052,6 +1052,24 @@ public enum SettingKind: Codable {
 	}
 }
 
+/// 設定画面の表示レベル
+public enum SettingLevel: String, Codable {
+	/// シンプルモード（詳細モードにも表示する）
+	case simple
+	/// 詳細モードのみ
+	case detail
+}
+
+/// 項目を出すプラットフォーム
+public enum SettingPlatforms: String, Codable {
+	/// デスクトップ（macOS / Windows）のみ
+	case desktop
+	/// iOS のみ
+	case ios
+	/// 両方
+	case both
+}
+
 /// 設定項目 1 件
 public struct SettingItem: Codable {
 	/// ドット区切りの TOML パス（例: `conversion.sync_budget_ms`）
@@ -1072,8 +1090,12 @@ public struct SettingItem: Codable {
 	public let explicit: Bool
 	/// 反映にエンジンの再起動が要るか
 	public let requires_restart: Bool
+	/// 表示レベル（`simple` / `detail`）。古いフロントは無視してよい
+	public let level: SettingLevel
+	/// 出すプラットフォーム（`desktop` / `ios` / `both`）。古いフロントは無視してよい
+	public let platforms: SettingPlatforms
 
-	public init(key: String, group: String, label: String, description: String, kind: SettingKind, value: SettingValue?, default: SettingValue?, explicit: Bool, requires_restart: Bool) {
+	public init(key: String, group: String, label: String, description: String, kind: SettingKind, value: SettingValue?, default: SettingValue?, explicit: Bool, requires_restart: Bool, level: SettingLevel, platforms: SettingPlatforms) {
 		self.key = key
 		self.group = group
 		self.label = label
@@ -1083,6 +1105,8 @@ public struct SettingItem: Codable {
 		self.default = `default`
 		self.explicit = explicit
 		self.requires_restart = requires_restart
+		self.level = level
+		self.platforms = platforms
 	}
 }
 

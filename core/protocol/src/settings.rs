@@ -80,6 +80,30 @@ pub enum SettingKind {
     Text,
 }
 
+/// 設定画面の表示レベル
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingLevel {
+    /// シンプルモード（詳細モードにも表示する）
+    Simple,
+    /// 詳細モードのみ
+    Detail,
+}
+
+/// 項目を出すプラットフォーム
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingPlatforms {
+    /// デスクトップ（macOS / Windows）のみ
+    Desktop,
+    /// iOS のみ
+    Ios,
+    /// 両方
+    Both,
+}
+
 /// 設定項目 1 件
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,6 +126,10 @@ pub struct SettingItem {
     pub explicit: bool,
     /// 反映にエンジンの再起動が要るか
     pub requires_restart: bool,
+    /// 表示レベル（`simple` / `detail`）。古いフロントは無視してよい
+    pub level: SettingLevel,
+    /// 出すプラットフォーム（`desktop` / `ios` / `both`）。古いフロントは無視してよい
+    pub platforms: SettingPlatforms,
 }
 
 /// `get_settings` の結果

@@ -4,7 +4,7 @@
 use nagi_config::settings as cfg;
 use nagi_protocol::settings::{
     ChoiceOptions, FloatRange, IntRange, SettingChange, SettingChoice, SettingError, SettingItem,
-    SettingKind, SettingValue, SettingsSnapshot,
+    SettingKind, SettingLevel, SettingPlatforms, SettingValue, SettingsSnapshot,
 };
 use std::path::Path;
 
@@ -57,6 +57,15 @@ fn item(s: cfg::SettingState) -> SettingItem {
         default: s.default.map(value_to_proto),
         explicit: s.explicit,
         requires_restart: s.def.requires_restart,
+        level: match s.def.level {
+            cfg::SettingLevel::Simple => SettingLevel::Simple,
+            cfg::SettingLevel::Detail => SettingLevel::Detail,
+        },
+        platforms: match s.def.platforms {
+            cfg::SettingPlatforms::Desktop => SettingPlatforms::Desktop,
+            cfg::SettingPlatforms::Ios => SettingPlatforms::Ios,
+            cfg::SettingPlatforms::Both => SettingPlatforms::Both,
+        },
     }
 }
 

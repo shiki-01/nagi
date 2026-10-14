@@ -219,9 +219,9 @@ final class EngineSupervisorTests: XCTestCase {
             {"items":[{"key":"conversion.sync_budget_ms","group":"変換","label":"待ち時間","description":"d",\
             "kind":{"type":"int","params":{"min":0,"max":5000,"step":10}},\
             "value":{"type":"int","value":150},"default":{"type":"int","value":150},\
-            "explicit":false,"requires_restart":false},\
+            "explicit":false,"requires_restart":false,"level":"detail","platforms":"both"},\
             {"key":"conversion.beam_width","group":"変換","label":"幅","description":"d",\
-            "kind":{"type":"bool"},"value":null,"default":null,"explicit":false,"requires_restart":false}]}
+            "kind":{"type":"bool"},"value":null,"default":null,"explicit":false,"requires_restart":false,"level":"detail","platforms":"both"}]}
             """
         launcher.configure = { _, c in
             c.responder = { req in

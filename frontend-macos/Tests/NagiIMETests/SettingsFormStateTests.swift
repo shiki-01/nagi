@@ -11,7 +11,8 @@ final class SettingsFormStateTests: XCTestCase {
     ) -> SettingItem {
         SettingItem(
             key: key, group: group, label: key, description: "説明", kind: kind, value: value,
-            default: def, explicit: explicit, requires_restart: restart)
+            default: def, explicit: explicit, requires_restart: restart,
+            level: .detail, platforms: .both)
     }
 
     private func snapshot(error: String? = nil) -> SettingsSnapshot {

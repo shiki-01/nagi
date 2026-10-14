@@ -60,6 +60,47 @@ pub enum SettingKind {
     Text,
 }
 
+/// 設定画面の表示レベル（シンプル / 詳細。`docs/ios-settings.md` §1 のモード列）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingLevel {
+    /// シンプルモード（詳細モードにも表示する）
+    Simple,
+    /// 詳細モードのみ
+    Detail,
+}
+
+impl SettingLevel {
+    /// プロトコル上の文字列
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SettingLevel::Simple => "simple",
+            SettingLevel::Detail => "detail",
+        }
+    }
+}
+
+/// 項目を出すプラットフォーム
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingPlatforms {
+    /// デスクトップ（macOS / Windows）のみ
+    Desktop,
+    /// iOS のみ
+    Ios,
+    /// 両方
+    Both,
+}
+
+impl SettingPlatforms {
+    /// プロトコル上の文字列
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SettingPlatforms::Desktop => "desktop",
+            SettingPlatforms::Ios => "ios",
+            SettingPlatforms::Both => "both",
+        }
+    }
+}
+
 /// 設定項目の記述子（静的な情報）
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingDef {
@@ -75,6 +116,10 @@ pub struct SettingDef {
     pub kind: SettingKind,
     /// 反映に再起動が要るか
     pub requires_restart: bool,
+    /// 表示レベル
+    pub level: SettingLevel,
+    /// 出すプラットフォーム
+    pub platforms: SettingPlatforms,
 }
 
 /// 現在の状態つきの設定項目
@@ -140,19 +185,36 @@ fn def(
         description,
         kind,
         requires_restart: false,
+        level: SettingLevel::Detail,
+        platforms: SettingPlatforms::Both,
+    }
+}
+
+impl SettingDef {
+    /// シンプルモードにも出す項目にする
+    fn simple(mut self) -> Self {
+        self.level = SettingLevel::Simple;
+        self
+    }
+
+    /// 反映に再起動が要る項目にする
+    fn restart(mut self) -> Self {
+        self.requires_restart = true;
+        self
     }
 }
 
 /// GUI から変更できる設定項目の一覧（表示順）
 pub fn definitions() -> Vec<SettingDef> {
-    let mut update_check = def(
+    let update_check = def(
         "update.auto_check",
         "アップデート",
         "アップデートを自動で確認",
         "起動時に新しいバージョンがないか確認し、あれば通知します。ダウンロードやインストールは行いません。",
         SettingKind::Bool,
-    );
-    update_check.requires_restart = true;
+    )
+    .simple()
+    .restart();
     vec![
         def(
             "profile.mode",
@@ -166,7 +228,8 @@ pub fn definitions() -> Vec<SettingDef> {
                 ("light", "軽量"),
                 ("minimal", "辞書のみ"),
             ]),
-        ),
+        )
+        .simple(),
         def(
             "profile.auto_switch",
             "動作モード",
@@ -187,13 +250,21 @@ pub fn definitions() -> Vec<SettingDef> {
             "ライブ変換",
             "Space を押さなくても、入力に合わせて自動で漢字に変換します。",
             SettingKind::Bool,
-        ),
+        )
+        .simple(),
         def(
             "conversion.live_conversion_delay_ms",
             "変換",
             "ライブ変換の待ち時間（ミリ秒）",
             "入力が止まってから変換するまでの時間です。短いほど反応が速い代わりに負荷が上がります。",
             int(0, 5000, 10),
+        ),
+        def(
+            "conversion.live_conversion_min_key_length",
+            "変換",
+            "ライブ変換を始める最小の読みの長さ（文字数）",
+            "読みがこの文字数に達するまでは、ライブ変換せずひらがなのまま表示します。",
+            int(1, 20, 1),
         ),
         def(
             "conversion.composing_chunk_len",
@@ -208,7 +279,24 @@ pub fn definitions() -> Vec<SettingDef> {
             "LLM による変換",
             "オフにすると辞書のみで変換します（軽くなりますが、精度は下がります）。",
             SettingKind::Bool,
-        ),
+        )
+        .simple(),
+        def(
+            "conversion.model",
+            "変換",
+            "変換モデル",
+            "使用する LLM のモデル ID または GGUF ファイルのパスです。未指定ならプロファイルに従います。変更は次回起動時に反映されます。",
+            SettingKind::Text,
+        )
+        .restart(),
+        def(
+            "conversion.n_threads",
+            "変換",
+            "推論スレッド数",
+            "LLM 推論に使うスレッド数です。0 なら自動で決めます。多いほど速くなりますが発熱・負荷が増えます。変更は次回起動時に反映されます。",
+            int(0, 8, 1),
+        )
+        .restart(),
         def(
             "conversion.sync_budget_ms",
             "変換",
@@ -224,6 +312,13 @@ pub fn definitions() -> Vec<SettingDef> {
             int(1, 16, 1),
         ),
         def(
+            "conversion.max_latency_ms",
+            "変換",
+            "推論の最大レイテンシ（ミリ秒）",
+            "LLM 推論の待ち時間の上限（タイムアウト）です。通常は変更する必要はありません。",
+            int(10, 10_000, 10),
+        ),
+        def(
             "conversion.num_candidates",
             "変換",
             "候補ウィンドウの 1 ページの候補数",
@@ -236,6 +331,13 @@ pub fn definitions() -> Vec<SettingDef> {
             "前後の文脈を使う",
             "カーソル前後の文章を読み取り、変換の精度向上に使います。パスワード入力欄などでは自動で無効になります。",
             SettingKind::Bool,
+        ),
+        def(
+            "conversion.max_context_length",
+            "変換",
+            "文脈の最大文字数",
+            "変換に使う前後の文脈の長さです。小さいほどメモリと時間を節約できます。未指定ならプロファイルに従います。",
+            int(1, 200, 1),
         ),
         def(
             "conversion.initial_view",
@@ -260,14 +362,16 @@ pub fn definitions() -> Vec<SettingDef> {
             "句読点の種類",
             "「、」「。」キーで入力する句読点の組み合わせです。",
             choice(&[("、。", "、。"), ("，．", "，．"), ("，。", "，。")]),
-        ),
+        )
+        .simple(),
         def(
             "learning.enabled",
             "学習",
             "学習する",
             "確定した変換結果を記録し、次回以降の候補の順位に反映します。",
             SettingKind::Bool,
-        ),
+        )
+        .simple(),
         def(
             "learning.max_entries",
             "学習",
@@ -281,7 +385,8 @@ pub fn definitions() -> Vec<SettingDef> {
             "予測変換",
             "入力中の読みから、学習履歴やユーザー辞書の候補を先回りして表示します。",
             SettingKind::Bool,
-        ),
+        )
+        .simple(),
         def(
             "predict.min_chars",
             "予測変換",
@@ -306,7 +411,16 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
             config.conversion.live_conversion_delay_ms,
         )
         .unwrap_or(i32::MAX))),
+        "conversion.live_conversion_min_key_length" => {
+            Some(n(config.conversion.live_conversion_min_key_length))
+        }
         "conversion.composing_chunk_len" => Some(n(config.conversion.composing_chunk_len)),
+        "conversion.model" => config.conversion.model.clone().map(Text),
+        "conversion.n_threads" => Some(n(config.conversion.n_threads)),
+        "conversion.max_latency_ms" => Some(Int(
+            i32::try_from(config.conversion.max_latency_ms).unwrap_or(i32::MAX)
+        )),
+        "conversion.max_context_length" => config.conversion.max_context_length.map(n),
         "conversion.use_llm" => Some(Bool(config.conversion.use_llm)),
         "conversion.sync_budget_ms" => Some(Int(
             i32::try_from(config.conversion.sync_budget_ms).unwrap_or(i32::MAX)
@@ -563,6 +677,44 @@ mod tests {
                 assert_eq!(validate_value(&s.def, v), Ok(()), "{}", s.def.key);
             }
         }
+    }
+
+    #[test]
+    fn new_toml_items_are_editable() {
+        let r = apply_changes(
+            None,
+            &[
+                set("conversion.model", SettingValue::Text("m.gguf".into())),
+                set("conversion.n_threads", SettingValue::Int(4)),
+                set("conversion.max_context_length", SettingValue::Int(50)),
+                set("conversion.max_latency_ms", SettingValue::Int(200)),
+                set(
+                    "conversion.live_conversion_min_key_length",
+                    SettingValue::Int(3),
+                ),
+                set("conversion.n_threads", SettingValue::Int(9)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(r.applied.len(), 5);
+        assert_eq!(r.errors.len(), 1);
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.conversion.model.as_deref(), Some("m.gguf"));
+        assert_eq!(c.conversion.n_threads, 4);
+        assert_eq!(c.conversion.max_context_length, Some(50));
+        assert_eq!(c.conversion.max_latency_ms, 200);
+        assert_eq!(c.conversion.live_conversion_min_key_length, 3);
+    }
+
+    #[test]
+    fn level_and_platforms_attributes() {
+        let defs = definitions();
+        let level = |k: &str| defs.iter().find(|d| d.key == k).unwrap().level;
+        assert_eq!(level("conversion.live_conversion"), SettingLevel::Simple);
+        assert_eq!(level("conversion.n_threads"), SettingLevel::Detail);
+        assert_eq!(SettingLevel::Simple.as_str(), "simple");
+        assert_eq!(SettingPlatforms::Both.as_str(), "both");
     }
 
     #[test]

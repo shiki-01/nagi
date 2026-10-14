@@ -99,3 +99,33 @@ fn waker_and_poll_roundtrip() {
         nagi_server_free(handle);
     }
 }
+
+#[test]
+fn settings_roundtrip_via_user_dir() {
+    let dir = std::env::temp_dir().join(format!("nagi-ffi-settings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let dir_c = CString::new(dir.to_str().unwrap()).unwrap();
+    unsafe {
+        let handle = nagi_server_new(dir_c.as_ptr(), dir_c.as_ptr(), 1);
+        assert!(!handle.is_null());
+        send(handle, INIT);
+        let got = send(
+            handle,
+            r#"{"jsonrpc":"2.0","id":3,"method":"get_settings"}"#,
+        );
+        assert!(got.contains("\"conversion.n_threads\""), "{got}");
+        assert!(got.contains("\"level\":\"simple\""), "{got}");
+        let upd = send(
+            handle,
+            r#"{"jsonrpc":"2.0","id":4,"method":"update_settings","params":{"changes":[{"key":"conversion.live_conversion","value":{"type":"bool","value":false}},{"key":"conversion.n_threads","value":{"type":"int","value":2}}]}}"#,
+        );
+        assert!(upd.contains("\"applied\""), "{upd}");
+        assert!(!upd.contains("\"errors\":[{"), "{upd}");
+        // user_dir 直下の config.toml に書かれる
+        let text = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(text.contains("live_conversion = false"), "{text}");
+        assert!(text.contains("n_threads = 2"), "{text}");
+        nagi_server_free(handle);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

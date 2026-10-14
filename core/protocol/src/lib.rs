@@ -34,7 +34,8 @@ pub use methods::{
 };
 pub use settings::{
     ChoiceOptions, FloatRange, IntRange, SettingChange, SettingChoice, SettingError, SettingItem,
-    SettingKind, SettingValue, SettingsSnapshot, UpdateSettingsParams, UpdateSettingsResult,
+    SettingKind, SettingLevel, SettingPlatforms, SettingValue, SettingsSnapshot,
+    UpdateSettingsParams, UpdateSettingsResult,
 };
 pub use view::{
     CandidateSource, CandidateView, CandidatesView, InputMode, PreeditView, RangeU16, SegmentKind,

@@ -65,18 +65,18 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `conversion.live_conversion` | ライブ変換 | bool | iOS: false（暫定。実機計測後に決定） | S | core:conversion.live_conversion | 既存(GUI) | デスクトップの既定は true。iOS の既定は電池・発熱への影響を見て決める（H 節の計測結果に依存）。**iOS だけ既定を変える場合、iOS 用の初期 `config.toml` で明示指定する** |
 | `conversion.live_conversion_delay_ms` | ライブ変換の待ち時間 | int 0–5000, step 10 | 228 | D | core:conversion.live_conversion_delay_ms | 既存(GUI) | |
-| `conversion.live_conversion_min_key_length` | ライブ変換を始める最小の読みの長さ | int 1–20 | 2 | D | core:conversion.live_conversion_min_key_length | 既存(toml) | |
+| `conversion.live_conversion_min_key_length` | ライブ変換を始める最小の読みの長さ | int 1–20 | 2 | D | core:conversion.live_conversion_min_key_length | 既存(GUI) | |
 | `conversion.composing_chunk_len` | ライブ変換のチャンク長 | int 1–200 | 30 | D | core:conversion.composing_chunk_len | 既存(GUI) | 小さいほど軽いが文脈が切れる |
 | `conversion.initial_view` | 変換開始時の表示 | choice: `sentence` / `segment` | `sentence` | D | core:conversion.initial_view | 既存(GUI) | |
 | `conversion.num_candidates` | 展開した候補一覧の 1 ページの候補数 | int 1–50 | 9 | D | core:conversion.num_candidates | 既存(GUI) | 候補バーに出す件数は `candbar.visible_count` |
 | `conversion.use_llm` | LLM による変換 | bool | true（LLM が使える端末のみ。使えなければ自動で false 相当） | S | core:conversion.use_llm | 既存(GUI) | メモリ上限・低電力モードで自動降格（`profile.auto_switch`）。OFF で辞書のみ |
-| `conversion.model` | 変換モデル | choice: `auto` / 取得済みモデル ID | `auto` | D | core:conversion.model | 既存(toml) | 次回起動時に反映（コアの仕様）。拡張の再起動が要る旨を UI に表示。選択肢は `data.models` から生成 |
+| `conversion.model` | 変換モデル | choice: `auto` / 取得済みモデル ID | `auto` | D | core:conversion.model | 既存(GUI) | 次回起動時に反映（コアの仕様）。拡張の再起動が要る旨を UI に表示。選択肢は `data.models` から生成 |
 | `conversion.beam_width` | ビーム幅 | int 1–16 または自動 | 自動 | D | core:conversion.beam_width | 既存(GUI) | 大きいほど遅く、メモリも増える |
-| `conversion.n_threads` | 推論スレッド数 | int 0–8（0 = 自動） | 0 | D | core:conversion.n_threads | 既存(toml) | 次回起動時に反映。拡張の発熱に影響するため上限は端末のコア数 |
+| `conversion.n_threads` | 推論スレッド数 | int 0–8（0 = 自動） | 0 | D | core:conversion.n_threads | 既存(GUI) | 次回起動時に反映。拡張の発熱に影響するため上限は端末のコア数 |
 | `conversion.sync_budget_ms` | Space 変換の待ち時間（LLM の同期待ち） | int 10–5000, step 10 | 150 | D | core:conversion.sync_budget_ms | 既存(GUI) | 超過するとひらがなのまま応答し、結果は後で差し替え。iOS の実測に合わせて調整（H-12 参照） |
-| `conversion.max_latency_ms` | 推論の最大レイテンシ（タイムアウト） | int 10–10000 | 100 | - | core:conversion.max_latency_ms | 既存(toml) | 通常は触らせない |
+| `conversion.max_latency_ms` | 推論の最大レイテンシ（タイムアウト） | int 10–10000 | 100 | - | core:conversion.max_latency_ms | 既存(GUI) | 通常は触らせない |
 | `conversion.use_context` | 前後の文脈を使う | bool | true | D | core:conversion.use_context | 既存(GUI) | ホストの文字列を読むため、パスワード欄では自動で無効。プライバシー注記を UI に出す |
-| `conversion.max_context_length` | 文脈の最大文字数 | int 1–200 または自動 | 自動 | D | core:conversion.max_context_length | 既存(toml) | 小さいほどメモリ・時間が減る |
+| `conversion.max_context_length` | 文脈の最大文字数 | int 1–200 または自動 | 自動 | D | core:conversion.max_context_length | 既存(GUI) | 小さいほどメモリ・時間が減る |
 | `profile.mode` | プロファイル | choice: `auto` / `quality` / `balanced` / `light` / `minimal` | `auto` | S | core:profile.mode | 既存(GUI) | シンプルモードでは「自動 / 軽量 / 辞書のみ」に絞って表示。iOS の `auto` は `light` から開始し、実測に応じて昇格（`mobile-design.md` §4.3） |
 | `profile.auto_switch` | 環境に応じて自動で切り替え | bool | true | D | core:profile.auto_switch | 既存(GUI) | 低電力モード・温度・メモリ警告での降格。OFF にするとメモリ警告時も昇降格しない点に注意（拡張が落ちる恐れ。警告を出す） |
 | `profile.persona` | ペルソナ | text, 200 文字以内 | 空 | D | core:profile.persona | 既存(GUI) | スタイル変換（将来）で使用。端末内のみ |
