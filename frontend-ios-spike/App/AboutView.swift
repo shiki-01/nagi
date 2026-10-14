@@ -106,9 +106,13 @@ struct NagiThirdPartyNoticeView: View {
             }
 
             Section {
-                Text("ライセンス全文はリポジトリの NOTICE ファイルにあります（https://github.com/shiki-01/nagi）。")
+                Text("ライセンス全文はリポジトリの NOTICE ファイルにあります。")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                if let url = URL(string: "https://github.com/shiki-01/nagi") {
+                    Link("github.com/shiki-01/nagi", destination: url)
+                        .font(.caption)
+                }
             }
         }
         .navigationTitle("辞書・モデルの出典")
