@@ -8,6 +8,7 @@ protocol KeyboardHost: AnyObject {
     func hostSetMarkedText(_ text: String, cursor: Int)
     /// 変換中の表示を消す（確定した文字列は別に `hostInsertText` で入れる）
     func hostClearMarkedText()
+    func hostReplaceMarkedAndCommit(_ text: String)
     /// 変換中でないときのカーソル移動（文字数単位）
     func hostAdjustCursor(by offset: Int)
     func hostAdvanceToNextInputMode()
@@ -167,8 +168,13 @@ final class KeyboardModel: ObservableObject {
         }
         if let commit = result.commit, !commit.isEmpty {
             // 変換中の表示（下線）を消してから、確定した文字列を通常のテキストとして入れる
-            host?.hostClearMarkedText()
-            host?.hostInsertText(commit)
+            if shownMarked.isEmpty {
+                host?.hostInsertText(commit)
+            } else {
+                // 変換中の範囲を確定文字列で置き換えて確定する（残りの入力中の文字列が
+                // 平文として残らないよう、挿入ではなく置換で扱う）
+                host?.hostReplaceMarkedAndCommit(commit)
+            }
             shownMarked = ""
             shownCursor = 0
         }
