@@ -34,7 +34,10 @@ export const BUILTIN_LAYOUT_IDS = [
   'flick-alpha',
   'symbols',
   'numbers',
-  'emoji'
+  'emoji',
+  // 割り当て済みのかな / 英字レイアウトを指す特別名
+  'kana',
+  'alpha'
 ] as const
 
 export const LIMITS = {
@@ -91,7 +94,7 @@ export interface TextKey extends KeyBase {
 }
 export interface FlickKey extends KeyBase {
   kind: 'flick'
-  center: FlickCell
+  center?: FlickCell
   up?: FlickCell
   down?: FlickCell
   left?: FlickCell

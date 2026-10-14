@@ -23,7 +23,7 @@
 
   function chipLabel(k: Key): string {
     if (k.kind === 'spacer') return '空白'
-    return k.label || (k.kind === 'text' ? k.text : k.kind === 'flick' ? k.center.text : k.id) || k.id
+    return k.label || (k.kind === 'text' ? k.text : k.kind === 'flick' ? (k.center?.text ?? k.kana ?? "") : k.id) || k.id
   }
 
   function drop(rowIndex: number, index: number) {

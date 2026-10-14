@@ -44,7 +44,7 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 | kind | 追加フィールド | 動作 |
 | --- | --- | --- |
 | `text` | `text`, `shift?` | 文字を送る（QWERTY のローマ字入力は、かなモードではコアのローマ字変換に渡す） |
-| `flick` | `center`, `up?`, `down?`, `left?`, `right?`（各 `{ "text" }`）, `kana?` | フリック。`kana` に `"あ"` のような 12 キー名を指定すると、コアのトグル・フリック・濁点循環に任せる |
+| `flick` | `center`（`kana` 指定時は省略可）, `up?`, `down?`, `left?`, `right?`（各 `{ "text" }`）, `kana?` | フリック。`kana` に `"あ"` のような 12 キー名を指定すると、コアのトグル・フリック・濁点循環に任せる |
 | `toggle` | `cycle: [string...]` | 押すたびに順に切り替わる（ガラケー式）。確定は他のキー・時間経過 |
 | `action` | `action` | `space` / `enter` / `backspace` / `shift` / `capslock` / `convert` / `moveLeft` / `moveRight` / `dakuten` / `smallKana` / `modeSwitch` / `globe` / `dismiss` ほか（コアの `TouchAction` に対応） |
 | `shortcut` | `steps: [{ "action" or "text" }...]` | 複数操作の連続（例: 「ありがとうございます」の定型挿入、カーソルを括弧の間へ） |

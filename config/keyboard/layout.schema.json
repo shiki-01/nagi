@@ -136,7 +136,8 @@
     },
     "flickKey": {
       "allOf": [{ "$ref": "#/$defs/keyBase" }],
-      "required": ["kind", "center"],
+      "required": ["kind"],
+      "anyOf": [{ "required": ["center"] }, { "required": ["kana"] }],
       "unevaluatedProperties": false,
       "properties": {
         "kind": { "const": "flick" },

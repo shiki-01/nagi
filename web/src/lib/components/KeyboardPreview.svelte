@@ -24,7 +24,7 @@
       case 'text':
         return k.text
       case 'flick':
-        return k.center.text
+        return (k.center?.text ?? k.kana ?? "")
       case 'toggle':
         return k.cycle[0] ?? ''
       case 'action':
@@ -83,7 +83,7 @@
                 <span class="fl fl-d" aria-hidden="true">{key.down?.text ?? ''}</span>
                 <span class="fl fl-l" aria-hidden="true">{key.left?.text ?? ''}</span>
                 <span class="fl fl-r" aria-hidden="true">{key.right?.text ?? ''}</span>
-                <span class="main" aria-hidden="true">{key.label ?? key.center.text}</span>
+                <span class="main" aria-hidden="true">{key.label ?? (key.center?.text ?? key.kana ?? "")}</span>
               {:else}
                 <span class="main" class:small={mainLabel(key).length > 3} aria-hidden="true">{mainLabel(key)}</span>
               {/if}

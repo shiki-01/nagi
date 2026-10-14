@@ -65,7 +65,7 @@ describe('schema agreement with ajv', () => {
       mk((l) => (l.id = 'Bad Id')),
       mk((l) => (l.rows[0].keys[0].extra = 1)),
       mk((l) => (l.rows[0].keys[0].up = { text: 'x'.repeat(17) })),
-      mk((l) => delete l.rows[0].keys[0].center),
+      mk((l) => { delete l.rows[0].keys[0].center; delete l.rows[0].keys[0].kana }),
       mk((l) => (l.rows[0].keys[1].cycle = [])),
       mk((l) => (l.rows[0].keys[2].steps = [{ action: 'a', text: 'b' }])),
       mk((l) => (l.rows[0].keys[3].style = 'neon')),

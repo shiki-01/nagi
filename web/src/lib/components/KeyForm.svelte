@@ -197,7 +197,7 @@
         <div class="grid">
           <label class="field">
             <span>中央（タップ）</span>
-            <input value={key.center.text} maxlength={LIMITS.textMax} oninput={(e) => setFlick('center', e.currentTarget.value)} />
+            <input value={(key.center?.text ?? key.kana ?? "")} maxlength={LIMITS.textMax} oninput={(e) => setFlick('center', e.currentTarget.value)} />
           </label>
           {#each FLICK_DIRECTIONS as d (d)}
             <label class="field">

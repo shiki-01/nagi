@@ -158,7 +158,7 @@ function validateKey(c: Collector, k: unknown, path: string, targets: readonly s
         const cell = k[d]
         const p = join(path, d)
         if (cell === undefined) {
-          if (d === 'center') c.add(p, 'フリックには center（中央の文字）が必要です')
+          if (d === 'center' && k.kana === undefined) c.add(p, 'フリックには center（中央の文字）か kana が必要です')
           continue
         }
         if (!isObj(cell)) c.add(p, `${d} は { "text": "..." } で指定してください`)
