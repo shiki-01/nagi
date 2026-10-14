@@ -1,0 +1,170 @@
+name: ios-testflight
+
+# iOS アプリ（frontend-ios-spike）を署名して TestFlight（App Store Connect）へアップロードする。
+# 署名は App Store Connect API キーによるクラウド署名（-allowProvisioningUpdates）。
+# 証明書・プロビジョニングプロファイルはリポジトリにも Secrets にも置かない。
+#
+# 必要な Secrets（Settings → Secrets and variables → Actions）:
+#   APPLE_TEAM_ID   Apple Developer の Team ID（10 文字）
+#   ASC_KEY_ID      App Store Connect API キーの Key ID
+#   ASC_ISSUER_ID   同 Issuer ID
+#   ASC_KEY_P8      AuthKey_XXXX.p8 の中身（-----BEGIN PRIVATE KEY----- から全文）
+#
+# 事前に Developer ポータルで App ID（com.shiki01.nagi / com.shiki01.nagi.keyboard）と
+# App Group（group.com.shiki01.nagi）を登録し、App Store Connect でアプリを作成しておくこと。
+
+on:
+  workflow_dispatch:
+    inputs:
+      marketing_version:
+        description: "表示バージョン（CFBundleShortVersionString）"
+        type: string
+        default: "0.1.0"
+      llama:
+        description: "LLM 推論（llama.cpp）を有効にしてビルドする"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  testflight:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Rust ツールチェーン（core/rust-toolchain.toml に従う）
+        working-directory: core
+        run: |
+          rustup show
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: XcodeGen と cmake を用意
+        run: brew install xcodegen cmake
+
+      - name: XCFramework をビルド
+        working-directory: core
+        run: |
+          if [ "${{ inputs.llama }}" = "true" ]; then
+            cargo xtask build-ios-xcframework --llama
+          else
+            cargo xtask build-ios-xcframework
+          fi
+
+      - name: 辞書を取得・生成（アプリのリソースに含める）
+        working-directory: core
+        run: |
+          cargo xtask fetch-dict
+          cargo xtask build-dict
+
+      - name: 辞書をアプリのリソースへ配置
+        run: |
+          mkdir -p frontend-ios-spike/Resources/data/dict
+          cp data/dict/nagi-dict.bin frontend-ios-spike/Resources/data/dict/
+
+      - name: Xcode プロジェクトを生成
+        working-directory: frontend-ios-spike
+        run: |
+          if [ "${{ inputs.llama }}" = "true" ]; then
+            NAGI_LLM=NAGI_LLM xcodegen generate
+          else
+            NAGI_LLM=NAGI_NO_LLM xcodegen generate
+          fi
+
+      - name: App Store Connect API キーを配置
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/asc/AuthKey.p8"
+
+      - name: アーカイブ（署名あり）
+        working-directory: frontend-ios-spike
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          mkdir -p build
+          set -o pipefail
+          xcodebuild archive \
+            -project NagiSpike.xcodeproj \
+            -scheme NagiSpike \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Nagi.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            MARKETING_VERSION="${{ inputs.marketing_version }}" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            | tee build/xcodebuild-archive.log | tail -n 40
+
+      - name: ExportOptions.plist を生成
+        working-directory: frontend-ios-spike
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          EOF
+
+      - name: 書き出し・App Store Connect へアップロード
+        working-directory: frontend-ios-spike
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/Nagi.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/export \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            | tee build/xcodebuild-export.log | tail -n 40
+
+      - name: API キーを削除
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asc"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-testflight-logs
+          path: |
+            frontend-ios-spike/build/xcodebuild-archive.log
+            frontend-ios-spike/build/xcodebuild-export.log
+            frontend-ios-spike/build/export/*.log
+          if-no-files-found: ignore

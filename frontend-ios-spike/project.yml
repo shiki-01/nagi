@@ -46,6 +46,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Nagi Spike
+        # 独自の暗号化を使わない（TestFlight の輸出コンプライアンス質問を省略する）
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
