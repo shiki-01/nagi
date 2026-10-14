@@ -74,7 +74,7 @@ pub struct EngineConfig {
     pub beam_width: usize,
     /// 濁点・小書きキーの循環順（`input.dakuten_cycle`。タッチ入力のみ）
     pub dakuten_order: touch::DakutenOrder,
-    /// Backspace で残った未変換のローマ字を保留に戻すか（`input.romaji_carryover`。H-22）
+    /// Backspace で残った未変換のローマ字を保留に戻すか（`input.romaji_carryover`。H-23）
     pub romaji_carryover: bool,
 }
 

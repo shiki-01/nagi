@@ -328,7 +328,7 @@
     - key: "BackSpace"
       expect: {preedit: "へんk", pending: ""}
 
-# ローマ字の引き継ぎ（H-22）: 不一致で素通しされた ky が、直後のかなを消すと保留に戻る
+# ローマ字の引き継ぎ（H-23）: 不一致で素通しされた ky が、直後のかなを消すと保留に戻る
 - name: composing-carryover-kypu-backspace-ou
   steps:
     - {key: "k"}

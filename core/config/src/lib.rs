@@ -330,7 +330,7 @@ pub struct InputSection {
     pub punctuation: Punctuation,
     /// 濁点・小書きキーの循環順（タッチ入力のみ）。既定: SmallFirst（従来の動作）。
     pub dakuten_cycle: DakutenCycle,
-    /// Backspace で文字を消したとき、残った未変換のローマ字を保留に戻して続けて入力できるようにする（H-22）。既定: true。
+    /// Backspace で文字を消したとき、残った未変換のローマ字を保留に戻して続けて入力できるようにする（H-23）。既定: true。
     pub romaji_carryover: bool,
 }
 

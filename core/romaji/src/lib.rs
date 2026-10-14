@@ -356,7 +356,7 @@ pub struct Composer {
     converter: RomajiConverter,
     shift_letter: ShiftLetterMode,
     /// (文字, 種別, ローマ字の取りこぼしか)。3 つ目は、テーブルに当たらず素通しされた ASCII 小文字
-    /// （Shift 入力や数字・literal モードの英字ではない）。Backspace の引き継ぎ（H-22）で使う
+    /// （Shift 入力や数字・literal モードの英字ではない）。Backspace の引き継ぎ（H-23）で使う
     chars: Vec<(char, PieceKind, bool)>,
     cursor: usize,
     literal_mode: bool, // Shift+英字で開始した literal モード
@@ -377,7 +377,7 @@ impl Composer {
         }
     }
 
-    /// Backspace で残った未変換のローマ字を保留に戻すか（既定 true。H-22）
+    /// Backspace で残った未変換のローマ字を保留に戻すか（既定 true。H-23）
     pub fn set_carryover(&mut self, enabled: bool) {
         self.carryover = enabled;
     }
@@ -489,7 +489,7 @@ impl Composer {
     }
 
     /// カーソル直前に残った未変換のローマ字（取りこぼしの ASCII 小文字）のうち、
-    /// 有効な接頭辞になる最長の末尾を保留に戻す（`kypu`→BS で `ky` が保留に戻り、`ou` で「きょう」。H-22）。
+    /// 有効な接頭辞になる最長の末尾を保留に戻す（`kypu`→BS で `ky` が保留に戻り、`ou` で「きょう」。H-23）。
     /// 無効な断片（続きのエントリが無い）は何もしない
     fn carry_over_fragment(&mut self) {
         let run = self.chars[..self.cursor]
@@ -1881,7 +1881,7 @@ mod tests {
         }
     }
 
-    // --- ローマ字の引き継ぎ（H-22） ---
+    // --- ローマ字の引き継ぎ（H-23） ---
 
     #[test]
     fn test_carryover_restores_prefix_after_deleting_kana() {

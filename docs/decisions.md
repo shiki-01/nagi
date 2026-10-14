@@ -1056,3 +1056,14 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **診断ログ・Probes（App Store 版）**: About の「開発者向け」セクション（端末情報・Probes・結果）を `DiagLog.isTestBuild` のときだけ表示する（App Store 版では隠す）。キーボード側の検証 UI は元から `isTestBuild` 限定
 - **サイト**: Cloudflare Pages に置く（ドメイン `nagi.shiki-01.com`、DNS・カスタムドメインの設定は後で）。手順は `web/README.md`。`/privacy` の【要確認】欄（提供者名・施行日・アクセスログ・年齢区分・連絡窓口）は**空けておく指示のため触らない**（公開前に埋める必要がある点は変わらない）
 - **未決のまま**: フルアクセス OFF での動作（§0.3）、モデルの配布方針（§4）、U-1、ed25519 更新鍵、カテゴリ・連絡先・TestFlight 外部テスターの扱い
+
+### H-23. Backspace で残った未変換のローマ字を保留に戻す（曖昧入力・ローマ字の引き継ぎ）（2026-10-14、要レビュー）
+
+- **背景**: 「kyou」を打つつもりで `kypu` と打つと、`ky` は `p` で変換規則に当たらず未変換の ASCII（Literal 扱い）として確定し、`pu` が「ぷ」になる（`kyぷ`）。「ぷ」を消しても `ky` は固定のままで、続けて `ou` と打っても「kyおう」になっていた。G-49（直前の 1 キーの巻き戻し）は「ぷ」のように保留が空になる入力には効かない
+- **決定**: `Composer::backspace` が確定済みのかな（種別 Japanese）を 1 文字消した結果、カーソル直前に「ローマ字の取りこぼし」の ASCII 小文字が連続して残っていれば、その末尾から**有効な接頭辞（テーブルに、それより長いエントリがある）になる最長の部分**を、確定済みの文字から取り除いて保留に戻す。`kypu`→BS→保留 `ky`→`ou`→「きょう」。戻した後の BS は保留を 1 文字ずつ消す（`ky`→`k`→空。G-49 と同じ経路）。断片が無効（続きが無い）なら従来どおり固定のまま
+- **「取りこぼし」の判定**: `Composer` が各文字に「変換器が素通し（`Emit::Raw`）した ASCII 小文字か」の印を持つ（`chars` の 3 つ目の要素）。Shift 入力の大文字・literal_continue 中の英字・数字・`load_pieces` で復元した文字には付かない（戻さない）。保留の確定（カーソル移動など）で素通しされた断片にも付く
+- **条件**: 消したのが Japanese の文字のときだけ働く（取りこぼしそのものを消したときは戻さない）。カーソルが文中でも、直前が取りこぼしなら同じ（保留はカーソル位置に付随）。Rollback（G-49）や保留の削除では何もしない
+- **設定**: `input.romaji_carryover`（bool、既定 true、詳細モード、platforms=both）。`config/default.toml`・記述子・`EngineConfig.romaji_carryover`・`Composer::set_carryover`。`false` で従来の挙動
+- **タッチ入力**: QWERTY の `insert_reading(Text)` も同じ Composer を通るので同様（`touch.rs` のテスト）。12 キーのかなは非 ASCII なので対象外
+- **ライブ変換**: engine の Backspace 処理は変更なし（変換表示の破棄・抑制は従来どおり）。reading は保留を含まないので、保留に戻した分だけ短くなる
+- **テスト**: romaji の `test_carryover_*`、golden `30_composing_edit.yaml`（`composing-carryover-*`。`config.romaji_carryover` を追加）、`touch.rs`、config の既定値テスト
