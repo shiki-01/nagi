@@ -17,7 +17,7 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 | M0 実機での技術検証（iOS） | **ほぼ完了**（拡張の上限 約 177MB、xsmall・small とも拡張内で動作、応答時間は同期待ち 30ms + 非同期の差し替えで目標内、C ABI の非同期通知を確認。H-6〜H-10）。SideStore 検証は不要。Android は未着手 |
 | M1 Android MVP | 未着手 |
 | M2 フリック・学習・範囲操作 | フリックは iOS で実装済み。学習・ユーザー辞書はコアに有り（モバイルでの共有・同時アクセスは D-5 とともに未着手）。範囲操作の UI は未着手 |
-| M3 iOS | **進行中**: TestFlight で実機を使える段階（かな 12 キー・フリック・変換・候補・部分変換・英字）。キーボード UI（⌫連打・数字記号・絵文字・シフト・フリック案内・データ駆動レイアウト）と `set_context` は実装済み（実機未確認。`docs/ios-device-checklist.md`）。残り: 設定（`docs/ios-settings.md`）、本体アプリ、レイアウト編集サイト（`web/`、`docs/ios-keyboard-layout.md`）との連携、配布の準備、堅牢性、部分変換の不具合（U-1） |
+| M3 iOS | **進行中**: TestFlight で実機を使える段階。実装済み（実機未確認の項目あり。`docs/ios-device-checklist.md`）: かな 12 キー・フリック・変換・候補・部分変換・英字、データ駆動レイアウト（`docs/ios-keyboard-layout.md`。toggle・長押し・shortcut・片手モード）、設定タブ（シンプル/詳細。`docs/ios-settings.md`）、レイアウト管理（取り込み・割当・`nagi://layout`）、初回案内・データ・About、診断ログ。サイト（`web/`）にレイアウト編集 GUI。残り: 部分変換の不具合 U-1 の再確認、実機確認、本物のアイコン・プライバシーポリシー・Beta App Review、堅牢性（`set_environment`、メモリ警告、他機種）、設定のコア側新規項目（`docs/ios-settings.md` §4 段階4）、タブ整理（現在7タブ）、見た目の調整 |
 | M4 スタイル変換等 | 未着手 |
 
 ## 1. 着手順の方針
