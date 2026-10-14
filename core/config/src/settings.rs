@@ -380,6 +380,24 @@ pub fn definitions() -> Vec<SettingDef> {
             int(100, 1_000_000, 100),
         ),
         def(
+            "learning.strength",
+            "学習",
+            "学習の強さ",
+            "確定した変換結果を候補の順位に反映する度合いです。0 で順位に反映せず、大きいほど強く反映します。",
+            SettingKind::Float {
+                min: 0.0,
+                max: 2.0,
+                step: 0.1,
+            },
+        ),
+        def(
+            "learning.forget_days",
+            "学習",
+            "学習を忘れるまでの日数",
+            "最後に使ってからこの日数が過ぎた学習を忘れます。0 なら忘れません。",
+            int(0, 3650, 30),
+        ),
+        def(
             "predict.enabled",
             "予測変換",
             "予測変換",
@@ -400,7 +418,7 @@ pub fn definitions() -> Vec<SettingDef> {
 
 /// 設定値の現在値（`Config` から取り出す）。未指定の任意項目は `None`
 fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
-    use SettingValue::{Bool, Int, Text};
+    use SettingValue::{Bool, Float, Int, Text};
     let n = |v: usize| Int(i32::try_from(v).unwrap_or(i32::MAX));
     match key {
         "profile.mode" => Some(Text(config.profile.mode.as_str().to_string())),
@@ -438,6 +456,10 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         }
         "learning.enabled" => Some(Bool(config.learning.enabled)),
         "learning.max_entries" => Some(n(config.learning.max_entries)),
+        "learning.strength" => Some(Float(config.learning.strength)),
+        "learning.forget_days" => Some(Int(
+            i32::try_from(config.learning.forget_days).unwrap_or(i32::MAX)
+        )),
         "predict.enabled" => Some(Bool(config.predict.enabled)),
         "predict.min_chars" => Some(n(config.predict.min_chars)),
         "update.auto_check" => Some(Bool(config.update.auto_check)),
@@ -734,6 +756,31 @@ mod tests {
         }
         let (_, issues) = crate::parse(&src).unwrap();
         assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn learning_strength_and_forget_days_definitions() {
+        let defs = definitions();
+        for key in ["learning.strength", "learning.forget_days"] {
+            let d = defs.iter().find(|d| d.key == key).unwrap();
+            assert_eq!(d.level, SettingLevel::Detail, "{key}");
+            assert_eq!(d.platforms, SettingPlatforms::Both, "{key}");
+        }
+        let strength = defs.iter().find(|d| d.key == "learning.strength").unwrap();
+        assert!(validate_value(strength, &SettingValue::Float(2.0)).is_ok());
+        assert!(validate_value(strength, &SettingValue::Float(2.5)).is_err());
+        let r = apply_changes(
+            None,
+            &[
+                set("learning.strength", SettingValue::Float(1.5)),
+                set("learning.forget_days", SettingValue::Int(90)),
+            ],
+        )
+        .unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.learning.strength, 1.5);
+        assert_eq!(c.learning.forget_days, 90);
     }
 
     #[test]

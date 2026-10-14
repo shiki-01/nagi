@@ -28,6 +28,12 @@ pub mod method {
     pub const GET_SETTINGS: &str = "get_settings";
     /// `update_settings` メソッド（設定の書き込み）
     pub const UPDATE_SETTINGS: &str = "update_settings";
+    /// `get_key_table` メソッド（タッチ入力: 12 キーの文字表と濁点・小書きの循環）
+    pub const GET_KEY_TABLE: &str = "get_key_table";
+    /// `unload_model` メソッド（変換モデルだけをメモリから解放し、辞書のみで動く状態にする）
+    pub const UNLOAD_MODEL: &str = "unload_model";
+    /// `reload_model` メソッド（解放した変換モデルを再び読み込む）
+    pub const RELOAD_MODEL: &str = "reload_model";
     /// `insert_reading` メソッド（タッチ入力: ローマ字を経由せず読みを挿入）
     pub const INSERT_READING: &str = "insert_reading";
     /// `perform_action` メソッド（タッチ UI のボタンから操作を直接実行）
@@ -66,6 +72,33 @@ pub struct InitializeParams {
     pub client_version: String,
     /// OS 識別子（例：`macos`、`windows`）
     pub os: String,
+    /// ホストが把握している実行環境（任意。省略すると従来どおり。後から `set_environment` で更新できる）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub capabilities: Option<ClientCapabilities>,
+}
+
+/// 入力方式（フロントエンドの入力手段）
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMethod {
+    /// 物理キーボード（macOS / Windows など）
+    Physical,
+    /// タッチ（ソフトウェアキーボード。iOS / Android）
+    Touch,
+}
+
+/// `initialize` でフロントエンドが申告する実行環境（すべて任意）。OS への問い合わせはコアでは行わず、
+/// ホストが報告した値でプロファイルを判定する（mobile-design §3-2）
+#[typeshare]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientCapabilities {
+    /// 入力方式。省略は `physical` 相当
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub input_method: Option<InputMethod>,
+    /// 電源・サーマル・メモリ逼迫・メモリ上限（`set_environment` と同じ項目）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub environment: Option<SetEnvironmentParams>,
 }
 
 /// サーバーの機能
@@ -377,6 +410,10 @@ pub struct SetEnvironmentParams {
     /// メモリ逼迫
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_pressure: Option<MemoryPressureState>,
+    /// このプロセスが OS から課されているメモリ上限（MB。iOS 拡張の `phys_footprint + 残り` など）。
+    /// 上限が小さいと軽いプロファイルに制限し、LLM に必要な量（150MB）未満なら LLM を解放する
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub memory_budget_mb: Option<u32>,
 }
 
 /// `get_status` の結果: メニューなどで「今どういう状態か・なぜか」を表示するための情報
@@ -554,4 +591,38 @@ pub struct PerformActionParams {
     pub session_id: String,
     /// 操作
     pub action: TouchAction,
+}
+
+// ---- 12 キーの文字表（`get_key_table`） ----
+
+/// 12 キーのうち 1 つのキー（行）の文字表。入力される文字の決定はコア（`insert_reading`）が行うので、
+/// フロントはこれを押下ポップアップの表示などにだけ使う
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyTableEntry {
+    /// キー（行）
+    pub key: KanaKey,
+    /// タップ（中央）で入る文字
+    pub center: String,
+    /// 左フリックで入る文字
+    pub left: String,
+    /// 上フリックで入る文字
+    pub up: String,
+    /// 右フリックで入る文字
+    pub right: String,
+    /// 下フリックで入る文字
+    pub down: String,
+    /// トグル入力で連続して押したときの文字の循環（先頭から順に進み、末尾の次は先頭に戻る）
+    pub toggle: Vec<String>,
+}
+
+/// `get_key_table` メソッドの応答
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyTableResult {
+    /// 各キーの文字表（レイアウト順）
+    pub keys: Vec<KeyTableEntry>,
+    /// 「゛゜小」キーの循環（`variant`）。各要素が 1 つの循環で、末尾の次は先頭に戻る
+    /// （例：`["は", "ば", "ぱ"]`）。循環に含まれない文字は変化しない
+    pub variants: Vec<Vec<String>>,
 }

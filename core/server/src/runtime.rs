@@ -8,21 +8,49 @@ use nagi_config::{Config, ProfileMode};
 use nagi_dict::Overlay;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_profile::{
-    AutoConfig, Change, Controller, Decision, Environment, MemoryPressure, Profile, SystemInfo,
-    Thermal, initial_profile,
+    AutoConfig, Change, Controller, Decision, Environment, MIN_MEMORY_BUDGET_FOR_LLM_MB,
+    MemoryPressure, Profile, SystemInfo, Thermal, initial_profile, initial_profile_with_budget,
 };
 use nagi_protocol::methods::{
-    MemoryPressureState, NotifyLevel, SetEnvironmentParams, StatusResult, ThermalState,
-    UpdateCandidatesParams, UpdatePreeditParams,
+    InputMethod, MemoryPressureState, NotifyLevel, SetEnvironmentParams, StatusResult,
+    ThermalState, UpdateCandidatesParams, UpdatePreeditParams,
 };
 use nagi_protocol::view::CandidateSource;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 /// 学習ファイルを書き出す最短の間隔（設計書 §4.11: 5 分ごと）
 const FLUSH_INTERVAL: Duration = Duration::from_secs(300);
+
+/// メモリ逼迫が解消（`normal`）してから、解放していた変換モデルを再読み込みするまでの待ち時間。
+/// 逼迫が短い間隔で繰り返されても、読み込みと解放を繰り返さないための猶予
+pub const MODEL_RELOAD_DELAY: Duration = Duration::from_secs(30);
+
+/// 変換モデルの解放・再読み込みを実際に行うもの（[`crate::pipeline::Pipeline`] が実装する）。
+/// どちらも呼び出し側を待たせない（読み込みは別スレッド）。実行中の推論があっても安全
+pub trait ModelControl: Send + Sync {
+    /// 変換モデルをメモリから解放する。以降、再読み込みまで辞書のみで動く
+    fn unload_model(&self);
+    /// 解放したモデルを別スレッドで再読み込みする。完了すると [`Runtime::set_llm_loaded`] で LLM ありに戻る。
+    /// 失敗したら [`Runtime::model_reload_failed`] を呼ぶ（辞書のみで継続）
+    fn reload_model(&self);
+}
+
+/// 変換モデルの解放状態（Runtime から見たもの）
+#[derive(Debug, Default)]
+struct ModelState {
+    /// 解放している（または解放を要求した）
+    unloaded: bool,
+    /// `unload_model`（明示の解放）が要求されている。`reload_model` まで自動では戻さない
+    manual: bool,
+    /// 自動再読み込みの予定時刻（`now_ms`）。条件が解消してから [`MODEL_RELOAD_DELAY`] 後
+    resume_at: Option<u64>,
+    /// 自動の再読み込みに失敗した。次に解放が必要になるまで（または明示の `reload_model` まで）再試行しない
+    gave_up: bool,
+}
 
 /// ユーザーに知らせる出来事（`notify` 通知になる）
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +200,13 @@ pub struct Runtime {
     config_error: AtomicBool,
     backend_name: Mutex<String>,
     calibration_path: Mutex<Option<PathBuf>>,
+    /// プロセスのメモリ上限（MB）。0 は上限なし
+    memory_budget_mb: AtomicU64,
+    /// フロントエンドの入力方式（`initialize` の capabilities）
+    input_method: Mutex<InputMethod>,
+    model: Mutex<ModelState>,
+    model_control: Mutex<Option<Weak<dyn ModelControl>>>,
+    reload_delay: Mutex<Duration>,
 }
 
 impl Runtime {
@@ -183,7 +218,20 @@ impl Runtime {
         learner: Learner,
         learn_path: Option<PathBuf>,
     ) -> Arc<Runtime> {
-        let decision = Self::decide(&tunables, &system, has_llm, None);
+        Self::new_with_budget(system, has_llm, tunables, learner, learn_path, None)
+    }
+
+    /// [`Self::new`] に、プロセスのメモリ上限（MB。`None` なら上限なし）を加えた版。
+    /// 初回のプロファイル判定から上限を反映する
+    pub fn new_with_budget(
+        system: SystemInfo,
+        has_llm: bool,
+        tunables: Tunables,
+        learner: Learner,
+        learn_path: Option<PathBuf>,
+        memory_budget_mb: Option<u64>,
+    ) -> Arc<Runtime> {
+        let decision = Self::decide(&tunables, &system, has_llm, None, memory_budget_mb);
         let controller =
             Controller::new(decision, tunables.fixed_profile.is_some(), tunables.auto, 0);
         Arc::new(Runtime {
@@ -205,6 +253,11 @@ impl Runtime {
             config_error: AtomicBool::new(false),
             backend_name: Mutex::new(String::new()),
             calibration_path: Mutex::new(None),
+            memory_budget_mb: AtomicU64::new(memory_budget_mb.unwrap_or(0)),
+            input_method: Mutex::new(InputMethod::Physical),
+            model: Mutex::new(ModelState::default()),
+            model_control: Mutex::new(None),
+            reload_delay: Mutex::new(MODEL_RELOAD_DELAY),
         })
     }
 
@@ -224,6 +277,7 @@ impl Runtime {
         system: &SystemInfo,
         has_llm: bool,
         calibration: Option<f64>,
+        memory_budget_mb: Option<u64>,
     ) -> Decision {
         match t.fixed_profile {
             Some(p) if has_llm || p == Profile::Minimal => Decision {
@@ -231,7 +285,7 @@ impl Runtime {
                 reason: format!("設定（profile.mode = {}）で固定されています", p.as_str()),
             },
             Some(_) => initial_profile(system, None, false),
-            None => initial_profile(system, calibration, has_llm),
+            None => initial_profile_with_budget(system, calibration, has_llm, memory_budget_mb),
         }
     }
 
@@ -247,6 +301,8 @@ impl Runtime {
             .ok()
             .and_then(|mut c| c.tick(self.now_ms()));
         self.announce(change);
+        // メモリ逼迫の解消から時間が経っていれば、解放していたモデルを戻す
+        self.evaluate_model(false);
     }
 
     fn announce(&self, change: Option<Change>) {
@@ -420,7 +476,7 @@ impl Runtime {
             return;
         };
         let has_llm = self.llm_loaded.load(Ordering::Relaxed);
-        let decision = Self::decide(&t, &self.system, has_llm, *cal);
+        let decision = Self::decide(&t, &self.system, has_llm, *cal, self.memory_budget_mb());
         let now = self.now_ms();
         let change = self.controller.lock().ok().and_then(|mut c| {
             let _ = force;
@@ -432,6 +488,9 @@ impl Runtime {
 
     /// フロントエンドが報告した実行環境（電源・サーマル・メモリ）を反映する。省略された項目は前回の値を維持
     pub fn set_environment(&self, p: &SetEnvironmentParams) {
+        if let Some(mb) = p.memory_budget_mb {
+            self.set_memory_budget_mb(Some(u64::from(mb)));
+        }
         let change = self.controller.lock().ok().and_then(|mut c| {
             let mut env = c.environment();
             if let Some(v) = p.on_battery {
@@ -458,6 +517,168 @@ impl Runtime {
             c.set_environment(env, self.now_ms())
         });
         self.announce(change);
+        self.evaluate_model(false);
+    }
+
+    /// プロセスのメモリ上限（MB）。未報告なら `None`
+    pub fn memory_budget_mb(&self) -> Option<u64> {
+        match self.memory_budget_mb.load(Ordering::Relaxed) {
+            0 => None,
+            mb => Some(mb),
+        }
+    }
+
+    /// メモリ上限（MB）を報告する（`None` または 0 で上限なし）。変わったらプロファイルを判定し直し、
+    /// LLM に必要な量（[`MIN_MEMORY_BUDGET_FOR_LLM_MB`]）を下回れば変換モデルを解放する
+    pub fn set_memory_budget_mb(&self, mb: Option<u64>) {
+        let new = mb.unwrap_or(0);
+        if self.memory_budget_mb.swap(new, Ordering::Relaxed) != new {
+            self.recompute_profile(true);
+            self.evaluate_model(false);
+        }
+    }
+
+    /// フロントエンドの入力方式を記録する（`initialize` の capabilities）
+    pub fn set_input_method(&self, method: InputMethod) {
+        if let Ok(mut m) = self.input_method.lock() {
+            *m = method;
+        }
+    }
+
+    /// 報告されたフロントエンドの入力方式（未報告は物理キー）
+    pub fn input_method(&self) -> InputMethod {
+        self.input_method
+            .lock()
+            .map_or(InputMethod::Physical, |m| *m)
+    }
+
+    // ---- 変換モデルの解放・再読み込み ----
+
+    /// 変換モデルの解放・再読み込みの実行先を登録する（弱い参照。`build` が Pipeline を登録する）
+    pub fn set_model_control(&self, control: Weak<dyn ModelControl>) {
+        if let Ok(mut c) = self.model_control.lock() {
+            *c = Some(control);
+        }
+    }
+
+    /// 自動の再読み込みまでの待ち時間を変える（テスト用）
+    pub fn set_model_reload_delay(&self, delay: Duration) {
+        if let Ok(mut d) = self.reload_delay.lock() {
+            *d = delay;
+        }
+    }
+
+    /// 変換モデルを解放している（解放を要求した）か
+    pub fn model_unloaded(&self) -> bool {
+        self.model.lock().is_ok_and(|m| m.unloaded)
+    }
+
+    /// 変換モデルだけをメモリから解放して、辞書のみで動く状態にする（`unload_model`）。
+    /// 実行中の推論は待たずに捨てる。明示の再読み込み（[`Self::reload_model`]）まで戻らない
+    pub fn unload_model(&self) {
+        if let Ok(mut m) = self.model.lock() {
+            m.manual = true;
+        }
+        self.evaluate_model(false);
+    }
+
+    /// 解放した変換モデルを再び読み込む（`reload_model`）。読み込みは別スレッドで、完了までは辞書のみ。
+    /// メモリ逼迫（危険）・メモリ上限不足・LLM を使えないプロファイルでは読み込まない（理由は
+    /// `notify`）。モデルを解放していなければ何もしない
+    pub fn reload_model(&self) {
+        if let Ok(mut m) = self.model.lock() {
+            m.manual = false;
+            m.gave_up = false;
+        }
+        self.evaluate_model(true);
+    }
+
+    /// 再読み込みに失敗した（辞書のみで継続する。自動では再試行しない）
+    pub fn model_reload_failed(&self) {
+        if let Ok(mut m) = self.model.lock() {
+            m.unloaded = true;
+            m.gave_up = true;
+            m.resume_at = None;
+        }
+    }
+
+    /// このホスト・設定で、モデルを読み込めば LLM を使えるか（`light` 以上になるか）
+    fn can_run_llm(&self) -> bool {
+        let (Ok(t), Ok(cal)) = (self.tunables.read(), self.calibration_ms.lock()) else {
+            return false;
+        };
+        t.llm_enabled
+            && Self::decide(&t, &self.system, true, *cal, self.memory_budget_mb()).profile
+                >= Profile::Light
+    }
+
+    fn control(&self) -> Option<Arc<dyn ModelControl>> {
+        self.model_control
+            .lock()
+            .ok()
+            .and_then(|c| c.as_ref().and_then(Weak::upgrade))
+    }
+
+    /// 解放すべきか・戻すべきかを判定して実行する。`immediate` は待ち時間を置かずに戻す（明示の要求）。
+    ///
+    /// 解放する条件: 明示の `unload_model`、メモリ逼迫が `critical`、メモリ上限が LLM の最小値未満。
+    /// 戻す条件: どれも解消し、逼迫が `normal` に戻ってから待ち時間（[`MODEL_RELOAD_DELAY`]）が経ち、
+    /// `light` 以上で動けること。戻せなければ（失敗も含め）辞書のみで継続する
+    fn evaluate_model(&self, immediate: bool) {
+        enum Action {
+            Unload,
+            Reload,
+        }
+        let env = self.environment();
+        let budget_low = self
+            .memory_budget_mb()
+            .is_some_and(|mb| mb < MIN_MEMORY_BUDGET_FOR_LLM_MB);
+        let delay = self.reload_delay.lock().map_or(MODEL_RELOAD_DELAY, |d| *d);
+        let now = self.now_ms();
+        let action = {
+            let Ok(mut st) = self.model.lock() else {
+                return;
+            };
+            let blocked =
+                st.manual || budget_low || env.memory_pressure == MemoryPressure::Critical;
+            if blocked {
+                st.resume_at = None;
+                st.gave_up = false;
+                if st.unloaded {
+                    None
+                } else {
+                    st.unloaded = true;
+                    Some(Action::Unload)
+                }
+            } else if !st.unloaded || (st.gave_up && !immediate) {
+                None
+            } else if env.memory_pressure != MemoryPressure::Normal && !immediate {
+                // 逼迫（警告）が続いている間は戻さない
+                st.resume_at = None;
+                None
+            } else {
+                let at = *st.resume_at.get_or_insert(now + delay.as_millis() as u64);
+                if immediate || now >= at {
+                    st.resume_at = None;
+                    if self.can_run_llm() {
+                        st.unloaded = false;
+                        Some(Action::Reload)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+        match (action, self.control()) {
+            (Some(Action::Unload), Some(c)) => c.unload_model(),
+            (Some(Action::Reload), Some(c)) => c.reload_model(),
+            // 実行先が無い（モデルを持たない構成・テスト）: 状態だけ反映する
+            (Some(Action::Unload), None) => self.set_llm_loaded(false),
+            (Some(Action::Reload), None) => self.set_llm_loaded(true),
+            (None, _) => {}
+        }
     }
 
     /// 現在の実行環境（テスト用）
@@ -476,6 +697,8 @@ impl Runtime {
         if let Ok(mut learner) = self.learner.lock() {
             let mut lc = learner.config().clone();
             lc.max_entries = config.learning.max_entries;
+            lc.strength = config.learning.strength;
+            lc.forget_days = config.learning.forget_days;
             learner.set_config(lc);
         }
         if let Ok(mut t) = self.tunables.write() {

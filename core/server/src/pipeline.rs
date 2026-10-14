@@ -13,16 +13,18 @@
 //!   辞書の結果で応答する。推論は続行して結果をキャッシュに入れる
 //! - **縮退**: モデルが無い・エラー・`minimal` プロファイルでは辞書だけ、辞書も無ければ読みのまま
 
-use crate::runtime::{Effective, Runtime};
+use crate::runtime::{Effective, Event, ModelControl, Runtime};
 use nagi_dict::{Dictionary, Overlay};
 use nagi_engine::{
     BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend,
 };
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
+use nagi_protocol::methods::NotifyLevel;
 use nagi_protocol::view::CandidateSource;
 use nagi_rewriter::RewriterChain;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -43,8 +45,28 @@ const CALIBRATION_READING: &str = "きょうはいいてんきです";
 type SharedModel = Arc<Mutex<Box<dyn ConversionModel>>>;
 type Cache = Arc<Mutex<HashMap<(String, String), String>>>;
 
+/// モデルの解放 / 再読み込みの状態。推論スレッドと共有する
+#[derive(Default)]
+struct LlmState {
+    /// 変換モデルを解放している（または解放を始めた）。真の間は推論を始めない
+    unloaded: AtomicBool,
+    /// 解放・再読み込みのたびに進める世代。推論の開始時と完了時で変わっていたら、その結果は捨てる
+    generation: AtomicU64,
+}
+
+impl LlmState {
+    fn is_unloaded(&self) -> bool {
+        self.unloaded.load(Ordering::SeqCst)
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+}
+
 struct Llm {
     model: SharedModel,
+    state: Arc<LlmState>,
     cache: Cache,
     /// 直前に `reconcile_active` を呼んだときのプロファイル（変化を検出するため）
     last_profile: Mutex<nagi_profile::Profile>,
@@ -145,6 +167,7 @@ impl Pipeline {
     fn make_llm(model: Box<dyn ConversionModel>, profile: nagi_profile::Profile) -> Llm {
         Llm {
             model: Arc::new(Mutex::new(model)),
+            state: Arc::new(LlmState::default()),
             cache: Arc::new(Mutex::new(HashMap::new())),
             last_profile: Mutex::new(profile),
         }
@@ -165,8 +188,30 @@ impl Pipeline {
         }
         self.runtime
             .set_backend_name(backend_name(self.dict.is_some(), true));
+        if self.runtime.model_unloaded()
+            && let Some(llm) = self.llm.get()
+        {
+            // 読み込み中にメモリ逼迫などで解放が要求された: 取り付けた直後に重みを手放す
+            // （再読み込みが要求されるまで辞書のみ）
+            llm.state.unloaded.store(true, Ordering::SeqCst);
+            llm.state.generation.fetch_add(1, Ordering::SeqCst);
+            Self::spawn_set_active(llm.model.clone(), false);
+            return;
+        }
         self.runtime.set_llm_loaded(true);
         self.warm_up();
+    }
+
+    /// 別スレッドでモデルの重みを解放 / 再読み込みする（呼び出し側を待たせない。実行中の推論があれば
+    /// それが終わってから）
+    fn spawn_set_active(model: SharedModel, active: bool) {
+        let _ = std::thread::Builder::new()
+            .name("nagi-llm-active".into())
+            .spawn(move || {
+                if let Ok(mut m) = model.lock() {
+                    let _ = m.set_active(active);
+                }
+            });
     }
 
     /// プロファイルの変化を見て、LLM をアクティブ / 非アクティブに切り替え、辞書の逆引き索引
@@ -182,15 +227,10 @@ impl Pipeline {
         {
             *last = current;
             drop(last);
-            let should_be_active = current != nagi_profile::Profile::Minimal;
-            let model = llm.model.clone();
-            let _ = std::thread::Builder::new()
-                .name("nagi-llm-active".into())
-                .spawn(move || {
-                    if let Ok(mut m) = model.lock() {
-                        let _ = m.set_active(should_be_active);
-                    }
-                });
+            // 明示的に解放している間は、プロファイルが上がっても再読み込みしない（reload_model の仕事）
+            let should_be_active =
+                current != nagi_profile::Profile::Minimal && !llm.state.is_unloaded();
+            Self::spawn_set_active(llm.model.clone(), should_be_active);
         }
 
         if matches!(
@@ -209,6 +249,7 @@ impl Pipeline {
             return;
         };
         let model = llm.model.clone();
+        let state = llm.state.clone();
         let runtime = self.runtime.clone();
         let _ = std::thread::Builder::new()
             .name("nagi-llm-warmup".into())
@@ -217,6 +258,9 @@ impl Pipeline {
                 let req = Self::request(CALIBRATION_READING, "", None);
                 let mut samples = Vec::new();
                 if let Ok(mut m) = model.lock() {
+                    if state.is_unloaded() {
+                        return;
+                    }
                     m.set_n_threads(runtime.effective().n_threads);
                     let _ = m.convert(&req); // ページイン
                     for _ in 0..3 {
@@ -282,6 +326,8 @@ impl Pipeline {
 
         let (tx, rx) = mpsc::sync_channel::<Option<String>>(1);
         let (model, cache, runtime) = (llm.model.clone(), llm.cache.clone(), self.runtime.clone());
+        let state = llm.state.clone();
+        let generation = state.generation();
         let completions = self.completions.clone();
         let req = Self::request(reading, left, eff.persona.as_deref());
         let slot_bg = slot.clone();
@@ -292,6 +338,10 @@ impl Pipeline {
             .name("nagi-llm-convert".into())
             .spawn(move || {
                 let result = model.lock().ok().and_then(|mut m| {
+                    // 待っている間に解放されたら、推論せず（重みを読み直さず）捨てる
+                    if state.is_unloaded() || state.generation() != generation {
+                        return None;
+                    }
                     m.set_n_threads(n_threads);
                     let started = Instant::now();
                     let out = m.convert(&req).ok();
@@ -302,6 +352,8 @@ impl Pipeline {
                     .and_then(|h| h.into_iter().next())
                     .map(|h| h.surface)
                     .filter(|s| plausible(&req.reading, s));
+                // 推論中に解放・再読み込みされていたら、結果はキャッシュにも通知にも使わない
+                let result = result.filter(|_| state.generation() == generation);
                 if let (Some(surface), Ok(mut cache)) = (&result, cache.lock()) {
                     if cache.len() >= CACHE_CAPACITY {
                         cache.clear();
@@ -364,6 +416,7 @@ impl Pipeline {
         };
         let (tx, rx) = mpsc::sync_channel::<Vec<String>>(1);
         let model = llm.model.clone();
+        let state = llm.state.clone();
         let mut req = Self::request(reading, left, eff.persona.as_deref());
         req.beam_width = width;
         let reading_owned = reading.to_string();
@@ -373,6 +426,7 @@ impl Pipeline {
                 let hyps = model
                     .lock()
                     .ok()
+                    .filter(|_| !state.is_unloaded())
                     .and_then(|mut m| m.convert(&req).ok())
                     .unwrap_or_default();
                 let surfaces: Vec<String> = hyps
@@ -399,12 +453,16 @@ impl Pipeline {
         let llm = self.llm.get()?;
         let (tx, rx) = mpsc::sync_channel::<Option<Vec<f32>>>(1);
         let model = llm.model.clone();
+        let state = llm.state.clone();
         let req = Self::request(reading, left, eff.persona.as_deref());
         let n_threads = eff.n_threads;
         std::thread::Builder::new()
             .name("nagi-llm-score".into())
             .spawn(move || {
                 let scores = model.lock().ok().and_then(|mut m| {
+                    if state.is_unloaded() {
+                        return None;
+                    }
                     m.set_n_threads(n_threads);
                     m.score(&req, &candidates).ok()
                 });
@@ -567,6 +625,81 @@ fn merge_by_order(
         }
     }
     out
+}
+
+impl ModelControl for Pipeline {
+    fn unload_model(&self) {
+        let Some(llm) = self.llm.get() else {
+            // まだ取り付け前: 取り付け（attach_model）が Runtime の状態を見て解放する
+            return;
+        };
+        // 先に印を付けて、待機中・これから始まる推論が重みに触らないようにする。実行中の推論は
+        // 待たず、世代を進めて結果を捨てる
+        llm.state.unloaded.store(true, Ordering::SeqCst);
+        llm.state.generation.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut cache) = llm.cache.lock() {
+            cache.clear();
+        }
+        self.runtime.set_llm_loaded(false);
+        Self::spawn_set_active(llm.model.clone(), false);
+        self.runtime.push_event(Event {
+            level: NotifyLevel::Info,
+            code: "llm_unloaded",
+            message: "変換モデルを解放しました（辞書のみで動作します）".to_string(),
+        });
+    }
+
+    fn reload_model(&self) {
+        let Some(llm) = self.llm.get() else {
+            return;
+        };
+        if !llm.state.is_unloaded() {
+            return;
+        }
+        // 以前の再読み込み・解放の要求を無効にする
+        let generation = llm.state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let (model, state, runtime) = (llm.model.clone(), llm.state.clone(), self.runtime.clone());
+        let spawned = std::thread::Builder::new()
+            .name("nagi-llm-reload".into())
+            .spawn(move || {
+                let Ok(mut m) = model.lock() else {
+                    return;
+                };
+                if state.generation() != generation {
+                    // 待っている間に解放などが要求された。重みは手放したままにする
+                    return;
+                }
+                match m.set_active(true) {
+                    Ok(()) => {
+                        state.unloaded.store(false, Ordering::SeqCst);
+                        // 読み込み済みなので、ページインを兼ねて 1 回だけ推論しておく（結果は使わない）
+                        let _ = m.convert(&Self::request(CALIBRATION_READING, "", None));
+                        drop(m);
+                        runtime.set_llm_loaded(true);
+                        runtime.push_event(Event {
+                            level: NotifyLevel::Info,
+                            code: "llm_reloaded",
+                            message: "変換モデルを再び読み込みました".to_string(),
+                        });
+                    }
+                    Err(_) => {
+                        let _ = m.set_active(false);
+                        drop(m);
+                        runtime.model_reload_failed();
+                        runtime.push_event(Event {
+                            level: NotifyLevel::Warning,
+                            code: "llm_reload_failed",
+                            message:
+                                "変換モデルを再読み込みできませんでした（辞書のみで動作を続けます）"
+                                    .to_string(),
+                        });
+                    }
+                }
+            });
+        if spawned.is_err() {
+            self.runtime.model_reload_failed();
+        }
+    }
 }
 
 impl ConversionBackend for Pipeline {

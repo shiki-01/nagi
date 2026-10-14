@@ -80,6 +80,74 @@ public struct ChoiceOptions: Codable {
 	}
 }
 
+/// 入力方式（フロントエンドの入力手段）
+public enum InputMethod: String, Codable {
+	/// 物理キーボード（macOS / Windows など）
+	case physical
+	/// タッチ（ソフトウェアキーボード。iOS / Android）
+	case touch
+}
+
+/// サーマル状態（OS が報告するもの）
+public enum ThermalState: String, Codable {
+	/// 通常
+	case nominal
+	/// やや高い
+	case fair
+	/// 高い
+	case serious
+	/// 危険
+	case critical
+}
+
+/// メモリ逼迫の状態（OS が報告するもの）
+public enum MemoryPressureState: String, Codable {
+	/// 通常
+	case normal
+	/// 警告
+	case warning
+	/// 危険
+	case critical
+}
+
+/// `set_environment` 通知のパラメータ（応答なし）。実行環境の状態を報告し、コアはこれに応じて
+/// 環境プロファイルを自動で切り替える（設計書 §4.7）。省略した項目は「前回の値を維持」
+public struct SetEnvironmentParams: Codable {
+	/// バッテリー駆動か
+	public let on_battery: Bool?
+	/// OS の低電力モードか
+	public let low_power_mode: Bool?
+	/// サーマル状態
+	public let thermal: ThermalState?
+	/// メモリ逼迫
+	public let memory_pressure: MemoryPressureState?
+	/// このプロセスが OS から課されているメモリ上限（MB。iOS 拡張の `phys_footprint + 残り` など）。
+	/// 上限が小さいと軽いプロファイルに制限し、LLM に必要な量（150MB）未満なら LLM を解放する
+	public let memory_budget_mb: UInt32?
+
+	public init(on_battery: Bool?, low_power_mode: Bool?, thermal: ThermalState?, memory_pressure: MemoryPressureState?, memory_budget_mb: UInt32?) {
+		self.on_battery = on_battery
+		self.low_power_mode = low_power_mode
+		self.thermal = thermal
+		self.memory_pressure = memory_pressure
+		self.memory_budget_mb = memory_budget_mb
+	}
+}
+
+/// `initialize` でフロントエンドが申告する実行環境（すべて任意）。OS への問い合わせはコアでは行わず、
+/// ホストが報告した値でプロファイルを判定する（mobile-design §3-2）
+public struct ClientCapabilities: Codable {
+	/// 入力方式。省略は `physical` 相当
+	public let input_method: InputMethod?
+	/// 電源・サーマル・メモリ逼迫・メモリ上限（`set_environment` と同じ項目）
+	public let environment: SetEnvironmentParams?
+
+	public init(input_method: InputMethod?, environment: SetEnvironmentParams?) {
+		self.input_method = input_method
+		self.environment = environment
+	}
+}
+
 /// 設定読み込みエラー
 public struct ConfigError: Codable {
 	/// エラー行番号
@@ -124,12 +192,15 @@ public struct InitializeParams: Codable {
 	public let client_version: String
 	/// OS 識別子（例：`macos`、`windows`）
 	public let os: String
+	/// ホストが把握している実行環境（任意。省略すると従来どおり。後から `set_environment` で更新できる）
+	public let capabilities: ClientCapabilities?
 
-	public init(protocol_version: UInt32, client_name: String, client_version: String, os: String) {
+	public init(protocol_version: UInt32, client_name: String, client_version: String, os: String, capabilities: ClientCapabilities?) {
 		self.protocol_version = protocol_version
 		self.client_name = client_name
 		self.client_version = client_version
 		self.os = os
+		self.capabilities = capabilities
 	}
 }
 
@@ -329,6 +400,75 @@ public struct KeyEvent: Codable {
 		self.text = text
 		self.modifiers = modifiers
 		self.kind = kind
+	}
+}
+
+/// 12 キーのキー（行）。レイアウトの描画はフロント、各キーの文字（タップ・フリック）の対応はコアが持つ
+public enum KanaKey: String, Codable {
+	/// あ行（あ い う え お）
+	case a
+	/// か行
+	case ka
+	/// さ行
+	case sa
+	/// た行
+	case ta
+	/// な行
+	case na
+	/// は行
+	case ha
+	/// ま行
+	case ma
+	/// や行（や （ ゆ ） よ）
+	case ya
+	/// ら行
+	case ra
+	/// わ行（わ を ん ー 〜）
+	case wa
+	/// 句読点（、 。 ？ ！ …）
+	case punct
+}
+
+/// 12 キーのうち 1 つのキー（行）の文字表。入力される文字の決定はコア（`insert_reading`）が行うので、
+/// フロントはこれを押下ポップアップの表示などにだけ使う
+public struct KeyTableEntry: Codable {
+	/// キー（行）
+	public let key: KanaKey
+	/// タップ（中央）で入る文字
+	public let center: String
+	/// 左フリックで入る文字
+	public let left: String
+	/// 上フリックで入る文字
+	public let up: String
+	/// 右フリックで入る文字
+	public let right: String
+	/// 下フリックで入る文字
+	public let down: String
+	/// トグル入力で連続して押したときの文字の循環（先頭から順に進み、末尾の次は先頭に戻る）
+	public let toggle: [String]
+
+	public init(key: KanaKey, center: String, left: String, up: String, right: String, down: String, toggle: [String]) {
+		self.key = key
+		self.center = center
+		self.left = left
+		self.up = up
+		self.right = right
+		self.down = down
+		self.toggle = toggle
+	}
+}
+
+/// `get_key_table` メソッドの応答
+public struct KeyTableResult: Codable {
+	/// 各キーの文字表（レイアウト順）
+	public let keys: [KeyTableEntry]
+	/// 「゛゜小」キーの循環（`variant`）。各要素が 1 つの循環で、末尾の次は先頭に戻る
+	/// （例：`["は", "ば", "ぱ"]`）。循環に含まれない文字は変化しない
+	public let variants: [[String]]
+
+	public init(keys: [KeyTableEntry], variants: [[String]]) {
+		self.keys = keys
+		self.variants = variants
 	}
 }
 
@@ -839,48 +979,6 @@ public struct SetContextParams: Codable {
 	}
 }
 
-/// サーマル状態（OS が報告するもの）
-public enum ThermalState: String, Codable {
-	/// 通常
-	case nominal
-	/// やや高い
-	case fair
-	/// 高い
-	case serious
-	/// 危険
-	case critical
-}
-
-/// メモリ逼迫の状態（OS が報告するもの）
-public enum MemoryPressureState: String, Codable {
-	/// 通常
-	case normal
-	/// 警告
-	case warning
-	/// 危険
-	case critical
-}
-
-/// `set_environment` 通知のパラメータ（応答なし）。実行環境の状態を報告し、コアはこれに応じて
-/// 環境プロファイルを自動で切り替える（設計書 §4.7）。省略した項目は「前回の値を維持」
-public struct SetEnvironmentParams: Codable {
-	/// バッテリー駆動か
-	public let on_battery: Bool?
-	/// OS の低電力モードか
-	public let low_power_mode: Bool?
-	/// サーマル状態
-	public let thermal: ThermalState?
-	/// メモリ逼迫
-	public let memory_pressure: MemoryPressureState?
-
-	public init(on_battery: Bool?, low_power_mode: Bool?, thermal: ThermalState?, memory_pressure: MemoryPressureState?) {
-		self.on_battery = on_battery
-		self.low_power_mode = low_power_mode
-		self.thermal = thermal
-		self.memory_pressure = memory_pressure
-	}
-}
-
 /// 設定値（`{"type":"bool","value":true}` のように型名つきで表す）
 public enum SettingValue: Codable {
 	/// 真偽値
@@ -1214,32 +1312,6 @@ public struct UpdateSettingsResult: Codable {
 		self.errors = errors
 		self.snapshot = snapshot
 	}
-}
-
-/// 12 キーのキー（行）。レイアウトの描画はフロント、各キーの文字（タップ・フリック）の対応はコアが持つ
-public enum KanaKey: String, Codable {
-	/// あ行（あ い う え お）
-	case a
-	/// か行
-	case ka
-	/// さ行
-	case sa
-	/// た行
-	case ta
-	/// な行
-	case na
-	/// は行
-	case ha
-	/// ま行
-	case ma
-	/// や行（や （ ゆ ） よ）
-	case ya
-	/// ら行
-	case ra
-	/// わ行（わ を ん ー 〜）
-	case wa
-	/// 句読点（、 。 ？ ！ …）
-	case punct
 }
 
 /// 12 キーの操作

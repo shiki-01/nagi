@@ -964,3 +964,11 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - ビルド・署名・アップロードは GitHub Actions `ios-testflight`（手動実行。App Store Connect API キーのクラウド署名。表示バージョンは `ios-vX.Y.Z` タグ、ビルド番号は run_number。CI の開発証明書は前後で失効させて上限を避ける）
 - macOS の配布方針は、加入済みの前提で Developer ID 署名 + 公証へ見直せる（未着手。現状の実装は ad-hoc 署名）。Android の配布（APK 直接配布）は変更なし。**SideStore は使わない**（ユーザー決定。関連ワークフロー `ios-spike.yml`・`ios-signing-diag.sh` は削除）
 
+### H-16. モバイル向けコア API: LLM の解放/再読み込み・12 キーの文字表・D-4（2026-10-14、要レビュー）
+
+- **LLM だけの解放・再読み込み**: `Runtime::unload_model` / `reload_model`（実行先は `ModelControl` trait。`Pipeline` が実装し、`build` が登録）。解放は変換モデルの `set_active(false)`（重みの解放）+ 辞書の逆引き索引の解放（Minimal 化）。**待たない・破棄**: 解放を要求したらすぐに辞書のみの応答になり、実行中の推論は待たずに、世代番号で結果（キャッシュ・遅延完了通知）を捨てる。解放中に始まる推論はモデルに触れない（`LlamaModel` は `convert` で重みを読み直すため、印を見て弾く）
+- **自動の解放・再読み込み**: `set_environment` の `memory_pressure = critical`、またはメモリ上限が 150MB 未満のとき解放。逼迫が `normal` に戻って **30 秒**後（`MODEL_RELOAD_DELAY`。暫定値）、`light` 以上で動ける場合に再読み込み（`warning` の間は戻さない）。再読み込みの失敗は `llm_reload_failed` を通知して辞書のみで継続し、**自動では再試行しない**（次の逼迫サイクルか明示の `reload_model` まで）。再読み込みが起動時の非同期読み込みと重なる場合は、取り付けた直後に解放する
+- **JSON-RPC の追加（加算的）**: `unload_model` / `reload_model`（params なし、応答 `{}`）。明示の `unload_model` は `reload_model` まで自動では戻さない。状態は `get_status.llm`
+- **`get_key_table`**: 12 キーの文字表（`center/left/up/right/down`・`toggle` の循環）と濁点・小書きの循環（`variants`）を返す。エンジンの `touch.rs` の表から作る（単一の情報源）。iOS の `KanaKeyTable.swift` の複製表はこれで置き換えられる
+- **D-4**: `initialize.params.capabilities`（任意。`input_method: touch|physical`、`environment`＝`set_environment` と同じ項目）と `set_environment.memory_budget_mb`（任意）を追加。プロファイル判定（`nagi_profile::initial_profile_with_budget`）はメモリ上限に従う: **150MB 未満は Minimal、1024MB 未満は Light まで、2048MB 未満は Balanced まで**（暫定値。実機で見直す）。`profile.mode` での固定は上限より優先。`input_method` は記録するのみで、現状は挙動を変えない
+- **Swift の追従が必要**: 生成された `InitializeParams` / `SetEnvironmentParams` のメモリワイズ init に引数が増えたため、既存の呼び出し（macOS `EngineSupervisor.swift`、iOS `NagiSession.swift`・`NagiEnvironment.swift`）に `capabilities: nil` / `memory_budget_mb: nil` が要る

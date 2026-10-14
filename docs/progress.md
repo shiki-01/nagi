@@ -180,3 +180,7 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 5. 堅牢性: メモリ警告・電源・発熱への対応（`set_environment` の送信）、他機種での上限・応答時間の実測、複数プロセスでの学習データの同時アクセス（D-5）
 6. 最後にまとめて: 見た目と操作感の調整（実機のフィードバックを集める）
 
+## モバイル向けコア API（2026-10-14、決定は decisions.md H-16）
+
+- 実装済み: LLM だけの解放/再読み込み（`unload_model` / `reload_model`、メモリ逼迫 critical・メモリ上限不足での自動解放、normal から 30 秒後の自動再読み込み）、`get_key_table`、D-4（`initialize.capabilities`・`set_environment.memory_budget_mb`・メモリ上限に従うプロファイル判定）
+- 未完了: iOS（Swift）側の追従（生成型の init 引数の追加、`KanaKeyTable.swift` の `get_key_table` への置き換え、起動時の `capabilities` 送信、メモリ警告の `unload_model` 連携）。実機でのメモリ上限の閾値（150/1024/2048MB）と再読み込みの待ち時間（30 秒）の見直し

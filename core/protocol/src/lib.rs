@@ -25,12 +25,13 @@ pub mod view;
 // 主要型の再エクスポート
 pub use key::{KeyEvent, KeyKind, Modifiers};
 pub use methods::{
-    ConfigError, EmptyResult, InitializeParams, InitializeResult, InsertReadingParams, KanaKey,
-    KeyGesture, MemoryPressureState, NotifyLevel, NotifyParams, PerformActionParams,
-    ProcessKeyParams, ProcessKeyResult, ReadingInput, ReconvertParams, ReloadConfigResult,
-    RestoreSegment, RestoreSessionParams, SelectCandidateParams, ServerCapabilities, SessionParams,
-    SetContextParams, SetEnvironmentParams, StatusResult, SurroundingText, ThermalState,
-    TouchAction, TouchDirection, UpdateCandidatesParams, UpdatePreeditParams,
+    ClientCapabilities, ConfigError, EmptyResult, InitializeParams, InitializeResult, InputMethod,
+    InsertReadingParams, KanaKey, KeyGesture, KeyTableEntry, KeyTableResult, MemoryPressureState,
+    NotifyLevel, NotifyParams, PerformActionParams, ProcessKeyParams, ProcessKeyResult,
+    ReadingInput, ReconvertParams, ReloadConfigResult, RestoreSegment, RestoreSessionParams,
+    SelectCandidateParams, ServerCapabilities, SessionParams, SetContextParams,
+    SetEnvironmentParams, StatusResult, SurroundingText, ThermalState, TouchAction, TouchDirection,
+    UpdateCandidatesParams, UpdatePreeditParams,
 };
 pub use settings::{
     ChoiceOptions, FloatRange, IntRange, SettingChange, SettingChoice, SettingError, SettingItem,

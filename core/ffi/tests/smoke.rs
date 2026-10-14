@@ -129,3 +129,44 @@ fn settings_roundtrip_via_user_dir() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn key_table_and_model_unload_via_handle_line() {
+    let dir = std::env::temp_dir().join("nagi-ffi-smoke-key-table");
+    let dir_c = CString::new(dir.to_str().unwrap()).unwrap();
+    unsafe {
+        let handle = nagi_server_new_with_budget(dir_c.as_ptr(), dir_c.as_ptr(), 1, 3072);
+        assert!(!handle.is_null());
+        // capabilities つきの initialize（任意項目。省略したフロントも従来どおり動く）
+        let init = send(
+            handle,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client_name":"t","client_version":"0","os":"ios","capabilities":{"input_method":"touch","environment":{"memory_budget_mb":3072}}}}"#,
+        );
+        assert!(init.contains("\"result\""), "{init}");
+
+        let table = send(
+            handle,
+            r#"{"jsonrpc":"2.0","id":2,"method":"get_key_table"}"#,
+        );
+        assert!(
+            table.contains("\"keys\"") && table.contains("\"variants\""),
+            "{table}"
+        );
+        assert!(
+            table.contains("\"toggle\":[\"か\",\"き\",\"く\",\"け\",\"こ\"]"),
+            "{table}"
+        );
+
+        // モデルを持たない構成でも、解放 / 再読み込みの要求は安全に受け付ける
+        for (id, method) in [(3, "unload_model"), (4, "reload_model")] {
+            let r = send(
+                handle,
+                &format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"{method}"}}"#),
+            );
+            assert!(r.contains("\"result\""), "{method}: {r}");
+        }
+        let key = send(handle, KEY_A);
+        assert!(key.contains("あ"), "{key}");
+        nagi_server_free(handle);
+    }
+}

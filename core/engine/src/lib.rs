@@ -11,7 +11,7 @@ pub mod kana;
 pub mod keymap;
 pub mod keys;
 pub mod observer;
-mod touch;
+pub mod touch;
 
 pub use action::{Action, Direction};
 pub use backend::{

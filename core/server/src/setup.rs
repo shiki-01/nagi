@@ -23,10 +23,9 @@ use std::time::{Instant, SystemTime};
 /// 既定の変換モデルのファイル名（`<data_dir>/models/` 下。`cargo xtask fetch-model` の出力）
 pub const DEFAULT_MODEL_FILE: &str = "zenz-v3.1-small-Q5_K_M.gguf";
 
-/// LLM を読み込むために必要な、プロセスのメモリ上限（MB）の最小値。これ未満なら LLM を読み込まず
-/// 辞書のみで動く。iPhone 16e のキーボード拡張（上限 約 177MB）で xsmall（20MB）+ 辞書が
-/// ピーク 124MB に収まった実測（decisions.md H-6）に余裕を持たせた暫定値で、他機種の実測で見直す
-pub const MIN_MEMORY_BUDGET_FOR_LLM_MB: u64 = 150;
+/// LLM を読み込むために必要な、プロセスのメモリ上限（MB）の最小値（定義は `nagi_profile`）。これ未満なら
+/// LLM を読み込まず辞書のみで動く
+pub use nagi_profile::MIN_MEMORY_BUDGET_FOR_LLM_MB;
 
 /// 起動オプション
 #[derive(Debug, Clone)]
@@ -427,6 +426,8 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
     // 学習
     let learn_config = LearnConfig {
         max_entries: config.learning.max_entries,
+        strength: config.learning.strength,
+        forget_days: config.learning.forget_days,
         ..LearnConfig::default()
     };
     let mut learn_path = user_dir.as_ref().map(|d| d.join("learning.tsv"));
@@ -469,12 +470,13 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
         .and_then(crate::calibration::load)
         .filter(|record| record.matches(&system, backend))
         .map(|record| record.median_ms);
-    let runtime = Runtime::new(
+    let runtime = Runtime::new_with_budget(
         system,
         has_llm,
         Tunables::from_config(&config),
         learner,
         learn_path,
+        options.memory_budget_mb,
     );
     runtime.set_calibration_path(calibration_path);
     if let Some(ms) = cached_calibration_ms {
@@ -537,6 +539,9 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
 
     let applied_model = config.conversion.model.clone();
     let pipeline = Arc::new(Pipeline::new(dict.clone(), model, runtime.clone()));
+    // メモリ逼迫・メモリ上限・`unload_model` でのモデルの解放と再読み込みの実行先
+    let control: Arc<dyn crate::runtime::ModelControl> = pipeline.clone();
+    runtime.set_model_control(Arc::downgrade(&control));
     pipeline.warm_up();
     if let Some(loader) = pending_loader {
         spawn_model_loader(loader, pipeline.clone());

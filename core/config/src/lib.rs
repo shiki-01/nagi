@@ -337,13 +337,17 @@ impl Default for RankingSection {
 }
 
 /// 学習セクション。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LearningSection {
     /// 学習を有効にするかどうか。既定: true。
     pub enabled: bool,
     /// 学習データの最大エントリ数。既定: 10000。
     pub max_entries: usize,
+    /// 学習の強さ（ランキングへの加点の倍率）。0.0〜2.0。既定: 1.0。
+    pub strength: f64,
+    /// 最終使用からこの日数を過ぎた学習を忘れる。0 = 忘れない。0〜3650。既定: 0。
+    pub forget_days: u32,
     /// 学習を無効にするアプリのリスト。既定: パスワードマネージャ等。
     pub disabled_apps: Vec<String>,
 }
@@ -353,6 +357,8 @@ impl Default for LearningSection {
         LearningSection {
             enabled: true,
             max_entries: 10000,
+            strength: 1.0,
+            forget_days: 0,
             disabled_apps: vec![
                 "com.1password.1password".to_string(),
                 "com.agilebits.onepassword7".to_string(),
@@ -428,7 +434,7 @@ impl Default for UpdateSection {
 }
 
 /// Nagi の全設定。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// 環境プロファイルセクション。
@@ -528,6 +534,22 @@ impl Config {
             errors.push(format!(
                 "learning.max_entries は 100 から 1000000 の間である必要があります: {}",
                 self.learning.max_entries
+            ));
+        }
+
+        // learning.strength: 0.0 <= strength <= 2.0
+        if !(self.learning.strength.is_finite() && (0.0..=2.0).contains(&self.learning.strength)) {
+            errors.push(format!(
+                "learning.strength は 0.0 から 2.0 の間である必要があります: {}",
+                self.learning.strength
+            ));
+        }
+
+        // learning.forget_days: 0 <= forget_days <= 3650
+        if self.learning.forget_days > 3650 {
+            errors.push(format!(
+                "learning.forget_days は 0 から 3650 の間である必要があります: {}",
+                self.learning.forget_days
             ));
         }
 
@@ -650,7 +672,13 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         ],
         "input" => &["shift_letter", "punctuation"],
         "ranking" => &["source_order"],
-        "learning" => &["enabled", "max_entries", "disabled_apps"],
+        "learning" => &[
+            "enabled",
+            "max_entries",
+            "strength",
+            "forget_days",
+            "disabled_apps",
+        ],
         "predict" => &["enabled", "min_chars"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
@@ -1063,6 +1091,23 @@ foo = 42
                 .iter()
                 .any(|e| e.contains("live_conversion_min_key_length"))
         );
+    }
+
+    #[test]
+    fn test_validate_learning_strength_and_forget_days() {
+        let mut config = Config::default();
+        assert_eq!(config.learning.strength, 1.0);
+        assert_eq!(config.learning.forget_days, 0);
+        assert!(config.validate().iter().all(|e| !e.contains("learning.")));
+        config.learning.strength = 2.1;
+        assert!(config.validate().iter().any(|e| e.contains("strength")));
+        config.learning.strength = -0.1;
+        assert!(config.validate().iter().any(|e| e.contains("strength")));
+        config.learning.strength = 0.0;
+        config.learning.forget_days = 3651;
+        let errors = config.validate();
+        assert!(errors.iter().any(|e| e.contains("forget_days")));
+        assert!(!errors.iter().any(|e| e.contains("strength")));
     }
 
     #[test]

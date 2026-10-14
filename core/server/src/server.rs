@@ -412,6 +412,15 @@ impl Server {
                     ));
                 }
                 self.initialized = true;
+                // ホストが申告した実行環境（任意）。プロファイル判定に反映する
+                if let Some(caps) = &p.capabilities {
+                    if let Some(method) = caps.input_method {
+                        self.runtime.set_input_method(method);
+                    }
+                    if let Some(env) = &caps.environment {
+                        self.runtime.set_environment(env);
+                    }
+                }
                 to_value(InitializeResult {
                     protocol_version: PROTOCOL_VERSION,
                     server_name: "nagi-server".to_string(),
@@ -493,6 +502,20 @@ impl Server {
                 self.require_initialized()?;
                 let p: SetEnvironmentParams = params(req)?;
                 self.runtime.set_environment(&p);
+                to_value(EmptyResult {})
+            }
+            method::GET_KEY_TABLE => {
+                self.require_initialized()?;
+                to_value(nagi_engine::touch::key_table())
+            }
+            method::UNLOAD_MODEL => {
+                self.require_initialized()?;
+                self.runtime.unload_model();
+                to_value(EmptyResult {})
+            }
+            method::RELOAD_MODEL => {
+                self.require_initialized()?;
+                self.runtime.reload_model();
                 to_value(EmptyResult {})
             }
             method::GET_STATUS => {

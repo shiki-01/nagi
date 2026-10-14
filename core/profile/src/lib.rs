@@ -249,6 +249,65 @@ pub fn initial_profile(sys: &SystemInfo, calibration_ms: Option<f64>, has_llm: b
     decide(p, why)
 }
 
+/// LLM を読み込むために必要な、プロセスのメモリ上限（MB）の最小値。これ未満なら LLM を使わず辞書のみで
+/// 動く。iPhone 16e のキーボード拡張（上限 約 177MB）で xsmall（20MB）+ 辞書がピーク 124MB に
+/// 収まった実測（decisions.md H-6）に余裕を持たせた暫定値
+pub const MIN_MEMORY_BUDGET_FOR_LLM_MB: u64 = 150;
+
+/// メモリ上限がこの値（MB）未満なら、`Light` より重いプロファイルにしない
+const LIGHT_ONLY_BUDGET_MB: u64 = 1024;
+/// メモリ上限がこの値（MB）未満なら、`Balanced` より重いプロファイルにしない
+const BALANCED_MAX_BUDGET_MB: u64 = 2048;
+
+/// [`initial_profile`] に、ホストが報告したプロセスのメモリ上限（`budget_mb`、`None` なら上限なし）を
+/// 加味する。搭載メモリが大きくても、OS がプロセスに課す上限が小さい環境（iOS のキーボード拡張など）
+/// では、上限に合わせて軽いプロファイルに制限する（OS への問い合わせはコアでは行わない）。
+///
+/// - 上限 [`MIN_MEMORY_BUDGET_FOR_LLM_MB`] 未満: LLM を使えないので `Minimal`
+/// - 1024MB 未満: `Light` まで / 2048MB 未満: `Balanced` まで
+pub fn initial_profile_with_budget(
+    sys: &SystemInfo,
+    calibration_ms: Option<f64>,
+    has_llm: bool,
+    budget_mb: Option<u64>,
+) -> Decision {
+    let decision = initial_profile(sys, calibration_ms, has_llm);
+    let Some(mb) = budget_mb else {
+        return decision;
+    };
+    if mb < MIN_MEMORY_BUDGET_FOR_LLM_MB && decision.profile == Profile::Minimal {
+        // モデルが無い（読み込めなかった・解放した）場合も、上限が原因であることを理由に示す
+        return Decision {
+            profile: Profile::Minimal,
+            reason: format!(
+                "メモリ上限 {mb}MB（{MIN_MEMORY_BUDGET_FOR_LLM_MB}MB 未満）のため辞書のみで動作します"
+            ),
+        };
+    }
+    if decision.profile == Profile::Minimal {
+        return decision;
+    }
+    let (cap, limit) = if mb < MIN_MEMORY_BUDGET_FOR_LLM_MB {
+        (Profile::Minimal, MIN_MEMORY_BUDGET_FOR_LLM_MB)
+    } else if mb < LIGHT_ONLY_BUDGET_MB {
+        (Profile::Light, LIGHT_ONLY_BUDGET_MB)
+    } else if mb < BALANCED_MAX_BUDGET_MB {
+        (Profile::Balanced, BALANCED_MAX_BUDGET_MB)
+    } else {
+        return decision;
+    };
+    if decision.profile <= cap {
+        return decision;
+    }
+    Decision {
+        profile: cap,
+        reason: format!(
+            "メモリ上限 {mb}MB（{limit}MB 未満）のため {} に制限しました",
+            cap.as_str()
+        ),
+    }
+}
+
 /// サーマル状態
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Thermal {
@@ -881,5 +940,31 @@ mod tests {
         for i in 0..40 {
             assert_eq!(c.observe_latency(500.0, i), None);
         }
+    }
+
+    #[test]
+    fn memory_budget_caps_the_profile() {
+        let big = sys(16384, 10);
+        let p = |budget| initial_profile_with_budget(&big, Some(10.0), true, budget).profile;
+        assert_eq!(p(None), Profile::Quality);
+        assert_eq!(p(Some(4096)), Profile::Quality);
+        assert_eq!(p(Some(2047)), Profile::Balanced);
+        assert_eq!(p(Some(1023)), Profile::Light);
+        assert_eq!(p(Some(MIN_MEMORY_BUDGET_FOR_LLM_MB)), Profile::Light);
+        let d = initial_profile_with_budget(&big, Some(10.0), true, Some(100));
+        assert_eq!(d.profile, Profile::Minimal);
+        assert!(d.reason.contains("メモリ上限"), "{}", d.reason);
+        // LLM なし: 上限が十分なら元の判定のまま、不足なら上限が理由になる
+        assert_eq!(
+            initial_profile_with_budget(&big, None, false, Some(500)),
+            initial_profile(&big, None, false)
+        );
+        let d = initial_profile_with_budget(&big, None, false, Some(100));
+        assert_eq!(d.profile, Profile::Minimal);
+        assert!(d.reason.contains("メモリ上限"), "{}", d.reason);
+        // 元の判定のほうが軽ければ変えない
+        let small = initial_profile_with_budget(&sys(2048, 4), None, true, Some(500));
+        assert_eq!(small.profile, Profile::Light);
+        assert!(!small.reason.contains("メモリ上限"));
     }
 }

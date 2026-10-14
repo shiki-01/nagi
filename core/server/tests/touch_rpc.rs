@@ -165,3 +165,57 @@ fn composing_candidates_are_pushed_without_further_input() {
     assert_eq!(r["result"]["commit"], "京");
     assert_eq!(r["result"]["preedit"]["text"], "は");
 }
+
+#[test]
+fn get_key_table_returns_the_tables_used_by_insert_reading() {
+    let mut s = server();
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":2,"method":"get_key_table"}),
+    );
+    let keys = r["result"]["keys"].as_array().expect("keys");
+    assert_eq!(keys.len(), 11);
+    let ka = keys.iter().find(|k| k["key"] == "ka").expect("ka");
+    assert_eq!(ka["center"], "か");
+    assert_eq!(ka["left"], "き");
+    assert_eq!(ka["up"], "く");
+    assert_eq!(ka["right"], "け");
+    assert_eq!(ka["down"], "こ");
+    assert_eq!(ka["toggle"], json!(["か", "き", "く", "け", "こ"]));
+    let variants = r["result"]["variants"].as_array().expect("variants");
+    assert!(variants.contains(&json!(["は", "ば", "ぱ"])));
+
+    // 表の文字は、実際に insert_reading で入る文字と一致する（表示と入力の食い違いがない）
+    let gestures = [
+        ("tap", "center"),
+        ("flick_left", "left"),
+        ("flick_up", "up"),
+        ("flick_right", "right"),
+        ("flick_down", "down"),
+    ];
+    for (i, k) in keys.iter().enumerate() {
+        for (j, (gesture, field)) in gestures.iter().enumerate() {
+            let id = 100 + (i * 10 + j) as i64;
+            call(
+                &mut s,
+                json!({"jsonrpc":"2.0","id":id,"method":"reset","params":{"session_id":"s"}}),
+            );
+            let r = insert(
+                &mut s,
+                id,
+                json!({"type":"key12","content":{"key":k["key"],"gesture":gesture}}),
+            );
+            assert_eq!(r["result"]["preedit"]["text"], k[*field], "{k} {gesture}");
+        }
+    }
+}
+
+#[test]
+fn get_key_table_requires_initialize() {
+    let mut s = Server::new(Arc::new(KanaBackend), "balanced", EngineConfig::default());
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":1,"method":"get_key_table"}),
+    );
+    assert!(r["error"].is_object(), "{r}");
+}
