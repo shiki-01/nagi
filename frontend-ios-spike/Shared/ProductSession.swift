@@ -8,6 +8,8 @@ enum ProductSession {
         let message: String?
         /// 動作はするが、設定の保存先が作れないなど、画面に出しておきたい注意
         var warning: String? = nil
+        /// コアが読む `config.toml`（キーボードの focusIn で更新を検出して `reload_config` を送る）
+        var configURL: URL? = nil
     }
 
     /// 同期の待ち時間（ms）。これを超えた LLM の推論は裏で続け、完了を非同期通知で差し替える
@@ -33,12 +35,13 @@ enum ProductSession {
         let warning = prepared.path == nil
             ? "設定の保存先を作れません（\(prepared.detail)）。既定の設定で動作します"
             : nil
-        return Outcome(session: session, message: nil, warning: warning)
+        let configURL = prepared.path.map { URL(fileURLWithPath: $0).appendingPathComponent("config.toml") }
+        return Outcome(session: session, message: nil, warning: warning, configURL: configURL)
     }
 
     /// 使うモデルのパス。既定は xsmall（待ち時間内に結果が返り、差し替えのちらつきが無い。H-10）で、
     /// 無ければ配置済みのモデルから既定の選び方で選ぶ
-    private static func preferredModelPath(store: SharedStore) -> String? {
+    static func preferredModelPath(store: SharedStore) -> String? {
         guard case .found(_, let files, _) = DataPaths.modelStatus(appGroupId: store.appGroupId) else {
             return nil
         }
@@ -51,14 +54,36 @@ enum ProductSession {
         )?.path
     }
 
-    /// 自動生成した設定ファイルの目印。この行があるファイルだけ、起動のたびに作り直す
-    /// （モデルを入れ替えても追随する）。ユーザーが編集した設定（この行が無いもの）は書き換えない
+    /// 自動生成した設定ファイルの目印（1 行目）。続けて ` body=<本文のハッシュ>` を付ける。
+    /// 本文がハッシュと一致する（誰も編集していない）ファイルだけ、起動のたびに作り直す。
+    /// 設定画面（コアの `update_settings`）が書き換えたファイルは、本文が変わるのでハッシュが合わず、
+    /// ユーザーの設定として保たれる（コメントの 1 行目は残るため、目印だけでは判別できない）
     private static let generatedMarker = "# nagi:generated"
+
+    /// 本文のハッシュ（FNV-1a 64 bit。プロセスをまたいで同じ値になる）
+    private static func bodyHash(_ body: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in body.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100_0000_01b3
+        }
+        return String(hash, radix: 16)
+    }
+
+    /// 自動生成のままか。目印が無ければ false。ハッシュの無い旧形式の目印は、従来どおり生成物として扱う
+    private static func isPristineGenerated(_ text: String) -> Bool {
+        guard text.hasPrefix(generatedMarker) else { return false }
+        let firstLineEnd = text.firstIndex(of: "\n") ?? text.endIndex
+        let firstLine = String(text[text.startIndex..<firstLineEnd])
+        let body = firstLineEnd < text.endIndex ? String(text[text.index(after: firstLineEnd)...]) : ""
+        guard let range = firstLine.range(of: " body=") else { return true }
+        return String(firstLine[range.upperBound...]) == bodyHash(body)
+    }
 
     /// ユーザーデータのディレクトリを用意し、`config.toml` を既定値で作る。
     /// 候補は順に `<App Group>/user`、拡張自身の Application Support、一時ディレクトリ。
     /// どれも作れなければ `path` が nil で、`detail` に各候補の失敗理由を入れる
-    private static func prepareUserDir(store: SharedStore, modelPath: String?) -> (path: String?, detail: String) {
+    static func prepareUserDir(store: SharedStore, modelPath: String?) -> (path: String?, detail: String) {
         let fileManager = FileManager.default
         var candidates: [URL] = []
         var failures: [String] = []
@@ -84,18 +109,45 @@ enum ProductSession {
         return (nil, failures.joined(separator: " / "))
     }
 
-    /// `config.toml` が無い、または自動生成したものなら、既定値で作り直す。
-    /// ユーザーが編集した設定（目印の行が無いもの）は書き換えない
+    /// `config.toml` が無い、または自動生成のままなら、既定値で作り直す。
+    /// ユーザーが編集した設定（設定画面での変更を含む）は書き換えない。ただしモデルのパスだけは、
+    /// `[conversion]` の `model = '...'` の行が既にあれば、配置済みのモデルに追随させる
     private static func writeConfigIfGenerated(in dir: URL, modelPath: String?) throws {
         let configURL = dir.appendingPathComponent("config.toml")
         let existing = try? String(contentsOf: configURL, encoding: .utf8)
-        guard existing == nil || existing?.hasPrefix(generatedMarker) == true else { return }
-        // キーボード拡張はネットワークを使わない（更新確認を切る）
-        var config = "\(generatedMarker)\n[update]\nauto_check = false\n\n"
-        config += "[conversion]\nsync_budget_ms = \(syncBudgetMs)\n"
-        if let modelPath = modelPath {
-            config += "model = '\(modelPath)'\n"
+        if let existing = existing, !isPristineGenerated(existing) {
+            if let modelPath = modelPath, let updated = replacingModelLine(in: existing, with: modelPath), updated != existing {
+                try updated.write(to: configURL, atomically: true, encoding: .utf8)
+            }
+            return
         }
+        // キーボード拡張はネットワークを使わない（更新確認を切る）
+        var body = "[update]\nauto_check = false\n\n"
+        body += "[conversion]\nsync_budget_ms = \(syncBudgetMs)\n"
+        if let modelPath = modelPath {
+            body += "model = '\(modelPath)'\n"
+        }
+        let config = "\(generatedMarker) body=\(bodyHash(body))\n" + body
         try config.write(to: configURL, atomically: true, encoding: .utf8)
+    }
+
+    /// `[conversion]` テーブルの `model = '...'` の行を差し替える。該当の行が無ければ nil
+    private static func replacingModelLine(in text: String, with modelPath: String) -> String? {
+        var inConversion = false
+        var replaced = false
+        var lines: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                inConversion = (trimmed == "[conversion]")
+            }
+            if inConversion, !replaced, trimmed.hasPrefix("model"), trimmed.contains("='") || trimmed.contains("= '") {
+                lines.append("model = '\(modelPath)'")
+                replaced = true
+            } else {
+                lines.append(line)
+            }
+        }
+        return replaced ? lines.joined(separator: "\n") : nil
     }
 }

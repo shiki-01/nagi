@@ -267,6 +267,13 @@ struct ContentView: View {
                     Label("入力テスト", systemImage: "keyboard")
                 }
                 .tag(3)
+
+            // Tab 5: 設定
+            SettingsView()
+                .tabItem {
+                    Label("設定", systemImage: "gearshape")
+                }
+                .tag(4)
         }
         .alert("メッセージ", isPresented: $showingAlert) {
             Button("OK") { }

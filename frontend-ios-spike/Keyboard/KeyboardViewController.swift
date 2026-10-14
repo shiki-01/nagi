@@ -11,6 +11,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     private var model: KeyboardModel?
     private let screen = KeyboardScreen()
     private var hostingController: UIHostingController<KeyboardRoot>?
+    /// キーボード全体の高さの制約（設定の高さの倍率で、focusIn のたびに更新する）
+    private var heightConstraint: NSLayoutConstraint?
 
     override func viewDidLoad() {
         LaunchBaseline.capture()
@@ -22,6 +24,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         model?.focusIn()
+        // focusIn で読み直した設定の高さを反映する
+        heightConstraint?.constant = CGFloat(NagiKeyMetrics.totalHeight)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -64,9 +68,10 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         hostView.didMove(toParent: self)
 
         // キーボードの高さ（候補バー 44 + キー 4 行）。優先度を下げて OS の制約と衝突しないようにする
-        let height = view.heightAnchor.constraint(equalToConstant: 270)
+        let height = view.heightAnchor.constraint(equalToConstant: CGFloat(NagiKeyMetrics.totalHeight))
         height.priority = UILayoutPriority(999)
         height.isActive = true
+        heightConstraint = height
     }
 
     // MARK: - KeyboardHost

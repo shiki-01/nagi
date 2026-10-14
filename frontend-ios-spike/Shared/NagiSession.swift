@@ -154,4 +154,26 @@ final class NagiSession {
     func focusOut() -> ProcessKeyResult? {
         request("focus_out", SessionParams(session_id: sessionId))
     }
+
+    // MARK: - 設定・学習
+
+    /// 設定項目の記述子と現在値（`config.toml` を読む）
+    func getSettings() -> SettingsSnapshot? {
+        request("get_settings", EmptyResult())
+    }
+
+    /// 設定を書き込む（`config.toml` へ原子的に。`value` が nil の変更は明示指定を消して既定に戻す）
+    func updateSettings(_ changes: [SettingChange]) -> UpdateSettingsResult? {
+        request("update_settings", UpdateSettingsParams(changes: changes))
+    }
+
+    /// `config.toml` とユーザー辞書を読み直す（壊れていれば旧設定のまま）
+    func reloadConfig() -> ReloadConfigResult? {
+        request("reload_config", EmptyResult())
+    }
+
+    /// 学習データをすべて削除する
+    func clearLearning() -> EmptyResult? {
+        request("clear_learning", SessionParams(session_id: sessionId))
+    }
 }

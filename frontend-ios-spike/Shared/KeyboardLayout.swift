@@ -264,6 +264,13 @@ enum LayoutLoader {
         return names.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }.sorted()
     }
 
+    /// 同梱の既定レイアウトの id 一覧（ホストアプリの設定画面用。バンドルの `presets/` フォルダ）
+    static func bundledIds() -> [String] {
+        guard let dir = Bundle.main.resourceURL?.appendingPathComponent(bundledFolder, isDirectory: true),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
+        return names.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }.sorted()
+    }
+
     private static func read(url: URL, label: String) -> KeyboardLayoutDef? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         do {
@@ -349,6 +356,12 @@ enum LayoutAssignment {
         default:
             return defaults?.string(forKey: kanaKey) ?? LayoutLoader.defaultKanaId
         }
+    }
+
+    /// 設定画面で明示的に選んだか（「既定に戻す」を出す条件）
+    static func isExplicit(for mode: LayoutMode) -> Bool {
+        let key = mode == .alpha ? alphaKey : kanaKey
+        return defaults?.object(forKey: key) != nil
     }
 
     static func set(id: String?, for mode: LayoutMode) {

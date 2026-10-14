@@ -9,21 +9,42 @@ struct NagiKeyboardView: View {
     var body: some View {
         VStack(spacing: 0) {
             CandidateBar(model: model, onShowProbes: onShowProbes)
-            Group {
-                if model.isExpanded {
-                    ExpandedCandidates(model: model)
-                } else {
-                    LayoutPad(model: model)
+            if model.ios.oneHanded == "off" {
+                padArea
+                    .padding(6)
+            } else {
+                // 片手モード: キー部分を左または右に寄せる（候補バーは全幅のまま）
+                GeometryReader { geo in
+                    HStack(spacing: 0) {
+                        if model.ios.oneHanded == "right" { Spacer(minLength: 0) }
+                        padArea
+                            .padding(6)
+                            .frame(width: geo.size.width * CGFloat(model.ios.oneHandedWidth))
+                        if model.ios.oneHanded == "left" { Spacer(minLength: 0) }
+                    }
                 }
             }
-            .padding(6)
         }
         .background(Color(UIColor.systemGray6))
     }
+
+    /// キー（または展開した候補一覧）の領域
+    private var padArea: some View {
+        Group {
+            if model.isExpanded {
+                ExpandedCandidates(model: model)
+            } else {
+                LayoutPad(model: model)
+            }
+        }
+    }
 }
 
-private let keySpacing: CGFloat = 6
-private let keyHeight: CGFloat = 46
+/// キーの間隔と高さ（設定 `keyboard.key_spacing_pt` / 高さの倍率。`NagiKeyMetrics`）
+private var keySpacing: CGFloat { CGFloat(NagiKeyMetrics.keySpacing) }
+private var keyHeight: CGFloat { CGFloat(NagiKeyMetrics.keyHeight) }
+/// キーの角丸（設定 `keyboard.key_corner_pt`）
+private var keyCorner: CGFloat { CGFloat(NagiKeyMetrics.current.keyCornerPt) }
 
 /// キー領域の高さ。絵文字は一覧を含め、キー 4 行分に揃える
 private func padHeight(_ def: KeyboardLayoutDef) -> CGFloat {
@@ -200,7 +221,7 @@ private struct KeyFace: View {
     var body: some View {
         label
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: 6).fill(fill.opacity(pressed ? 0.6 : 1)))
+            .background(RoundedRectangle(cornerRadius: keyCorner).fill(fill.opacity(pressed ? 0.6 : 1)))
             .contentShape(Rectangle())
     }
 
@@ -252,6 +273,7 @@ private struct TapKeyView: View {
                     .onEnded { value in
                         // 指を大きく動かして離した場合は、押した扱いにしない
                         if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
+                            NagiKeyFeedback.keyDown()
                             action()
                         }
                     }
@@ -270,11 +292,11 @@ private struct RepeatKeyView: View {
     @State private var isDown = false
     @State private var repeatTask: Task<Void, Never>?
 
-    /// 連打を始めるまでの待ち（ナノ秒）
-    private let initialDelay: UInt64 = 450_000_000
-    /// 最初の間隔と、加速の下限（ナノ秒）
-    private let startInterval: UInt64 = 110_000_000
-    private let minInterval: UInt64 = 35_000_000
+    /// 連打を始めるまでの待ち（ナノ秒。設定 `touch.key_repeat_delay_ms`）
+    private var initialDelay: UInt64 { UInt64(NagiKeyMetrics.current.keyRepeatDelayMs) * 1_000_000 }
+    /// 最初の間隔（設定 `touch.key_repeat_ms`）と、加速の下限（最初の間隔の約 3 割、25ms 以上）
+    private var startInterval: UInt64 { UInt64(NagiKeyMetrics.current.keyRepeatMs) * 1_000_000 }
+    private var minInterval: UInt64 { max(25_000_000, startInterval * 32 / 100) }
     /// 暴走防止（離したイベントが届かなかった場合に、無限に消し続けない）
     private let maxRepeats = 600
 
@@ -285,6 +307,7 @@ private struct RepeatKeyView: View {
                     .onChanged { _ in
                         guard !isDown else { return }
                         isDown = true
+                        NagiKeyFeedback.keyDown()
                         action()
                         startRepeat()
                     }
@@ -376,7 +399,7 @@ private struct FlickKeyView: View {
         )
         .overlay(
             GeometryReader { geo in
-                if let drag = drag, chars.hasAny {
+                if let drag = drag, chars.hasAny, NagiKeyMetrics.current.flickPopup {
                     FlickPopup(chars: chars, selected: Self.gesture(for: drag), size: geo.size)
                 }
             }
@@ -394,6 +417,7 @@ private struct FlickKeyView: View {
                 .onEnded { value in
                     reported = false
                     onPress(false)
+                    NagiKeyFeedback.keyDown()
                     onGesture(Self.gesture(for: value.translation))
                 }
         )
@@ -401,7 +425,7 @@ private struct FlickKeyView: View {
 
     /// 移動量から操作を決める（小さな移動はタップ）
     static func gesture(for translation: CGSize) -> KeyGesture {
-        let threshold: CGFloat = 14
+        let threshold = CGFloat(NagiKeyMetrics.current.flickThresholdPoints)
         if abs(translation.width) < threshold && abs(translation.height) < threshold {
             return .tap
         }
@@ -438,10 +462,10 @@ private struct FlickPopup: View {
                 .foregroundColor(isSelected ? Color.white : Color(UIColor.label))
                 .frame(width: size.width, height: size.height)
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: keyCorner)
                         .fill(isSelected ? Color.accentColor : Color(UIColor.secondarySystemBackground))
                 )
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(UIColor.separator), lineWidth: 0.5))
+                .overlay(RoundedRectangle(cornerRadius: keyCorner).stroke(Color(UIColor.separator), lineWidth: 0.5))
                 .position(
                     x: size.width / 2 + dx * (size.width + 2),
                     y: size.height / 2 + dy * (size.height + 2)

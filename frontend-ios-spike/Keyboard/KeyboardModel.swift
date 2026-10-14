@@ -59,12 +59,23 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var message: String?
     /// 動作はするが画面に出しておきたい注意（設定の保存先を作れないなど）
     @Published private(set) var warning: String?
+    /// iOS 固有の設定（`ios-settings.json`。focusIn のたびに読み直す）。
+    /// 描画が参照する寸法は `NagiKeyMetrics.current` にも同じ値を入れる
+    @Published private(set) var ios = NagiIOSSettings()
 
     weak var host: KeyboardHost?
 
     private let session: NagiSession?
-    /// 同じキーの連続タップでトグル入力にするか（false ならフリック入力で、タップは常に先頭の文字）
-    private let toggleInput: Bool
+    /// 同じキーの連続タップでトグル入力にするか（false ならフリック入力で、タップは常に先頭の文字）。
+    /// 設定（`input.toggle_input`）で決まる
+    private var toggleInput: Bool
+    /// コアの `config.toml`。focusIn で更新時刻が変わっていたら `reload_config` を送る
+    private let configURL: URL?
+    private var lastConfigStamp: Date?
+    /// 学習データの全削除の合図（ホストアプリが更新する）を最後に処理した値
+    private var lastLearningClearSignal: String?
+    /// 直前に反映した、かな・英字モードのレイアウトの割り当て（変わったら表示中のレイアウトを切り替える）
+    private var appliedAssignment: (kana: String, alpha: String)
     private var lastRevision: UInt32 = 0
     /// ホストに表示している変換中の文字列とカーソル位置
     private var shownMarked = ""
@@ -83,15 +94,35 @@ final class KeyboardModel: ObservableObject {
     /// コアに渡す文脈の最大文字数
     private let contextLength = 20
 
+    /// - toggleInput: 設定ファイルが読めないときの既定（通常は設定 `input.toggle_input` で上書きされる）
     init(outcome: ProductSession.Outcome, toggleInput: Bool = false) {
         self.session = outcome.session
         self.message = outcome.message
         self.warning = outcome.warning
         self.toggleInput = toggleInput
+        self.configURL = outcome.configURL
+        self.lastConfigStamp = Self.modificationDate(outcome.configURL)
+        self.lastLearningClearSignal = NagiLearningClearSignal.current()
+        self.appliedAssignment = (kana: LayoutAssignment.id(for: .kana), alpha: LayoutAssignment.id(for: .alpha))
         self.layoutDef = LayoutLoader.loadAssigned(mode: .kana)
         session?.onPreeditUpdate = { [weak self] update in self?.applyPreeditUpdate(update) }
         session?.onCandidatesUpdate = { [weak self] update in self?.applyCandidatesUpdate(update) }
         session?.startNotifications()
+        reloadIOSSettings()
+    }
+
+    private static func modificationDate(_ url: URL?) -> Date? {
+        guard let url = url else { return nil }
+        return (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
+    /// `ios-settings.json` を読み直して反映する（不正な値は既定に丸められている）
+    func reloadIOSSettings() {
+        let settings = NagiIOSSettingsStore.load()
+        // 描画が参照する値を先に更新してから、@Published で再描画を起こす
+        NagiKeyMetrics.current = settings
+        toggleInput = settings.toggleInput
+        if settings != ios { ios = settings }
     }
 
     var isAvailable: Bool { session != nil }
@@ -296,13 +327,51 @@ final class KeyboardModel: ObservableObject {
     }
 
     func focusIn() {
+        reloadIOSSettings()
+        applyCoreSettingsChanges()
         // レイアウトのファイルが変わっていても追随する（ホストアプリでの割り当て・取り込み）
         layoutCache.removeAll()
         if let fresh = cachedLayout(id: layoutDef.id) { layoutDef = fresh }
+        applyLayoutAssignment()
         lastSentContext = nil
         DiagLog.log("focusIn layout=\(layoutDef.id)")
         if let result = session?.focusIn() { apply(result, origin: "response(focus_in)") }
         scheduleContextUpdate(delay: 0)
+    }
+
+    /// ホストアプリでの変更をコアに反映する。`config.toml` の更新時刻が変わっていれば `reload_config`
+    /// （コアも要求のたびに更新を見て自動で読み直すが、focusIn の時点で確実に反映する）。
+    /// 学習データの全削除の合図が変わっていれば `clear_learning`（拡張のメモリ上の学習データが、
+    /// 削除済みのファイルへ書き戻されて復活しないようにする）
+    private func applyCoreSettingsChanges() {
+        guard let session = session else { return }
+        if NagiLearningClearSignal.current() != lastLearningClearSignal {
+            lastLearningClearSignal = NagiLearningClearSignal.current()
+            _ = session.clearLearning()
+            DiagLog.log("clear_learning (signal from host app)")
+        }
+        let stamp = Self.modificationDate(configURL)
+        if stamp != lastConfigStamp {
+            lastConfigStamp = stamp
+            if let result = session.reloadConfig() {
+                DiagLog.log("reload_config ok=\(result.ok) errors=\(result.errors.count)")
+            }
+        }
+    }
+
+    /// かな・英字の割り当てが変わっていたら、表示中のレイアウトをその新しい割り当てに切り替える
+    private func applyLayoutAssignment() {
+        let kana = LayoutAssignment.id(for: .kana)
+        let alpha = LayoutAssignment.id(for: .alpha)
+        let kanaChanged = kana != appliedAssignment.kana
+        let alphaChanged = alpha != appliedAssignment.alpha
+        guard kanaChanged || alphaChanged else { return }
+        appliedAssignment = (kana: kana, alpha: alpha)
+        if kanaChanged && layoutDef.mode == .kana {
+            switchLayout(target: "kana")
+        } else if alphaChanged && layoutDef.mode == .alpha {
+            switchLayout(target: "alpha")
+        }
     }
 
     /// フォーカスを失うとき: 変換中の文字列を確定する

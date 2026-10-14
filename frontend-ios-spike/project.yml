@@ -29,6 +29,10 @@ targets:
       - path: Shared
       # コアのプロトコルの型（typeshare で生成。macOS フロントエンドと共有）
       - path: ../frontend-macos/Sources/Generated
+      # 既定のキーボードレイアウト（JSON）。設定画面のレイアウト選択肢の列挙に使う
+      - path: ../config/keyboard/presets
+        type: folder
+        buildPhase: resources
       - path: Resources/data
         type: folder
         optional: true

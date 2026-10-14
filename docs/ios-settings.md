@@ -32,7 +32,7 @@
 | ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `input.mode` | 入力方式 | choice: `flick`（12 キー）/ `qwerty_kana`（ローマ字）/ `qwerty_alpha` | `flick` | S | kbd | 新規(iOS) | 起動時に開く既定レイアウト。実際の割当は `keyboard.layout_*` |
-| `input.toggle_input` | トグル入力（同じキーの連続タップで次の文字） | bool | false | S | kbd+core | 新規(iOS) | 現状 `KeyboardModel` のコンストラクタ引数 `toggleInput`。タップを `toggle` ジェスチャでコアへ送る。false のときタップは先頭の文字 |
+| `input.toggle_input` | トグル入力（同じキーの連続タップで次の文字） | bool | false | S | kbd+core | 既存(iOS) | 現状 `KeyboardModel` のコンストラクタ引数 `toggleInput`。タップを `toggle` ジェスチャでコアへ送る。false のときタップは先頭の文字 |
 | `input.toggle_timeout_ms` | トグル確定までの時間 | int 200–3000, step 50 | 1000 | D | kbd+core | 新規(core) | 現状コアにタイムアウトの概念があるか要確認。無ければ「他のキーで確定」のみ |
 | `input.dakuten_cycle` | 濁点・小書き循環キーの順序 | choice: `dakuten_first`（清→濁→半濁→小）/ `small_first` | `dakuten_first` | D | core:input.dakuten_cycle | 新規(core) | 現状は固定表（`engine/tests/touch.rs` の variant 循環） |
 | `input.dakuten_key_enabled` | 濁点キーを出す | bool | true | D | kbd | 新規(iOS) | OFF にすると、濁点はフリック・長押しのみ |
@@ -44,16 +44,16 @@
 | `input.double_space_period` | スペース 2 回で句点 | bool | false | D | kbd | 新規(iOS) | OS 標準の挙動と揃える項目 |
 | `input.auto_close_bracket` | 括弧の自動閉じ | bool | false | D | kbd | 新規(iOS) | 閉じ括弧の間にカーソルを置く |
 | `input.long_vowel_assist` | 「ー」「っ」の補助（連続入力） | bool | false | D | core:input.long_vowel_assist | 新規(core) | backlog 3 章。精度検証後に昇格 |
-| `flick.sensitivity` | フリック感度（判定距離の倍率） | float 0.5–2.0, step 0.1 | 1.0 | S | kbd | 新規(iOS) | 値が大きいほど短い移動で反応。`flick.threshold_pt` を倍率で調整 |
-| `flick.threshold_pt` | フリック判定距離 | float 4–40 pt, step 1 | 14 | D | kbd | 新規(iOS) | キー幅に対する比ではなく絶対距離。小さい端末は自動で縮める |
-| `flick.popup` | フリック方向のポップアップ表示 | bool | true | S | kbd | 新規(iOS) | OFF は視認性が下がる代わりに描画が軽い |
+| `flick.sensitivity` | フリック感度（判定距離の倍率） | float 0.5–2.0, step 0.1 | 1.0 | S | kbd | 既存(iOS) | 値が大きいほど短い移動で反応。`flick.threshold_pt` を倍率で調整 |
+| `flick.threshold_pt` | フリック判定距離 | float 4–40 pt, step 1 | 14 | D | kbd | 既存(iOS) | キー幅に対する比ではなく絶対距離。小さい端末は自動で縮める |
+| `flick.popup` | フリック方向のポップアップ表示 | bool | true | S | kbd | 既存(iOS) | OFF は視認性が下がる代わりに描画が軽い |
 | `flick.popup_size` | ポップアップの大きさ | choice: `small` / `medium` / `large` | `medium` | D | kbd | 新規(iOS) | |
 | `flick.diagonal` | 斜めフリックを認識 | bool | false | D | kbd | 新規(iOS) | 4 方向 + 中央の仕様（`ios-keyboard-layout.md`）と整合。ON で 8 方向を最寄りの 4 方向に丸める |
-| `flick.long_press_ms` | 長押しと判定する時間 | int 150–1000, step 50 | 350 | D | kbd | 新規(iOS) | 長押しポップアップ（レイアウト仕様 `longPress`）の起点 |
+| `flick.long_press_ms` | 長押しと判定する時間 | int 150–1000, step 50 | 350 | D | kbd | 既存(iOS・保存のみ) | 長押しポップアップ（レイアウト仕様 `longPress`）の起点 |
 | `flick.cancel_on_return` | 元の位置に戻したらキャンセル | bool | true | D | kbd | 新規(iOS) | |
 | `touch.tap_slop_pt` | タップと判定する許容移動量 | float 2–20 pt | 8 | D | kbd | 新規(iOS) | |
-| `touch.key_repeat_ms` | ⌫・カーソル長押し連打の間隔 | int 30–300, step 10 | 80 | D | kbd | 新規(iOS) | 初回遅延は `touch.key_repeat_delay_ms` |
-| `touch.key_repeat_delay_ms` | 長押し連打を始めるまでの時間 | int 200–1000, step 50 | 400 | D | kbd | 新規(iOS) | |
+| `touch.key_repeat_ms` | ⌫・カーソル長押し連打の間隔 | int 30–300, step 10 | 80 | D | kbd | 既存(iOS) | 初回遅延は `touch.key_repeat_delay_ms` |
+| `touch.key_repeat_delay_ms` | 長押し連打を始めるまでの時間 | int 200–1000, step 50 | 400 | D | kbd | 既存(iOS) | |
 | `touch.space_swipe_cursor` | スペースキーのスワイプでカーソル移動 | bool | true | S | kbd | 新規(iOS) | トラックパッド化（backlog 操作）。変換中は注目文節の移動 |
 | `touch.space_swipe_step_pt` | カーソル移動 1 文字あたりの距離 | float 4–40 pt | 12 | D | kbd | 新規(iOS) | |
 | `touch.backspace_swipe_word` | ⌫のスワイプで単語単位の削除 | bool | false | D | kbd+core | 新規(iOS) | 単語境界の判定はコア側で行う想定（要設計） |
@@ -102,7 +102,7 @@
 | `learning.forget_days` | 未使用の学習を忘れるまでの日数 | int 0–3650（0 = 忘れない） | 0 | D | core:learning.forget_days | 新規(core) | 忘却速度（backlog 3 章） |
 | `learning.disabled_apps` | 学習を無効にするアプリ | 文字列配列（bundle id） | パスワードマネージャの標準リスト | - | core:learning.disabled_apps | 既存(toml) | **iOS ではキーボード拡張からホストアプリの bundle id を取れない**ため機能しない。代わりにキーのタイプ（下記 `privacy.secure_field_off`）で判定する |
 | `learning.delete_candidate` | 候補の長押しで学習から削除 | bool | true | D | kbd+core | 新規(iOS) | コアの `DeleteLearning` アクション相当を候補バーから呼ぶ |
-| `learning.clear` | 学習データの全削除 | 操作（確認ダイアログ付き） | - | S | app→core | 既存(core) | コアの `clear_learning` を呼ぶ。拡張が動いていない場合はホストアプリが `learning.tsv` を直接削除する経路が必要 |
+| `learning.clear` | 学習データの全削除 | 操作（確認ダイアログ付き） | - | S | app→core | 既存(iOS) | コアの `clear_learning` を呼ぶ。拡張が動いていない場合はホストアプリが `learning.tsv` を直接削除する経路が必要 |
 | `learning.export` | 学習データの書き出し | 操作 | - | D | app | 新規(iOS) | TSV を共有シートへ。内容は入力履歴そのものなので、共有先の選択に注意を出す |
 
 ### 2.4 ユーザー辞書・スニペット（`userdict`）
@@ -122,24 +122,24 @@
 
 | ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `keyboard.layout_kana` | かなモードのレイアウト | choice: 組み込み（`flick-kana` / `qwerty-kana`）+ ユーザー定義の id | `flick-kana` | S | kbd | 新規(iOS) | レイアウト仕様 `ios-keyboard-layout.md`。不正なレイアウトは既定に戻す |
-| `keyboard.layout_alpha` | 英字モードのレイアウト | choice: `flick-alpha` / `qwerty-alpha` / ユーザー定義 | `qwerty-alpha` | S | kbd | 新規(iOS) | |
+| `keyboard.layout_kana` | かなモードのレイアウト | choice: 組み込み（`flick-kana` / `qwerty-kana`）+ ユーザー定義の id | `flick-kana` | S | kbd | 既存(iOS) | レイアウト仕様 `ios-keyboard-layout.md`。不正なレイアウトは既定に戻す |
+| `keyboard.layout_alpha` | 英字モードのレイアウト | choice: `flick-alpha` / `qwerty-alpha` / ユーザー定義 | `qwerty-alpha` | S | kbd | 既存(iOS) | |
 | `keyboard.layout_number` | 数字モードのレイアウト | choice: `numbers` / ユーザー定義 | `numbers` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_symbol` | 記号モードのレイアウト | choice: `symbols` / ユーザー定義 | `symbols` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_emoji` | 絵文字モードのレイアウト | choice: `emoji` / ユーザー定義 | `emoji` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_by_field` | 入力欄の種類で自動切替（URL・メール・数字） | bool | true | D | kbd | 新規(iOS) | `keyboardType` に従う。数字パッド欄では数字配列 |
 | `keyboard.remember_last_mode` | 最後に使ったモードで起動 | bool | true | D | kbd | 新規(iOS) | OFF の場合は `input.mode` で起動 |
-| `keyboard.height` | キーボードの高さ | choice: `compact` / `standard` / `tall` | `standard` | S | kbd | 新規(iOS) | 内部的には下記の倍率 |
-| `keyboard.height_scale` | 高さの倍率 | float 0.8–1.3, step 0.05 | 1.0 | D | kbd | 新規(iOS) | 縦・横画面で別々に持つ（`keyboard.height_scale_landscape`） |
+| `keyboard.height` | キーボードの高さ | choice: `compact` / `standard` / `tall` | `standard` | S | kbd | 既存(iOS) | 内部的には下記の倍率 |
+| `keyboard.height_scale` | 高さの倍率 | float 0.8–1.3, step 0.05 | 1.0 | D | kbd | 既存(iOS) | 縦・横画面で別々に持つ（`keyboard.height_scale_landscape`） |
 | `keyboard.height_scale_landscape` | 横画面の高さの倍率 | float 0.7–1.2, step 0.05 | 1.0 | D | kbd | 新規(iOS) | |
-| `keyboard.one_handed` | 片手モード | choice: `off` / `left` / `right` | `off` | S | kbd | 新規(iOS) | キーボードを寄せる。切替ボタンをキー上に出す |
-| `keyboard.one_handed_width` | 片手モードのときの幅の比 | float 0.6–0.9, step 0.05 | 0.8 | D | kbd | 新規(iOS) | |
-| `keyboard.key_spacing_pt` | キーの余白 | float 0–8 pt, step 0.5 | 4 | D | kbd | 新規(iOS) | |
-| `keyboard.key_corner_pt` | キーの角丸 | float 0–16 pt, step 1 | 6 | D | kbd | 新規(iOS) | |
+| `keyboard.one_handed` | 片手モード | choice: `off` / `left` / `right` | `off` | S | kbd | 既存(iOS) | キーボードを寄せる。切替ボタンをキー上に出す |
+| `keyboard.one_handed_width` | 片手モードのときの幅の比 | float 0.6–0.9, step 0.05 | 0.8 | D | kbd | 既存(iOS) | |
+| `keyboard.key_spacing_pt` | キーの余白 | float 0–8 pt, step 0.5 | 4 | D | kbd | 既存(iOS) | |
+| `keyboard.key_corner_pt` | キーの角丸 | float 0–16 pt, step 1 | 6 | D | kbd | 既存(iOS) | |
 | `keyboard.key_label_size` | キー文字の大きさ | float 0.8–1.4（倍率） | 1.0 | D | kbd | 新規(iOS) | Dynamic Type との関係は `a11y.*` で整理 |
 | `keyboard.show_globe` | 地球儀キーを出す | bool | 自動（OS の `needsInputModeSwitchKey`） | D | kbd | 新規(iOS) | 他のキーボードへ切り替えられない端末では常に出す |
-| `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 新規(iOS) | **触覚の発生にはフルアクセスが要る**（`UIFeedbackGenerator` は拡張では制限あり。要実機確認） |
-| `keyboard.sound` | キー入力の音 | choice: `off` / `system` | `off` | S | kbd | 新規(iOS) | 端末の「キーボードのクリック」設定に従う（`UIDevice.playInputClick`）。独自音源は持たない |
+| `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS・要実機確認) | **触覚の発生にはフルアクセスが要る**（`UIFeedbackGenerator` は拡張では制限あり。要実機確認） |
+| `keyboard.sound` | キー入力の音 | choice: `off` / `system` | `off` | S | kbd | 既存(iOS・要実機確認) | 端末の「キーボードのクリック」設定に従う（`UIDevice.playInputClick`）。独自音源は持たない |
 | `keyboard.sound_volume` | 音量 | float 0–1 | 0.5 | - | kbd | 新規(iOS) | `system` では OS が音量を決めるため非表示 |
 | `keyboard.theme` | テーマ | choice: `system` / `light` / `dark` / ユーザー定義 | `system` | S | kbd | 新規(iOS) | |
 | `keyboard.accent_color` | アクセントカラー | 色（sRGB 16 進）または `system` | `system` | D | kbd | 新規(iOS) | |
@@ -211,7 +211,7 @@
 | `diag.status` | 状態表示（プロファイル・LLM の有無・メモリ・辞書の有無） | 表示 | - | S | app | 既存(iOS) | 実機計測画面の簡略版。入力内容は含めない |
 | `diag.latency_view` | 応答時間の表示（直近 N 回の p50/p95） | 表示 | - | D | app | 既存(iOS) | 現状はホストアプリの実機計測（H 節）。常用の画面に整理する |
 | `diag.memory_view` | 拡張のメモリ使用量の表示 | 表示 | - | D | app | 既存(iOS) | `MemoryProbe` 相当 |
-| `diag.log_enabled` | 診断ログを記録 | bool | false | D | kbd+core | 新規(iOS) | **入力内容はログに残さない**（CLAUDE.md）。件数・時間・エラーコードのみ。デバッグビルドのみ内容の記録を opt-in で許可 |
+| `diag.log_enabled` | 診断ログを記録 | bool | false | D | kbd+core | 既存(iOS) | **入力内容はログに残さない**（CLAUDE.md）。件数・時間・エラーコードのみ。デバッグビルドのみ内容の記録を opt-in で許可 |
 | `diag.log_level` | ログのレベル | choice: `error` / `warn` / `info` / `debug` | `warn` | D | kbd+core | 新規(iOS) | `debug` はデバッグビルドのみ |
 | `diag.log_export` | ログの書き出し | 操作 | - | D | app | 新規(iOS) | 共有シート。書き出し前に内容の種類を表示 |
 | `diag.log_clear` | ログの削除 | 操作 | - | D | app | 新規(iOS) | |
