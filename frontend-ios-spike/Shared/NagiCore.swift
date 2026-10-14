@@ -90,10 +90,13 @@ class NagiEngine {
 
     /// ビルド時の注記（プロファイル名など）を取得
     var notes: String {
-        guard let handle = handle else { return "" }
-        guard let notesPtr = nagi_last_notes(handle) else { return "" }
-        defer { nagi_string_free(notesPtr) }
-        return String(cString: notesPtr)
+        // コアのハンドルは同時に触れないため、他の呼び出しと同じ直列キューで取り出す
+        queue.sync { () -> String in
+            guard let handle = handle else { return "" }
+            guard let notesPtr = nagi_last_notes(handle) else { return "" }
+            defer { nagi_string_free(notesPtr) }
+            return String(cString: notesPtr)
+        }
     }
 
     deinit {

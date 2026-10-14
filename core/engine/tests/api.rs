@@ -686,13 +686,17 @@ fn next_words_are_dropped_by_reset_focus_out_and_context_change() {
         let direct = op(&mut e);
         let has_direct = direct.is_some();
         if let Some(r) = direct {
-            let c = r.candidates.unwrap_or_else(|| panic!("{name}: バーを消す差分"));
+            let c = r
+                .candidates
+                .unwrap_or_else(|| panic!("{name}: バーを消す差分"));
             assert!(!c.visible && c.items.is_empty(), "{name}");
         }
         let r = e.select_candidate("s", 0);
         assert!(r.commit.is_none(), "{name}: 古い次語が挿入された");
         if !has_direct {
-            let c = r.candidates.unwrap_or_else(|| panic!("{name}: バーを消す差分"));
+            let c = r
+                .candidates
+                .unwrap_or_else(|| panic!("{name}: バーを消す差分"));
             assert!(!c.visible && c.items.is_empty(), "{name}");
         }
     }

@@ -27,6 +27,8 @@ pub struct OverlayEntry {
 #[derive(Debug, Clone, Default)]
 pub struct Overlay {
     by_reading: HashMap<String, Vec<OverlayEntry>>,
+    /// 読みの登録順（`lookup_prefix` の結果を実行ごとに変わらないようにする）
+    order: Vec<String>,
     snippets: HashMap<String, Vec<String>>,
     max_reading_chars: usize,
 }
@@ -37,17 +39,20 @@ impl Overlay {
         self.by_reading.get(reading).map_or(&[], Vec::as_slice)
     }
 
-    /// 読みが前方一致するユーザー語（表記とエントリの組。読みの昇順ではなく登録順の走査。
+    /// 読みが前方一致するユーザー語（表記とエントリの組。読みの初出の登録順、同じ読みの中も登録順。
     /// 件数が少ない前提の線形探索）
     pub fn lookup_prefix(&self, prefix: &str, limit: usize) -> Vec<(&str, &OverlayEntry)> {
         if prefix.is_empty() {
             return Vec::new();
         }
         let mut out = Vec::new();
-        for (reading, entries) in &self.by_reading {
+        for reading in &self.order {
             if reading == prefix || !reading.starts_with(prefix) {
                 continue;
             }
+            let Some(entries) = self.by_reading.get(reading) else {
+                continue;
+            };
             for entry in entries {
                 out.push((reading.as_str(), entry));
                 if out.len() >= limit {
@@ -83,6 +88,7 @@ impl Overlay {
         let mut o = self.clone();
         if !words {
             o.by_reading.clear();
+            o.order.clear();
             o.max_reading_chars = 0;
         }
         if !snippets {
@@ -146,6 +152,9 @@ impl Dictionary {
                 .entry(e.pos.as_str())
                 .or_insert_with(|| find(pos_patterns(&e.pos)).unwrap_or(default_id));
             overlay.max_reading_chars = overlay.max_reading_chars.max(reading_chars);
+            if !overlay.by_reading.contains_key(&e.reading) {
+                overlay.order.push(e.reading.clone());
+            }
             let list = overlay.by_reading.entry(e.reading.clone()).or_default();
             if !list.iter().any(|x| x.surface == e.surface) {
                 list.push(OverlayEntry {

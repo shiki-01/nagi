@@ -48,6 +48,23 @@ fn null_handle_is_safe() {
 }
 
 #[test]
+fn null_line_is_safe() {
+    let dir = std::env::temp_dir().join("nagi-ffi-smoke-null-line");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let c = CString::new(dir.to_str().unwrap()).unwrap();
+    unsafe {
+        let handle = nagi_server_new(c.as_ptr(), c.as_ptr(), 1);
+        assert!(!handle.is_null());
+        let p = nagi_handle_line(handle, std::ptr::null());
+        assert!(!p.is_null());
+        assert!(CStr::from_ptr(p).to_bytes().is_empty());
+        nagi_string_free(p);
+        nagi_server_free(handle);
+    }
+}
+
+#[test]
 fn handle_with_memory_budget_roundtrip() {
     let dir = std::env::temp_dir().join("nagi-ffi-smoke-budget");
     let dir_c = CString::new(dir.to_str().unwrap()).unwrap();

@@ -1035,7 +1035,8 @@ impl Runtime {
             ),
             None => Ok(true),
         };
-        if matches!(result, Ok(true) | Err(_)) && matches!(next_result, Ok(true) | Err(_))
+        if matches!(result, Ok(true) | Err(_))
+            && matches!(next_result, Ok(true) | Err(_))
             && let Ok(mut last) = self.last_flush.lock()
         {
             *last = Instant::now();
@@ -1085,27 +1086,6 @@ impl Runtime {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finish_calibration_saves_to_configured_path() {
-        let runtime = Runtime::detached(true);
-        let path = std::env::temp_dir().join(format!(
-            "nagi-runtime-calibration-test-{}.json",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        runtime.set_calibration_path(Some(path.clone()));
-        runtime.finish_calibration(42.0);
-        assert!(path.exists(), "キャリブレーション結果が保存されているはず");
-        let record = crate::calibration::load(&path).expect("読み込める");
-        assert_eq!(record.median_ms, 42.0);
-        let _ = std::fs::remove_file(&path);
-    }
-}
-
 /// 学習ファイルの flock を `m` の外で取ってから、短い間だけ `m` を握って書き出す。
 /// 戻り値は「完了した（書くものが無かった場合を含む）」か。ロックが取れず先送りしたら `Ok(false)`
 fn flush_shared<T>(
@@ -1124,5 +1104,26 @@ fn flush_shared<T>(
     match m.lock() {
         Ok(mut g) => flush(&mut g, &lock).map(|_| true),
         Err(_) => Ok(true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finish_calibration_saves_to_configured_path() {
+        let runtime = Runtime::detached(true);
+        let path = std::env::temp_dir().join(format!(
+            "nagi-runtime-calibration-test-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        runtime.set_calibration_path(Some(path.clone()));
+        runtime.finish_calibration(42.0);
+        assert!(path.exists(), "キャリブレーション結果が保存されているはず");
+        let record = crate::calibration::load(&path).expect("読み込める");
+        assert_eq!(record.median_ms, 42.0);
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -486,9 +486,11 @@ fn unload_during_reload_keeps_weights_released_and_states_consistent() {
     *f.handles.reload_gate.lock().unwrap() = Some(gate);
     let entered = f.handles.reload_entered.load(Ordering::SeqCst);
     rpc(&mut f.server, "reload_model", json!({}));
-    assert!(wait_until(
-        || f.handles.reload_entered.load(Ordering::SeqCst) > entered
-    ));
+    assert!(wait_until(|| f
+        .handles
+        .reload_entered
+        .load(Ordering::SeqCst)
+        > entered));
     rpc(&mut f.server, "unload_model", json!({}));
     release.send(()).unwrap();
 
@@ -509,7 +511,10 @@ fn unload_during_reload_keeps_weights_released_and_states_consistent() {
     let lines = f
         .server
         .handle_line(&json!({"jsonrpc":"2.0","id":3,"method":"ping"}).to_string());
-    assert!(!lines.iter().any(|l| l.contains("llm_reloaded")), "{lines:?}");
+    assert!(
+        !lines.iter().any(|l| l.contains("llm_reloaded")),
+        "{lines:?}"
+    );
 
     // その後の明示の再読み込みでは正常に戻る
     rpc(&mut f.server, "reload_model", json!({}));

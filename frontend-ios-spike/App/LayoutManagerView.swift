@@ -8,14 +8,21 @@ import UniformTypeIdentifiers
 
 // MARK: - 保存・取り込み
 
-struct NagiLayoutError: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
-}
-
 enum NagiLayoutStore {
     /// 取り込むレイアウトの最大サイズ（バイト）
     static let maxBytes = 512 * 1024
+
+    /// 検証済みで、まだ保存していないレイアウト（確認ダイアログの表示に使う）
+    struct Preview {
+        let data: Data
+        let def: KeyboardLayoutDef
+        /// 全行のキー数
+        let keyCount: Int
+        /// 同じ id のユーザーレイアウトがあり、取り込むと置き換わるか
+        let replaced: Bool
+        /// 同梱プリセットと同じ id か（ユーザーのものが優先して使われる）
+        let overridesPreset: Bool
+    }
 
     struct Imported {
         let def: KeyboardLayoutDef
@@ -25,8 +32,9 @@ enum NagiLayoutStore {
         let overridesPreset: Bool
     }
 
-    /// JSON を検証して App Group に保存する。問題があれば日本語の理由つきで投げる
-    static func importLayout(_ data: Data) throws -> Imported {
+    /// JSON を検証する（保存はしない）。問題があれば日本語の理由つきで投げる。ファイルを読むので
+    /// メインスレッドでは呼ばないこと
+    static func preview(_ data: Data) throws -> Preview {
         if data.isEmpty { throw NagiLayoutError(message: "JSON が空です") }
         if data.count > maxBytes { throw NagiLayoutError(message: "JSON が大きすぎます（\(maxBytes / 1024) KB まで）") }
         let def: KeyboardLayoutDef
@@ -42,21 +50,48 @@ enum NagiLayoutStore {
             throw NagiLayoutError(message: "保存先（App Group）が使えません")
         }
         let url = dir.appendingPathComponent("\(def.id).json")
+        return Preview(
+            data: data,
+            def: def,
+            keyCount: def.rows.reduce(0) { $0 + $1.keys.count },
+            replaced: FileManager.default.fileExists(atPath: url.path),
+            overridesPreset: LayoutLoader.bundledIds().contains(def.id)
+        )
+    }
+
+    /// 検証済みのレイアウトを App Group に保存する
+    static func save(_ preview: Preview) throws -> Imported {
+        guard let dir = LayoutLoader.userLayoutsDirectory else {
+            throw NagiLayoutError(message: "保存先（App Group）が使えません")
+        }
+        let url = dir.appendingPathComponent("\(preview.def.id).json")
         let replaced = FileManager.default.fileExists(atPath: url.path)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try data.write(to: url, options: .atomic)
+            try preview.data.write(to: url, options: .atomic)
         } catch {
             throw NagiLayoutError(message: "保存できませんでした: \(error.localizedDescription)")
         }
-        return Imported(def: def, replaced: replaced, overridesPreset: LayoutLoader.bundledIds().contains(def.id))
+        return Imported(def: preview.def, replaced: replaced, overridesPreset: preview.overridesPreset)
     }
 
-    static func importLayout(text: String) throws -> Imported {
-        guard let data = text.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8) else {
-            throw NagiLayoutError(message: "文字列を読み取れません")
+    /// JSON を検証して App Group に保存する。問題があれば日本語の理由つきで投げる。
+    /// - allowPresetId: false なら、同梱プリセットと同じ id のものは拒否する（URL 経由の取り込み）
+    static func importLayout(_ data: Data, allowPresetId: Bool = true) throws -> Imported {
+        let checked = try preview(data)
+        if !allowPresetId && checked.overridesPreset {
+            throw NagiLayoutError(message: "同梱のレイアウトと同じ id（\(checked.def.id)）は、URL からは取り込めません")
         }
-        return try importLayout(data)
+        return try save(checked)
+    }
+
+    /// ファイルを読む。大きさを確認できない・上限を超えるファイルは、読み込む前に拒否する
+    static func readFile(_ url: URL) throws -> Data {
+        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else {
+            throw NagiLayoutError(message: "ファイルの大きさを確認できません")
+        }
+        if size > maxBytes { throw NagiLayoutError(message: "ファイルが大きすぎます（\(maxBytes / 1024) KB まで）") }
+        return try Data(contentsOf: url)
     }
 
     /// ユーザーのレイアウトを削除する。割り当てていたモードは既定に戻す
@@ -96,45 +131,148 @@ enum NagiLayoutStore {
         }
     }
 
-    /// `nagi://layout?data=<base64url の JSON>` から JSON を取り出す
+    /// `nagi://layout?data=<base64url の JSON>` から JSON を取り出す（実装は `Shared/LayoutURL.swift`）
     static func jsonData(fromURL url: URL) throws -> Data {
-        guard url.scheme?.lowercased() == "nagi", url.host?.lowercased() == "layout" else {
-            throw NagiLayoutError(message: "対応していない URL です")
-        }
-        guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-              let encoded = items.first(where: { $0.name == "data" })?.value, !encoded.isEmpty else {
-            throw NagiLayoutError(message: "URL に data がありません")
-        }
-        var base64 = encoded.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        while base64.count % 4 != 0 { base64 += "=" }
-        guard let data = Data(base64Encoded: base64) else {
-            throw NagiLayoutError(message: "data を base64url として読み取れません")
-        }
-        return data
+        try NagiLayoutURL.jsonData(fromURL: url)
     }
 }
 
-/// URL スキームからの取り込みの結果を、アプリ全体のアラートとレイアウト管理画面の再読み込みに伝える
+/// URL スキームからの取り込み。他のアプリや Web ページから任意に起動できるため、取り込む前に必ず確認する。
+/// 確認の結果と取り込み結果を、アプリ全体のアラートとレイアウト管理画面の再読み込みに伝える
 final class NagiLayoutURLInbox: ObservableObject {
     static let shared = NagiLayoutURLInbox()
 
+    /// 取り込みの確認待ち（nil なら無い）
+    struct Pending {
+        let data: Data
+        let name: String
+        let id: String
+        let keyCount: Int
+        /// 同じ id のユーザーレイアウトを置き換えるか
+        let replaced: Bool
+    }
+
     /// 表示するメッセージ（nil なら出さない）
     @Published var message: String?
+    /// 確認ダイアログを出す取り込み
+    @Published private(set) var pending: Pending?
     /// 取り込みのたびに増える（一覧の再読み込みの合図）
     @Published private(set) var changeCount = 0
 
+    /// 検証・保存は重いので、メインスレッドの外で行う
+    private let queue = DispatchQueue(label: "com.shiki.nagi.layoutimport", qos: .userInitiated)
+
+    /// URL を受け取る。保存はせず、検証して確認待ちにするだけ
     func handle(_ url: URL) {
         guard url.scheme?.lowercased() == "nagi", url.host?.lowercased() == "layout" else { return }
-        do {
-            let imported = try NagiLayoutStore.importLayout(try NagiLayoutStore.jsonData(fromURL: url))
-            changeCount += 1
-            var text = "レイアウト「\(imported.def.name)」を\(imported.replaced ? "更新しました" : "取り込みました")。"
-            text += "「レイアウト」タブで、かな / 英字への割り当てができます。"
-            if imported.overridesPreset { text += "\n同梱の「\(imported.def.id)」と同じ id のため、このレイアウトが優先されます。" }
-            message = text
-        } catch {
-            message = "レイアウトを取り込めませんでした。\n\(error.localizedDescription)"
+        queue.async { [weak self] in
+            var checked: NagiLayoutStore.Preview?
+            var failure: String?
+            do {
+                let preview = try NagiLayoutStore.preview(try NagiLayoutURL.jsonData(fromURL: url))
+                if preview.overridesPreset {
+                    failure = "同梱のレイアウトと同じ id（\(preview.def.id)）は、URL からは取り込めません"
+                } else {
+                    checked = preview
+                }
+            } catch {
+                failure = error.localizedDescription
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let preview = checked {
+                    self.pending = Pending(
+                        data: preview.data, name: preview.def.name, id: preview.def.id,
+                        keyCount: preview.keyCount, replaced: preview.replaced)
+                } else {
+                    self.message = "レイアウトを取り込めませんでした。\n\(failure ?? "不明なエラー")"
+                }
+            }
         }
+    }
+
+    /// 確認ダイアログで「取り込む」
+    func confirmPending() {
+        guard let target = pending else { return }
+        pending = nil
+        queue.async { [weak self] in
+            var text: String
+            var changed = false
+            do {
+                // 確認から保存までの間に同梱 id と衝突しないことを、もう一度確かめる
+                let imported = try NagiLayoutStore.importLayout(target.data, allowPresetId: false)
+                changed = true
+                text = "レイアウト「\(imported.def.name)」を\(imported.replaced ? "更新しました" : "取り込みました")。"
+                text += "「レイアウト」タブで、かな / 英字への割り当てができます。"
+            } catch {
+                text = "レイアウトを取り込めませんでした。\n\(error.localizedDescription)"
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if changed { self.changeCount += 1 }
+                self.message = text
+            }
+        }
+    }
+
+    /// 確認ダイアログで「キャンセル」
+    func cancelPending() {
+        pending = nil
+    }
+}
+
+/// 取り込みの確認と結果のアラート。初回案内のシートが出ている間は出さず（重ねると隠れて取りこぼす）、
+/// 閉じてから少し待って出す
+struct NagiLayoutInboxAlerts: ViewModifier {
+    @ObservedObject private var inbox: NagiLayoutURLInbox
+    /// 別のシートなどが前面にあるとき true
+    private let suppressed: Bool
+    /// シートが閉じてから少し待ったか（最初からシートが出ている場合は、閉じるまで false）
+    @State private var settled: Bool
+
+    init(inbox: NagiLayoutURLInbox, suppressed: Bool) {
+        self.inbox = inbox
+        self.suppressed = suppressed
+        _settled = State(initialValue: !suppressed)
+    }
+
+    private var canPresent: Bool { settled && !suppressed }
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: suppressed) { nowSuppressed in
+                if nowSuppressed {
+                    settled = false
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { settled = true }
+                }
+            }
+            .alert(
+                "レイアウトを取り込みますか？",
+                isPresented: Binding(
+                    get: { canPresent && inbox.pending != nil },
+                    // ボタンの処理で pending を空にするので、ここでは何もしない
+                    set: { _ in })
+            ) {
+                Button("取り込む") { inbox.confirmPending() }
+                Button("キャンセル", role: .cancel) { inbox.cancelPending() }
+            } message: {
+                if let pending = inbox.pending {
+                    Text("名前: \(pending.name)\nid: \(pending.id)\nキー数: \(pending.keyCount)"
+                        + (pending.replaced ? "\n同じ id のレイアウトを置き換えます。" : "")
+                        + "\nNagi の外から開かれたリンクです。心当たりがなければキャンセルしてください。")
+                }
+            }
+            .alert(
+                "レイアウト",
+                isPresented: Binding(
+                    get: { canPresent && inbox.pending == nil && inbox.message != nil },
+                    set: { if !$0 { inbox.message = nil } })
+            ) {
+                Button("OK") {}
+            } message: {
+                Text(inbox.message ?? "")
+            }
     }
 }
 
@@ -192,6 +330,9 @@ struct LayoutManagerView: View {
     @State private var notice: String?
     @State private var pendingDelete: NagiLayoutRow?
     @State private var showingDeleteConfirm = false
+    /// 同じ id のレイアウトを上書きする取り込みの確認待ち（ファイル・貼り付け）
+    @State private var pendingOverwrite: NagiLayoutStore.Preview?
+    @State private var showingOverwriteConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -254,15 +395,12 @@ struct LayoutManagerView: View {
                 }
             }
             .sheet(isPresented: $showingPaste) {
-                NagiLayoutPasteView { text in
-                    do {
-                        let imported = try NagiLayoutStore.importLayout(text: text)
-                        reload()
-                        notice = importedMessage(imported)
-                        return nil
-                    } catch {
-                        return error.localizedDescription
+                NagiLayoutPasteView { text, done in
+                    guard let data = text.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8) else {
+                        done("文字列を読み取れません")
+                        return
                     }
+                    prepare({ data }, completion: done)
                 }
             }
             .fileImporter(
@@ -279,6 +417,12 @@ struct LayoutManagerView: View {
                 Button("OK") {}
             } message: {
                 Text(notice ?? "")
+            }
+            .alert("同じ id のレイアウトがあります", isPresented: $showingOverwriteConfirm, presenting: pendingOverwrite) { preview in
+                Button("上書き", role: .destructive) { commit(preview) }
+                Button("キャンセル", role: .cancel) {}
+            } message: { preview in
+                Text(overwriteMessage(preview))
             }
             .alert("レイアウトを削除", isPresented: $showingDeleteConfirm, presenting: pendingDelete) { row in
                 Button("削除", role: .destructive) { delete(row) }
@@ -352,22 +496,74 @@ struct LayoutManagerView: View {
         reload()
     }
 
+    /// 検証をメインスレッドの外で行い、結果で保存または上書きの確認に進む。
+    /// `completion` は検証の結果（失敗の理由。成功は nil）をメインスレッドで受け取る
+    private func prepare(_ load: @escaping () throws -> Data, completion: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: Result<NagiLayoutStore.Preview, Error>
+            do {
+                result = .success(try NagiLayoutStore.preview(try load()))
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let preview):
+                    completion(nil)
+                    if preview.replaced || preview.overridesPreset {
+                        pendingOverwrite = preview
+                        // 貼り付けのシートが閉じる間に重ねると、アラートが出ないことがあるので少し待つ
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showingOverwriteConfirm = true }
+                    } else {
+                        commit(preview)
+                    }
+                case .failure(let error):
+                    completion(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func commit(_ preview: NagiLayoutStore.Preview) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: Result<NagiLayoutStore.Imported, Error>
+            do {
+                result = .success(try NagiLayoutStore.save(preview))
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let imported):
+                    reload()
+                    notice = importedMessage(imported)
+                case .failure(let error):
+                    notice = "取り込めませんでした。\n\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func overwriteMessage(_ preview: NagiLayoutStore.Preview) -> String {
+        var text = "「\(preview.def.name)」（id: \(preview.def.id)、キー数 \(preview.keyCount)）を取り込みます。"
+        if preview.replaced { text += "\n同じ id のユーザーレイアウトは置き換えられます。" }
+        if preview.overridesPreset { text += "\n同梱の同じ id のレイアウトより、こちらが優先して使われます。" }
+        return text
+    }
+
     private func importFile(_ result: Result<[URL], Error>) {
         switch result {
         case .failure(let error):
             notice = "ファイルを開けませんでした: \(error.localizedDescription)"
         case .success(let urls):
             guard let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let data = try Data(contentsOf: url)
-                let imported = try NagiLayoutStore.importLayout(data)
-                reload()
-                notice = importedMessage(imported)
-            } catch {
-                notice = "取り込めませんでした。\n\(error.localizedDescription)"
-            }
+            prepare({
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                return try NagiLayoutStore.readFile(url)
+            }, completion: { message in
+                if let message = message { notice = "取り込めませんでした。\n\(message)" }
+            })
         }
     }
 
@@ -382,11 +578,12 @@ struct LayoutManagerView: View {
 
 private struct NagiLayoutPasteView: View {
     @Environment(\.dismiss) private var dismiss
-    /// 取り込みを実行し、失敗したら理由を返す（成功は nil）
-    let onImport: (String) -> String?
+    /// 取り込みを始め、終わったら結果（失敗の理由。成功は nil）をメインスレッドで渡す
+    let onImport: (String, @escaping (String?) -> Void) -> Void
 
     @State private var text = ""
     @State private var error: String?
+    @State private var busy = false
 
     var body: some View {
         NavigationStack {
@@ -411,14 +608,18 @@ private struct NagiLayoutPasteView: View {
                     .buttonStyle(.bordered)
                     Spacer()
                     Button("取り込む") {
-                        if let message = onImport(text) {
-                            error = message
-                        } else {
-                            dismiss()
+                        busy = true
+                        onImport(text) { message in
+                            busy = false
+                            if let message = message {
+                                error = message
+                            } else {
+                                dismiss()
+                            }
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .padding()

@@ -111,7 +111,9 @@ final class NagiSettingsModel: ObservableObject {
         reloadCore()
     }
 
-    func reloadCore() {
+    /// - keepingMessage: 読み直しのあとにも残したい注意（保存の失敗など）。読み直しは成功すると
+    ///   `coreMessage` を消すので、その後に設定する
+    func reloadCore(keepingMessage: String? = nil) {
         coreQueue.async { [weak self] in
             guard let self = self else { return }
             let opened = self.ensureSession()
@@ -125,6 +127,7 @@ final class NagiSettingsModel: ObservableObject {
                 } else {
                     self.coreMessage = opened.message ?? "コアから設定を読めませんでした"
                 }
+                if let keep = keepingMessage { self.coreMessage = keep }
             }
         }
     }
@@ -348,11 +351,33 @@ final class NagiSettingsModel: ObservableObject {
     }
 
     func setFloat(_ row: NagiSettingRow, _ value: Double) {
+        // Stepper の加減で 0.30000000000000004 のような値が出るので、刻みに合わせて丸めて送る
+        let snapped = Self.snapped(value, for: row)
         if row.origin == .core {
-            editCore(row.key, .float(value))
+            editCore(row.key, .float(snapped))
         } else {
-            editIOS(row.key, .number(value))
+            editIOS(row.key, .number(snapped))
         }
+    }
+
+    /// 刻みの倍数に寄せ、刻みの小数の桁で丸める（範囲内に収める）
+    static func snapped(_ value: Double, for row: NagiSettingRow) -> Double {
+        guard case .floatStepper(let lo, let hi, let step) = row.control, step > 0 else { return value }
+        let digits = max(decimalPlaces(step), decimalPlaces(lo))
+        let scale = pow(10.0, Double(digits))
+        let raw = lo + ((value - lo) / step).rounded() * step
+        let rounded = (raw * scale).rounded() / scale
+        return min(max(rounded, lo), max(hi, lo))
+    }
+
+    /// 小数の桁数（最大 6）。0.05 なら 2
+    private static func decimalPlaces(_ value: Double) -> Int {
+        var scale = 1.0
+        for digits in 0...6 {
+            if abs(value * scale - (value * scale).rounded()) < 1e-9 { return digits }
+            scale *= 10
+        }
+        return 6
     }
 
     func setChoice(_ row: NagiSettingRow, _ value: String) {
@@ -417,8 +442,8 @@ final class NagiSettingsModel: ObservableObject {
             DispatchQueue.main.async {
                 self.inFlight -= 1
                 guard let result = result else {
-                    self.coreMessage = opened.message ?? "設定を保存できませんでした"
-                    self.reloadCore()
+                    // 読み直し（画面を実際の値に戻す）が終わったあとにメッセージを出す
+                    self.reloadCore(keepingMessage: opened.message ?? "設定を保存できませんでした")
                     return
                 }
                 self.coreMessage = nil
@@ -447,15 +472,20 @@ final class NagiSettingsModel: ObservableObject {
             if let session = opened.session, session.clearLearning() != nil {
                 ok = true
             } else if let dir = self.userDirPath {
-                // コアに繋がらないときは、学習ファイルを直接消す
-                let path = (dir as NSString).appendingPathComponent("learning.tsv")
-                // コアの flush / load と同じロック（`learning.lock` の flock）を取ってから消す。
-                // 拡張が書き出している最中に消して、書きかけのファイルが残るのを避ける
-                ok = NagiFileLock.withExclusive(path: (dir as NSString).appendingPathComponent("learning.lock")) {
-                    if FileManager.default.fileExists(atPath: path) {
-                        return (try? FileManager.default.removeItem(atPath: path)) != nil
+                // コアに繋がらないときは、学習ファイルを直接消す。通常の学習（learning.tsv）と
+                // 確定直後の次語予測（learning-next.tsv）は別ファイルで、ロックもそれぞれ別（`<名前>.lock`）
+                ok = true
+                for name in ["learning", "learning-next"] {
+                    let path = (dir as NSString).appendingPathComponent("\(name).tsv")
+                    // コアの flush / load と同じロック（flock）を取ってから消す。
+                    // 拡張が書き出している最中に消して、書きかけのファイルが残るのを避ける
+                    let removed = NagiFileLock.withExclusive(path: (dir as NSString).appendingPathComponent("\(name).lock")) {
+                        if FileManager.default.fileExists(atPath: path) {
+                            return (try? FileManager.default.removeItem(atPath: path)) != nil
+                        }
+                        return true
                     }
-                    return true
+                    if !removed { ok = false }
                 }
             }
             if ok { NagiLearningClearSignal.raise() }
@@ -624,15 +654,29 @@ private struct NagiTextSettingRow: View {
     @ObservedObject var model: NagiSettingsModel
     let row: NagiSettingRow
     @State private var draft = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack {
             Text(row.label)
             TextField("", text: $draft)
                 .multilineTextAlignment(.trailing)
-                .onSubmit { model.setText(row, draft) }
+                .focused($focused)
+                .onSubmit { commit() }
         }
         .onAppear { draft = model.textValue(row) }
+        // フォーカスを失ったとき（他の項目・タブへの移動）も確定する。Return を押さずに離れても値を失わない
+        .onChange(of: focused) { isFocused in
+            if !isFocused { commit() }
+        }
+        // 「既定に戻す」・再読み込みで値が変わったら下書きも追随する（入力中は邪魔しない）
+        .onChange(of: model.textValue(row)) { newValue in
+            if !focused { draft = newValue }
+        }
+    }
+
+    private func commit() {
+        if draft != model.textValue(row) { model.setText(row, draft) }
     }
 }
 

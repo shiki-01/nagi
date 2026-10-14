@@ -27,7 +27,11 @@ enum DiagLog {
 
     /// 明示の設定が無いときの既定。DEBUG ビルド、または TestFlight / 開発用の署名（レシートが
     /// `sandboxReceipt`）のときだけ ON。App Store 配布は OFF
-    static var defaultEnabled: Bool {
+    static var defaultEnabled: Bool { isTestBuild }
+
+    /// DEBUG ビルド、または TestFlight / 開発用の署名か。App Store 配布では false。
+    /// 検証用の機能（候補バーの「検証」・Probe の入力欄挿入など）を、この判定のビルドだけで有効にする
+    static var isTestBuild: Bool {
         #if DEBUG
         return true
         #else

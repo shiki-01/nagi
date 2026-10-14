@@ -18,7 +18,9 @@ struct ContentView: View {
     @State private var probesRunning = false
     // 初回案内（初回のみ自動表示。ホームから再表示できる）
     @AppStorage("nagi.onboarding.completed") private var onboardingCompleted = false
-    @State private var showingOnboarding = false
+    // 初回は最初の描画からシートを出す（URL 取り込みの確認アラートが、あとから出るシートと重ならないように）
+    @State private var showingOnboarding = !UserDefaults.standard.bool(forKey: "nagi.onboarding.completed")
+    @ObservedObject private var layoutInbox = NagiLayoutURLInbox.shared
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -142,6 +144,8 @@ struct ContentView: View {
                 onOpenInputTest: { selectedTab = 3 }
             )
         }
+        // nagi://layout の取り込みの確認と結果。初回案内のシートが出ている間は出さない
+        .modifier(NagiLayoutInboxAlerts(inbox: layoutInbox, suppressed: showingOnboarding))
         .onAppear {
             if !onboardingCompleted { showingOnboarding = true }
         }

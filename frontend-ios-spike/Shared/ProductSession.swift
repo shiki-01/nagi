@@ -40,15 +40,13 @@ enum ProductSession {
         return Outcome(session: session, message: nil, warning: warning, configURL: configURL)
     }
 
-    /// 使うモデルのパス。既定は xsmall（待ち時間内に結果が返り、差し替えのちらつきが無い。H-10）で、
-    /// 無ければ配置済みのモデルから既定の選び方で選ぶ
+    /// 使うモデルのパス。ユーザーの選択（`preferredModelName`）を優先し、未選択なら xsmall
+    /// （待ち時間内に結果が返り、差し替えのちらつきが無い。H-10）、無ければ既定の選び方で選ぶ
     static func preferredModelPath(store: SharedStore) -> String? {
         guard case .found(_, let files, _) = DataPaths.modelStatus(appGroupId: store.appGroupId) else {
             return nil
         }
-        if let xsmall = files.first(where: { $0.name.contains("xsmall") }) {
-            return xsmall.path
-        }
+        // 未選択のときだけ xsmall が優先される（`DataPaths.selectModel`。ホームの表示と同じ決め方）
         return DataPaths.selectModel(
             from: files,
             preferredName: DataPaths.preferredModelName(appGroupId: store.appGroupId)
@@ -116,9 +114,20 @@ enum ProductSession {
     private static func writeConfigIfGenerated(in dir: URL, modelPath: String?) throws {
         let configURL = dir.appendingPathComponent("config.toml")
         let existing = try? String(contentsOf: configURL, encoding: .utf8)
+        // ファイルはあるが読めない（権限・文字コードなど）ときは、ユーザーの設定かもしれないので上書きしない
+        if existing == nil, FileManager.default.fileExists(atPath: configURL.path) {
+            return
+        }
+        // 書き込みの直前に読み直し、読んだあとに誰か（設定画面・別プロセス）が書き換えていたら諦める
+        // （次の起動で再評価される）。読み取りから書き込みまでの隙間を縮めるだけで、完全な排他ではない
+        func writeIfUnchanged(_ text: String) throws {
+            let current = try? String(contentsOf: configURL, encoding: .utf8)
+            guard current == existing else { return }
+            try text.write(to: configURL, atomically: true, encoding: .utf8)
+        }
         if let existing = existing, !isPristineGenerated(existing) {
             if let modelPath = modelPath, let updated = replacingModelLine(in: existing, with: modelPath), updated != existing {
-                try updated.write(to: configURL, atomically: true, encoding: .utf8)
+                try writeIfUnchanged(updated)
             }
             return
         }
@@ -129,7 +138,9 @@ enum ProductSession {
             body += "model = '\(modelPath)'\n"
         }
         let config = "\(generatedMarker) body=\(bodyHash(body))\n" + body
-        try config.write(to: configURL, atomically: true, encoding: .utf8)
+        // 内容が同じなら書かない（ユーザー辞書画面を開くたびに更新時刻を進めて reload_config を誘発しない）
+        if config == existing { return }
+        try writeIfUnchanged(config)
     }
 
     /// `[conversion]` テーブルの `model = '...'` の行を差し替える。該当の行が無ければ nil

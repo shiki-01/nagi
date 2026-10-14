@@ -1018,3 +1018,14 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **無効時**: `predict.next_word`（既定 false）が false の間は**記録もしない**（現状維持。有効にした時点から貯まる）。学習が無効・secure input・停止アプリでも記録・表示しない
 - **削除**: `clear_learning` は両ファイルを消す。候補ウィンドウの学習削除（`Ctrl+Delete`）は、その表記を次語とするバイグラムも消す（読みが違う同表記も消える。粗い扱いだが誤学習の除去を優先）
 - **暫定**: スコアは通常の学習と同じ `ln(1+count)` の指数減衰。`learning.strength` は次語の順位に影響しない（順序に効かないため）。Swift 側の追従: `docs/ios-settings.md` の `predict.next_word` / `predict.next_word_count` の設定 UI、Direct 状態の `candidates` を候補バーに出して `select_candidate` で挿入する処理
+
+### H-20. コードレビュー指摘への対応（2026-10-14、要レビュー）
+
+- **モデルの解放と再読み込みの競合**（`pipeline.rs` / `runtime.rs`）: 再読み込みスレッドは `set_active(true)` の直後に、モデルのロックを握ったまま世代を再確認し、変わっていれば `set_active(false)` で戻して `unloaded` は true のまま通知も出さずに終える（状態反映の後にもう一度確認する）。`spawn_set_active` は世代つきで、古い世代の要求は捨てる。`Runtime::evaluate_model`（状態の更新から `unload_model` / `reload_model` の指示まで）と `attach_model` の判定は `model_apply` の Mutex で直列化する。回帰テスト: `server/tests/model_unload.rs`
+- **secure input と次語予測**（`engine.rs`）: `notify_commit` は secure input 中に `last_word` / `next_words` を消し、`prev_word` を空で通知する（observer には secure フラグつきで従来どおり通知）。`set_context` は secure の出入り・`app_id` の変化・Surrounding Text の不一致で `last_word` / `next_words` を消す
+- **古い次語の挿入**: `reset` / `focus_out` / 不一致の `set_context` で `next_words` を消す。確定のない消費で候補を保つのは、モード切替（`SetMode` / `ToggleMode`）だけにした。`set_context` は戻り値が無いので、候補バーを消す差分は次の呼び出し（`select_candidate` など）で返る（`reset` / `focus_out` は自身の戻り値で返す）
+- **学習ファイルの flush**（`runtime.rs` / `learn`）: 他プロセスの flock を待つ間 learner の Mutex を握らない。`nagi_learn::FlushLock::acquire(path, timeout)` で先にロックを取り（定期は 100ms、明示の忘却・全削除は 2 秒で打ち切り、取れなければ dirty のまま次回へ）、Mutex は書き出しの間だけ握る（`flush_with_lock`）。書き出し自体（ファイルの読み込み・マージ・書き込み）は引き続き Mutex 内。**暫定**: スナップショット方式はマージの基準の管理が複雑になるため採らなかった
+- **flush での解釈できない行**: 書き戻して消える前に `.bak` を 1 度だけ作る（load 時に作った場合は作らない）。スキーマは変更なし
+- **`cargo xtask build-dict`**: `.tmp` に書いて rename（mmap 済みの辞書を同じ inode で上書きしない）
+- **FFI**: `nagi_handle_line` の `line` の NULL を検査。`nagi_server_free` で `Server` を捨てる前に学習のフラッシュを試みる
+- **ユーザー辞書オーバーレイ**: `lookup_prefix` を読みの登録順で安定化（`order` を併用）

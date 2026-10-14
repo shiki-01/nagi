@@ -215,7 +215,7 @@ final class KeyboardModel: ObservableObject {
             DiagLog.log("llm released by core (get_status llm=false)")
         } else {
             DiagLog.log("llm still active after memory_pressure=critical: fallback to restart core")
-            restartCore(noLLM: true, reason: "memory warning (llm not released)")
+            scheduleRestartCore(noLLM: true, reason: "memory warning (llm not released)")
         }
     }
 
@@ -241,7 +241,23 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    /// コアを作り直す。入力中の文字列はホストの入力欄に残した上で（失わない）、古いセッションを手放してから
+    /// 作り直しの予約が済んでいるか
+    private var restartScheduled = false
+
+    /// コアの作り直しを、呼び出し元（`send` や `handleMemoryWarning`）が戻ったあとに行う。
+    /// 呼び出し元は旧セッションをローカル変数で持っているため、その場で作り直すと旧コア（LLM 入り）が
+    /// 解放されないまま新しいコアを作ってしまい、メモリの上限を超えやすい
+    private func scheduleRestartCore(noLLM: Bool, reason: String) {
+        guard !restartScheduled else { return }
+        restartScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.restartScheduled = false
+            self.restartCore(noLLM: noLLM, reason: reason)
+        }
+    }
+
+    /// コアを作り直す（呼び出し元が旧セッションを持っていないこと。持ちうる場合は `scheduleRestartCore`）。入力中の文字列はホストの入力欄に残した上で（失わない）、古いセッションを手放してから
     /// 新しく作る（二重に持ってメモリを増やさない）。作り直せなければ session は nil になり、
     /// キーは直接ホストへ入る
     private func restartCore(noLLM: Bool, reason: String) {
@@ -291,7 +307,7 @@ final class KeyboardModel: ObservableObject {
         consecutiveFailures = 0
         if coreRestarts < 2 {
             coreRestarts += 1
-            restartCore(noLLM: dictionaryOnly, reason: "no response x3 (\(label))")
+            scheduleRestartCore(noLLM: dictionaryOnly, reason: "no response x3 (\(label))")
         } else {
             DiagLog.log("core unavailable: direct input mode")
             if let old = session { detach(old) }

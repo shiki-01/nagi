@@ -1272,11 +1272,17 @@ mod tests {
         let mut l = Learner::new(LearnConfig::default());
         l.record("あ", "亜", 0, "learned", 100);
         assert!(l.flush(&path).unwrap());
-        assert!(path.with_extension("bak").exists(), "捨てる前にバックアップ");
+        assert!(
+            path.with_extension("bak").exists(),
+            "捨てる前にバックアップ"
+        );
         assert!(!fs::read_to_string(&path).unwrap().contains("garbage"));
         l.record("い", "胃", 0, "learned", 101);
         l.flush(&path).unwrap();
-        assert!(!path.with_extension("bak.1").exists(), "バックアップは 1 度だけ");
+        assert!(
+            !path.with_extension("bak.1").exists(),
+            "バックアップは 1 度だけ"
+        );
     }
 
     #[test]
@@ -1285,8 +1291,7 @@ mod tests {
         let path = temp_dir.join("lock_timeout.tsv");
         let held = FlushLock::acquire(&path, None).unwrap().unwrap();
         let start = std::time::Instant::now();
-        let second =
-            FlushLock::acquire(&path, Some(std::time::Duration::from_millis(50))).unwrap();
+        let second = FlushLock::acquire(&path, Some(std::time::Duration::from_millis(50))).unwrap();
         assert!(second.is_none());
         assert!(start.elapsed() < std::time::Duration::from_secs(2));
         drop(held);

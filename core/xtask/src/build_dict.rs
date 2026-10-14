@@ -128,7 +128,20 @@ pub fn run(source: DictSource) -> Result<(), String> {
             .ok_or("出力ディレクトリが特定できない")?,
     )
     .map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
-    fs::write(&output_file, binary_data).map_err(|e| format!("ファイル書き込み失敗: {}", e))?;
+    // 同じ inode を上書きしない: 起動中のサーバーが mmap している辞書が SIGBUS しないよう、
+    // 一時ファイルに書いてから rename で置き換える（fetch_dict と同じ）
+    let temp_file = output_file.with_extension("tmp");
+    fs::write(&temp_file, binary_data)
+        .map_err(|e| format!("一時ファイル書き込み失敗 {}: {}", temp_file.display(), e))?;
+    fs::rename(&temp_file, &output_file).map_err(|e| {
+        let _ = fs::remove_file(&temp_file);
+        format!(
+            "ファイルリネーム失敗 {} -> {}: {}",
+            temp_file.display(),
+            output_file.display(),
+            e
+        )
+    })?;
 
     eprintln!();
     eprintln!("完了");

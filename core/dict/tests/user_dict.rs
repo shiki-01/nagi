@@ -207,6 +207,41 @@ fn overlay_lookup_prefix_matches_forward_only() {
 }
 
 #[test]
+fn overlay_lookup_prefix_is_in_registration_order() {
+    let d = dict();
+    let readings = [
+        "ふじのやま",
+        "ふじさわ",
+        "ふじた",
+        "ふじわら",
+        "ふじい",
+        "ふじえだ",
+    ];
+    let text: String = readings
+        .iter()
+        .map(|r| format!("{r}\t語{r}\t名詞\n"))
+        .collect();
+    let (user, _) = parse(&text);
+    // 何度作り直しても（HashMap の走査順が変わっても）登録順
+    for _ in 0..20 {
+        let overlay = d.make_overlay(&user);
+        let found: Vec<&str> = overlay
+            .lookup_prefix("ふじ", 10)
+            .iter()
+            .map(|(r, _)| *r)
+            .collect();
+        assert_eq!(found, readings);
+        // limit で切っても先頭から
+        let first: Vec<&str> = overlay
+            .lookup_prefix("ふじ", 2)
+            .iter()
+            .map(|(r, _)| *r)
+            .collect();
+        assert_eq!(first, &readings[..2]);
+    }
+}
+
+#[test]
 fn align_with_overlay_uses_user_words() {
     let d = dict();
     let (user, _) = parse("ふじさわ\t藤澤\t人名\n");

@@ -2,7 +2,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
-use std::panic::catch_unwind;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
 use nagi_server::{Server, build, parse_args};
@@ -172,8 +172,11 @@ pub unsafe extern "C" fn nagi_handle_line(
         if handle.is_null() {
             return Err("ハンドルが NULL です".to_string());
         }
+        if line.is_null() {
+            return Err("line が NULL です".to_string());
+        }
 
-        // SAFETY: C 呼び出し側の責務で line は NULL-terminated UTF-8 文字列
+        // SAFETY: line は NULL でないことを確認済み。C 呼び出し側の責務で NULL-terminated UTF-8 文字列
         let line_str = unsafe { CStr::from_ptr(line) }
             .to_str()
             .map_err(|_| "line が有効な UTF-8 ではありません".to_string())?;
@@ -307,6 +310,10 @@ pub unsafe extern "C" fn nagi_server_free(handle: NagiServerHandle) {
         if let Ok(mut slot) = handle.wake.lock() {
             *slot = None;
         }
+        // 学習データの保存を試みる（失敗・パニックしても解放は続ける）
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            handle.server.runtime().flush_learning(true);
+        }));
     }
 }
 

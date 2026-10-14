@@ -785,9 +785,12 @@ private struct CandidateBar: View {
                     }
                 }
             }
-            Button("検証", action: onShowProbes)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
+            // 検証用の画面は DEBUG / TestFlight のビルドだけ（App Store 版では出さない）
+            if DiagLog.isTestBuild {
+                Button("検証", action: onShowProbes)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
         }
         .padding(.horizontal, 8)
         .frame(height: 44)

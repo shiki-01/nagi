@@ -174,10 +174,15 @@ struct DataPaths {
         return .noContainer
     }
 
-    /// 使用するモデルの選び方: 設定で選んだファイル名 → 既定名 → 最大サイズ
+    /// 使用するモデルの選び方: 設定で選んだファイル名 → （未選択のときだけ）xsmall
+    /// （iOS の既定。decisions.md H-10）→ 既定名 → 最大サイズ。
+    /// ホームの「使用中」表示・Picker と、拡張が実際に読むモデルを一致させるため、全員がこの関数を使う
     static func selectModel(from files: [ModelFile], preferredName: String?) -> ModelFile? {
         if let preferredName = preferredName, let hit = files.first(where: { $0.name == preferredName }) {
             return hit
+        }
+        if preferredName == nil, let xsmall = files.first(where: { $0.name.contains("xsmall") }) {
+            return xsmall
         }
         if let hit = files.first(where: { $0.name == defaultModelFileName }) {
             return hit

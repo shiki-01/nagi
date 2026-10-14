@@ -200,35 +200,63 @@ final class NagiUserDictModel: ObservableObject {
             return
         }
         busy = true
+        // 取り込み中は busy で他の書き込みが止まるので、この時点の内容を判定に使ってよい
+        let ownSnapshot = own
+        let readOnlySnapshot = readOnly
         queue.async { [weak self] in
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-            var parsed: (entries: [NagiUserDictEntry], issues: [NagiUserDictIssue])?
+            var prepared: (added: [NagiUserDictEntry], summary: String)?
             var failure: String?
             do {
-                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                // 大きさを取れないファイルは 0 扱いにせず拒否する（上限の検査をすり抜けさせない）
+                guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else {
+                    throw NagiUserDictImportError.sizeUnknown
+                }
                 if size > NagiUserDictStore.maxImportBytes {
                     failure = "ファイルが大きすぎます（上限 \(NagiUserDictStore.maxImportBytes / 1024 / 1024) MB）"
                 } else {
                     let data = try Data(contentsOf: url)
-                    parsed = NagiUserDictStore.parse(NagiUserDictStore.decodeText(data), file: url.lastPathComponent)
+                    // 検証・重複判定も重いので、このキューの上で済ませる
+                    let parsed = NagiUserDictStore.parse(NagiUserDictStore.decodeText(data), file: url.lastPathComponent)
+                    prepared = Self.prepareImport(
+                        parsed.entries, parseIssues: parsed.issues, own: ownSnapshot, readOnly: readOnlySnapshot
+                    )
                 }
+            } catch NagiUserDictImportError.sizeUnknown {
+                failure = "ファイルの大きさを確認できないため取り込めません"
             } catch {
                 failure = "ファイルを読み込めませんでした: \(error.localizedDescription)"
             }
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.busy = false
-                if let parsed = parsed {
-                    self.finishImport(parsed.entries, parseIssues: parsed.issues)
-                } else {
+                guard let prepared = prepared else {
                     self.message = failure ?? "ファイルを読み込めませんでした"
+                    return
+                }
+                if prepared.added.isEmpty {
+                    self.message = prepared.summary
+                    return
+                }
+                self.commit(self.own + prepared.added) { [weak self] error in
+                    self?.message = error ?? prepared.summary
                 }
             }
         }
     }
 
-    private func finishImport(_ entries: [NagiUserDictEntry], parseIssues: [NagiUserDictIssue]) {
+    private enum NagiUserDictImportError: Error {
+        case sizeUnknown
+    }
+
+    /// 取り込む行を検証し、重複・上限を除いて、追加する行と結果の文言を作る（状態には触らない）
+    private static func prepareImport(
+        _ entries: [NagiUserDictEntry],
+        parseIssues: [NagiUserDictIssue],
+        own: [NagiUserDictEntry],
+        readOnly: [NagiUserDictEntry]
+    ) -> (added: [NagiUserDictEntry], summary: String) {
         var keys = Set<String>()
         for e in own { keys.insert(e.duplicateKey) }
         for e in readOnly { keys.insert(e.duplicateKey) }
@@ -264,13 +292,7 @@ final class NagiUserDictModel: ObservableObject {
             for line in problems.prefix(5) { summary += "\n  \(line)" }
             if problems.count > 5 { summary += "\n  …ほか \(problems.count - 5) 件" }
         }
-        if added.isEmpty {
-            message = summary
-            return
-        }
-        commit(own + added) { [weak self] error in
-            self?.message = error ?? summary
-        }
+        return (added, summary)
     }
 }
 

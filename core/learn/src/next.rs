@@ -5,8 +5,8 @@
 //! flush は [`crate::Learner`] と同じ流儀（`<path>.lock` の flock・3 者マージ・世代・原子的置換）。
 
 use crate::{
-    FlushLock, LearnConfig, LearnError, LoadReport, calculate_score, create_backup_file, escape_tsv_field,
-    open_lock, system_now, unescape_tsv_field,
+    FlushLock, LearnConfig, LearnError, LoadReport, calculate_score, create_backup_file,
+    escape_tsv_field, open_lock, system_now, unescape_tsv_field,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;

@@ -172,7 +172,7 @@ struct KeyboardRoot: View {
     let probeView: KeyboardSwiftUIView
 
     var body: some View {
-        if screen.showProbes {
+        if screen.showProbes && DiagLog.isTestBuild {
             ZStack(alignment: .topTrailing) {
                 probeView
                 Button("閉じる") { screen.showProbes = false }
@@ -320,13 +320,16 @@ struct KeyboardSwiftUIView: View {
                         .cornerRadius(4)
                 }
 
-                Button(action: { insertResultsToTextField() }) {
-                    Text("結果を入力欄に挿入")
-                        .frame(maxWidth: .infinity)
-                        .padding(8)
-                        .background(Color.green)
-                        .foregroundColor(.white)
-                        .cornerRadius(4)
+                // 入力欄への挿入は DEBUG / TestFlight のビルドだけ（App Store 版では出さない）
+                if DiagLog.isTestBuild {
+                    Button(action: { insertResultsToTextField() }) {
+                        Text("結果を入力欄に挿入")
+                            .frame(maxWidth: .infinity)
+                            .padding(8)
+                            .background(Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(4)
+                    }
                 }
             }
             .padding()
