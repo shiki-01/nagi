@@ -160,6 +160,12 @@ private struct CandidateBar: View {
                     .lineLimit(2)
                 Spacer(minLength: 0)
             } else {
+                if let warning = model.warning, !model.hasPreedit, model.candidates.isEmpty {
+                    Text(warning)
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                        .lineLimit(2)
+                }
                 if model.hasPreedit {
                     Text(model.preedit)
                         .font(.system(size: 14))

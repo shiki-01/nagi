@@ -260,6 +260,13 @@ struct ContentView: View {
                 Label("結果", systemImage: "doc.text.fill")
             }
             .tag(2)
+
+            // Tab 4: キーボードの入力テスト
+            KeyboardTestView()
+                .tabItem {
+                    Label("入力テスト", systemImage: "keyboard")
+                }
+                .tag(3)
         }
         .alert("メッセージ", isPresented: $showingAlert) {
             Button("OK") { }

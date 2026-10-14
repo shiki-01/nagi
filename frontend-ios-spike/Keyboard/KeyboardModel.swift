@@ -22,6 +22,8 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var mode: InputMode = .hiragana
     /// 画面に出すメッセージ（辞書が無いなど）
     @Published private(set) var message: String?
+    /// 動作はするが画面に出しておきたい注意（設定の保存先を作れないなど）
+    @Published private(set) var warning: String?
 
     weak var host: KeyboardHost?
 
@@ -35,6 +37,7 @@ final class KeyboardModel: ObservableObject {
     init(outcome: ProductSession.Outcome, toggleInput: Bool = false) {
         self.session = outcome.session
         self.message = outcome.message
+        self.warning = outcome.warning
         self.toggleInput = toggleInput
         session?.onPreeditUpdate = { [weak self] update in self?.applyPreeditUpdate(update) }
         session?.onCandidatesUpdate = { [weak self] update in self?.applyCandidatesUpdate(update) }
