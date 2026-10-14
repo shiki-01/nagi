@@ -1029,3 +1029,11 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **`cargo xtask build-dict`**: `.tmp` に書いて rename（mmap 済みの辞書を同じ inode で上書きしない）
 - **FFI**: `nagi_handle_line` の `line` の NULL を検査。`nagi_server_free` で `Server` を捨てる前に学習のフラッシュを試みる
 - **ユーザー辞書オーバーレイ**: `lookup_prefix` を読みの登録順で安定化（`order` を併用）
+
+### H-21. 絵文字・顔文字の読みからの候補（2026-10-14、要レビュー）
+
+- **実装**: `nagi_rewriter::EmojiRewriter` が読みの完全一致で候補を返し、`Pipeline::segment_candidates` の Rewriter グループの末尾に足す（出所は既存の `CandidateSource::Rewriter`。プロトコル型は不変）。順位は `ranking.source_order` の rewriter の位置に従うので、既定ではユーザー辞書・学習・LLM・システム辞書より後ろ。ユーザー辞書が同じ表記を持てば先に出て、出所は両方付く
+- **表**: `config/emoji.tsv`（自作。外部辞書の転記なし）。`[emoji]` / `[kaomoji]` のセクション行で種類を分ける（設定で別々に切れるため。仕様の `読み<TAB>候補...` に対する追加）。読みはひらがなのみ。肌色修飾なし。同じ読みが両セクションにあるのは可（絵文字 → 顔文字の順）
+- **入力中の候補**: 既存の `compute_composing_items` が先頭文節の `segment_candidates` を呼ぶので、先頭文節の読みが表に完全一致するときだけ絵文字が出る（前方一致・部分一致なし）。エンジンの変更なし。ただし入力中候補は上限 12 件なので、辞書候補が多い読みでは末尾の絵文字が切れる
+- **設定**: `rewriter.emoji` / `rewriter.kaomoji`（bool、既定 true、level=detail、platforms=both、グループ「表記の候補」）。ホットリロード対応（`Tunables` → `Effective`）。`docs/ios-settings.md` の旧 `convert.emoji_candidates` はこの 2 項目に置き換え
+

@@ -108,6 +108,10 @@ pub struct Tunables {
     pub userdict_enabled: bool,
     /// `snippet.enabled`
     pub snippet_enabled: bool,
+    /// `rewriter.emoji`
+    pub emoji_enabled: bool,
+    /// `rewriter.kaomoji`
+    pub kaomoji_enabled: bool,
 }
 
 /// 出所名（`ranking.source_order` の要素）を出所に直す
@@ -166,6 +170,8 @@ impl Tunables {
             live_conversion_min_key_length: config.conversion.live_conversion_min_key_length,
             userdict_enabled: config.userdict.enabled,
             snippet_enabled: config.snippet.enabled,
+            emoji_enabled: config.rewriter.emoji,
+            kaomoji_enabled: config.rewriter.kaomoji,
         }
     }
 }
@@ -190,6 +196,10 @@ pub struct Effective {
     /// 文全体の N-best（辞書のk-best・実LLMのビームサーチとも）の幅・候補数の起点。
     /// 1 なら貪欲デコードと同じ（`conversion.beam_width`。未指定ならプロファイルの既定値）
     pub beam_width: usize,
+    /// 読みからの絵文字候補（`rewriter.emoji`）
+    pub emoji: bool,
+    /// 読みからの顔文字候補（`rewriter.kaomoji`）
+    pub kaomoji: bool,
 }
 
 /// 実行時の共有状態
@@ -827,6 +837,8 @@ impl Runtime {
             ranking: t.ranking,
             n_threads,
             beam_width,
+            emoji: t.emoji_enabled,
+            kaomoji: t.kaomoji_enabled,
         }
     }
 

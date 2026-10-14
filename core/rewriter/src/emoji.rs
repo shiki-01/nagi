@@ -189,7 +189,11 @@ mod tests {
             } else {
                 &mut seen_kao
             };
-            assert!(seen.insert(fields[0]), "読みの重複 [{section}]: {}", fields[0]);
+            assert!(
+                seen.insert(fields[0]),
+                "読みの重複 [{section}]: {}",
+                fields[0]
+            );
             let mut cands = std::collections::HashSet::new();
             for c in &fields[1..] {
                 assert!(cands.insert(*c), "候補の重複: {line}");
@@ -213,12 +217,27 @@ mod tests {
     fn lookup_examples() {
         let t = EmojiTable::builtin();
         assert_eq!(t.lookup("わらう", true, false)[..3], ["😄", "😆", "🤣"]);
-        assert!(t.lookup("ありがとう", true, false).contains(&"🙏".to_string()));
-        assert!(t.lookup("ねこ", true, false).starts_with(&["🐱".into(), "🐈".into()]));
-        assert!(t.lookup("かおもじ", false, true).contains(&"(^_^)".to_string()));
+        assert!(
+            t.lookup("ありがとう", true, false)
+                .contains(&"🙏".to_string())
+        );
+        assert!(
+            t.lookup("ねこ", true, false)
+                .starts_with(&["🐱".into(), "🐈".into()])
+        );
+        assert!(
+            t.lookup("かおもじ", false, true)
+                .contains(&"(^_^)".to_string())
+        );
         assert!(t.lookup("かおもじ", true, false).is_empty());
-        assert!(t.lookup("えがお", false, true).contains(&"(＾▽＾)".to_string()));
-        assert!(t.lookup("はーと", true, false).contains(&"❤\u{fe0f}".to_string()));
+        assert!(
+            t.lookup("えがお", false, true)
+                .contains(&"(＾▽＾)".to_string())
+        );
+        assert!(
+            t.lookup("はーと", true, false)
+                .contains(&"❤\u{fe0f}".to_string())
+        );
     }
 
     #[test]
@@ -246,7 +265,12 @@ mod tests {
             emoji: true,
             kaomoji: false,
         };
-        assert!(only_emoji.rewrite("えがお").iter().all(|c| !c.starts_with('(')));
+        assert!(
+            only_emoji
+                .rewrite("えがお")
+                .iter()
+                .all(|c| !c.starts_with('('))
+        );
         let off = EmojiRewriter {
             emoji: false,
             kaomoji: false,
@@ -257,7 +281,9 @@ mod tests {
 
     #[test]
     fn parse_handles_comments_sections_and_dups() {
-        let t = EmojiTable::parse("あ\tx\n# c\n[emoji]\nいう\ta\tb\ta\n\nいう\tc\tb\nえお\n[kaomoji]\nいう\tk\n");
+        let t = EmojiTable::parse(
+            "あ\tx\n# c\n[emoji]\nいう\ta\tb\ta\n\nいう\tc\tb\nえお\n[kaomoji]\nいう\tk\n",
+        );
         assert_eq!(t.lookup("いう", true, false), ["a", "b", "c"]);
         assert_eq!(t.lookup("いう", false, true), ["k"]);
         assert!(t.lookup("あ", true, true).is_empty());

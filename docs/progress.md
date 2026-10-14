@@ -193,3 +193,9 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 - 実装済み: LLM だけの解放/再読み込み（`unload_model` / `reload_model`、メモリ逼迫 critical・メモリ上限不足での自動解放、normal から 30 秒後の自動再読み込み）、`get_key_table`、D-4（`initialize.capabilities`・`set_environment.memory_budget_mb`・メモリ上限に従うプロファイル判定）
 - iOS（Swift）側の追従は済み（起動時の `capabilities`、`get_key_table`、`set_environment`・メモリ警告による `unload_model` 連携。実機確認待ち。`KanaKeyTable.swift` の複製表はフォールバックとして残る）
 - 未完了: 実機でのメモリ上限の閾値（150/1024/2048MB）と再読み込みの待ち時間（30 秒）の見直し
+
+## 絵文字・顔文字の読みからの候補（2026-10-14、決定は decisions.md H-21）
+
+- 実装済み: Rewriter `EmojiRewriter`（`core/rewriter/src/emoji.rs`）、表 `config/emoji.tsv`（`include_str!` 同梱。絵文字 413 読み・顔文字 101 読み）、設定 `rewriter.emoji` / `rewriter.kaomoji`（既定 true・detail・both）
+- 未完了: iOS 側の設定 UI 追従（`IOSSettings.swift`）、実機での見え方の確認
+

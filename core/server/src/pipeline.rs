@@ -22,7 +22,7 @@ use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
 use nagi_protocol::methods::NotifyLevel;
 use nagi_protocol::view::CandidateSource;
-use nagi_rewriter::RewriterChain;
+use nagi_rewriter::{EmojiRewriter, Rewriter, RewriterChain};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -866,7 +866,15 @@ impl ConversionBackend for Pipeline {
             groups.push((CandidateSource::SystemDict, system));
             groups.push((CandidateSource::Kana, kana));
         }
-        let rewriter_candidates = self.rewriter.candidates(reading);
+        let mut rewriter_candidates = self.rewriter.candidates(reading);
+        // 絵文字・顔文字は Rewriter の末尾（読みが表に完全一致するときだけ）
+        rewriter_candidates.extend(
+            EmojiRewriter {
+                emoji: eff.emoji,
+                kaomoji: eff.kaomoji,
+            }
+            .rewrite(reading),
+        );
         groups.push((CandidateSource::Rewriter, rewriter_candidates));
 
         let mut out = merge_by_order(&eff.ranking, groups);
