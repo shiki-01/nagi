@@ -46,6 +46,8 @@ export const LIMITS = {
   rowWidthMin: 1,
   rowWidthMax: 20,
   rowHeightMax: 4,
+  // 行の高さ比の合計の上限（キーボード全体の高さに収めるため。iOS 側の LayoutValidation.rowHeightSumMax と同期）
+  rowHeightSumMax: 4.5,
   widthMax: 20,
   textMax: 16,
   shortcutTextMax: 256,

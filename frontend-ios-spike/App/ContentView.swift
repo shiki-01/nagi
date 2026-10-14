@@ -599,7 +599,7 @@ struct ProbeDetailView: View {
                                 HStack {
                                     Text(key).font(.caption)
                                     Spacer()
-                                    Text(String(format: "%.2f", value)).font(.caption).monospaced()
+                                    Text(String(format: "%.2f", value)).font(.caption.monospaced())
                                 }
                             }
                         }

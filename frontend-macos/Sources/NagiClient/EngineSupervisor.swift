@@ -227,7 +227,8 @@ public final class EngineSupervisor: @unchecked Sendable {
                 RpcMethod.initialize,
                 params: InitializeParams(
                     protocol_version: nagiProtocolVersion, client_name: configuration.clientName,
-                    client_version: configuration.clientVersion, os: configuration.os),
+                    client_version: configuration.clientVersion, os: configuration.os,
+                    capabilities: nil),
                 timeout: configuration.initializeTimeout)
         } catch {
             rpc.close()

@@ -3,7 +3,8 @@ import UIKit
 /// 画面の寸法と操作の判定に使う設定の現在値。`KeyboardModel` が focusIn のたびに `ios-settings.json` を読んで
 /// 更新し、描画のたびにここを参照する（値を変えてから `@Published` を更新するので、再描画は新しい値を見る）
 enum NagiKeyMetrics {
-    static var current = NagiIOSSettings()
+    /// メインスレッドからのみ読み書きする（Swift の並行性検査を抑制）
+    nonisolated(unsafe) static var current = NagiIOSSettings()
 
     /// キー 1 行（高さ比 1）の高さ
     static var keyHeight: Double { 46 * current.heightScale }
@@ -17,8 +18,8 @@ enum NagiKeyMetrics {
 /// キー入力のフィードバック（触覚・クリック音）。いずれも失敗しても何も起きない
 /// （フルアクセスが無いと触覚が出ない端末・OS があるため。要実機確認）
 enum NagiKeyFeedback {
-    private static var generator: UIImpactFeedbackGenerator?
-    private static var generatorStyle = ""
+    nonisolated(unsafe) private static var generator: UIImpactFeedbackGenerator?
+    nonisolated(unsafe) private static var generatorStyle = ""
 
     /// キーを押したときに呼ぶ（メインスレッド）
     static func keyDown() {
@@ -47,6 +48,6 @@ enum NagiKeyFeedback {
 }
 
 /// `UIDevice.playInputClick()` を有効にするための準拠（キーボード拡張のビューは UIInputView の子孫）
-extension UIView: UIInputViewAudioFeedback {
+extension UIView: @retroactive UIInputViewAudioFeedback {
     public var enableInputClicksWhenVisible: Bool { true }
 }

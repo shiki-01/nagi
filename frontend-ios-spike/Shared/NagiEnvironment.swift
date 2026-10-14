@@ -14,8 +14,8 @@ final class NagiEnvironmentReporter {
     private var lastMemoryWarning: Date?
     /// メモリ逼迫を「通常」へ戻すまでの猶予（秒）。警告のあと、この間は報告を維持する
     private let memoryPressureHold: TimeInterval = 60
-    /// これを下回ると「危険」として扱う、残りメモリ（MB）
-    private let criticalAvailableMB: Double = 25
+    /// 逼迫を解く予約の世代（新しい警告で古い予約を無効にする）
+    private var releaseGeneration = 0
 
     func start() {
         guard observers.isEmpty else { return }
@@ -34,10 +34,18 @@ final class NagiEnvironmentReporter {
 
     deinit { stop() }
 
-    /// OS のメモリ警告を記録する。残りが少なければ「危険」、そうでなければ「警告」
-    func noteMemoryWarning(availableMB: Double) {
+    /// OS のメモリ警告を記録する。`didReceiveMemoryWarning` はプロセスが強制終了に近いという OS の警告なので、
+    /// コアには常に `critical` で伝える（コアが LLM を解放する。H-16）。`memoryPressureHold` 秒後に自動で
+    /// 通常へ戻し、`onChange` を呼ぶ（呼び出し側が `normal` をコアへ送る。コアは更に約 30 秒後に LLM を再読み込みする）
+    func noteMemoryWarning() {
         lastMemoryWarning = Date()
-        memoryPressure = availableMB < criticalAvailableMB ? .critical : .warning
+        memoryPressure = .critical
+        releaseGeneration += 1
+        let generation = releaseGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + memoryPressureHold + 1) { [weak self] in
+            guard let self = self, self.releaseGeneration == generation else { return }
+            self.onChange?()
+        }
     }
 
     /// 現在の環境。`on_battery` は報告しない（コアは前回の値を維持する。iOS では低電力モードで代表させる）
@@ -47,6 +55,12 @@ final class NagiEnvironmentReporter {
            let last = lastMemoryWarning, Date().timeIntervalSince(last) > memoryPressureHold {
             memoryPressure = .normal
         }
+        return Self.systemSnapshot(memoryPressure: memoryPressure)
+    }
+
+    /// OS から読んだ低電力モード・サーマル状態と、このプロセスのメモリ上限の推定（`initialize` の
+    /// `capabilities` と `set_environment` で共通）
+    static func systemSnapshot(memoryPressure: MemoryPressureState) -> SetEnvironmentParams {
         let info = ProcessInfo.processInfo
         let thermal: ThermalState
         switch info.thermalState {
@@ -60,13 +74,14 @@ final class NagiEnvironmentReporter {
             on_battery: nil,
             low_power_mode: info.isLowPowerModeEnabled,
             thermal: thermal,
-            memory_pressure: memoryPressure
+            memory_pressure: memoryPressure,
+            memory_budget_mb: UInt32(clamping: MemoryProbe.processBudgetMB())
         )
     }
 
     /// ログ用の要約（入力内容は含まない）
     static func describe(_ params: SetEnvironmentParams) -> String {
         "lowPower=\(params.low_power_mode.map { "\($0)" } ?? "-") thermal=\(params.thermal?.rawValue ?? "-") "
-            + "memory=\(params.memory_pressure?.rawValue ?? "-") budgetMB=\(MemoryProbe.processBudgetMB())"
+            + "memory=\(params.memory_pressure?.rawValue ?? "-") budgetMB=\(params.memory_budget_mb.map { "\($0)" } ?? "-")"
     }
 }

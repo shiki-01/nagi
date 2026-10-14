@@ -31,7 +31,7 @@ enum NagiLayoutStore {
         if data.count > maxBytes { throw NagiLayoutError(message: "JSON が大きすぎます（\(maxBytes / 1024) KB まで）") }
         let def: KeyboardLayoutDef
         do {
-            def = try LayoutLoader.decode(data)
+            def = try LayoutLoader.decode(data, checkTargets: true)
         } catch let error as LayoutLoader.LoadError {
             throw NagiLayoutError(message: error.message)
         }

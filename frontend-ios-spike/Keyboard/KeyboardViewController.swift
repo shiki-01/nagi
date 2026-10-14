@@ -13,6 +13,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     private var hostingController: UIHostingController<KeyboardRoot>?
     /// キーボード全体の高さの制約（設定の高さの倍率で、focusIn のたびに更新する）
     private var heightConstraint: NSLayoutConstraint?
+    /// 直近に見た入力欄の識別子（`textDocumentProxy.documentIdentifier`）。変わったら入力欄が切り替わっている
+    private var lastDocumentIdentifier: UUID?
 
     override func viewDidLoad() {
         LaunchBaseline.capture()
@@ -29,6 +31,7 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
             defaults.set(now, forKey: "keyboardLastSeen")
             if hasFullAccess { defaults.set(now, forKey: "fullAccessLastSeen") }
         }
+        lastDocumentIdentifier = textDocumentProxy.documentIdentifier
         model?.focusIn()
         // focusIn で読み直した設定の高さを反映する
         heightConstraint?.constant = CGFloat(NagiKeyMetrics.totalHeight)
@@ -137,7 +140,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
 
     // MARK: - メモリ警告
 
-    /// OS からのメモリ警告。入力を確定して LLM を手放し、キャッシュを捨てる（強制終了される前に軽くする）
+    /// OS からのメモリ警告。コアに `memory_pressure: critical` を送って LLM を手放させ、キャッシュを捨てる
+    /// （強制終了される前に軽くする）
     override func didReceiveMemoryWarning() {
         super.didReceiveMemoryWarning()
         model?.handleMemoryWarning()
@@ -149,6 +153,14 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     /// 変換中でなければ、直前のテキストを文脈としてコアに渡し直す
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
+        // 入力欄そのものが切り替わったときは、状態を初期化する（入力中の文字は前の欄で確定扱い）
+        let identifier = textDocumentProxy.documentIdentifier
+        if let last = lastDocumentIdentifier, last != identifier {
+            lastDocumentIdentifier = identifier
+            model?.hostDocumentChanged()
+        } else if lastDocumentIdentifier == nil {
+            lastDocumentIdentifier = identifier
+        }
         model?.hostTextChanged()
     }
 }

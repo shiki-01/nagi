@@ -68,6 +68,8 @@ struct LayoutKey: Codable {
     var target: String?
     var longPress: [LayoutKey]?
     var visible: VisibleCondition?
+    /// JSON で id が指定されていたか（省略時は補った id。検証では「指定あり」のものだけ形式を見る）
+    var idGiven = true
 
     enum CodingKeys: String, CodingKey {
         case id, width, label, icon, style, kind, text, shift
@@ -79,7 +81,9 @@ struct LayoutKey: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         kind = try c.decode(LayoutKeyKind.self, forKey: .kind)
         // `spacer` などは id を省略できる（一意になるよう補う）
-        id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        let givenId = try c.decodeIfPresent(String.self, forKey: .id)
+        id = givenId ?? UUID().uuidString
+        idGiven = givenId != nil
         width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 1
         label = try c.decodeIfPresent(String.self, forKey: .label)
         icon = try c.decodeIfPresent(String.self, forKey: .icon)
@@ -162,7 +166,8 @@ struct KeyboardLayoutDef: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         schema = try c.decode(Int.self, forKey: .schema)
         id = try c.decode(String.self, forKey: .id)
-        name = try c.decodeIfPresent(String.self, forKey: .name) ?? id
+        // web 版の検証と同じく name は必須
+        name = try c.decode(String.self, forKey: .name)
         mode = try c.decode(LayoutMode.self, forKey: .mode)
         rows = try c.decode([LayoutRow].self, forKey: .rows)
     }
@@ -175,35 +180,173 @@ struct KeyboardLayoutDef: Codable {
         self.rows = rows
     }
 
-    /// 仕様（docs/ios-keyboard-layout.md「検証」）の範囲を確かめる。問題があれば理由を返す
-    func validationError() -> String? {
+    /// 仕様（docs/ios-keyboard-layout.md「検証」）の範囲を確かめる。問題があれば理由を返す。
+    /// 規則は `web/src/lib/keyboard/validate.ts` と同じ（変えるときは両方を揃える）。
+    /// - targets: `layout.target` として有効な id（組み込み名を除く）。nil なら存在の確認をしない
+    ///   （実行時の読み込みでは、参照先が消えていてもレイアウト全体は無効にしない）
+    func validationError(targets: [String]? = nil) -> String? {
+        typealias V = LayoutValidation
         if schema != 1 { return "未対応のスキーマ \(schema)" }
-        if rows.isEmpty || rows.count > 8 { return "rows は 1〜8 行（\(rows.count)）" }
+        if !V.matches(id, V.layoutIdPattern) {
+            return "id は英小文字・数字・- _ で始まりが英小文字か数字、64 文字以内にしてください"
+        }
+        let nameLength = name.unicodeScalars.count
+        if nameLength < 1 || nameLength > V.nameMax { return "name は 1〜\(V.nameMax) 文字にしてください" }
+        if rows.isEmpty || rows.count > V.rowsMax { return "rows は 1〜\(V.rowsMax) 行（\(rows.count)）" }
+        let validTargets: Set<String>? = targets.map { Set(V.builtinLayoutIds + $0 + [id]) }
         var ids = Set<String>()
+        var heightSum = 0.0
         for (index, row) in rows.enumerated() {
-            let total = row.keys.reduce(0.0) { $0 + $1.width }
-            if total < 1 || total > 20 { return "行 \(index + 1) の幅の合計が範囲外（\(total)）" }
-            if row.height <= 0 || row.height > 4 { return "行 \(index + 1) の高さが範囲外（\(row.height)）" }
+            let label = "行 \(index + 1)"
+            if !(row.height > 0 && row.height <= V.rowHeightMax) { return "\(label) の高さが範囲外（\(row.height)）" }
+            heightSum += row.height
+            if row.keys.isEmpty { return "\(label) には 1 つ以上のキーが必要です" }
+            if row.keys.count > V.keysPerRowMax { return "\(label) のキーは \(V.keysPerRowMax) 個以内にしてください" }
+            var total = 0.0
             for key in row.keys {
-                if key.width <= 0 { return "キー \(key.id) の幅が不正" }
+                if let reason = V.keyError(key, validTargets: validTargets) { return reason }
                 if !ids.insert(key.id).inserted { return "キー id の重複: \(key.id)" }
-                if let text = key.text, text.count > 16 { return "キー \(key.id) の text が長すぎる" }
-                if key.kind == .toggle {
-                    let count = key.cycle?.count ?? 0
-                    if count < 1 || count > 16 { return "キー \(key.id) の cycle は 1〜16 要素" }
+                total += key.width
+            }
+            if total < V.rowWidthMin || total > V.rowWidthMax { return "\(label) の幅の合計が範囲外（\(total)）" }
+        }
+        if heightSum > V.rowHeightSumMax {
+            return "行の高さの比の合計は \(V.rowHeightSumMax) 以下にしてください（現在 \(heightSum)）"
+        }
+        return nil
+    }
+}
+
+/// レイアウトの検証の規則（`web/src/lib/keyboard/types.ts` の LIMITS と同じ値。文字数はコードポイント数）
+enum LayoutValidation {
+    static let rowsMax = 8
+    static let keysPerRowMax = 24
+    static let rowWidthMin = 1.0
+    static let rowWidthMax = 20.0
+    static let rowHeightMax = 4.0
+    /// 行の高さの比の合計の上限。キーボード全体の高さは「高さ比 4 = キー 4 行分」を前提に決めており、
+    /// これを超えるとはみ出す（同梱のレイアウトは 4）。
+    /// **web 側（`web/src/lib/keyboard/validate.ts` と `config/keyboard/layout.schema.json`）には未反映。同じ制約の追加が必要**
+    static let rowHeightSumMax = 4.5
+    static let widthMax = 20.0
+    static let textMax = 16
+    static let shortcutTextMax = 256
+    static let cycleMax = 16
+    static let stepsMax = 32
+    static let longPressMax = 12
+    static let nameMax = 64
+    static let labelMax = 16
+    static let iconMax = 64
+    static let kanaMax = 4
+
+    static let layoutIdPattern = "^[a-z0-9][a-z0-9_-]{0,63}\\z"
+    static let keyIdPattern = "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}\\z"
+    static let actionPattern = "^[a-zA-Z][a-zA-Z0-9]{0,31}\\z"
+
+    /// `layout.target` に指定できる組み込み名（`kana` / `alpha` は割り当て済みのレイアウト）
+    static let builtinLayoutIds = [
+        "qwerty-kana", "qwerty-alpha", "flick-kana", "flick-alpha", "symbols", "numbers", "emoji", "kana", "alpha",
+    ]
+
+    /// `flick` の `kana` に指定できる 12 キー名（先頭の 1 文字で引く。`KanaKeyTable.entry(forName:)`）
+    static let kanaKeyNames: Set<Character> = ["あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ", "、"]
+
+    static func matches(_ text: String, _ pattern: String) -> Bool {
+        text.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private static func length(_ text: String) -> Int { text.unicodeScalars.count }
+
+    /// 文字列の長さ（コードポイント数）が min...max か
+    private static func inRange(_ text: String?, _ min: Int, _ max: Int) -> Bool {
+        guard let text = text else { return false }
+        let n = length(text)
+        return n >= min && n <= max
+    }
+
+    /// 1 つのキー（行内のキー）の検証
+    static func keyError(_ key: LayoutKey, validTargets: Set<String>?) -> String? {
+        if !matches(key.id, keyIdPattern) || !key.idGiven {
+            return "キー「\(key.idGiven ? key.id : "(id なし)")」の id は英数字・_ . - で 32 文字以内にしてください"
+        }
+        let name = "キー \(key.id)"
+        if !(key.width > 0 && key.width <= widthMax) { return "\(name) の幅は 0 より大きく \(Int(widthMax)) 以下にしてください" }
+        if let label = key.label, length(label) > labelMax { return "\(name) の label は \(labelMax) 文字以内にしてください" }
+        if let icon = key.icon, length(icon) > iconMax { return "\(name) の icon は \(iconMax) 文字以内にしてください" }
+        switch key.kind {
+        case .text:
+            if !inRange(key.text, 1, textMax) { return "\(name) の text は 1〜\(textMax) 文字で指定してください" }
+            if let shift = key.shift, !inRange(shift, 1, textMax) { return "\(name) の shift は 1〜\(textMax) 文字にしてください" }
+        case .flick:
+            if key.center == nil && key.kana == nil { return "\(name): フリックには center（中央の文字）か kana が必要です" }
+            for (direction, cell) in [("center", key.center), ("up", key.up), ("down", key.down), ("left", key.left), ("right", key.right)] {
+                if let cell = cell, !inRange(cell.text, 1, textMax) {
+                    return "\(name) の \(direction) の text は 1〜\(textMax) 文字にしてください"
                 }
-                for step in key.steps ?? [] {
-                    if let text = step.text, text.count > 256 { return "キー \(key.id) の shortcut の text が長すぎる" }
-                }
-                if let popup = key.longPress {
-                    if popup.isEmpty || popup.count > 12 { return "キー \(key.id) の longPress は 1〜12 個（\(popup.count)）" }
-                    for item in popup {
-                        if let text = item.text, text.count > 16 { return "キー \(key.id) の longPress の text が長すぎる" }
-                        for step in item.steps ?? [] {
-                            if let text = step.text, text.count > 256 { return "キー \(key.id) の longPress の shortcut の text が長すぎる" }
-                        }
-                    }
-                }
+            }
+            if let kana = key.kana {
+                if !inRange(kana, 1, kanaMax) { return "\(name) の kana は 1〜\(kanaMax) 文字にしてください" }
+                if let first = kana.first, !kanaKeyNames.contains(first) { return "\(name) の kana「\(kana)」は未知のキー名です" }
+            }
+        case .toggle:
+            let cycle = key.cycle ?? []
+            if cycle.isEmpty || cycle.count > cycleMax { return "\(name) の cycle は 1〜\(cycleMax) 要素" }
+            if cycle.contains(where: { !inRange($0, 1, textMax) }) {
+                return "\(name) の cycle の要素は 1〜\(textMax) 文字にしてください"
+            }
+        case .action:
+            if !matches(key.action ?? "", actionPattern) { return "\(name) の action は英字で始まる英数字（32 文字以内）にしてください" }
+        case .shortcut:
+            if let reason = stepsError(key.steps, owner: name) { return reason }
+        case .layout:
+            let target = key.target ?? ""
+            if !matches(target, layoutIdPattern) { return "\(name) の target は切り替え先のレイアウト id にしてください" }
+            if let valid = validTargets, !valid.contains(target) {
+                return "\(name) の切り替え先「\(target)」は存在するレイアウトでも組み込み名でもありません"
+            }
+        case .spacer:
+            break
+        }
+        if let popup = key.longPress {
+            if popup.isEmpty || popup.count > longPressMax { return "\(name) の longPress は 1〜\(longPressMax) 個（\(popup.count)）" }
+            for item in popup {
+                if let reason = popupError(item, owner: name) { return reason }
+            }
+        }
+        return nil
+    }
+
+    /// 長押しの 1 項目（kind は text / action / shortcut のみ。label 必須）
+    private static func popupError(_ item: LayoutKey, owner: String) -> String? {
+        if item.idGiven && !matches(item.id, keyIdPattern) { return "\(owner) の longPress の id が不正です" }
+        if !inRange(item.label, 1, labelMax) { return "\(owner) の longPress の label は 1〜\(labelMax) 文字で指定してください" }
+        if item.longPress != nil { return "\(owner) の longPress の中に longPress は置けません" }
+        switch item.kind {
+        case .text:
+            if !inRange(item.text, 1, textMax) { return "\(owner) の longPress の text は 1〜\(textMax) 文字にしてください" }
+        case .action:
+            if !matches(item.action ?? "", actionPattern) { return "\(owner) の longPress の action が不正です" }
+        case .shortcut:
+            return stepsError(item.steps, owner: "\(owner) の longPress")
+        default:
+            return "\(owner) の longPress の kind は text / action / shortcut のいずれかにしてください"
+        }
+        return nil
+    }
+
+    private static func stepsError(_ steps: [ShortcutStep]?, owner: String) -> String? {
+        guard let steps = steps, !steps.isEmpty, steps.count <= stepsMax else {
+            return "\(owner) の steps は 1〜\(stepsMax) 個で指定してください"
+        }
+        for (index, step) in steps.enumerated() {
+            if (step.action != nil) == (step.text != nil) {
+                return "\(owner) の手順 \(index + 1) は action か text のどちらか一方だけを指定してください"
+            }
+            if let action = step.action, !matches(action, actionPattern) {
+                return "\(owner) の手順 \(index + 1) の action が不正です"
+            }
+            if let text = step.text, !inRange(text, 1, shortcutTextMax) {
+                return "\(owner) の手順 \(index + 1) の text は 1〜\(shortcutTextMax) 文字にしてください"
             }
         }
         return nil
@@ -233,15 +376,18 @@ enum LayoutLoader {
         let message: String
     }
 
-    /// JSON を decode し、仕様の範囲を検証する
-    static func decode(_ data: Data) throws -> KeyboardLayoutDef {
+    /// JSON を decode し、仕様の範囲を検証する。
+    /// - checkTargets: `layout.target` が存在するレイアウト（同梱・ユーザー・自身）か組み込み名かも確かめる
+    ///   （取り込み時のみ true。実行時の読み込みでは、参照先が消えても他のキーは使えるよう確かめない）
+    static func decode(_ data: Data, checkTargets: Bool = false) throws -> KeyboardLayoutDef {
         let def: KeyboardLayoutDef
         do {
             def = try JSONDecoder().decode(KeyboardLayoutDef.self, from: data)
         } catch {
             throw LoadError(message: describe(error))
         }
-        if let reason = def.validationError() { throw LoadError(message: reason) }
+        let targets: [String]? = checkTargets ? (userLayoutIds() + bundledIds()) : nil
+        if let reason = def.validationError(targets: targets) { throw LoadError(message: reason) }
         return def
     }
 

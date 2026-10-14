@@ -70,8 +70,15 @@ final class KeyboardModel: ObservableObject {
     private let store = SharedStore.shared
     /// OS の電源・熱・メモリ逼迫の状態をコアへ渡す
     private let environment = NagiEnvironmentReporter()
-    /// メモリ警告で LLM を手放した（このプロセスの間は辞書のみで動く）
+    /// コアを作り直すときに LLM を読み込まない（メモリ警告でコアが LLM を解放しなかった場合の最後の手段。
+    /// このプロセスの間は辞書のみで動く）
     private var dictionaryOnly = false
+    /// メモリ警告でコアが LLM を解放した（逼迫が解けて再読み込みされるまで、辞書のみ表示の注意を出す）
+    private var llmReleasedByMemory = false
+    /// 逼迫が解けたあと、LLM の再読み込みを確かめる予約が済んでいるか
+    private var llmRecheckScheduled = false
+    /// 生成時の注意（設定の保存先を作れないなど）。メモリの注意は別に重ねて出す
+    private var baseWarning: String?
     /// コアが続けて応答しなかった回数（応答すれば 0 に戻る）
     private var consecutiveFailures = 0
     /// コアを作り直した回数（上限を超えたら直接入力に倒す）
@@ -87,6 +94,10 @@ final class KeyboardModel: ObservableObject {
     /// 直前に反映した、かな・英字モードのレイアウトの割り当て（変わったら表示中のレイアウトを切り替える）
     private var appliedAssignment: (kana: String, alpha: String)
     private var lastRevision: UInt32 = 0
+    /// 自分のホスト操作（挿入・削除・マーク）の直近の時刻。`textDidChange` が自分の操作の結果か外部の変更かの判定に使う
+    private var lastOwnHostOperation = Date.distantPast
+    /// 自分の操作の結果とみなす猶予（秒）
+    private let ownOperationWindow: TimeInterval = 0.5
     /// ホストに表示している変換中の文字列とカーソル位置
     private var shownMarked = ""
     private var shownCursor = 0
@@ -123,6 +134,7 @@ final class KeyboardModel: ObservableObject {
         self.session = outcome.session
         self.message = outcome.message
         self.warning = outcome.warning
+        self.baseWarning = outcome.warning
         self.toggleInput = toggleInput
         self.configURL = outcome.configURL
         self.lastConfigStamp = Self.modificationDate(outcome.configURL)
@@ -135,12 +147,25 @@ final class KeyboardModel: ObservableObject {
         reloadIOSSettings()
     }
 
-    /// 現在のセッションに通知の受け取りを付け、実行環境を報告する（生成時・作り直し時）
+    /// 現在のセッションに通知の受け取りを付け、実行環境を報告する（生成時・作り直し時）。
+    /// 12 キーの文字表は、まだ取得を試みていなければここで 1 回だけ取得する
     private func attachSession() {
         session?.onPreeditUpdate = { [weak self] update in self?.applyPreeditUpdate(update) }
         session?.onCandidatesUpdate = { [weak self] update in self?.applyCandidatesUpdate(update) }
         session?.startNotifications()
         reportEnvironment(reason: "attach")
+        if let session = session, !KanaKeyTable.fetchAttempted {
+            let table = session.getKeyTable()
+            KanaKeyTable.install(table)
+            DiagLog.log("get_key_table ok=\(table != nil)")
+        }
+    }
+
+    /// 旧セッションの通知を止めて、コールバックを外す（手放したあとに古い通知が届いて状態を壊さないように）
+    private func detach(_ old: NagiSession) {
+        old.stopNotifications()
+        old.onPreeditUpdate = nil
+        old.onCandidatesUpdate = nil
     }
 
     /// 電源・熱・メモリ逼迫の状態をコアへ渡す（focusIn、OS の変化通知、メモリ警告、セッション生成時）
@@ -149,27 +174,69 @@ final class KeyboardModel: ObservableObject {
         let params = environment.snapshot()
         session.setEnvironment(params)
         DiagLog.log("set_environment (\(reason)) \(NagiEnvironmentReporter.describe(params))")
+        guard llmReleasedByMemory else { return }
+        if params.memory_pressure == .normal {
+            // コアは逼迫が解けてから少し待って LLM を読み直すので、しばらく様子を見て注意を消す
+            refreshLLMNotice()
+            scheduleLLMRecheck(attempts: 6)
+        }
     }
 
     // MARK: - 堅牢性（メモリ警告・コアの異常）
 
+    private static let memoryNotice = "メモリ不足のため、変換を簡易モード（辞書のみ）に切り替えました"
+
+    private func updateWarning() {
+        warning = llmReleasedByMemory ? Self.memoryNotice : baseWarning
+    }
+
     /// OS のメモリ警告（`didReceiveMemoryWarning`）。拡張はメモリ上限を超えると強制終了されるので、
-    /// 入力を確定してから LLM を手放し（辞書のみで動くコアに作り直す）、画面側のキャッシュを捨てる。
-    /// コアには LLM だけを解放する API が無いため、エンジンごと作り直す（要望は報告に記載）
+    /// `set_environment` の `memory_pressure: critical` でコアに LLM を解放させ（入力中の状態は保たれる。H-16）、
+    /// 画面側のキャッシュを捨てる。逼迫が解けると（一定時間後に normal を送る）コアが LLM を読み直す。
+    /// 解放を `get_status` で確認できなかったときだけ、最後の手段として辞書のみのコアに作り直す
     func handleMemoryWarning() {
         let stats = MemoryProbe.getStats()
         DiagLog.log("memory warning footprint=\(Int(stats.physFootprintMB))MB available=\(Int(stats.availableMemoryMB))MB dictOnly=\(dictionaryOnly)")
-        environment.noteMemoryWarning(availableMB: stats.availableMemoryMB)
         // 画面側のキャッシュ（読み込み済みレイアウト・展開中の候補一覧）を捨てる。
         // 入力中の候補はコアの状態と対応しているので消さない
         layoutCache.removeAll()
         isExpanded = false
-        guard session != nil else { return }
-        reportEnvironment(reason: "memory warning")
-        guard !dictionaryOnly else { return }
+        guard let session = session else { return }
         // LLM を使っていないなら解放するものがない（状態が取れなければ使っているとみなす）
-        if let status = session?.getStatus(), !status.llm { return }
-        restartCore(noLLM: true, reason: "memory warning")
+        let usedLLM = session.getStatus()?.llm ?? true
+        environment.noteMemoryWarning()
+        reportEnvironment(reason: "memory warning")
+        guard usedLLM else { return }
+        if let status = session.getStatus(), !status.llm {
+            llmReleasedByMemory = true
+            updateWarning()
+            DiagLog.log("llm released by core (get_status llm=false)")
+        } else {
+            DiagLog.log("llm still active after memory_pressure=critical: fallback to restart core")
+            restartCore(noLLM: true, reason: "memory warning (llm not released)")
+        }
+    }
+
+    /// 注意を出している間、コアが LLM を読み直したか確かめて、読み直されていれば注意を消す
+    private func refreshLLMNotice() {
+        guard llmReleasedByMemory, !dictionaryOnly, let status = session?.getStatus() else { return }
+        if status.llm {
+            llmReleasedByMemory = false
+            updateWarning()
+            DiagLog.log("llm reloaded by core")
+        }
+    }
+
+    /// 逼迫が解けたあと、コアの再読み込み（約 30 秒後）に間に合うよう、間隔をあけて数回確かめる
+    private func scheduleLLMRecheck(attempts: Int) {
+        guard !llmRecheckScheduled, attempts > 0 else { return }
+        llmRecheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self = self else { return }
+            self.llmRecheckScheduled = false
+            self.refreshLLMNotice()
+            if self.llmReleasedByMemory { self.scheduleLLMRecheck(attempts: attempts - 1) }
+        }
     }
 
     /// コアを作り直す。入力中の文字列はホストの入力欄に残した上で（失わない）、古いセッションを手放してから
@@ -180,7 +247,7 @@ final class KeyboardModel: ObservableObject {
         if let old = session {
             // 応答するなら、focusOut で入力中の文字列を確定する（学習の書き出しもここで行われる）
             if let result = old.focusOut() { apply(result, origin: "response(focus_out before restart)") }
-            old.stopNotifications()
+            detach(old)
         }
         keepPreeditInHost()
         session = nil
@@ -188,9 +255,11 @@ final class KeyboardModel: ObservableObject {
         let outcome = ProductSession.make(store: store, noLLM: dictionaryOnly)
         session = outcome.session
         message = outcome.message
-        warning = dictionaryOnly && outcome.session != nil
-            ? "メモリ不足のため、変換を簡易モード（辞書のみ）に切り替えました"
-            : outcome.warning
+        baseWarning = outcome.warning
+        // 新しいコアの revision は 0 から数え直す（旧コアの値を持ち越すと、新しい通知を古いと誤って捨てる）
+        lastRevision = 0
+        llmReleasedByMemory = dictionaryOnly && outcome.session != nil
+        updateWarning()
         consecutiveFailures = 0
         lastSentContext = nil
         attachSession()
@@ -222,7 +291,7 @@ final class KeyboardModel: ObservableObject {
             restartCore(noLLM: dictionaryOnly, reason: "no response x3 (\(label))")
         } else {
             DiagLog.log("core unavailable: direct input mode")
-            session?.stopNotifications()
+            if let old = session { detach(old) }
             keepPreeditInHost()
             session = nil
             message = "変換エンジンが応答しません。直接入力に切り替えました"
@@ -497,6 +566,8 @@ final class KeyboardModel: ObservableObject {
 
     /// シフトキー: 1 回で次の 1 文字のみ大文字、0.5 秒以内の 2 回連続で Caps Lock、Caps Lock 中の 1 回で解除
     func tapShift() {
+        // シフトは英字などの大文字化のためのもの。かなのレイアウトでは意味を持たないので無視する
+        guard layoutDef.mode != .kana else { return }
         let now = Date()
         switch shiftState {
         case .off:
@@ -516,6 +587,7 @@ final class KeyboardModel: ObservableObject {
     }
 
     func toggleCapsLock() {
+        guard layoutDef.mode != .kana else { return }
         shiftState = (shiftState == .caps) ? .off : .caps
         lastShiftTap = nil
     }
@@ -538,6 +610,10 @@ final class KeyboardModel: ObservableObject {
 
     func focusIn() {
         toggleState = nil
+        // 直接入力に倒れている（コアが作れていない・応答しなかった）ときは、フォーカスのたびに作り直しを試みる
+        if session == nil {
+            restartCore(noLLM: dictionaryOnly, reason: "focusIn: no session")
+        }
         reloadIOSSettings()
         applyCoreSettingsChanges()
         reportEnvironment(reason: "focusIn")
@@ -597,7 +673,33 @@ final class KeyboardModel: ObservableObject {
 
     /// ホストの入力欄が変わった（外部からの変更・カーソル移動・自分の操作の結果）
     func hostTextChanged() {
+        // 自分の操作の結果ではない変更（カーソル移動・他アプリによる書き換え）が起きたら、
+        // 直前のトグル入力の「置き換え」は続けない
+        if toggleState != nil, Date().timeIntervalSince(lastOwnHostOperation) > ownOperationWindow {
+            toggleState = nil
+        }
         scheduleContextUpdate(delay: 0.05)
+    }
+
+    /// 入力欄そのものが切り替わった（`textDocumentProxy.documentIdentifier` が変わった）。
+    /// 入力中の文字は前の欄に入っている（確定扱い）ので、新しい欄には何も反映せず、コアの状態だけを初期化し、
+    /// 新しい欄の secure 判定を含む文脈をコアへ必ず送り直す
+    func hostDocumentChanged() {
+        DiagLog.log("document changed")
+        toggleState = nil
+        if let session = session {
+            if let result = session.focusOut() { lastRevision = max(lastRevision, result.revision) }
+            if let result = session.focusIn() { lastRevision = max(lastRevision, result.revision) }
+        }
+        shownMarked = ""
+        shownCursor = 0
+        preedit = ""
+        isConverting = false
+        candidates = []
+        selectedCandidate = -1
+        isExpanded = false
+        lastSentContext = nil
+        scheduleContextUpdate(delay: 0)
     }
 
     /// 文脈の送信を予約する。連続した変更は 1 回にまとめる
@@ -635,18 +737,25 @@ final class KeyboardModel: ObservableObject {
             DiagLog.log("send \(label) -> no session")
             return false
         }
+        let shown = loggedLabel(label)
         guard let result = call(session) else {
-            DiagLog.log("send \(label) -> no result")
-            noteCoreFailure(label)
+            if session.lastRequestWasRPCError {
+                // コアは生きていて要求を拒んだ（JSON-RPC のエラー応答）。無応答ではないので失敗には数えない
+                DiagLog.log("send \(shown) -> rpc error")
+            } else {
+                DiagLog.log("send \(shown) -> no result")
+                noteCoreFailure(shown)
+            }
             return false
         }
         consecutiveFailures = 0
-        DiagLog.log("send \(label)")
+        DiagLog.log("send \(shown)")
         apply(result, origin: "response")
         return result.consumed
     }
 
     private func apply(_ result: ProcessKeyResult, origin: String) {
+        lastOwnHostOperation = Date()
         if DiagLog.isEnabled {
             var parts: [String] = ["\(origin) consumed=\(result.consumed) rev=\(result.revision)"]
             if let commit = result.commit { parts.append("commit=\(logText(commit))") }
@@ -670,8 +779,12 @@ final class KeyboardModel: ObservableObject {
                 // 実機で範囲がずれて二重になるため、本文を確定的に直す:
                 // 範囲を確定扱いにして、表示中の文字数だけ戻して消し、確定文字列を入れる
                 // （残りは直後の showPreedit が新しい変換中として入れる）
-                DiagLog.log("host partialCommit \(logText(commit)) delete=\(shownMarked.count) shownMarked=\(logText(shownMarked))")
+                DiagLog.log("host partialCommit \(logText(commit)) delete=\(shownMarked.count) caretToEnd=\(max(0, shownMarked.utf16.count - shownCursor)) shownMarked=\(logText(shownMarked))")
                 host?.hostUnmarkText()
+                // キャレットが変換中の文字列の途中にあると、後ろへ消すと手前の本文を削ってしまう。
+                // 先にキャレットを変換中だった文字列の末尾へ寄せる
+                let toEnd = shownMarked.utf16.count - shownCursor
+                if toEnd > 0 { host?.hostAdjustCursor(by: toEnd) }
                 for _ in 0..<shownMarked.count { host?.hostDeleteBackward() }
                 host?.hostInsertText(commit)
             } else {
@@ -717,6 +830,7 @@ final class KeyboardModel: ObservableObject {
         isConverting = view.focus != nil
         let cursor = Int(view.cursor)
         guard view.text != shownMarked || cursor != shownCursor else { return }
+        lastOwnHostOperation = Date()
         if view.text.isEmpty {
             DiagLog.log("host clearMarked")
             host?.hostClearMarkedText()
@@ -740,13 +854,21 @@ final class KeyboardModel: ObservableObject {
     // MARK: - ホストへの操作（ログ付き）
 
     private func hostInsert(_ text: String) {
+        lastOwnHostOperation = Date()
         DiagLog.log("host insertText \(logText(text))")
         host?.hostInsertText(text)
     }
 
     private func hostDeleteBackward(_ count: Int) {
+        lastOwnHostOperation = Date()
         DiagLog.log("host deleteBackward x\(count)")
         for _ in 0..<count { host?.hostDeleteBackward() }
+    }
+
+    /// ログに出す操作名。パスワード欄などでは、押したキーが分かる（かな 12 キーの行・方向など）ので伏せる
+    private func loggedLabel(_ label: String) -> String {
+        guard DiagLog.isEnabled, host?.hostIsSecure() ?? false else { return label }
+        return "<secure>"
     }
 
     /// ログ用の文字列。パスワード欄などでは内容を伏せる

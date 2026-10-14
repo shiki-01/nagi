@@ -58,7 +58,7 @@ class MemoryProbe {
 /// 直前の測定との差分が 0 に見えるのを避けるため、起動時点からの増分を別途記録する。
 /// `LaunchBaseline.capture()` をアプリ/拡張の起動時に 1 度呼ぶ。
 enum LaunchBaseline {
-    private static var captured: Double?
+    nonisolated(unsafe) private static var captured: Double?
 
     static func capture() {
         if captured == nil { captured = MemoryProbe.getPhysFootprintMB() }

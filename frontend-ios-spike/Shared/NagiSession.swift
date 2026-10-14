@@ -8,6 +8,9 @@ final class NagiSession {
     let engine: NagiEngine
     let sessionId: String
     private(set) var profile = ""
+    /// 直近の `request` が JSON-RPC のエラー応答（`error`）で終わったか。コアは生きているが要求を拒んだ場合で、
+    /// 応答が無い（コアの異常）こととは区別する
+    private(set) var lastRequestWasRPCError = false
 
     /// 非同期通知（LLM が同期の待ち時間を超えた分の完了、ライブ変換の結果）
     var onPreeditUpdate: ((UpdatePreeditParams) -> Void)?
@@ -35,9 +38,13 @@ final class NagiSession {
         let result: R?
     }
 
+    /// JSON-RPC の `error` オブジェクト（中身は使わない。あるかどうかだけ見る）
+    private struct RPCErrorBody: Decodable {}
+
     private struct Header: Decodable {
         let id: Int?
         let method: String?
+        let error: RPCErrorBody?
     }
 
     private struct ParamsBox<P: Decodable>: Decodable {
@@ -52,7 +59,12 @@ final class NagiSession {
             protocol_version: 1,
             client_name: "nagi-ios",
             client_version: "0.1",
-            os: "ios"
+            os: "ios",
+            // タッチ入力であることと、その時点の電源・熱・メモリ上限を申告する（コアはこれで最初のプロファイルを決める）
+            capabilities: ClientCapabilities(
+                input_method: .touch,
+                environment: NagiEnvironmentReporter.systemSnapshot(memoryPressure: .normal)
+            )
         )
         guard let result: InitializeResult = request("initialize", params) else { return nil }
         profile = result.profile
@@ -62,6 +74,7 @@ final class NagiSession {
     func request<P: Encodable, R: Decodable>(_ method: String, _ params: P) -> R? {
         let id = nextId
         nextId += 1
+        lastRequestWasRPCError = false
         guard let data = try? encoder.encode(Request(id: id, method: method, params: params)),
               let line = String(data: data, encoding: .utf8) else { return nil }
         var result: R?
@@ -69,6 +82,7 @@ final class NagiSession {
             guard let bytes = response.data(using: .utf8),
                   let header = try? decoder.decode(Header.self, from: bytes) else { continue }
             if header.id == id {
+                if header.error != nil { lastRequestWasRPCError = true }
                 result = (try? decoder.decode(Response<R>.self, from: bytes))?.result
             } else if let notification = header.method {
                 dispatchNotification(notification, bytes)
@@ -165,6 +179,11 @@ final class NagiSession {
     /// 現在のプロファイル・LLM の使用有無など
     func getStatus() -> StatusResult? {
         request("get_status", EmptyResult())
+    }
+
+    /// 12 キーの文字表と濁点・小書きの循環（表示専用。入力される文字の決定はコアが行う）
+    func getKeyTable() -> KeyTableResult? {
+        request("get_key_table", EmptyResult())
     }
 
     // MARK: - 設定・学習

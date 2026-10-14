@@ -225,6 +225,10 @@ export function validateLayout(value: unknown, options: ValidateOptions = {}): V
   }
   if (rows.length < 1 || rows.length > LIMITS.rowsMax) c.add('rows', `行数は 1〜${LIMITS.rowsMax} にしてください（現在 ${rows.length}）`)
 
+  const heightSum = rows.reduce((a: number, r) => a + (isObj(r) && isNum(r.height) ? r.height : 1), 0)
+  if (heightSum > LIMITS.rowHeightSumMax)
+    c.add('rows', `行の高さ比の合計は ${LIMITS.rowHeightSumMax} 以下にしてください（現在 ${heightSum}）`)
+
   const seen = new Map<string, string>()
   rows.forEach((row, ri) => {
     const rp = `rows[${ri}]`

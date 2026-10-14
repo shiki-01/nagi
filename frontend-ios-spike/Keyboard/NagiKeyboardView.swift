@@ -361,6 +361,9 @@ private struct LongPressKeyView: View {
     let activateKey: () -> Void
     let activateItem: (LayoutKey) -> Void
 
+    /// 指が触れている間 true。ジェスチャが `onEnded` なしで取り消された（システムのジェスチャに奪われた等）とき、
+    /// 自動で false に戻るので、それを検出して状態をリセットする
+    @GestureState private var touching = false
     @State private var isDown = false
     @State private var popupShown = false
     @State private var selected: Int?
@@ -377,9 +380,16 @@ private struct LongPressKeyView: View {
                 }
                 .gesture(
                     DragGesture(minimumDistance: 0)
+                        .updating($touching) { _, state, _ in state = true }
                         .onChanged { value in changed(value, keyWidth: geo.size.width) }
                         .onEnded { value in ended(value) }
                 )
+        }
+        .onChange(of: touching) { nowTouching in
+            guard !nowTouching else { return }
+            // 正常に終わった場合は `onEnded` が状態を戻す。そちらが先に処理されるよう 1 周遅らせ、
+            // それでもまだ押下中の状態が残っていれば、取り消されたとみなしてリセットする
+            DispatchQueue.main.async { if isDown { reset() } }
         }
         .onDisappear { reset() }
     }
@@ -508,7 +518,7 @@ private struct RepeatKeyView: View {
     private var startInterval: UInt64 { UInt64(NagiKeyMetrics.current.keyRepeatMs) * 1_000_000 }
     private var minInterval: UInt64 { max(25_000_000, startInterval * 32 / 100) }
     /// 暴走防止（離したイベントが届かなかった場合に、無限に消し続けない）
-    private let maxRepeats = 600
+    private let maxRepeats = 150
 
     var body: some View {
         KeyFace(content: content, style: style, active: false, pressed: isPressed, fontSize: 17)
@@ -524,6 +534,10 @@ private struct RepeatKeyView: View {
                     .updating($isPressed) { _, state, _ in state = true }
                     .onEnded { _ in stopRepeat() }
             )
+            // ジェスチャが `onEnded` なしで取り消されても `isPressed` は false に戻るので、そこで連打を止める
+            .onChange(of: isPressed) { pressed in
+                if !pressed { stopRepeat() }
+            }
             .onDisappear { stopRepeat() }
     }
 
@@ -631,6 +645,23 @@ private struct FlickKeyView: View {
                     onGesture(Self.gesture(for: value.translation))
                 }
         )
+        // `onEnded` なしで取り消された場合（`drag` が nil に戻る）は、押下中の報告を取り消す。
+        // 正常に終わった場合は `onEnded` が先に `reported` を戻すので、1 周遅らせて判定する
+        .onChange(of: drag != nil) { nowDown in
+            guard !nowDown else { return }
+            DispatchQueue.main.async {
+                if reported {
+                    reported = false
+                    onPress(false)
+                }
+            }
+        }
+        .onDisappear {
+            if reported {
+                reported = false
+                onPress(false)
+            }
+        }
     }
 
     /// 移動量から操作を決める（小さな移動はタップ）

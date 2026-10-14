@@ -57,7 +57,7 @@ struct KeyboardTestView: View {
                             DiagLog.isEnabled = newValue
                         }
                     ))
-                    Text("入力した文字を含みます。TestFlight での確認期間だけ使い、配布前に無効にします。直近 \(DiagLog.maxLines) 行だけ残ります。")
+                    Text("入力した文字を含みます。既定では TestFlight・開発用ビルドでのみ有効で、App Store 配布では無効です。直近 \(DiagLog.maxBytes / 1024)KB 程度だけ残ります。")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                     HStack {
