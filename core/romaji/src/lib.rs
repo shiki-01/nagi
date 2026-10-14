@@ -393,6 +393,15 @@ impl Composer {
         }
     }
 
+    /// 先頭から `n` 文字を取り除く（部分変換で先頭だけを確定したあと、残りを入力中に残す）。
+    /// カーソルはその分だけ前へ動く。保留中のローマ字は先に確定する
+    pub fn remove_front(&mut self, n: usize) {
+        self.flush_pending();
+        let n = n.min(self.chars.len());
+        self.chars.drain(..n);
+        self.cursor = self.cursor.saturating_sub(n);
+    }
+
     /// カーソル直前の 1 文字（保留中のローマ字がある場合は `None`）
     pub fn char_before_cursor(&self) -> Option<char> {
         if self.has_pending() {

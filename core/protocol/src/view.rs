@@ -123,6 +123,11 @@ pub struct CandidateView {
     pub surface: String,
     /// 出所のリスト（複数の出所から同じ候補が来た場合）
     pub sources: Vec<CandidateSource>,
+    /// 入力中（変換前）の候補で、先頭から何文字（Unicode スカラー）の読みを置き換えるか。
+    /// `None` は読み全体（変換中の候補は常に `None`）。短い値の候補を選ぶと、その分だけ確定し、
+    /// 残りの読みは入力中のまま続く（部分変換）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub covers: Option<u32>,
 }
 
 /// 候補ウィンドウの状態

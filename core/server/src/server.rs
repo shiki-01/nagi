@@ -14,7 +14,7 @@ use nagi_protocol::methods::{
     ConfigError, EmptyResult, InitializeParams, InitializeResult, InsertReadingParams,
     NotifyParams, PerformActionParams, ProcessKeyParams, ReconvertParams, ReloadConfigResult,
     RestoreSessionParams, SelectCandidateParams, ServerCapabilities, SessionParams,
-    SetContextParams, SetEnvironmentParams, UpdatePreeditParams, method,
+    SetContextParams, SetEnvironmentParams, UpdateCandidatesParams, UpdatePreeditParams, method,
 };
 use nagi_protocol::settings::{UpdateSettingsParams, UpdateSettingsResult};
 use nagi_protocol::view::InputMode;
@@ -27,6 +27,9 @@ use std::time::Duration;
 
 /// 設定ファイル・ユーザー辞書の変更を確認する最短の間隔
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// 入力中の候補を作るまでのデバウンス。キー入力が続く間は、最後のキーのあとに 1 回だけ作る
+const COMPOSING_CANDIDATES_DELAY: Duration = Duration::from_millis(25);
 
 /// JSON-RPC サーバー
 pub struct Server {
@@ -164,7 +167,7 @@ impl Server {
 
     /// バックエンドの非同期完了をプリエディット差し替え通知に変換
     fn async_notifications(&mut self) -> Vec<String> {
-        use nagi_protocol::methods::{UpdateCandidatesParams, UpdatePreeditParams};
+        use nagi_protocol::methods::UpdatePreeditParams;
         // 初期化前は通知を出さない（完了通知は取り出さずに残す）
         if !self.initialized {
             return Vec::new();
@@ -224,6 +227,16 @@ impl Server {
             .collect();
         lines.extend(
             self.runtime
+                .drain_candidates_updates()
+                .into_iter()
+                .filter_map(|p| {
+                    Notification::new(method::UPDATE_CANDIDATES, p)
+                        .ok()
+                        .and_then(|n| serde_json::to_string(&n).ok())
+                }),
+        );
+        lines.extend(
+            self.runtime
                 .drain_preedit_updates()
                 .into_iter()
                 .filter_map(|p| {
@@ -233,6 +246,33 @@ impl Server {
                 }),
         );
         lines
+    }
+
+    /// 入力中（変換前）の候補を、デバウンス後にバックグラウンドで作り、`update_candidates` で届ける。
+    /// 入力のたびに呼ぶ。古いスレッドは、実行時点の入力と読みが一致しなければ何もしない
+    fn maybe_schedule_composing_candidates(&self, session_id: &str) {
+        let Some(reading) = self.engine_lock().composing_candidate_reading(session_id) else {
+            return;
+        };
+        let engine = self.engine.clone();
+        let runtime = self.runtime.clone();
+        let session_id = session_id.to_string();
+        std::thread::spawn(move || {
+            std::thread::sleep(COMPOSING_CANDIDATES_DELAY);
+            let result = engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .refresh_composing_candidates(&session_id, &reading);
+            if let Some(r) = result
+                && let Some(candidates) = r.candidates
+            {
+                runtime.push_candidates_update(UpdateCandidatesParams {
+                    session_id,
+                    revision: r.revision,
+                    candidates,
+                });
+            }
+        });
     }
 
     /// ライブ変換の対象なら、デバウンス後に `live_convert` を試みるスレッドを立てる。
@@ -398,6 +438,7 @@ impl Server {
                     .engine_lock()
                     .process_key(&p.session_id, &p.key_event());
                 self.maybe_schedule_live_conversion(&p.session_id);
+                self.maybe_schedule_composing_candidates(&p.session_id);
                 to_value(result)
             }
             method::INSERT_READING => {
@@ -405,6 +446,7 @@ impl Server {
                 let p: InsertReadingParams = params(req)?;
                 let result = self.engine_lock().insert_reading(&p.session_id, &p.input);
                 self.maybe_schedule_live_conversion(&p.session_id);
+                self.maybe_schedule_composing_candidates(&p.session_id);
                 to_value(result)
             }
             method::PERFORM_ACTION => {
@@ -412,6 +454,7 @@ impl Server {
                 let p: PerformActionParams = params(req)?;
                 let result = self.engine_lock().perform_action(&p.session_id, &p.action);
                 self.maybe_schedule_live_conversion(&p.session_id);
+                self.maybe_schedule_composing_candidates(&p.session_id);
                 to_value(result)
             }
             method::FOCUS_IN => {
@@ -488,7 +531,10 @@ impl Server {
             method::SELECT_CANDIDATE => {
                 self.require_initialized()?;
                 let p: SelectCandidateParams = params(req)?;
-                to_value(self.engine_lock().select_candidate(&p.session_id, p.index))
+                let result = self.engine_lock().select_candidate(&p.session_id, p.index);
+                // 入力中の候補を選んだあとは、残った読みの候補を作り直す
+                self.maybe_schedule_composing_candidates(&p.session_id);
+                to_value(result)
             }
             method::RECONVERT => {
                 self.require_initialized()?;

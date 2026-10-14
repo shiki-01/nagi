@@ -10,11 +10,15 @@ struct NagiKeyboardView: View {
         VStack(spacing: 0) {
             CandidateBar(model: model, onShowProbes: onShowProbes)
             Group {
-                switch model.layout {
-                case .kana:
-                    KanaPad(model: model)
-                case .qwerty:
-                    QwertyPad(model: model)
+                if model.isExpanded {
+                    ExpandedCandidates(model: model)
+                } else {
+                    switch model.layout {
+                    case .kana:
+                        KanaPad(model: model)
+                    case .qwerty:
+                        QwertyPad(model: model)
+                    }
                 }
             }
             .padding(6)
@@ -239,22 +243,19 @@ private struct CandidateBar: View {
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(Array(model.candidates.enumerated()), id: \.offset) { index, surface in
-                            Button(action: { model.selectCandidate(index) }) {
-                                Text(surface)
-                                    .font(.system(size: 17))
-                                    .foregroundColor(Color(UIColor.label))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(index == model.selectedCandidate
-                                                  ? Color.accentColor.opacity(0.25)
-                                                  : Color(UIColor.systemBackground))
-                                    )
+                        ForEach(model.candidates) { item in
+                            CandidateButton(item: item, selected: item.id == model.selectedCandidate) {
+                                model.selectCandidate(item.id)
                             }
-                            .buttonStyle(.plain)
                         }
+                    }
+                }
+                if !model.candidates.isEmpty {
+                    Button(action: { model.isExpanded.toggle() }) {
+                        Text(model.isExpanded ? "︿" : "﹀")
+                            .font(.system(size: 16))
+                            .foregroundColor(Color(UIColor.label))
+                            .frame(width: 32, height: 32)
                     }
                 }
             }
@@ -265,5 +266,57 @@ private struct CandidateBar: View {
         .padding(.horizontal, 8)
         .frame(height: 44)
         .background(Color(UIColor.systemGray5))
+    }
+}
+
+/// 候補 1 つのボタン
+private struct CandidateButton: View {
+    let item: CandidateItem
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(item.surface)
+                .font(.system(size: 17))
+                .foregroundColor(Color(UIColor.label))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(selected ? Color.accentColor.opacity(0.25) : Color(UIColor.systemBackground))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// 広げた候補の一覧（キーの代わりに出す）。縦にスクロールできる
+private struct ExpandedCandidates: View {
+    @ObservedObject var model: KeyboardModel
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: keySpacing)], spacing: keySpacing) {
+                ForEach(model.candidates) { item in
+                    Button(action: { model.selectCandidate(item.id) }) {
+                        Text(item.surface)
+                            .font(.system(size: 17))
+                            .lineLimit(1)
+                            .foregroundColor(Color(UIColor.label))
+                            .frame(maxWidth: .infinity, minHeight: keyHeight)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(item.id == model.selectedCandidate
+                                          ? Color.accentColor.opacity(0.25)
+                                          : Color(UIColor.systemBackground))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        // キー 4 行分の高さに合わせる
+        .frame(height: keyHeight * 4 + keySpacing * 3)
     }
 }

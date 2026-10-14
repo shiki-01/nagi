@@ -180,3 +180,99 @@ fn space_shows_the_candidate_list_immediately() {
     let shown = e.snapshot("s").unwrap().candidates;
     assert!(shown.visible);
 }
+
+// ---- 入力中（変換前）の候補と部分変換 ----
+
+fn mock_engine() -> Engine {
+    use nagi_engine::MockBackend;
+    let backend = MockBackend::new().with_sentence(
+        "きょうはあめ",
+        vec![
+            ("きょう", vec!["今日", "京"]),
+            ("は", vec!["は"]),
+            ("あめ", vec!["雨", "飴"]),
+        ],
+    );
+    Engine::new(Arc::new(backend), EngineConfig::default())
+}
+
+fn type_text(e: &mut Engine, text: &str) {
+    e.insert_reading("s", &ReadingInput::Text(text.into()));
+}
+
+/// 入力中の候補を作る（サーバーがバックグラウンドで行うのと同じ）。候補の表記と covers を返す
+fn refresh(e: &mut Engine) -> Vec<(String, Option<u32>)> {
+    let reading = e
+        .composing_candidate_reading("s")
+        .expect("候補を作る対象がある");
+    let r = e
+        .refresh_composing_candidates("s", &reading)
+        .expect("候補が作られる");
+    r.candidates
+        .expect("候補の差分")
+        .items
+        .into_iter()
+        .map(|c| (c.surface, c.covers))
+        .collect()
+}
+
+#[test]
+fn composing_candidates_list_whole_prefix_and_kana() {
+    let mut e = mock_engine();
+    type_text(&mut e, "きょうはあめ");
+    let items = refresh(&mut e);
+    // 読み全体の最良、先頭の文節の候補（部分変換）、ひらがな・カタカナ
+    assert_eq!(items[0], ("今日は雨".into(), None));
+    assert!(items.contains(&("今日".into(), Some(3))));
+    assert!(items.contains(&("京".into(), Some(3))));
+    assert!(items.contains(&("きょうはあめ".into(), None)));
+    assert!(items.contains(&("キョウハアメ".into(), None)));
+}
+
+#[test]
+fn selecting_a_prefix_candidate_commits_only_that_part() {
+    let mut e = mock_engine();
+    type_text(&mut e, "きょうはあめ");
+    let items = refresh(&mut e);
+    let index = items.iter().position(|i| i.0 == "京").unwrap();
+    let r = e.select_candidate("s", index as u32);
+    assert_eq!(r.commit.as_deref(), Some("京"));
+    // 残りの読みは入力中のまま
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    assert_eq!(text(&mut e), "はあめ");
+}
+
+#[test]
+fn selecting_the_whole_candidate_commits_everything() {
+    let mut e = mock_engine();
+    type_text(&mut e, "きょうはあめ");
+    refresh(&mut e);
+    let r = e.select_candidate("s", 0);
+    assert_eq!(r.commit.as_deref(), Some("今日は雨"));
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+}
+
+#[test]
+fn composing_candidates_go_stale_when_the_input_changes() {
+    let mut e = mock_engine();
+    type_text(&mut e, "きょうは");
+    refresh(&mut e);
+    // 入力が変わったら、古い候補は表示にも選択にも使わない
+    let r = e.insert_reading("s", &ReadingInput::Text("あ".into()));
+    assert!(r.candidates.is_some_and(|c| c.items.is_empty()));
+    let r = e.select_candidate("s", 0);
+    assert!(r.commit.is_none());
+    assert_eq!(text(&mut e), "きょうはあ");
+    // 古い読みでの更新は無視される
+    assert!(e.refresh_composing_candidates("s", "きょうは").is_none());
+}
+
+#[test]
+fn no_composing_candidates_while_romaji_is_pending_or_for_literals() {
+    let mut e = engine();
+    e.process_key("s", &parse_key("k").unwrap());
+    assert!(e.composing_candidate_reading("s").is_none());
+    let mut e = engine();
+    e.process_key("s", &parse_key("1").unwrap());
+    assert!(e.composing_candidate_reading("s").is_none());
+}

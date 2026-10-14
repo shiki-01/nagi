@@ -112,3 +112,56 @@ fn touch_methods_require_initialize() {
     let r = action(&mut s, 2, json!({"type":"space"}));
     assert!(r["error"].is_object());
 }
+
+#[test]
+fn composing_candidates_are_pushed_without_further_input() {
+    use nagi_engine::MockBackend;
+    use std::time::Duration;
+
+    let backend = MockBackend::new().with_sentence(
+        "きょうは",
+        vec![("きょう", vec!["今日", "京"]), ("は", vec!["は"])],
+    );
+    let mut s = Server::new(Arc::new(backend), "balanced", EngineConfig::default());
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let tx = std::sync::Mutex::new(tx);
+    s.set_wake_callback(Arc::new(move || {
+        let _ = tx.lock().unwrap().send(());
+    }));
+    call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocol_version":1,"client_name":"t","client_version":"0","os":"ios"}}),
+    );
+    insert(&mut s, 2, json!({"type":"text","content":"きょうは"}));
+
+    // 入力のあと、リクエストを送らなくても候補が届く
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("通知で起こされる");
+    let lines: Vec<Value> = s
+        .poll_notifications()
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let update = lines
+        .iter()
+        .find(|l| l["method"] == "update_candidates")
+        .expect("update_candidates が届く");
+    let items = update["params"]["candidates"]["items"].as_array().unwrap();
+    assert_eq!(items[0]["surface"], "今日は");
+    assert!(
+        items
+            .iter()
+            .any(|i| i["surface"] == "京" && i["covers"] == 3),
+        "{items:?}"
+    );
+
+    // 部分変換: 「京」を選ぶと「京」だけが確定し、「は」が入力中に残る
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":3,"method":"select_candidate","params":{
+            "session_id":"s","index":items.iter().position(|i| i["surface"] == "京").unwrap()}}),
+    );
+    assert_eq!(r["result"]["commit"], "京");
+    assert_eq!(r["result"]["preedit"]["text"], "は");
+}

@@ -13,6 +13,14 @@ protocol KeyboardHost: AnyObject {
     func hostAdvanceToNextInputMode()
 }
 
+/// 候補バーに出す候補 1 つ
+struct CandidateItem: Identifiable {
+    let id: Int
+    let surface: String
+    /// 入力中（変換前）の候補で、先頭の何文字分の読みを置き換えるか。nil は読み全体
+    let covers: Int?
+}
+
 /// キーボードのレイアウト
 enum KeyboardLayout {
     case kana
@@ -25,7 +33,9 @@ final class KeyboardModel: ObservableObject {
     /// 変換中の文字列（候補バーの左に出す）
     @Published private(set) var preedit = ""
     /// 候補
-    @Published private(set) var candidates: [String] = []
+    @Published private(set) var candidates: [CandidateItem] = []
+    /// 候補の一覧を広げているか（候補が無くなれば自動で閉じる）
+    @Published var isExpanded = false
     /// 選択中の候補（なければ -1）
     @Published private(set) var selectedCandidate = -1
     @Published private(set) var layout: KeyboardLayout = .kana
@@ -121,11 +131,14 @@ final class KeyboardModel: ObservableObject {
         host?.hostAdvanceToNextInputMode()
     }
 
-    /// 候補を選んで確定する
+    /// 候補を選ぶ。変換中は選んでから確定し、入力中（変換前）は選んだ候補が置き換える読みの部分を
+    /// コアが確定する（部分変換。残りは入力中のまま続く）
     func selectCandidate(_ index: Int) {
         guard let session = session else { return }
+        let converting = isConverting
+        isExpanded = false
         if let result = session.selectCandidate(index) { apply(result) }
-        if let result = session.perform(.commit) { apply(result) }
+        if converting, let result = session.perform(.commit) { apply(result) }
     }
 
     func focusIn() {
@@ -191,7 +204,10 @@ final class KeyboardModel: ObservableObject {
     }
 
     private func showCandidates(_ view: CandidatesView) {
-        candidates = view.items.map { $0.surface }
+        candidates = view.items.enumerated().map { index, item in
+            CandidateItem(id: index, surface: item.surface, covers: item.covers.map { Int($0) })
+        }
         selectedCandidate = candidates.isEmpty ? -1 : Int(view.selected)
+        if candidates.isEmpty { isExpanded = false }
     }
 }

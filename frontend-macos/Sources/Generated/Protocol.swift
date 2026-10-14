@@ -26,10 +26,15 @@ public struct CandidateView: Codable {
 	public let surface: String
 	/// 出所のリスト（複数の出所から同じ候補が来た場合）
 	public let sources: [CandidateSource]
+	/// 入力中（変換前）の候補で、先頭から何文字（Unicode スカラー）の読みを置き換えるか。
+	/// `None` は読み全体（変換中の候補は常に `None`）。短い値の候補を選ぶと、その分だけ確定し、
+	/// 残りの読みは入力中のまま続く（部分変換）
+	public let covers: UInt32?
 
-	public init(surface: String, sources: [CandidateSource]) {
+	public init(surface: String, sources: [CandidateSource], covers: UInt32?) {
 		self.surface = surface
 		self.sources = sources
+		self.covers = covers
 	}
 }
 

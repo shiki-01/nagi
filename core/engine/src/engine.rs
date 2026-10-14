@@ -184,7 +184,28 @@ struct Session {
     pending_delete_before: Option<u32>,
     /// 12 キーのトグル入力の途中状態（直前の入力が `Toggle` のタップだったとき）
     touch_toggle: Option<TouchToggle>,
+    /// 入力中（変換前）の候補。バックグラウンドで作る（`refresh_composing_candidates`）
+    composing_cands: Option<ComposingCands>,
 }
+
+/// 入力中（変換前）の候補 1 つ
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposingItem {
+    surface: String,
+    /// 先頭から何文字（Unicode スカラー）の読みを置き換えるか
+    covers: usize,
+    sources: Vec<CandidateSource>,
+}
+
+/// 入力中（変換前）の候補の一覧。`reading` が現在の入力と一致する間だけ表示と選択に使う
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposingCands {
+    reading: String,
+    items: Vec<ComposingItem>,
+}
+
+/// 入力中の候補の最大件数
+const COMPOSING_CANDIDATES_LIMIT: usize = 12;
 
 /// 12 キーのトグル入力で、直前に入れた文字（同じキーが続けて押されたら置き換える）
 #[derive(Debug, Clone, Copy)]
@@ -344,6 +365,7 @@ impl Engine {
             last_commit: None,
             pending_delete_before: None,
             touch_toggle: None,
+            composing_cands: None,
         }
     }
 
@@ -565,13 +587,176 @@ impl Engine {
         result
     }
 
+    /// 入力中（変換前）の候補を作る対象の読み。Composing で、保留中のローマ字が無く、日本語だけの入力で、
+    /// まだその読みの候補を作っていないときだけ `Some`（サーバーがデバウンス後の更新を決めるのに使う）
+    pub fn composing_candidate_reading(&self, session_id: &str) -> Option<String> {
+        let sess = self.sessions.get(session_id)?;
+        let reading = Self::candidate_reading(sess)?;
+        match &sess.composing_cands {
+            Some(c) if c.reading == reading => None,
+            _ => Some(reading),
+        }
+    }
+
+    /// 入力中の候補を作れる状態なら、現在の読み
+    fn candidate_reading(sess: &Session) -> Option<String> {
+        if !matches!(sess.state, State::Composing) || sess.composer.has_pending() {
+            return None;
+        }
+        let pieces = sess.composer.pieces();
+        if pieces.is_empty() || pieces.iter().any(|p| p.kind != PieceKind::Japanese) {
+            return None;
+        }
+        Some(pieces.iter().map(|p| p.text.as_str()).collect())
+    }
+
+    /// 入力中の候補を作り直す（バックグラウンドのスレッドから、デバウンス後に呼ぶ）。
+    /// 入力が `reading` から変わっていれば何もしない。候補が変わったときだけ、差分を返す
+    pub fn refresh_composing_candidates(
+        &mut self,
+        session_id: &str,
+        reading: &str,
+    ) -> Option<ProcessKeyResult> {
+        let mut sess = self.take_session(session_id);
+        let current = Self::candidate_reading(&sess);
+        let result = if current.as_deref() == Some(reading) {
+            let items = self.compute_composing_items(reading, &sess.left_context);
+            sess.composing_cands = Some(ComposingCands {
+                reading: reading.to_string(),
+                items,
+            });
+            let result = self.finish(&mut sess, false, String::new());
+            result.candidates.is_some().then_some(result)
+        } else {
+            None
+        };
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// 入力中の候補: 読み全体の最良の変換、先頭の文節の候補（部分変換）、ひらがな・カタカナ
+    fn compute_composing_items(&self, reading: &str, left_context: &str) -> Vec<ComposingItem> {
+        let left = tail_chars(left_context, LEFT_CONTEXT_CHARS);
+        let total = reading.chars().count();
+        let mut items: Vec<ComposingItem> = Vec::new();
+        let mut push = |surface: String, covers: usize, sources: Vec<CandidateSource>| {
+            if surface.is_empty() || items.len() >= COMPOSING_CANDIDATES_LIMIT {
+                return;
+            }
+            if let Some(existing) = items
+                .iter_mut()
+                .find(|i| i.surface == surface && i.covers == covers)
+            {
+                for s in sources {
+                    if !existing.sources.contains(&s) {
+                        existing.sources.push(s);
+                    }
+                }
+            } else {
+                items.push(ComposingItem {
+                    surface,
+                    covers,
+                    sources,
+                });
+            }
+        };
+
+        let best = self.backend.convert_sentence(reading, &left);
+        let joined: String = best.iter().map(|s| s.reading.as_str()).collect();
+        if !best.is_empty() && joined == reading {
+            let surface: String = best.iter().map(|s| s.surface.as_str()).collect();
+            let mut sources: Vec<CandidateSource> = Vec::new();
+            for seg in &best {
+                for s in &seg.sources {
+                    if !sources.contains(s) {
+                        sources.push(*s);
+                    }
+                }
+            }
+            push(surface, total, sources);
+            // 先頭の文節の候補。複数の文節なら先頭だけを置き換える部分変換、1 文節なら読み全体の別の候補
+            let first = &best[0];
+            let covers = if best.len() > 1 {
+                first.reading.chars().count()
+            } else {
+                total
+            };
+            for c in
+                self.backend
+                    .segment_candidates(&first.reading, &left, COMPOSING_CANDIDATES_LIMIT)
+            {
+                push(c.surface, covers, c.sources);
+            }
+        }
+        push(reading.to_string(), total, vec![CandidateSource::Kana]);
+        push(to_katakana(reading), total, vec![CandidateSource::Kana]);
+        items
+    }
+
+    /// 入力中の候補を選ぶ: 候補が置き換える読みの先頭部分を確定し、残りは入力中のまま続ける。
+    /// 候補が現在の入力と対応していなければ何もしない（`false`）
+    fn select_composing(&self, sess: &mut Session, index: usize, commit: &mut String) -> bool {
+        let Some(reading) = Self::candidate_reading(sess) else {
+            return false;
+        };
+        let Some(item) = sess
+            .composing_cands
+            .as_ref()
+            .filter(|c| c.reading == reading)
+            .and_then(|c| c.items.get(index))
+            .cloned()
+        else {
+            return false;
+        };
+        let total = reading.chars().count();
+        let covers = item.covers.min(total);
+        let prefix: String = reading.chars().take(covers).collect();
+        self.notify_commit(
+            sess,
+            &[Segment {
+                reading: prefix.clone(),
+                surface: item.surface.clone(),
+                kind: SegmentKind::Japanese,
+                candidates: None,
+                chunk_id: 0,
+            }],
+        );
+        let before_len = commit.len();
+        commit.push_str(&item.surface);
+        sess.live_conversion = None;
+        sess.composing_cands = None;
+        sess.touch_toggle = None;
+        sess.live_suppressed = false;
+        if covers >= total {
+            sess.composer.clear();
+            sess.state = State::Direct;
+            sess.last_commit = Some(LastCommit {
+                pieces: vec![Piece {
+                    kind: PieceKind::Japanese,
+                    text: prefix,
+                }],
+                committed_len_utf16: utf16::utf16_len(&commit[before_len..]),
+            });
+        } else {
+            // 一部だけを確定した。残りは入力中のまま（確定の取消は対象外）
+            sess.composer.remove_front(covers);
+            sess.last_commit = None;
+        }
+        true
+    }
+
     /// `select_candidate` メソッド: 注目文節の候補一覧から絶対インデックスで選択する
     /// （マウス操作等。ページ相対の数字キー（`Action::SelectCand`）とは別経路）。
     /// Converting 状態でなければ何もしない。候補一覧が未生成なら作ってから選択する。
     /// index が範囲外なら選択を変えない
     pub fn select_candidate(&mut self, session_id: &str, index: u32) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
-        if let State::Converting(conv) = &mut sess.state {
+        sess.origins.clear();
+        let mut commit = String::new();
+        if matches!(sess.state, State::Composing) {
+            // 入力中（変換前）の候補: 置き換える読みの部分を確定する
+            self.select_composing(&mut sess, index as usize, &mut commit);
+        } else if let State::Converting(conv) = &mut sess.state {
             let f = conv.focus;
             self.ensure_candidates(&sess.left_context, conv, f);
             let index = index as usize;
@@ -584,7 +769,7 @@ impl Engine {
             }
             conv.visible = false;
         }
-        let result = self.finish(&mut sess, true, String::new());
+        let result = self.finish(&mut sess, true, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
     }
@@ -914,10 +1099,14 @@ impl Engine {
             .iter()
             .filter(|(_, s)| match s.state {
                 State::Converting(_) => !s.origins.is_empty(),
-                State::Composing => s
-                    .live_conversion
-                    .as_ref()
-                    .is_some_and(|l| !l.chunks.is_empty()),
+                State::Composing => {
+                    s.live_conversion
+                        .as_ref()
+                        .is_some_and(|l| !l.chunks.is_empty())
+                        || s.composing_cands
+                            .as_ref()
+                            .is_some_and(|c| done.iter().any(|d| d.reading == c.reading))
+                }
                 State::Direct => false,
             })
             .map(|(id, _)| id.clone())
@@ -926,7 +1115,10 @@ impl Engine {
         for id in ids {
             let mut sess = self.take_session(&id);
             let changed = if matches!(sess.state, State::Composing) {
-                self.replace_live(&mut sess, done)
+                // LLM の遅延結果が入ったので、入力中の候補も作り直す（キャッシュに結果がある）
+                let live = self.replace_live(&mut sess, done);
+                let cands = self.recompute_composing(&mut sess, done);
+                live || cands
             } else {
                 self.replace_origins(&mut sess, done)
             };
@@ -939,6 +1131,25 @@ impl Engine {
             self.sessions.insert(id, sess);
         }
         out
+    }
+
+    /// `done` が入力中の候補の読みと一致すれば、候補を作り直す。変わったら `true`
+    fn recompute_composing(&self, sess: &mut Session, done: &[Completion]) -> bool {
+        let Some(cc) = &sess.composing_cands else {
+            return false;
+        };
+        if !done.iter().any(|d| d.reading == cc.reading)
+            || Self::candidate_reading(sess).as_deref() != Some(cc.reading.as_str())
+        {
+            return false;
+        }
+        let reading = cc.reading.clone();
+        let items = self.compute_composing_items(&reading, &sess.left_context);
+        if items == cc.items {
+            return false;
+        }
+        sess.composing_cands = Some(ComposingCands { reading, items });
+        true
     }
 
     /// ライブ変換の LLM 遅延完了の取り込み。`done` が表示中のライブ変換のチャンクと一致し、
@@ -2051,9 +2262,33 @@ impl Engine {
                     .map(|c| CandidateView {
                         surface: c.surface.clone(),
                         sources: c.sources.clone(),
+                        covers: None,
                     })
                     .collect(),
                 selected: set.selected as u32,
+                page_size,
+                visible: true,
+            };
+        }
+        // 入力中（変換前）の候補。現在の入力と対応しているものだけを出す
+        if let Some(reading) = Self::candidate_reading(sess)
+            && let Some(cc) = sess
+                .composing_cands
+                .as_ref()
+                .filter(|c| c.reading == reading)
+        {
+            let total = reading.chars().count();
+            return CandidatesView {
+                items: cc
+                    .items
+                    .iter()
+                    .map(|i| CandidateView {
+                        surface: i.surface.clone(),
+                        sources: i.sources.clone(),
+                        covers: (i.covers < total).then_some(i.covers as u32),
+                    })
+                    .collect(),
+                selected: 0,
                 page_size,
                 visible: true,
             };

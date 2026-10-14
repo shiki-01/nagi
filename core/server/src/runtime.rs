@@ -13,7 +13,7 @@ use nagi_profile::{
 };
 use nagi_protocol::methods::{
     MemoryPressureState, NotifyLevel, SetEnvironmentParams, StatusResult, ThermalState,
-    UpdatePreeditParams,
+    UpdateCandidatesParams, UpdatePreeditParams,
 };
 use nagi_protocol::view::CandidateSource;
 use std::path::PathBuf;
@@ -164,6 +164,7 @@ pub struct Runtime {
     events: Mutex<Vec<Event>>,
     /// ライブ変換等の非同期な preedit 更新（`update_preedit` 通知になる）
     preedit_updates: Mutex<Vec<UpdatePreeditParams>>,
+    candidate_updates: Mutex<Vec<UpdateCandidatesParams>>,
     /// イベントが積まれたときに呼ぶフック（`Server::run` が非同期通知の配信に使う）。
     /// `Box<dyn Fn() + Send + Sync>` なので中身は任意（チャンネルへの送信等）
     event_hook: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -198,6 +199,7 @@ impl Runtime {
             overlay: RwLock::new(Arc::new(Overlay::default())),
             events: Mutex::new(Vec::new()),
             preedit_updates: Mutex::new(Vec::new()),
+            candidate_updates: Mutex::new(Vec::new()),
             event_hook: Mutex::new(None),
             config_path: Mutex::new(None),
             config_error: AtomicBool::new(false),
@@ -300,6 +302,22 @@ impl Runtime {
             q.push(params);
         }
         self.fire_event_hook();
+    }
+
+    /// 入力中の候補の更新を積む（バックグラウンドで作った候補をフロントへ届ける）
+    pub fn push_candidates_update(&self, params: UpdateCandidatesParams) {
+        if let Ok(mut q) = self.candidate_updates.lock() {
+            q.push(params);
+        }
+        self.fire_event_hook();
+    }
+
+    /// 積まれた候補の更新を取り出す
+    pub fn drain_candidates_updates(&self) -> Vec<UpdateCandidatesParams> {
+        self.candidate_updates
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default()
     }
 
     /// 積まれた preedit 更新を取り出す
