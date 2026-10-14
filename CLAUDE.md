@@ -6,11 +6,13 @@
 - 設計書: `docs/ime-design-doc.md`（v0.2 draft）。本ファイルはその要約であり、詳細・根拠は設計書を参照すること
 - 決定事項ログ: `docs/decisions.md`（決定の経緯・理由。設計書と食い違う場合はこちらが新しい）
 - IME の bundle id: `com.shiki.inputmethod.Nagi`（macOS が入力メソッドとして認識するには `.inputmethod.` を含む必要があるため。設定/データの識別子は `com.shiki.nagi` のまま） / リポジトリ名: `nagi` / 配布・DL元ドメイン: `shiki-01.com`
-- 対象: macOS（先行）/ Windows（後続）/ Linux（将来検討）/ iOS・Android（将来。設計のみ `docs/mobile-design.md`）
+- 対象: macOS（先行）/ Windows（後続）/ Linux（将来検討）/ iOS（**実装中**。TestFlight で実機検証。`docs/mobile-design.md`・`docs/mobile-roadmap.md`）/ Android（将来）
+- iOS の bundle id: ホスト `com.shiki01.nagi`、キーボード拡張 `com.shiki01.nagi.keyboard`、App Group `group.com.shiki01.nagi`（macOS の IME とは別。`docs/decisions.md` H-15）
 
 ## 現状
 
-- Phase 0（技術検証）は未着手。Phase 1 のコア部分（romaji / protocol / engine / server / dict / infer）は実装済み（進捗・未完了は `docs/progress.md`、要レビューの暫定判断は `docs/decisions.md` G 節）
+- Phase 0（技術検証）は、iOS の実機検証（拡張のメモリ上限・LLM の可否・応答時間）は完了（`docs/decisions.md` H 節）。モデル・辞書の精度比較は未着手。Phase 1 のコア部分（romaji / protocol / engine / server / dict / infer）は実装済み（進捗・未完了は `docs/progress.md`、要レビューの暫定判断は `docs/decisions.md` G 節）
+- **iOS（`frontend-ios-spike/`）**: キーボード拡張（かな 12 キー・フリック・変換・候補バー・部分変換・英字）とホストアプリ（辞書・モデルの取り込み、入力テスト、実機計測）が TestFlight で動く。コアとは C ABI（`core/ffi/`）で接続し、型は `cargo xtask gen-types` の Swift 型を共有する。実機の確認結果は `docs/decisions.md` H-6〜H-14。ビルド・署名・アップロードは GitHub Actions `ios-testflight`（手動実行: `gh workflow run ios-testflight.yml --ref main -f llama=true`。表示バージョンは `ios-vX.Y.Z` タグ、ビルド番号は run_number）。Swift はローカルでコンパイルできないため、CI の結果で確認する
 - Rust ワークスペースは `core/` 以下（edition 2024、`core/rust-toolchain.toml` で 1.89.0 固定）。コマンドはすべて `core/` で実行する
 - 未決定: 変換モデル・システム辞書（Phase 0 の比較で確定。基準は「無料・再配布制約が小さい → 品質 → 速度/サイズ」）。暫定は Mozc OSS 辞書 + zenz-v3.1-small（`docs/decisions.md` G 節）
 
@@ -117,7 +119,7 @@ nagi/
 - ログに入力内容を残さない（デバッグビルドのみopt-inで許可）
 - 学習データはワンコマンドで全削除可能にする
 - macOS 配布は Apple Developer Program 非加入: ad-hoc 署名 + インストールスクリプト（`shiki-01.com`）+ ed25519 署名検証付きアップデート
-- モバイル（将来）: iOS は SideStore、Android は APK 直接配布。どちらも本体アプリで更新確認し、データ資産は再インストールなしで更新（`docs/mobile-design.md` §6）
+- モバイル: **iOS は TestFlight / App Store（Apple Developer Program 加入済み。H-15）**、Android は APK 直接配布（将来）。どちらも本体アプリでデータ資産を再インストールなしで更新する方針（`docs/mobile-design.md` §6）
 
 ## テスト戦略
 

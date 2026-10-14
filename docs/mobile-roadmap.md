@@ -2,12 +2,30 @@
 
 v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisions.md` H 節（決定）を前提に、着手順とデスクトップ側の修正をまとめる。
 
+## 0. 現在の状況（2026-10-14）
+
+**実際の着手順は、計画（Android 先行）と異なり、iOS を先に進めている**（Apple Developer Program に加入し、TestFlight で実機検証を回せるようになったため。H-15）。そのため M2（フリック・学習）の一部を iOS で前倒しで実装している。
+
+| 項目 | 状況 |
+| --- | --- |
+| D-1 辞書の mmap 化 | **完了**（形式は変えず、要素ごとの読み出しに。拡張で +61MB → +0.2MB。H-7） |
+| D-2 `insert_reading` / `perform_action` | **完了**（12 キーのトグル・フリック・濁点循環をコアで解決。H-11） |
+| D-3 クロスビルド CI | 一部（iOS は `ios-testflight` で毎回ビルド。Android の `cargo check` は `ci.yml`（手動実行）に有り） |
+| D-4 `initialize` の capability | 一部（メモリ上限は `nagi_server_new_with_budget` で注入。電源・熱は `set_environment`。`initialize` への統合は未実施。H-8） |
+| D-5 複数プロセスの同時アクセス | 未着手 |
+| D-6 予測変換の要件 | 未着手（入力中の候補・部分変換で一部を代替。H-14） |
+| M0 実機での技術検証（iOS） | **ほぼ完了**（拡張の上限 約 177MB、xsmall・small とも拡張内で動作、応答時間は同期待ち 30ms + 非同期の差し替えで目標内、C ABI の非同期通知を確認。H-6〜H-10）。SideStore 検証は不要。Android は未着手 |
+| M1 Android MVP | 未着手 |
+| M2 フリック・学習・範囲操作 | フリックは iOS で実装済み。学習・ユーザー辞書はコアに有り（モバイルでの共有・同時アクセスは D-5 とともに未着手）。範囲操作の UI は未着手 |
+| M3 iOS | **進行中**: TestFlight で実機を使える段階（かな 12 キー・フリック・変換・候補・部分変換・英字）。残り: キーボード UI（⌫連打・数字記号・絵文字）、文脈とホストへの追従、本体アプリ、配布の準備、堅牢性 |
+| M4 スタイル変換等 | 未着手 |
+
 ## 1. 着手順の方針
 
 - 設計の制約は厳しい側（iOS）に合わせる。ただし実装・検証は Android を先行する（H-2 の既存決定と整合）。
   - iOS 拡張は子プロセス不可・メモリ上限が数十 MB 級・SideStore 配布で、実装の試行回数が稼ぎにくい。Android で FFI・タッチ入力・辞書共有の仕組みを先に確立する。
   - 「厳しい側に合わせる」は実装順ではなくコア設計の基準として適用する。辞書は mmap 前提、LLM は `minimal` で常用に耐える、依存は iOS/Android 両方でビルド可能、を Android 実装中も守る。
-- iOS の致命的リスク（拡張のメモリ上限、SideStore の App Group 動作）は M0 で実測し、Android 実装に入る前に判定する。iOS が成立しない場合の設計変更を早く知るため。
+- iOS の致命的リスク（拡張のメモリ上限。SideStore は H-15 で不要になった）は M0 で実測し、Android 実装に入る前に判定する。iOS が成立しない場合の設計変更を早く知るため。
 
 ## 2. デスクトップ側の先行修正（D 系）
 
@@ -38,7 +56,7 @@ D-1・D-2・D-3 は先行して実施する。D-4〜D-6 は M0 の結果を見�
 
 1. iOS キーボード拡張で、mmap した辞書 + Viterbi が動く際の常駐メモリと、拡張が強制終了される閾値
 2. iOS 拡張で LLM（zenz-v3.1-small の GGUF）が載るか。載らない場合は本体アプリ側での推論やオンデバイス外の代替は採らず、`minimal` 固定とする
-3. SideStore 配布で App Group と Custom Keyboard が実際に動作するか（entitlement の扱い）
+3. ~~SideStore 配布で App Group と Custom Keyboard が実際に動作するか~~ → TestFlight 配布に変更（H-15）。App Group と拡張は TestFlight で動作を確認済み
 4. UniFFI 経由の 1 キーあたりのレイテンシ（JSON 文字列渡しと型渡しの比較）。目標は既存の p95 < 16ms（ひらがな反映）を維持
 5. Android で `android:process` 分離した IME サービスのメモリと、コールドスタート時間
 6. azooKey のキーボード UI・拡張構成の調査（参考実装）

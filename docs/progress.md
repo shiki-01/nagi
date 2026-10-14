@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-15）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -22,6 +22,20 @@
 | 12 | LLM のビームサーチ（infer 単体、Stage 1） | `ConvertRequest::beam_width` を新設し、`llama::LlamaModel::convert` に設計書 B-4 どおりの真のビームサーチ（各ステップで上位 `width` 本に絞りながら進める）を実装。KV キャッシュの分岐・合流は `kv_cache_seq_cp`（要 `kv_unified = true`）。`beam_width <= 1` は既存の貪欲デコードのまま（挙動・レイテンシとも無変更）。実モデルで曖昧性の低い文でも表記ゆれ・別の妥当な変換が上位に出ることを確認。詳細は G-33 |
 | 13 | LLM のビームサーチ（server/engine 統合、Stage 2） | `Effective::beam_width`（プロファイル既定 + `conversion.beam_width` 上書き）、`Pipeline::sentence_candidates`（仮説を強制アライメント + 学習/ユーザー辞書の優先を適用、重複除去、縮退条件）、engine の候補ウィンドウ sentence モード（`Conv::whole`/`sentence`、`conversion.initial_view`、`←/→` 等での恒久的な離脱）。プロトコル・Swift 型の変更は無し。詳細は G-34（辞書ベースの N-best との統合方法は G-30 の追記を参照） |
 
+## iOS 関連の実装（2026-10-14 追記。詳細は `docs/decisions.md` H-6〜H-15）
+
+| 項目 | 内容 |
+| --- | --- |
+| 辞書の mmap 化 | `Dictionary::load` を mmap（非 Windows）。形式は version 2 のまま（H-7）。拡張で +61MB → +0.2MB |
+| メモリ上限による LLM 抑止 | `--memory-budget-mb` / `nagi_server_new_with_budget`。150MB 未満は辞書のみ（H-8） |
+| 非同期通知の C ABI 配信 | `Server::poll_notifications` / `set_wake_callback`、`nagi_set_waker` / `nagi_poll_notifications`（H-10） |
+| タッチ入力 | `insert_reading`（12 キー・フリック・濁点循環）/ `perform_action`（H-11） |
+| 入力中の候補と部分変換 | 入力中に候補を常に出し、候補の選択で先頭部分だけ確定（`CandidateView.covers`、H-14） |
+| iOS の製品版キーボード | 拡張の UI（`NagiKeyboardView`）、状態（`KeyboardModel`）、型付きセッション（`NagiSession`）、ホストアプリの入力テスト（H-12・H-13） |
+| iOS のビルド・配布 | GitHub Actions `ios-testflight`（署名・アップロード・証明書の掃除）。TestFlight へ配布（H-15） |
+| 実機の実測 | 拡張の上限 約 177MB、xsmall・small とも動作、応答時間は同期待ち 30ms + 非同期差し替え（H-6・H-9・H-10） |
+
+
 ## 未完了の項目と次の一手
 
 優先順:
@@ -34,8 +48,8 @@
 6. ~~辞書形式を mmap 可能な形式へ変更~~ → 実装済み（H-7）。形式（version 2）は変えず、セクションを要素ごとのリトルエンディアン読み出し（アラインメント不要）にして `Dictionary::load` を mmap 化（非 Windows）。実機（iPhone 16e 拡張）で辞書の footprint は +61MB → +0.2MB、xsmall 併用のピークは 124MB → 71MB（H-7）
 7. ~~`insert_reading` / `perform_action` のプロトコル設計を core/protocol に追加~~ → 実装済み（H-11。12 キーのトグル・フリック・濁点循環をコアで解決、Swift 型生成済み）。残るのはレイアウトの設定化・`initialize` の capability 拡張
 8. **iOS 拡張のメモリ上限実測と LLM 可否判定**（M0 最優先）: `nagi-infer` を iOS 環境でビルド・実行し、メモリ上限（Apple 公式ドキュメントの記載値・実測値）と LLM ロードのコストを測定。実測が出るまで iOS の品質基準は `minimal`（辞書+Viterbi）。**一次実測あり**（H-6: 拡張の上限は約 177MB、辞書の全量読み込みで +61MB。zenz small は載らない見込み。xsmall + 辞書は iPhone 16e の拡張内で連続変換 20 回に耐えた（残量最小 52.8MB）。他機種・CPU のみ・mmap 辞書での成立可否は未確認）。メモリ上限による LLM 読み込みの抑止（`--memory-budget-mb`、150MB 未満は辞書のみ）は実装済み（H-8）
-9. **SideStore 検証**（entitlement/App Group、無料 Apple ID 制限、URL scheme）: 再署名後の entitlement / App Group の維持、無料 Apple ID のデバイス台数・有効期限制限の数え方、更新時の URL scheme 対応を検証。デスクトップ作業と独立に早期に実施
-10. **UniFFI 試作**（ネスト構造のコスト・callback・JSON か型かの計測）: FFI 方式を UniFFI で確定（H-4 参照）。実装時に以下を計測して詳細を決める: Preedit 等のネスト構造を毎キー渡すコスト、非同期通知（revision 付き差し替え）の callback 表現、描画差分を JSON 文字列か UniFFI 型で渡すか（p95 < 16ms 目標への影響）
+9. ~~**SideStore 検証**~~ → 不要（iOS の配布を TestFlight / App Store に変更。H-15）
+10. **UniFFI 試作**（ネスト構造のコスト・callback・JSON か型かの計測）: FFI 方式を UniFFI で確定（H-4 参照）。実装時に以下を計測して詳細を決める: Preedit 等のネスト構造を毎キー渡すコスト、非同期通知（revision 付き差し替え）の callback 表現、描画差分を JSON 文字列か UniFFI 型で渡すか（p95 < 16ms 目標への影響）。**iOS は C ABI（`core/ffi/`）で実装済み**で、UniFFI は Android（M1）着手時に再検討（H-10）
 11. macOS フロントエンド（IMKit。`set_environment` の送信、`set_context.app_id` の報告を含む。**未着手**: 本環境にXcode等が無く、Swift/IMKitのコードを書いてもコンパイル確認ができないため）。~~アップデート確認（署名検証）~~ → 検証ロジックは実装済み（G-31。ed25519署名検証。ダウンロード・インストールの実処理はプラットフォーム実装待ち）。インストールスクリプトは、対象の`.app`バンドル（フロントエンド本体）が無いため未着手（フロントエンド着手時に合わせて作る）。`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）は作成済み
 7. Phase 3 以降: ~~範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）~~ → 選択・再変換・ToHankaku まで実装済み（G-17・G-22）。~~確定取消~~ → エンジン側は実装済み（G-28。`ProcessKeyResult.delete_before` を追加。ホストアプリのテキストを実際に削除するフロント側の対応は別途必要）。スタイル変換は未着手。~~Rewriter~~ → 全角/半角英数記号・半角カナ・漢数字・日付・簡易計算まで実装済み（G-15・G-16・G-20）
 8. `select_candidate`（JSON-RPC）実装済み（G-18）。~~`reconvert`~~ → 実装済み（G-29。辞書の逆引きによる専用Viterbi。ユーザー辞書は対象外。実データでのメモリ増加量は実機（Windows）で実測済み: 約270MB。`minimal`/`light` では使用後に自動解放するよう対応済み）
@@ -154,3 +168,15 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 ## CI
 
 （最終確認の結果を下に追記する）
+
+## iOS の未完了項目（2026-10-14）
+
+優先順（詳細は `docs/mobile-roadmap.md` §0）:
+
+1. キーボード UI: ⌫の長押し連打、数字・記号・絵文字のレイアウト、英字のシフト 2 回押しでの大文字固定、フリックの押下時の 4 方向の案内
+2. 変換の質と安定: 直前のテキストの文脈（`set_context`）の受け渡し、ホストのカーソル移動・外部変更への追従
+3. 本体アプリ: キーボードの有効化の案内、辞書・モデルの取得（現状は手動）、設定、学習データの削除、ユーザー辞書の管理
+4. 配布の準備: 正式なアイコン、プライバシーポリシー、外部テスト（Beta App Review）、フルアクセスの用途の明記
+5. 堅牢性: メモリ警告・電源・発熱への対応（`set_environment` の送信）、他機種での上限・応答時間の実測、複数プロセスでの学習データの同時アクセス（D-5）
+6. 最後にまとめて: 見た目と操作感の調整（実機のフィードバックを集める）
+

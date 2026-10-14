@@ -1,5 +1,17 @@
 # Nagi iOS 実機検証アプリ
 
+> **【2026-10-14 追記】このアプリは「検証用スパイク」から iOS の製品版（キーボード拡張 + ホストアプリ）に発展しています。**
+> 配布は SideStore ではなく TestFlight / App Store です（`docs/decisions.md` H-15）。ビルド・署名・アップロードは
+> GitHub Actions `ios-testflight`（`gh workflow run ios-testflight.yml --ref main -f llama=true`）で行います。
+> bundle id は `com.shiki01.nagi`（ホスト）/ `com.shiki01.nagi.keyboard`（拡張）、App Group は `group.com.shiki01.nagi`。
+> 以下の SideStore・未署名 IPA・手動ビルドの手順は、当初のスパイク向けの記述として残しています。
+> 実機の確認結果と実装の経緯は `docs/decisions.md` の H-6〜H-15 を参照してください。
+>
+> ホストアプリには、ホーム（辞書・モデルの取り込み）、Probes（計測）、結果、入力テスト（キーボードの動作確認用の入力欄）のタブがあります。
+> キーボード拡張は、製品版の 12 キー（フリック）と英字（QWERTY）が既定で、候補バー右端の「検証」ボタンで Probe の画面に切り替えられます。
+
+
+
 Nagi（日本語IME）の iOS 実機上での動作検証用スパイク実装。メモリ使用量、レイテンシ、LLM ロード、システム状態などを測定できます。
 
 ## クイックスタート（推奨：GitHub Actions 経由）

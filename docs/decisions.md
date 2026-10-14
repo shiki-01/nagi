@@ -178,7 +178,7 @@
 - 入力モード: 状態の正はコアの内部モードとする。表示は OS の入力モード（ひらがな / 英数）へ同期し、メニューバーに「あ / A」を出す（Mozc と同じ方式）
 - 候補ウィンドウ: 独自の NSPanel で実装する
 - preedit の属性がアプリごとにどこまで反映されるかは、Phase 0 で実機確認する（下線スタイル、選択範囲の強調）
-- 配布: Apple Developer Program には加入しない
+- 配布: Apple Developer Program には加入しない【2026-10-14: 加入済み。iOS は TestFlight / App Store で配布（H-15）。macOS の配布方針は見直し可能】
   - アプリには ad-hoc 署名だけを付ける
   - 主な導入手段はインストールスクリプト（`curl -fsSL https://shiki-01.com/nagi/install.sh | sh`）。`~/Library/Input Methods` に配置する。curl で取得したファイルには quarantine 属性が付かないため、Gatekeeper の警告は出ない
   - 手動用に zip と手順書も配布する
@@ -720,7 +720,7 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 
 ### H-5. 配布・更新・アプリ仕様（2026-09-29 ユーザー決定）
 
-- iOS は SideStore によるサイドロードで配布する（Apple Developer Program 非加入の方針を維持）。更新は AltStore 互換のソース JSON を `shiki-01.com` に置いて配信する
+- iOS は SideStore によるサイドロードで配布する（Apple Developer Program 非加入の方針を維持）【H-15 で TestFlight / App Store に変更】。更新は AltStore 互換のソース JSON を `shiki-01.com` に置いて配信する
 - Android は署名済み APK の直接配布とする（公式ストアは使わない）
 - 両 OS とも本体アプリに更新確認を入れる。データ資産（辞書・モデル・プリセット）は再インストールなしで更新できるようにする。アプリ本体は Android が `PackageInstaller` で上書き、iOS は SideStore の更新へ誘導する（iOS は署名済みでないコードを実行できないため）
 - アプリ仕様（キーボード UI・本体アプリの構成・設定項目）は azooKey を参考にする。変換エンジン本体は参考にしない（F の方針どおり）
@@ -956,4 +956,11 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **矢印**: 入力中はカーソル移動、変換中は注目文節の移動、未入力ならホストのカーソル移動。文節の細かい操作（区切り伸縮・範囲選択）は、Phase 3 の範囲操作 UI（セグメント列、mobile-design §5.1）で改めて設計する
 - **UI**: 候補バー右端の「﹀」で、候補の一覧を縦のグリッドで広げる（キーの領域に重ねる）。選ぶと閉じる
 - **ロードマップ上の位置づけ（今後の実装順、実機のフィードバックの分類）**: 構造に関わるもの（候補の仕組み・展開）はこの H-14 で対応。ほかは (1) 英字シフトの 2 回押しでの大文字固定、(2) フリックの押下時に 4 方向の文字を出す案内、⌫の長押し連打・数字記号のレイアウトと合わせて「キーボード UI の実装」、(3) 直前のテキストの文脈、(4) 本体アプリ、(5) 最後に見た目と操作感の調整
+
+### H-15. iOS の配布を TestFlight / App Store に変更（2026-10-14、ユーザー決定）
+
+- **Apple Developer Program に加入済み**で、iOS は **TestFlight（内部テスト → 外部テスト）→ App Store** で配布する。H-5 の「SideStore によるサイドロード」と、`docs/decisions.md` の「Apple Developer Program には加入しない」（iOS について）は、この決定で置き換える。SideStore 向けの検証項目（再署名後の App Group、無料 Apple ID の制限、7 日失効、AltStore 互換ソース JSON）は不要になった
+- bundle id は `com.shiki01.nagi`（ホスト）、`com.shiki01.nagi.keyboard`（キーボード拡張）、App Group は `group.com.shiki01.nagi`。macOS の IME（`com.shiki.inputmethod.Nagi`）とは別
+- ビルド・署名・アップロードは GitHub Actions `ios-testflight`（手動実行。App Store Connect API キーのクラウド署名。表示バージョンは `ios-vX.Y.Z` タグ、ビルド番号は run_number。CI の開発証明書は前後で失効させて上限を避ける）
+- **未決**: macOS の配布方針（ad-hoc 署名 + スクリプト）は、加入済みの前提に照らして見直せる（公証など）。Android の配布（APK 直接配布）は変更なし。SideStore 配布を併用するかは、必要が出るまで保留（現状は行わない）
 

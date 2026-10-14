@@ -129,7 +129,9 @@
 | `process_key` | F→C 要求 | `{session_id, keysym, keycode, text, modifiers, kind: down\|flags_changed}` |
 | `focus_in` / `focus_out` | F→C 要求 | セッションのフォーカス変化。`focus_out` 時は表示中の surface を確定して返す |
 | `set_context` | F→C 通知 | Surrounding Text、アプリ識別子、secure input フラグ |
-| `select_candidate` | F→C 要求 | 候補ウィンドウ外からの選択（将来のマウス対応用に予約） |
+| `select_candidate` | F→C 要求 | 候補の選択（絶対インデックス）。変換中は注目文節の候補を選ぶ。入力中（変換前）は、候補が置き換える読みの先頭部分を確定し、残りは入力中のまま続ける（部分変換。モバイル。H-14） |
+| `insert_reading` | F→C 要求 | タッチ入力（モバイル）: ローマ字を経由せず読みを挿入。12 キーのキーと操作（タップ・トグル・フリック）や濁点・小書きの循環をコアが解決する（H-11） |
+| `perform_action` | F→C 要求 | タッチ入力（モバイル）: 空白・改行・削除・カーソル・文節操作・モードなどのボタン操作を実行する。未入力で意味の無い操作は消費しない（H-11） |
 | `reconvert` | F→C 要求 | 確定済みテキストの再変換要求（OS側の再変換APIから） |
 | `restore_session` | F→C 要求 | エンジン再起動後、フロントが保持していた preedit を復元（§3.3） |
 | `reset` | F→C 要求 | 未確定状態の破棄 |
@@ -435,7 +437,7 @@ model = "style"              # style | 専用GGUFパス
 - Secure Input検知で学習停止フラグを送る
 - preedit 属性の各アプリでの反映範囲は Phase 0 で実機確認
 - 既知の罠（karukan README等より）: ログイン再認識、TextInputMenuAgentのキャッシュ、スリープ時のパイプ破棄 → 設計に織込み済み
-- 配布（Apple Developer Program 非加入）:
+- 配布（macOS は Apple Developer Program 非加入前提のまま。**iOS は加入済みで TestFlight / App Store、H-15**）:
   - ad-hoc 署名のみ
   - 主導線: `curl -fsSL https://shiki-01.com/nagi/install.sh | sh` で `~/Library/Input Methods` へ配置（curl 取得物には quarantine 属性が付かず Gatekeeper 警告が出ない。配布元の信頼が前提）
   - 手動用 zip + 手順書（Gatekeeper の「このまま開く」手順を含む）

@@ -27,8 +27,8 @@
 | 候補表示 | 独自ウィンドウ | キーボード上部の候補バー | キーボード上部の候補バー |
 | データ（辞書・モデル） | ユーザー領域に取得 | 本体アプリが取得し App Group 共有コンテナ経由で参照。**拡張からの参照には「フルアクセス」許可が必要** | アプリ専用領域に取得 |
 | パスワード欄 | secure input 検知で学習停止 | OS がシステムキーボードへ強制切替（Nagi は呼ばれない） | `EditorInfo.inputType` のパスワード種別・`IME_FLAG_NO_PERSONALIZED_LEARNING` で学習停止 |
-| 配布 | ad-hoc 署名 + スクリプト | SideStore によるサイドロード（§6） | APK 直接配布（§6） |
-| アップデート | 自前確認 + ed25519 検証 | 本体アプリで確認。データは直接更新、アプリ本体は SideStore 経由で上書き（§6.3） | 本体アプリで確認・APK を取得して上書きインストール（§6.3） |
+| 配布 | ad-hoc 署名 + スクリプト | TestFlight / App Store（§6。当初は SideStore の想定だったが H-15 で変更） | APK 直接配布（§6） |
+| アップデート | 自前確認 + ed25519 検証 | 本体アプリで確認。データは直接更新、アプリ本体は TestFlight / App Store の更新（§6.3） | 本体アプリで確認・APK を取得して上書きインストール（§6.3） |
 
 ## 3. デスクトップ開発中から守る制約（今から適用）
 
@@ -60,6 +60,7 @@
 
 - 新 crate `core/ffi/`（仮）: C ABI で `nagi_create(config) / nagi_handle(handle, json_line) -> json_lines / nagi_set_notify_callback / nagi_destroy` を公開する
 - メッセージは既存の JSON-RPC スキーマをそのまま流す（**プロトコルは一本化**。トランスポートだけが stdio か関数呼び出しかで異なる）
+- **【実装の現状】iOS は C ABI（`core/ffi/` の `nagi-ffi`。`nagi_server_new` / `nagi_server_new_with_budget` / `nagi_handle_line` / `nagi_poll_notifications` / `nagi_set_waker`）で実装済み。UniFFI は未試作で、型は typeshare 生成の Swift を使う（H-10・H-12）。**
 - バインディング生成は UniFFI を第一候補とする（Swift / Kotlin の両方を生成できるため）。typeshare の Swift 型生成との役割分担は着手時に決める
 - 配布形態: iOS は XCFramework、Android は AAR（`cargo xtask` にビルドタスクを追加）
 - クラッシュ隔離: 子プロセス化できないため、iOS ではコアのパニックが拡張ごと落ちる。`catch_unwind` で FFI 境界を守り、復帰時は `restore_session` 相当をフロントが呼ぶ
@@ -107,7 +108,7 @@
 - フルアクセス未許可時: ひらがな・カタカナ変換のみで動作し、許可を促す表示を出す（入力は失わない）
 - メモリ上限への対応: 辞書は mmap（§3-3）、モデルは量子化版 + mmap。上限を超える端末では LLM を使わない
 - 外付けキーボードの入力はキーボード拡張に届かないため、物理キーボードでの利用はサポート外（OS 標準 IME を使う）
-- SideStore 配布に伴う要検証事項（Phase M0）: キーボード拡張と App Group の entitlement が SideStore の再署名で維持されるか、無料 Apple ID の制限（有効アプリ数・App ID 数）に拡張がどう数えられるか
+- ~~SideStore 配布に伴う要検証事項（Phase M0）~~ → TestFlight 配布に変更したため不要（H-15）。元の記述: キーボード拡張と App Group の entitlement が SideStore の再署名で維持されるか、無料 Apple ID の制限（有効アプリ数・App ID 数）に拡張がどう数えられるか
 
 ### 5.3 Android
 
@@ -119,9 +120,11 @@
 
 ## 6. 配布と更新
 
-デスクトップと同じく、公式ストアと有料の開発者プログラムを使わない（Apple Developer Program 非加入の方針を維持）。
+**【H-15 で変更】iOS は Apple Developer Program に加入済みで、TestFlight / App Store で配布する。以下の §6.1（SideStore）は、当初の案として残している。** Android は公式ストアを使わず APK 直接配布の方針のまま。
 
-### 6.1 iOS: SideStore
+（当初の記述）デスクトップと同じく、公式ストアと有料の開発者プログラムを使わない（Apple Developer Program 非加入の方針を維持）。
+
+### 6.1 iOS: SideStore（当初の案。H-15 で TestFlight / App Store に変更）
 
 - 未署名の `.ipa` を `shiki-01.com` と GitHub Releases で配布し、ユーザーが SideStore で自分の Apple ID で署名してインストールする
 - SideStore のソース（AltStore 互換のソース JSON）を `shiki-01.com` に置き、SideStore 上で更新を配信する
@@ -154,7 +157,7 @@
 | M0 | 技術検証: コアの iOS/Android クロスビルド、FFI 最小実装、iOS 拡張内のメモリ実測（辞書 mmap・モデル量子化別）、端末別の推論レイテンシ、SideStore でのキーボード拡張・App Group の動作、azooKey の仕様調査 | 実測値・iOS の LLM 可否・SideStore 可否・仕様表を `decisions.md` に記録 |
 | M1 | Android MVP: QWERTY ローマ字 + 文全体/文節変換 + 候補バー + セグメント列 + 更新確認（§6.3） | 自分の Android 端末で常用可能。コア側の変更は FFI 層と §4.2 のみ |
 | M2 | フリック入力 + 学習・ユーザー辞書 + 範囲操作 | フリックで1週間常用 |
-| M3 | iOS（SideStore 配布・更新確認を含む） | 自分の iPhone で常用可能 |
+| M3 | iOS（TestFlight / App Store 配布。当初は SideStore） | 自分の iPhone で常用可能 |
 | M4 | スタイル変換・設定 GUI のモバイル対応 | デスクトップと同等の機能 |
 
 ## 8. リスク
@@ -163,7 +166,7 @@
 | --- | --- | --- |
 | iOS 拡張のメモリ上限で LLM が載らない | 高 | `minimal` の品質を保つ。M0 で実測し、不可なら iOS は辞書 + 学習のみ |
 | フルアクセス要求によるユーザーの不信 | 中 | 用途の明示、未許可でも入力できる縮退動作、ネットワーク不使用の明記 |
-| SideStore でキーボード拡張・App Group が動かない、または 7 日失効が運用負担になる | 中 | M0 で検証。失効時も OS 標準キーボードに戻るだけで入力は失われない |
+| ~~SideStore でキーボード拡張・App Group が動かない、または 7 日失効が運用負担になる~~（H-15 で TestFlight に変更し解消） | 低 | M0 で検証。失効時も OS 標準キーボードに戻るだけで入力は失われない |
 | Android のサイドロード規制の強化 | 中 | 動向を確認し、必要なら開発者認証を検討 |
 | タッチでの範囲操作の操作性 | 中 | セグメント列 UI を M1 で試作し、実利用で調整 |
 | デスクトップ実装中に §3 の制約が破られる | 中 | レビュー観点に追加。M0 前に mobile ターゲットの `cargo check` を CI に入れることを検討 |
