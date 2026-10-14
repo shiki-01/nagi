@@ -33,7 +33,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `input.mode` | 入力方式 | choice: `flick`（12 キー）/ `qwerty_kana`（ローマ字）/ `qwerty_alpha` | `flick` | S | kbd | 新規(iOS) | 起動時に開く既定レイアウト。実際の割当は `keyboard.layout_*` |
 | `input.toggle_input` | トグル入力（同じキーの連続タップで次の文字） | bool | false | S | kbd+core | 既存(iOS) | 現状 `KeyboardModel` のコンストラクタ引数 `toggleInput`。タップを `toggle` ジェスチャでコアへ送る。false のときタップは先頭の文字 |
-| `input.toggle_timeout_ms` | トグル確定までの時間 | int 200–3000, step 50 | 1000 | D | kbd+core | 新規(core) | 現状コアにタイムアウトの概念があるか要確認。無ければ「他のキーで確定」のみ |
+| `input.toggle_timeout_ms` | トグル確定までの時間 | int 200–3000, step 50 | 1000 | D | kbd+core | iOS 側で完結（既存(iOS)） | コアには時間の概念が無く、キーボード拡張が判定する。設定画面には未登録で、`ios-settings.json` に値があればそれを使う（無ければ 1000ms。`IOSSettings.swift`）。コアの項目にはしない |
 | `input.dakuten_cycle` | 濁点・小書き循環キーの順序 | choice: `small_first`（つ→っ→づ）/ `dakuten_first`（つ→づ→っ） | `small_first` | D | core:input.dakuten_cycle | 既存(GUI)（platforms=ios） | 従来の固定表の動作を既定にするため既定値と名前を変更（違いは「つ」「う」のみ）。`get_key_table` の `variants` にも反映 |
 | `input.dakuten_key_enabled` | 濁点キーを出す | bool | true | D | kbd | 新規(iOS) | OFF にすると、濁点はフリック・長押しのみ |
 | `input.shift_letter` | Shift + 英字の動作 | choice: `literal_continue` / `single_upper` | `literal_continue` | D | core:input.shift_letter | 既存(GUI) | QWERTY のみ有効 |
@@ -63,7 +63,7 @@
 
 | ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `conversion.live_conversion` | ライブ変換 | bool | iOS: false（暫定。実機計測後に決定） | S | core:conversion.live_conversion | 既存(GUI) | デスクトップの既定は true。iOS の既定は電池・発熱への影響を見て決める（H 節の計測結果に依存）。**iOS だけ既定を変える場合、iOS 用の初期 `config.toml` で明示指定する** |
+| `conversion.live_conversion` | ライブ変換 | bool | true（iOS の実効も true。生成 config に指定なし＝コア既定） | S | core:conversion.live_conversion | 既存(GUI) | デスクトップ・iOS とも既定は true。iOS の生成 config（`ProductSession.swift`）は `live_conversion` を書いていないため、実効はコア既定の true。**iOS の既定を false にする場合は、生成 config に `live_conversion = false` を明示する必要がある**（電池・発熱の計測に基づく判断は未決。§5） |
 | `conversion.live_conversion_delay_ms` | ライブ変換の待ち時間 | int 0–5000, step 10 | 228 | D | core:conversion.live_conversion_delay_ms | 既存(GUI) | |
 | `conversion.live_conversion_min_key_length` | ライブ変換を始める最小の読みの長さ | int 1–20 | 2 | D | core:conversion.live_conversion_min_key_length | 既存(GUI) | |
 | `conversion.composing_chunk_len` | ライブ変換のチャンク長 | int 1–200 | 30 | D | core:conversion.composing_chunk_len | 既存(GUI) | 小さいほど軽いが文脈が切れる |
@@ -73,7 +73,7 @@
 | `conversion.model` | 変換モデル | choice: `auto` / 取得済みモデル ID | `auto` | D | core:conversion.model | 既存(GUI) | 次回起動時に反映（コアの仕様）。拡張の再起動が要る旨を UI に表示。選択肢は `data.models` から生成 |
 | `conversion.beam_width` | ビーム幅 | int 1–16 または自動 | 自動 | D | core:conversion.beam_width | 既存(GUI) | 大きいほど遅く、メモリも増える |
 | `conversion.n_threads` | 推論スレッド数 | int 0–8（0 = 自動） | 0 | D | core:conversion.n_threads | 既存(GUI) | 次回起動時に反映。拡張の発熱に影響するため上限は端末のコア数 |
-| `conversion.sync_budget_ms` | Space 変換の待ち時間（LLM の同期待ち） | int 10–5000, step 10 | 150 | D | core:conversion.sync_budget_ms | 既存(GUI) | 超過するとひらがなのまま応答し、結果は後で差し替え。iOS の実測に合わせて調整（H-12 参照） |
+| `conversion.sync_budget_ms` | Space 変換の待ち時間（LLM の同期待ち） | int 10–5000, step 10 | 150（デスクトップ）。iOS の生成 config は 30 | D | core:conversion.sync_budget_ms | 既存(GUI) | 超過するとひらがなのまま応答し、結果は後で差し替え。iOS は生成 config（`ProductSession.swift`）で 30ms（H-10）。デスクトップの既定 150 とは別の値 |
 | `conversion.max_latency_ms` | 推論の最大レイテンシ（タイムアウト） | int 10–10000 | 100 | - | core:conversion.max_latency_ms | 既存(GUI) | 通常は触らせない |
 | `conversion.use_context` | 前後の文脈を使う | bool | true | D | core:conversion.use_context | 既存(GUI) | ホストの文字列を読むため、パスワード欄では自動で無効。プライバシー注記を UI に出す |
 | `conversion.max_context_length` | 文脈の最大文字数 | int 1–200 または自動 | 自動 | D | core:conversion.max_context_length | 既存(GUI) | 小さいほどメモリ・時間が減る |
@@ -98,7 +98,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `learning.enabled` | 学習する | bool | true | S | core:learning.enabled | 既存(GUI) | OFF にしても既存の学習データは残る（削除は別操作） |
 | `learning.max_entries` | 学習データの最大件数 | int 100–1,000,000 | iOS: 10000（暫定） | D | core:learning.max_entries | 既存(GUI) | ファイルサイズ・読み込みメモリに直結。iOS では上限を低めに検討 |
-| `learning.strength` | 学習の強さ（確定を順位へ反映する度合い） | choice: `weak` / `normal` / `strong` | `normal` | D | core:learning.strength | 新規(core) | 内部的には加点量と減衰の組。数値化（0.0–2.0）は詳細モード内の `learning.boost` に出す案もあるが、まず 3 段階 |
+| `learning.strength` | 学習の強さ（確定を順位へ反映する度合い） | float 0.0–2.0 | `1.0` | D | core:learning.strength | 既存(GUI) | コアの記述子（`core/config/src/settings.rs`）に掲載済み。範囲外は検証で拒否される。weak / normal / strong の 3 段階案は取り下げた |
 | `learning.forget_days` | 未使用の学習を忘れるまでの日数 | int 0–3650（0 = 忘れない） | 0 | D | core:learning.forget_days | 新規(core) | 忘却速度（backlog 3 章） |
 | `learning.disabled_apps` | 学習を無効にするアプリ | 文字列配列（bundle id） | パスワードマネージャの標準リスト | - | core:learning.disabled_apps | 既存(toml) | **iOS ではキーボード拡張からホストアプリの bundle id を取れない**ため機能しない。代わりにキーのタイプ（下記 `privacy.secure_field_off`）で判定する |
 | `learning.delete_candidate` | 候補の長押しで学習から削除 | bool | true | D | kbd+core | 新規(iOS) | コアの `DeleteLearning` アクション相当を候補バーから呼ぶ |
@@ -149,7 +149,7 @@
 | `keyboard.capslock_double_tap` | シフト 2 回でキャップスロック | bool | true | D | kbd | 新規(iOS) | |
 | `keyboard.number_row` | QWERTY に数字行を常時表示 | bool | false | D | kbd | 新規(iOS) | |
 | `keyboard.long_press_symbols` | QWERTY の長押しで記号 | bool | true | D | kbd | 新規(iOS) | |
-| `keyboard.custom_layouts` | カスタムレイアウトの管理（取り込み・削除・並べ替え） | 操作 | - | D | app | 新規(iOS) | App Group の `keyboard/layouts/<id>.json`。仕様は `ios-keyboard-layout.md` |
+| `keyboard.custom_layouts` | カスタムレイアウトの管理（取り込み・削除・割り当て） | 操作 | - | D | app | 既存(iOS) | App Group の `keyboard/layouts/<id>.json`。仕様は `ios-keyboard-layout.md`。並べ替えは未実装（`LayoutManagerView.swift` に無い） |
 | `keyboard.keymap_preset` | キー操作プリセット | choice: `default` | `default` | - | core:keymap.preset | 既存(toml) | タッチ UI ではボタンと Action の対応に使う。現時点では選択肢が 1 つなので UI に出さない |
 | `candbar.visible_count` | 候補バーに並べる候補数 | int 3–20 | 9 | D | kbd+core | 新規(iOS) | コアに要求する候補数でもある（`conversion.num_candidates` とは別に持つか、同じにするかは要決定） |
 | `candbar.expand_button` | 展開ボタン（全候補一覧）を出す | bool | true | D | kbd | 新規(iOS) | |
@@ -166,7 +166,7 @@
 
 | ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `privacy.secure_field_off` | パスワード欄・機密欄で学習・文脈取得・ログを停止 | bool | true | S | kbd+core | 新規(iOS) | `isSecureTextEntry` 等で判定し、コアの学習・`use_context` を一時停止（セッション単位）。OFF にできない固定でも良い（要決定: 既定は固定 ON を推奨） |
+| `privacy.secure_field_off` | パスワード欄・機密欄で学習・文脈取得・ログを停止 | bool | true | S | kbd+core | 部分実装（固定 ON。設定項目は未実装） | `isSecureTextEntry` と `textContentType`（パスワード・ワンタイムコード）で判定し、学習・文脈取得（`set_context`）を止める（`KeyboardViewController.swift` の `hostIsSecure`）。診断ログは押したキーを残さない（`send <secure>`）。設定項目として ON/OFF できるかは §5 の未決事項 |
 | `privacy.no_learning_fields` | 特定の入力欄の種類（メール・URL・数字）では学習しない | multi-choice: `email` / `url` / `number` / `phone` | `email`, `url`, `number`, `phone` | D | kbd+core | 新規(iOS) | |
 | `privacy.full_access_status` | フルアクセスの状態表示と案内 | 表示（操作: 設定アプリを開く） | - | S | app | 新規(iOS) | 用途の説明（データ参照のみ・外部送信なし）を併記。未許可時は辞書・モデルが読めず縮退する |
 | `privacy.no_network` | ネットワークを使わない（更新確認・取得を無効化） | bool | false | D | app+core:update.auto_check | 新規(iOS) | ON でも手動取得は可能。拡張は元々ネットワークを使わない |
@@ -180,9 +180,9 @@
 | ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `data.dict_status` | システム辞書の状態表示（版・サイズ・取得日） | 表示 | - | S | app | 新規(iOS) | 保存先は App Group の `dict/`（`DataPaths`） |
-| `data.dict_fetch` | 辞書の取得・更新 | 操作 | - | S | app | 既存(iOS) | 現状はホストアプリで取り込み可能。SHA-256 検証あり（デスクトップの取得タスクと同じ方針） |
+| `data.dict_fetch` | 辞書の取得・更新 | 操作 | - | S | app | 取り込み（取得は手動） | ホストアプリがバンドル同梱の辞書を App Group にコピーする（取り込み）。取得（ダウンロード）は手動。現状の iOS 側に SHA-256 検証は無い（デスクトップの取得タスクは検証あり） |
 | `data.models` | 取得済みモデルの一覧 | 表示（名前・量子化・サイズ・メモリ目安） | - | D | app | 新規(iOS) | `conversion.model` の選択肢の元 |
-| `data.model_fetch` | モデルの取得・更新 | 操作 | - | S | app | 既存(iOS) | 既定のモデルは暫定で zenz-v3.1-small（`decisions.md` G 節）。ライセンス表示を併記 |
+| `data.model_fetch` | モデルの取得・更新 | 操作 | - | S | app | 取り込み（取得は手動） | iOS の現行既定は xsmall（`ProductSession.swift` の `preferredModelPath`）。small は精度で優位（H-17）だが、iOS の既定をどちらにするかは未決（`ios-device-checklist.md` の要判断 (c)）。ライセンス表示を併記 |
 | `data.download_wifi_only` | Wi-Fi のみでダウンロード | bool | true | S | app | 新規(iOS) | 容量が大きいためモバイル回線は既定で使わない |
 | `data.download_confirm_mb` | この容量以上は確認を出す | int 10–2000 | 100 | D | app | 新規(iOS) | |
 | `data.delete_dict` | 辞書の削除 | 操作 | - | D | app | 新規(iOS) | 容量確保用。削除後は読みそのまま返す縮退動作 |
@@ -248,6 +248,7 @@
 - ホストアプリと拡張で同じファイルを同時に書かないようにする。`config.toml` は **コアの `update_settings` 経由に統一**（コメントと未知のキーを保つ原子的な書き込みが実装済み）。拡張が動いていないときはホストアプリが同じ `nagi-config` のロジックで書く（Rust 側の関数を FFI で公開するか、コアを一時的に起動する。要決定）
 - `ios-settings.json` は「ホストアプリのみが書く」ことを原則とし、一時的な状態（最後のモードなど）は別ファイル `ios-state.json` に拡張が書く。書き込みは原子的（一時ファイル → rename）
 - `UserDefaults(suiteName:)`（App Group）は使わない案を第一候補とする。理由は、`config.toml` と同じくファイルで持つほうが検証・バックアップ・書き出しを共通化できるため。ただし変更通知が必要なら Darwin 通知（下記）で補う
+- **実装の現状**: 表示モード（`ui.mode`）・キーボードのレイアウト割り当て・診断ログの ON/OFF・使うモデルの選択は、App Group の UserDefaults に置いている（小さな状態で、ホストと拡張が同じファイルを書かないため）。`ios-settings.json` は `kbd` / `app` の値（`IOSSettings.swift`）に使う。上の「第一候補」の記述は、この実装と食い違っている（方針の見直し対象）
 
 ### 3.2 反映の経路
 
@@ -258,7 +259,7 @@
 5. 読み込みに失敗した場合は旧設定を維持し、行番号つきの通知を出す（設計書 §6）。ホストアプリは書き込み前に検証済みだが、手編集やバックアップ復元で壊れた場合に備える
 6. `get_settings` が壊れた `config.toml` では既定値と `error` を返す仕様のため、ホストアプリは「設定ファイルが壊れています」の表示と、修復（初期化）の選択肢を出す
 
-- シンプル ⇄ 詳細の切替は UI のみの状態で、`ios-settings.json` の `ui.mode` に保存する。切替で設定値は変わらない。詳細モードで変更した値は、シンプルモードに戻しても保持する
+- シンプル ⇄ 詳細の切替は UI のみの状態で、App Group の UserDefaults（キー `ui.mode`。`SettingsView.swift`）に保存する。`ios-settings.json` には入れない（実装どおり）。切替で設定値は変わらない。詳細モードで変更した値は、シンプルモードに戻しても保持する
 - プロファイルによる自動値（自動のとき）と、ユーザーの明示指定（`explicit`）を区別して表示する（コアの `SettingState` が既に持つ）
 
 ### 3.3 メモリ・安全面の制約

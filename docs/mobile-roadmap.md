@@ -10,20 +10,20 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 | --- | --- |
 | D-1 辞書の mmap 化 | **完了**（形式は変えず、要素ごとの読み出しに。拡張で +61MB → +0.2MB。H-7） |
 | D-2 `insert_reading` / `perform_action` | **完了**（12 キーのトグル・フリック・濁点循環をコアで解決。H-11） |
-| D-3 クロスビルド CI | 一部（iOS は `ios-testflight` で毎回ビルド。Android の `cargo check` は `ci.yml`（手動実行）に有り） |
-| D-4 `initialize` の capability | コア側は実装済み（2026-10-14、H-16）: `initialize.params.capabilities`（`input_method` / `environment`）と `set_environment.memory_budget_mb` でメモリ上限・電源・熱・メモリ逼迫を受け取りプロファイル判定に反映。LLM だけの解放・再読み込み（`unload_model` / `reload_model`、メモリ逼迫 critical で自動解放）も実装済み。Swift 側（iOS）の追従は未実施 |
+| D-3 クロスビルド CI | 一部。iOS は `ios-testflight` で毎回ビルドする。Android（`aarch64-linux-android`）と `aarch64-apple-ios` の `cargo check` は `ci.yml` に無く、**未実施** |
+| D-4 `initialize` の capability | コア側は実装済み（2026-10-14、H-16）: `initialize.params.capabilities`（`input_method` / `environment`）と `set_environment.memory_budget_mb` でメモリ上限・電源・熱・メモリ逼迫を受け取りプロファイル判定に反映。LLM だけの解放・再読み込み（`unload_model` / `reload_model`、メモリ逼迫 critical で自動解放）も実装済み。iOS 側の追従は済み（`NagiSession.swift`・`NagiEnvironment.swift`・`KeyboardModel.swift` で capabilities・`set_environment`・`get_key_table` を使う。実機確認待ち。複製表 `KanaKeyTable.swift` はフォールバックとして残る） |
 | D-5 複数プロセスの同時アクセス | 一部（ホストが学習ファイルを直接消す経路は、コアと同じ `learning.lock` の flock を取るようにした。コアの flush が他プロセスの更新を取り込まず後勝ちで上書きする点、ロックファイルの削除の競合は未対応でコア側の課題。実機未確認） |
 | D-6 予測変換の要件 | 未着手（入力中の候補・部分変換で一部を代替。H-14） |
 | M0 実機での技術検証（iOS） | **ほぼ完了**（拡張の上限 約 177MB、xsmall・small とも拡張内で動作、応答時間は同期待ち 30ms + 非同期の差し替えで目標内、C ABI の非同期通知を確認。H-6〜H-10）。SideStore 検証は不要。Android は未着手 |
 | M1 Android MVP | 未着手 |
 | M2 フリック・学習・範囲操作 | フリックは iOS で実装済み。学習・ユーザー辞書はコアに有り（モバイルでの共有・同時アクセスは D-5 とともに未着手）。範囲操作の UI は未着手 |
-| M3 iOS | **進行中**: TestFlight で実機を使える段階。実装済み（実機未確認の項目あり。`docs/ios-device-checklist.md`）: かな 12 キー・フリック・変換・候補・部分変換・英字、データ駆動レイアウト（`docs/ios-keyboard-layout.md`。toggle・長押し・shortcut・片手モード）、設定タブ（シンプル/詳細。`docs/ios-settings.md`）、レイアウト管理（取り込み・割当・`nagi://layout`）、初回案内・データ・About、診断ログ。サイト（`web/`）にレイアウト編集 GUI。残り: 部分変換の不具合 U-1 の再確認、実機確認、本物のアイコン・プライバシーポリシー・Beta App Review、堅牢性（`set_environment`、メモリ警告、他機種）、設定のコア側新規項目（`docs/ios-settings.md` §4 段階4）、タブ整理（現在7タブ）、見た目の調整 |
+| M3 iOS | **進行中**: TestFlight で実機を使える段階。実装済み（実機未確認の項目あり。`docs/ios-device-checklist.md`）: かな 12 キー・フリック・変換・候補・部分変換・英字、データ駆動レイアウト（`docs/ios-keyboard-layout.md`。toggle・長押し・shortcut・片手モード）、設定タブ（シンプル/詳細。`docs/ios-settings.md`）、レイアウト管理（取り込み・割当・`nagi://layout`）、初回案内・データ・About、診断ログ。サイト（`web/`）にレイアウト編集 GUI。残り: 部分変換の不具合 U-1 の再確認、実機確認、本物のアイコン・プライバシーポリシー・Beta App Review、堅牢性（メモリ警告・電源の実機確認、他機種）、設定のコア側新規項目（`docs/ios-settings.md` §4 段階4）、見た目の調整。タブは 5 つに整理済み（ホーム / 入力テスト / 設定 / レイアウト / About。実機確認待ち） |
 | M4 スタイル変換等 | 未着手 |
 
 ## 1. 着手順の方針
 
 - 設計の制約は厳しい側（iOS）に合わせる。ただし実装・検証は Android を先行する（H-2 の既存決定と整合）。
-  - iOS 拡張は子プロセス不可・メモリ上限が数十 MB 級・SideStore 配布で、実装の試行回数が稼ぎにくい。Android で FFI・タッチ入力・辞書共有の仕組みを先に確立する。
+  - iOS 拡張は子プロセス不可・メモリ上限が数十 MB 級・SideStore 配布で（当時の前提。H-15 で TestFlight 配布に変更）、実装の試行回数が稼ぎにくい。Android で FFI・タッチ入力・辞書共有の仕組みを先に確立する。
   - 「厳しい側に合わせる」は実装順ではなくコア設計の基準として適用する。辞書は mmap 前提、LLM は `minimal` で常用に耐える、依存は iOS/Android 両方でビルド可能、を Android 実装中も守る。
 - iOS の致命的リスク（拡張のメモリ上限。SideStore は H-15 で不要になった）は M0 で実測し、Android 実装に入る前に判定する。iOS が成立しない場合の設計変更を早く知るため。
 

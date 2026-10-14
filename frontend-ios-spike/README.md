@@ -68,8 +68,8 @@ open NagiSpike.xcodeproj
 ```
 
 Xcode の署名設定：
-- **Team**: Personal Team（無料アカウントで OK）
-- **Bundle ID**: 自動設定（XcodeGen の設定を使う）
+- **Team**: Apple Developer Program のチーム（加入済み。H-15）。配布は TestFlight 用に CI（`ios-testflight`）で署名する。ローカルの実機ビルドは、このチームの証明書を Xcode に入れて行う
+- **Bundle ID**: 自動設定（XcodeGen の設定を使う）。ホスト `com.shiki01.nagi`、拡張 `com.shiki01.nagi.keyboard`、App Group `group.com.shiki01.nagi`
 
 #### 6. 実機にビルド・実行
 
@@ -109,7 +109,7 @@ Xcode の署名設定：
 
 ### Probes タブ
 
-8 つの検証項目を実行できます：
+9 つの検証項目を実行できます（`Shared/Probes.swift`）：
 
 1. **appgroup**: App Group コンテナの読み書き可否。キーボード拡張との相互検証
 2. **baseline_memory**: エンジン未ロード時のメモリ（phys_footprint、利用可能メモリ）
@@ -125,7 +125,8 @@ Xcode の署名設定：
 7. **llm_load**: LLM ロードのメモリ増加量、時間、その後の Space 変換レイテンシ（ローマ字を打ってから Space）
    - 使用したモデル名・サイズ・実行元（app / keyboard）を note に記録。ロード失敗は原因別 (a)〜(d) で表示
    - LLM 非対応ビルド（`llama=false` の CI ビルド）時は skip
-8. **thermal_battery**: システムの熱状態・低電力モード・バッテリー状態を記録
+8. **llm_load_light**: `llm_load` と同じ手順を、プロファイル `light` を固定して実行する（H-9・H-10 の比較用）
+9. **thermal_battery**: システムの熱状態・低電力モード・バッテリー状態を記録
 
 「すべての Probe を実行（memory_ramp 除外）」で全項目を一括実行できます。Memory Ramp は強制終了のリスクがあるため、単独ボタン（警告付き）で実行します。
 
@@ -166,9 +167,12 @@ Xcode の署名設定：
 - 実行結果をホストアプリで確認可能（App Group 共有、または per-process）
 - 「結果を入力欄に挿入」ボタン: キーボード拡張で実行した Probe 結果を、入力フィールドに挿入。ホストアプリのテキストフィールドにコピーして確認可能（App Group が使えない環境向け）
 
-## App Group が使えない場合（無料アカウント）
+## 旧スパイク時代の記録: App Group が使えない場合（無料アカウント・Sideloadly）
 
-Sideloadly + 無料 Apple ID での導入など、App Group が使えない環境では以下の動作をします：
+> **以下は現行の手順ではありません。** 無料 Apple ID（Sideloadly）で導入していた時代の動作の記録です。
+> 現在は Apple Developer Program に加入し、TestFlight / App Store で配布します（`docs/decisions.md` H-15）。App Group は前提で、フォールバックの動作はありません。
+
+以前の検証では、App Group が使えない環境で次の動作をしていました：
 
 ### 辞書・モデルの自動フォールバック
 - **辞書**: App Group コンテナが無い場合、バンドルに同梱された `Resources/data/dict/nagi-dict.bin` を自動的に使用
@@ -256,8 +260,10 @@ cargo xtask build-ios-xcframework
 
 ## 設定ファイル
 
-- アプリのユーザー設定: `~/Library/Application Support/Nagi/` 下に保存
-- App Group コンテナ: `~/Library/Group Containers/group.com.shiki01.nagi/`
+- コアの設定（`config.toml`）: App Group コンテナの `user/config.toml`（`<App Group>/user/config.toml`）。キーボード拡張とホストアプリが共有する。先頭に `# nagi:generated` の目印がある間は、起動のたびに自動生成し直す（`Shared/ProductSession.swift`）
+- 学習・ユーザー辞書: App Group コンテナの `learning.tsv` / `user_dict/`
+- 辞書・モデル: App Group コンテナの `data/dict/nagi-dict.bin` / `data/models/`（`Shared/DataPaths.swift`）
+- Mac の `~/Library/...` 配下は、実機では存在しない（シミュレータ・旧スパイクの記録用）
 
 ## 参考
 

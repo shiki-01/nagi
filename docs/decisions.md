@@ -715,6 +715,8 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 
 ### H-4. 追加決定（2026-09-30）
 
+> 【H-15 で注記】下の「SideStore 検証」は H-15 により不要になった（iOS は TestFlight / App Store で配布する）。iOS の FFI は UniFFI ではなく C ABI で実装済み（H-10）。以下は当時の決定の記録として残す。
+
 - **SideStore 検証**: entitlement / App Group の維持（再署名後）、無料 Apple ID の制限の数え方、更新時の URL scheme 対応を、デスクトップ作業と独立に早期に実施する。H-2 の「FFI バインディングは UniFFI」の前提で、Swift のバインディングとして同時に検証する
 - **FFI 方式**: UniFFI で確定（H-2 の第一候補を確定に格上げ）。確認事項として以下を実装時に計測して決める旨を添える: (1) Preedit 等のネスト構造を毎キー渡すコスト、(2) 非同期通知（revision 付き差し替え）の callback 表現、(3) 描画差分を JSON 文字列か UniFFI 型で渡すか（p95 < 16ms 目標への影響）
 
@@ -936,7 +938,7 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **構成**: `NagiSession`（型付きの JSON-RPC。非同期通知は C ABI の `nagi_set_waker`、H-10）→ `KeyboardModel`（状態。`KeyboardHost` 経由でホストの入力欄を操作）→ `NagiKeyboardView`（SwiftUI の 12 キーと候補バー）。`ProductSession` が App Group の辞書・モデルからセッションを作る
 - **変換中の表示**: ホストの入力欄に `setMarkedText`（下線付き）で出し、確定は「確定文字列を変換中の表示に置き換えて `unmarkText`」。未入力のとき、コアが消費しない空白・改行・削除（`consumed = false`）はフロントがホストに直接入れる
 - **起動時の設定**: `<App Group>/user/config.toml` を自動生成（先頭の `# nagi:generated` 行があるファイルだけ起動のたびに作り直す）。`sync_budget_ms = 30`、更新確認なし、モデルは xsmall を優先（H-10）。メモリ上限は `nagi_server_new_with_budget` で渡す（H-8）
-- **未実装（次の段階）**: BackSpace の長押し連打、トグル入力の切り替え設定（現状はフリック入力固定）、`set_context`（直前のテキストを LLM の文脈に渡す）、ホストの入力欄が外部から変わったときの追従、QWERTY・英数・記号のレイアウト、候補の展開表示、本体アプリ（有効化の案内・設定）。**Swift はローカルでコンパイルできず、確認は CI（Xcode 26.3）のみ**
+- **未実装（次の段階）**（当時の状態。現状は `ios-device-checklist.md` §3）: BackSpace の長押し連打、トグル入力の切り替え設定（現状はフリック入力固定）、`set_context`（直前のテキストを LLM の文脈に渡す）、ホストの入力欄が外部から変わったときの追従、QWERTY・英数・記号のレイアウト、候補の展開表示、本体アプリ（有効化の案内・設定）。**Swift はローカルでコンパイルできず、確認は CI（Xcode 26.3）のみ**
 
 ### H-13. iOS キーボード段階 1 の実機結果と修正（2026-10-14）
 

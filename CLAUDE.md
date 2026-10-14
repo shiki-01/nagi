@@ -11,10 +11,10 @@
 
 ## 現状
 
-- Phase 0（技術検証）は、iOS の実機検証（拡張のメモリ上限・LLM の可否・応答時間）は完了（`docs/decisions.md` H 節）。モデル・辞書の精度比較は未着手。Phase 1 のコア部分（romaji / protocol / engine / server / dict / infer）は実装済み（進捗・未完了は `docs/progress.md`、要レビューの暫定判断は `docs/decisions.md` G 節）
-- **iOS（`frontend-ios-spike/`）**: キーボード拡張（かな 12 キー・フリック・変換・候補バー・部分変換・英字）とホストアプリ（辞書・モデルの取り込み、入力テスト、実機計測）が TestFlight で動く。コアとは C ABI（`core/ffi/`）で接続し、型は `cargo xtask gen-types` の Swift 型を共有する。実機の確認結果は `docs/decisions.md` H-6〜H-14。ビルド・署名・アップロードは GitHub Actions `ios-testflight`（手動実行: `gh workflow run ios-testflight.yml --ref main -f llama=true`。表示バージョンは `ios-vX.Y.Z` タグ、ビルド番号は run_number）。Swift はローカルでコンパイルできないため、CI の結果で確認する
+- Phase 0（技術検証）は、iOS の実機検証（拡張のメモリ上限・LLM の可否・応答時間）は完了（`docs/decisions.md` H 節）。モデル（zenz-v3.1 small / xsmall）の精度比較は一次比較済み（`docs/decisions.md` H-17。固定プロファイルで比較。文脈あり・量子化違い・辞書の組み合わせは未比較）。Phase 1 のコア部分（romaji / protocol / engine / server / dict / infer）は実装済み（進捗・未完了は `docs/progress.md`、要レビューの暫定判断は `docs/decisions.md` G 節）
+- **iOS（`frontend-ios-spike/`）**: キーボード拡張（かな 12 キー・フリック・変換・候補バー・部分変換・英字）とホストアプリ（辞書・モデルの取り込み、入力テスト、実機計測）が TestFlight で動く。コアとは C ABI（`core/ffi/`）で接続し、型は `cargo xtask gen-types` の Swift 型を共有する。実機の確認結果は `docs/decisions.md` H-6〜H-17。ビルド・署名・アップロードは GitHub Actions `ios-testflight`（手動実行: `gh workflow run ios-testflight.yml --ref main -f llama=true`。表示バージョンは `ios-vX.Y.Z` タグ、ビルド番号は run_number）。Swift はローカルでコンパイルできないため、CI の結果で確認する
 - Rust ワークスペースは `core/` 以下（edition 2024、`core/rust-toolchain.toml` で 1.89.0 固定）。コマンドはすべて `core/` で実行する
-- 未決定: 変換モデル・システム辞書（Phase 0 の比較で確定。基準は「無料・再配布制約が小さい → 品質 → 速度/サイズ」）。暫定は Mozc OSS 辞書 + zenz-v3.1-small（`docs/decisions.md` G 節）
+- 未決定: 変換モデル・システム辞書（Phase 0 の比較で確定。基準は「無料・再配布制約が小さい → 品質 → 速度/サイズ」）。暫定は Mozc OSS 辞書 + zenz-v3.1-small（`docs/decisions.md` G 節）。iOS の既定モデルは xsmall（H-10 の暫定。small が精度で優位（H-17）のため未決。`docs/ios-device-checklist.md` §0 (c)）
 
 ### ビルド・テスト・lint コマンド（`core/` で実行）
 

@@ -87,5 +87,5 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 
 1. スキーマ + 既定レイアウトの JSON 化 + キーボード拡張が JSON から描画（`text` / `flick` / `action` / `layout` / `spacer`）— 実装済み
 2. `toggle` / `shortcut` / `longPress` — 実装済み（実機確認待ち。`docs/ios-device-checklist.md` §3）
-3. サイトの編集 GUI（プレビュー、キーの追加/削除/並べ替え/サイズ、種類の切替、JSON の書き出し/読み込み）— 別担当
+3. サイトの編集 GUI（プレビュー、キーの追加/削除/並べ替え/サイズ、種類の切替、JSON の書き出し/読み込み）— 実装済み（`web/`。`web/src/routes/custom-keyboard`）
 4. ホストアプリでの取り込み・管理・割り当て — 実装済み（`App/LayoutManagerView.swift`。実機確認待ち）

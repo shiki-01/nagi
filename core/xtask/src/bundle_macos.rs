@@ -1,6 +1,6 @@
 //! `cargo xtask bundle-macos` — `Nagi.app` を組み立てて ad-hoc 署名し、zip 化する。
 //!
-//! 配布は Apple Developer Program 非加入のため ad-hoc 署名のみ（設計書 §5.2）。
+//! Apple Developer Program 加入済みだが、現状は ad-hoc 署名（Developer ID 署名 + 公証は検討可。`docs/decisions.md` H-15）。
 //! 署名と zip 化は macOS 上でのみ行い、他の OS では警告してスキップする。
 
 use std::fs;
