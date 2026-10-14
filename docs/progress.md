@@ -32,7 +32,7 @@
 4. ~~**キーマップ TOML**: `[keymap]` は `preset` だけ~~ → 実装済み（G-14。`composing`/`converting` の個別キー上書きに対応。`Insert`/`InsertText`/`SetMode` への上書きと `Direct` 文脈は対象外）。~~`update.auto_check` の実装~~ → 実装済み（G-19。起動時の自動確認・notify のみ。実サーバー（`nagi.shiki-01.com/updates/latest.json`）は未整備なので機能するにはサーバー側の用意が必要）。**設定の残り**: 設定 GUI（Phase 4）
 5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測
 6. ~~辞書形式を mmap 可能な形式へ変更~~ → 実装済み（H-7）。形式（version 2）は変えず、セクションを要素ごとのリトルエンディアン読み出し（アラインメント不要）にして `Dictionary::load` を mmap 化（非 Windows）。実機（iPhone 16e 拡張）で辞書の footprint は +61MB → +0.2MB、xsmall 併用のピークは 124MB → 71MB（H-7）
-7. **`insert_reading` / `perform_action` のプロトコル設計を core/protocol に追加**（typeshare 生成・check-types 含む。モバイル着手時でも可、設計だけ先行）: タッチ由来の入力表現（H-4 参照）。物理キー（`process_key`）との分離
+7. ~~`insert_reading` / `perform_action` のプロトコル設計を core/protocol に追加~~ → 実装済み（H-11。12 キーのトグル・フリック・濁点循環をコアで解決、Swift 型生成済み）。残るのはレイアウトの設定化・`initialize` の capability 拡張
 8. **iOS 拡張のメモリ上限実測と LLM 可否判定**（M0 最優先）: `nagi-infer` を iOS 環境でビルド・実行し、メモリ上限（Apple 公式ドキュメントの記載値・実測値）と LLM ロードのコストを測定。実測が出るまで iOS の品質基準は `minimal`（辞書+Viterbi）。**一次実測あり**（H-6: 拡張の上限は約 177MB、辞書の全量読み込みで +61MB。zenz small は載らない見込み。xsmall + 辞書は iPhone 16e の拡張内で連続変換 20 回に耐えた（残量最小 52.8MB）。他機種・CPU のみ・mmap 辞書での成立可否は未確認）。メモリ上限による LLM 読み込みの抑止（`--memory-budget-mb`、150MB 未満は辞書のみ）は実装済み（H-8）
 9. **SideStore 検証**（entitlement/App Group、無料 Apple ID 制限、URL scheme）: 再署名後の entitlement / App Group の維持、無料 Apple ID のデバイス台数・有効期限制限の数え方、更新時の URL scheme 対応を検証。デスクトップ作業と独立に早期に実施
 10. **UniFFI 試作**（ネスト構造のコスト・callback・JSON か型かの計測）: FFI 方式を UniFFI で確定（H-4 参照）。実装時に以下を計測して詳細を決める: Preedit 等のネスト構造を毎キー渡すコスト、非同期通知（revision 付き差し替え）の callback 表現、描画差分を JSON 文字列か UniFFI 型で渡すか（p95 < 16ms 目標への影響）

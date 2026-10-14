@@ -177,6 +177,88 @@ public struct InitializeResult: Codable {
 	}
 }
 
+
+/// Generated type representing the anonymous struct variant `Key12` of the `ReadingInput` Rust enum
+public struct ReadingInputKey12Inner: Codable {
+	/// キー（行）
+	public let key: KanaKey
+	/// 操作
+	public let gesture: KeyGesture
+
+	public init(key: KanaKey, gesture: KeyGesture) {
+		self.key = key
+		self.gesture = gesture
+	}
+}
+/// `insert_reading` の入力
+public enum ReadingInput: Codable {
+	/// 読み（かな・記号）をそのまま挿入する
+	case text(String)
+	/// 12 キー: キーと操作（タップ・トグル・フリック）から、挿入する文字をコアが決める
+	case key12(ReadingInputKey12Inner)
+	/// 直前の文字の濁点・半濁点・小書きを循環させる（「゛゜小」キー。か→が、は→ば→ぱ→は、つ→っ→づ→つ）
+	case variant
+
+	enum CodingKeys: String, CodingKey, Codable {
+		case text,
+			key12,
+			variant
+	}
+
+	private enum ContainerCodingKeys: String, CodingKey {
+		case type, content
+	}
+
+	public init(from decoder: Decoder) throws {
+		let container = try decoder.container(keyedBy: ContainerCodingKeys.self)
+		if let type = try? container.decode(CodingKeys.self, forKey: .type) {
+			switch type {
+			case .text:
+				if let content = try? container.decode(String.self, forKey: .content) {
+					self = .text(content)
+					return
+				}
+			case .key12:
+				if let content = try? container.decode(ReadingInputKey12Inner.self, forKey: .content) {
+					self = .key12(content)
+					return
+				}
+			case .variant:
+				self = .variant
+				return
+			}
+		}
+		throw DecodingError.typeMismatch(ReadingInput.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for ReadingInput"))
+	}
+
+	public func encode(to encoder: Encoder) throws {
+		var container = encoder.container(keyedBy: ContainerCodingKeys.self)
+		switch self {
+		case .text(let content):
+			try container.encode(CodingKeys.text, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .key12(let content):
+			try container.encode(CodingKeys.key12, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .variant:
+			try container.encode(CodingKeys.variant, forKey: .type)
+		}
+	}
+}
+
+/// `insert_reading` メソッドの要求パラメータ。応答は `process_key` と同じ [`ProcessKeyResult`]
+public struct InsertReadingParams: Codable {
+	/// セッション ID
+	public let session_id: String
+	/// 入力
+	public let input: ReadingInput
+
+	public init(session_id: String, input: ReadingInput) {
+		self.session_id = session_id
+		self.input = input
+	}
+}
+
 /// 整数項目の範囲
 public struct IntRange: Codable {
 	/// 最小値
@@ -268,6 +350,244 @@ public struct NotifyParams: Codable {
 		self.level = level
 		self.message = message
 		self.code = code
+	}
+}
+
+/// `perform_action` で実行する操作（タッチ UI のボタンやジェスチャーに対応する）
+public enum TouchAction: Codable {
+	/// 空白キー: 入力中は変換、変換中は次の候補。未入力なら消費しない（フロントが空白を入れる）
+	case space
+	/// 改行（確定）キー: 入力中・変換中は確定。未入力なら消費しない（フロントが改行を入れる）
+	case enter
+	/// 変換を開始する
+	case startConvert
+	/// 予測変換
+	case predict
+	/// 次の候補
+	case nextCandidate
+	/// 前の候補
+	case prevCandidate
+	/// 確定
+	case commit
+	/// 取消
+	case cancel
+	/// 1 文字削除（未入力なら消費しない）
+	case backspace
+	/// カーソル直後を削除
+	case deleteForward
+	/// 入力中のカーソル移動
+	case moveCursor(TouchDirection)
+	/// カーソルを先頭へ
+	case moveCursorHome
+	/// カーソルを末尾へ
+	case moveCursorEnd
+	/// 注目文節の移動
+	case moveFocus(TouchDirection)
+	/// 文節の区切りの伸縮
+	case resizeSegment(TouchDirection)
+	/// 複数文節の選択
+	case extendSelection(TouchDirection)
+	/// 注目文節の学習を削除
+	case deleteLearning
+	/// カタカナに変換
+	case toKatakana
+	/// ひらがなに変換
+	case toHiragana
+	/// 半角化
+	case toHankaku
+	/// 入力モードのトグル
+	case toggleMode
+	/// 入力モードを設定
+	case setMode(InputMode)
+	/// 直前の確定の取消
+	case undoCommit
+
+	enum CodingKeys: String, CodingKey, Codable {
+		case space,
+			enter,
+			startConvert = "start_convert",
+			predict,
+			nextCandidate = "next_candidate",
+			prevCandidate = "prev_candidate",
+			commit,
+			cancel,
+			backspace,
+			deleteForward = "delete_forward",
+			moveCursor = "move_cursor",
+			moveCursorHome = "move_cursor_home",
+			moveCursorEnd = "move_cursor_end",
+			moveFocus = "move_focus",
+			resizeSegment = "resize_segment",
+			extendSelection = "extend_selection",
+			deleteLearning = "delete_learning",
+			toKatakana = "to_katakana",
+			toHiragana = "to_hiragana",
+			toHankaku = "to_hankaku",
+			toggleMode = "toggle_mode",
+			setMode = "set_mode",
+			undoCommit = "undo_commit"
+	}
+
+	private enum ContainerCodingKeys: String, CodingKey {
+		case type, content
+	}
+
+	public init(from decoder: Decoder) throws {
+		let container = try decoder.container(keyedBy: ContainerCodingKeys.self)
+		if let type = try? container.decode(CodingKeys.self, forKey: .type) {
+			switch type {
+			case .space:
+				self = .space
+				return
+			case .enter:
+				self = .enter
+				return
+			case .startConvert:
+				self = .startConvert
+				return
+			case .predict:
+				self = .predict
+				return
+			case .nextCandidate:
+				self = .nextCandidate
+				return
+			case .prevCandidate:
+				self = .prevCandidate
+				return
+			case .commit:
+				self = .commit
+				return
+			case .cancel:
+				self = .cancel
+				return
+			case .backspace:
+				self = .backspace
+				return
+			case .deleteForward:
+				self = .deleteForward
+				return
+			case .moveCursor:
+				if let content = try? container.decode(TouchDirection.self, forKey: .content) {
+					self = .moveCursor(content)
+					return
+				}
+			case .moveCursorHome:
+				self = .moveCursorHome
+				return
+			case .moveCursorEnd:
+				self = .moveCursorEnd
+				return
+			case .moveFocus:
+				if let content = try? container.decode(TouchDirection.self, forKey: .content) {
+					self = .moveFocus(content)
+					return
+				}
+			case .resizeSegment:
+				if let content = try? container.decode(TouchDirection.self, forKey: .content) {
+					self = .resizeSegment(content)
+					return
+				}
+			case .extendSelection:
+				if let content = try? container.decode(TouchDirection.self, forKey: .content) {
+					self = .extendSelection(content)
+					return
+				}
+			case .deleteLearning:
+				self = .deleteLearning
+				return
+			case .toKatakana:
+				self = .toKatakana
+				return
+			case .toHiragana:
+				self = .toHiragana
+				return
+			case .toHankaku:
+				self = .toHankaku
+				return
+			case .toggleMode:
+				self = .toggleMode
+				return
+			case .setMode:
+				if let content = try? container.decode(InputMode.self, forKey: .content) {
+					self = .setMode(content)
+					return
+				}
+			case .undoCommit:
+				self = .undoCommit
+				return
+			}
+		}
+		throw DecodingError.typeMismatch(TouchAction.self, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Wrong type for TouchAction"))
+	}
+
+	public func encode(to encoder: Encoder) throws {
+		var container = encoder.container(keyedBy: ContainerCodingKeys.self)
+		switch self {
+		case .space:
+			try container.encode(CodingKeys.space, forKey: .type)
+		case .enter:
+			try container.encode(CodingKeys.enter, forKey: .type)
+		case .startConvert:
+			try container.encode(CodingKeys.startConvert, forKey: .type)
+		case .predict:
+			try container.encode(CodingKeys.predict, forKey: .type)
+		case .nextCandidate:
+			try container.encode(CodingKeys.nextCandidate, forKey: .type)
+		case .prevCandidate:
+			try container.encode(CodingKeys.prevCandidate, forKey: .type)
+		case .commit:
+			try container.encode(CodingKeys.commit, forKey: .type)
+		case .cancel:
+			try container.encode(CodingKeys.cancel, forKey: .type)
+		case .backspace:
+			try container.encode(CodingKeys.backspace, forKey: .type)
+		case .deleteForward:
+			try container.encode(CodingKeys.deleteForward, forKey: .type)
+		case .moveCursor(let content):
+			try container.encode(CodingKeys.moveCursor, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .moveCursorHome:
+			try container.encode(CodingKeys.moveCursorHome, forKey: .type)
+		case .moveCursorEnd:
+			try container.encode(CodingKeys.moveCursorEnd, forKey: .type)
+		case .moveFocus(let content):
+			try container.encode(CodingKeys.moveFocus, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .resizeSegment(let content):
+			try container.encode(CodingKeys.resizeSegment, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .extendSelection(let content):
+			try container.encode(CodingKeys.extendSelection, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .deleteLearning:
+			try container.encode(CodingKeys.deleteLearning, forKey: .type)
+		case .toKatakana:
+			try container.encode(CodingKeys.toKatakana, forKey: .type)
+		case .toHiragana:
+			try container.encode(CodingKeys.toHiragana, forKey: .type)
+		case .toHankaku:
+			try container.encode(CodingKeys.toHankaku, forKey: .type)
+		case .toggleMode:
+			try container.encode(CodingKeys.toggleMode, forKey: .type)
+		case .setMode(let content):
+			try container.encode(CodingKeys.setMode, forKey: .type)
+			try container.encode(content, forKey: .content)
+		case .undoCommit:
+			try container.encode(CodingKeys.undoCommit, forKey: .type)
+		}
+	}
+}
+
+/// `perform_action` メソッドの要求パラメータ。応答は `process_key` と同じ [`ProcessKeyResult`]
+public struct PerformActionParams: Codable {
+	/// セッション ID
+	public let session_id: String
+	/// 操作
+	public let action: TouchAction
+
+	public init(session_id: String, action: TouchAction) {
+		self.session_id = session_id
+		self.action = action
 	}
 }
 
@@ -865,4 +1185,54 @@ public struct UpdateSettingsResult: Codable {
 		self.errors = errors
 		self.snapshot = snapshot
 	}
+}
+
+/// 12 キーのキー（行）。レイアウトの描画はフロント、各キーの文字（タップ・フリック）の対応はコアが持つ
+public enum KanaKey: String, Codable {
+	/// あ行（あ い う え お）
+	case a
+	/// か行
+	case ka
+	/// さ行
+	case sa
+	/// た行
+	case ta
+	/// な行
+	case na
+	/// は行
+	case ha
+	/// ま行
+	case ma
+	/// や行（や （ ゆ ） よ）
+	case ya
+	/// ら行
+	case ra
+	/// わ行（わ を ん ー 〜）
+	case wa
+	/// 句読点（、 。 ？ ！ …）
+	case punct
+}
+
+/// 12 キーの操作
+public enum KeyGesture: String, Codable {
+	/// タップ（行の先頭の文字。連続してもトグルしない。フリック入力用）
+	case tap
+	/// トグル入力のタップ（連続して同じキーを押すと、直前の文字を同じ行の次の文字に置き換える）
+	case toggle
+	/// 左フリック
+	case flickLeft = "flick_left"
+	/// 上フリック
+	case flickUp = "flick_up"
+	/// 右フリック
+	case flickRight = "flick_right"
+	/// 下フリック
+	case flickDown = "flick_down"
+}
+
+/// 左右の方向
+public enum TouchDirection: String, Codable {
+	/// 左
+	case left
+	/// 右
+	case right
 }

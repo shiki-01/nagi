@@ -14,8 +14,12 @@ use crate::ir::{
 use crate::kana::to_katakana;
 use crate::keymap::{KeyContext, KeyMap};
 use crate::observer::{CommitContext, CommitObserver, CommittedSegment};
+use crate::touch;
 use nagi_protocol::key::{KeyEvent, KeyKind};
-use nagi_protocol::methods::{ProcessKeyResult, RestoreSessionParams, SetContextParams};
+use nagi_protocol::methods::{
+    KanaKey, KeyGesture, ProcessKeyResult, ReadingInput, RestoreSessionParams, SetContextParams,
+    TouchAction, TouchDirection,
+};
 use nagi_protocol::utf16;
 use nagi_protocol::view::{CandidateView, CandidatesView, InputMode, PreeditView};
 use nagi_rewriter::Rewriter;
@@ -178,6 +182,19 @@ struct Session {
     last_commit: Option<LastCommit>,
     /// このキー処理で確定取消が成功した場合の `delete_before`（`finish` が読んで消費する）
     pending_delete_before: Option<u32>,
+    /// 12 キーのトグル入力の途中状態（直前の入力が `Toggle` のタップだったとき）
+    touch_toggle: Option<TouchToggle>,
+}
+
+/// 12 キーのトグル入力で、直前に入れた文字（同じキーが続けて押されたら置き換える）
+#[derive(Debug, Clone, Copy)]
+struct TouchToggle {
+    key: KanaKey,
+    /// `touch::key_chars` の添字
+    index: usize,
+    /// 文字を入れたあとのカーソル位置（別の編集があれば一致しなくなる）
+    cursor: usize,
+    ch: char,
 }
 
 /// ライブ変換のキャッシュ
@@ -326,6 +343,7 @@ impl Engine {
             live_suppressed: false,
             last_commit: None,
             pending_delete_before: None,
+            touch_toggle: None,
         }
     }
 
@@ -344,11 +362,164 @@ impl Engine {
     pub fn process_key(&mut self, session_id: &str, key: &KeyEvent) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
         sess.origins.clear();
+        sess.touch_toggle = None;
         let mut commit = String::new();
         let consumed = self.handle_key(&mut sess, key, &mut commit);
         let result = self.finish(&mut sess, consumed, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
+    }
+
+    /// `insert_reading` メソッド（タッチ入力）: ローマ字を経由せず、読み（かな）を挿入する。
+    /// 12 キーのキー・操作（タップ・トグル・フリック）や、濁点・小書きの循環もここで解決する
+    pub fn insert_reading(&mut self, session_id: &str, input: &ReadingInput) -> ProcessKeyResult {
+        let mut sess = self.take_session(session_id);
+        sess.origins.clear();
+        sess.last_commit = None;
+        let mut commit = String::new();
+        let consumed = self.apply_reading(&mut sess, input, &mut commit);
+        let result = self.finish(&mut sess, consumed, commit);
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// `perform_action` メソッド（タッチ入力）: ボタンに対応する操作を直接実行する。
+    /// 未入力（Direct）で意味の無い操作（Backspace・Enter など）は消費せず、フロントが既定の処理をする
+    pub fn perform_action(&mut self, session_id: &str, action: &TouchAction) -> ProcessKeyResult {
+        let mut sess = self.take_session(session_id);
+        sess.origins.clear();
+        sess.touch_toggle = None;
+        let mut commit = String::new();
+        let consumed = match Self::touch_to_action(&sess.state, action) {
+            Some(mapped) => {
+                // 確定取消以外の操作が来たら、確定直後の記憶を捨てる（キー経路と同じ）
+                if !matches!(mapped, Action::UndoCommit) {
+                    sess.last_commit = None;
+                }
+                self.apply(&mut sess, mapped, &mut commit)
+            }
+            None => false,
+        };
+        let result = self.finish(&mut sess, consumed, commit);
+        self.sessions.insert(session_id.to_string(), sess);
+        result
+    }
+
+    /// タッチ操作を Action に写す。`None` は「消費しない」（未入力で意味の無い操作）
+    fn touch_to_action(state: &State, action: &TouchAction) -> Option<Action> {
+        let dir = |d: &TouchDirection| match d {
+            TouchDirection::Left => Direction::Left,
+            TouchDirection::Right => Direction::Right,
+        };
+        let direct = matches!(state, State::Direct);
+        let mapped = match action {
+            TouchAction::Space => match state {
+                State::Direct => return None,
+                State::Composing => Action::StartConvert,
+                State::Converting(_) => Action::NextCand,
+            },
+            TouchAction::Enter | TouchAction::Commit => Action::Commit,
+            TouchAction::StartConvert => Action::StartConvert,
+            TouchAction::Predict => Action::Predict,
+            TouchAction::NextCandidate => Action::NextCand,
+            TouchAction::PrevCandidate => Action::PrevCand,
+            TouchAction::Cancel => Action::Cancel,
+            TouchAction::Backspace => Action::Backspace,
+            TouchAction::DeleteForward => Action::DeleteForward,
+            TouchAction::MoveCursor(d) => Action::MoveCursor(dir(d)),
+            TouchAction::MoveCursorHome => Action::MoveCursorHome,
+            TouchAction::MoveCursorEnd => Action::MoveCursorEnd,
+            TouchAction::MoveFocus(d) => Action::MoveFocus(dir(d)),
+            TouchAction::ResizeSegment(d) => Action::ResizeSegment(dir(d)),
+            TouchAction::ExtendSelection(d) => Action::ExtendSelection(dir(d)),
+            TouchAction::DeleteLearning => Action::DeleteLearning,
+            TouchAction::ToKatakana => Action::ToKatakana,
+            TouchAction::ToHiragana => Action::ToHiragana,
+            TouchAction::ToHankaku => Action::ToHankaku,
+            TouchAction::ToggleMode => Action::ToggleMode,
+            TouchAction::SetMode(mode) => Action::SetMode(*mode),
+            TouchAction::UndoCommit => Action::UndoCommit,
+        };
+        // 未入力では、モード切替と確定取消だけが意味を持つ。ほかはフロントの既定処理に任せる
+        if direct
+            && !matches!(
+                mapped,
+                Action::SetMode(_) | Action::ToggleMode | Action::UndoCommit
+            )
+        {
+            return None;
+        }
+        Some(mapped)
+    }
+
+    fn apply_reading(&self, sess: &mut Session, input: &ReadingInput, commit: &mut String) -> bool {
+        match input {
+            ReadingInput::Text(text) => {
+                sess.touch_toggle = None;
+                let mut chars = text.chars();
+                let Some(first) = chars.next() else {
+                    return false;
+                };
+                self.insert_char(sess, first, commit);
+                for c in chars {
+                    sess.composer.insert_char(c);
+                }
+                true
+            }
+            ReadingInput::Key12 { key, gesture } => {
+                let chars = touch::key_chars(*key);
+                // トグル: 直前に同じキーで入れた文字がカーソルの直前にそのまま残っていれば、次の文字に置き換える
+                if *gesture == KeyGesture::Toggle
+                    && let Some(t) = sess.touch_toggle
+                    && t.key == *key
+                    && matches!(sess.state, State::Composing)
+                    && sess.composer.cursor() == t.cursor
+                    && sess.composer.char_before_cursor() == Some(t.ch)
+                {
+                    let index = (t.index + 1) % chars.len();
+                    let ch = chars[index];
+                    sess.composer.replace_before_cursor(ch);
+                    // 入力済みの文字を書き換えたので、ライブ変換の結果は捨てる（文中編集と同じ）
+                    sess.live_conversion = None;
+                    sess.touch_toggle = Some(TouchToggle {
+                        key: *key,
+                        index,
+                        cursor: sess.composer.cursor(),
+                        ch,
+                    });
+                    return true;
+                }
+                let index = touch::gesture_index(*gesture);
+                let ch = chars[index];
+                self.insert_char(sess, ch, commit);
+                sess.touch_toggle = (*gesture == KeyGesture::Toggle).then(|| TouchToggle {
+                    key: *key,
+                    index,
+                    cursor: sess.composer.cursor(),
+                    ch,
+                });
+                true
+            }
+            ReadingInput::Variant => {
+                sess.touch_toggle = None;
+                match sess.state {
+                    // 未入力: フロントの既定処理に任せる（消費しない）
+                    State::Direct => false,
+                    State::Converting(_) => true,
+                    State::Composing => {
+                        if let Some(next) = sess
+                            .composer
+                            .char_before_cursor()
+                            .and_then(touch::next_variant)
+                        {
+                            sess.composer.replace_before_cursor(next);
+                            sess.live_conversion = None;
+                        }
+                        true
+                    }
+                }
+            }
+        }
     }
 
     /// フォーカスを得た（状態は変えない）

@@ -393,6 +393,31 @@ impl Composer {
         }
     }
 
+    /// カーソル直前の 1 文字（保留中のローマ字がある場合は `None`）
+    pub fn char_before_cursor(&self) -> Option<char> {
+        if self.has_pending() {
+            return None;
+        }
+        self.cursor
+            .checked_sub(1)
+            .and_then(|i| self.chars.get(i))
+            .map(|&(c, _)| c)
+    }
+
+    /// カーソル直前の 1 文字を、日本語の文字 `ch` に置き換える（タッチ入力のトグル・濁点循環用）。
+    /// 置き換えられたら `true`
+    pub fn replace_before_cursor(&mut self, ch: char) -> bool {
+        self.flush_pending();
+        let Some(i) = self.cursor.checked_sub(1) else {
+            return false;
+        };
+        let Some(slot) = self.chars.get_mut(i) else {
+            return false;
+        };
+        *slot = (ch, PieceKind::Japanese);
+        true
+    }
+
     /// 保留を確定させる（`n` → ん など）
     pub fn flush_pending(&mut self) {
         let emits = self.converter.flush();

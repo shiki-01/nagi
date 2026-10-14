@@ -914,3 +914,16 @@ H-9 の応答時間の謎の原因: `conversion.sync_budget_ms` の既定が 150
 - **xsmall の「不達」は不具合ではない**: 同期応答が 19.8ms で、待ち時間（30ms）に収まって LLM の結果をその場で返したため、差し替える結果がなかった
 - **iOS の暫定既定を訂正**: 先に「small + light」としたが、応答時間を踏まえて **xsmall を既定**とする。xsmall は待ち時間内に LLM の結果が返る（差し替えのちらつきが無い）。small は結果が約 0.6 秒遅れて差し替わる。**変換精度の差（zenz small と xsmall）は未比較**で、small が明確に良い場合に限り、設定で small を選べるようにする（Phase 0 の比較項目。デスクトップで `nagi-eval` により比較できる）
 
+### H-11. タッチ入力のプロトコル `insert_reading` / `perform_action`（2026-10-14、要レビュー）
+
+H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の系統で渡し、物理キーは `process_key`）を実装した。12 キーのトグル・フリックの解決はコア側（H-2）。
+
+- **`insert_reading`**（応答は `process_key` と同じ描画差分）: `input` は隣接タグ付きの列挙（`{"type": ..., "content": ...}`）。
+  - `text`: 読み（かな・記号）をそのまま挿入する。ローマ字変換を通らない（非 ASCII は直接、ASCII はローマ字扱い）
+  - `key12 { key, gesture }`: 12 キーのキー（`a ka sa ta na ha ma ya ra wa punct`）と操作（`tap` / `toggle` / `flick_left|up|right|down`）。文字の対応はコア（`engine/src/touch.rs`。中央・左・上・右・下の順で、や行は `や （ ゆ ） よ`、わ行は `わ を ん ー 〜`、句読点は `、 。 ？ ！ …`）。`tap` は連続してもトグルしない（フリック入力）。`toggle` は同じキーを続けて押すと、直前の文字を同じ行の次の文字に置き換える（あ→い→う→え→お→あ）。カーソルが動く・別の入力が入る・物理キーが来る・フリックを挟むと、トグルは続かない
+  - `variant`: 直前の文字の濁点・半濁点・小書きの循環（か→が→か、は→ば→ぱ→は、つ→っ→づ→つ、う→ぅ→ゔ→う など）。未入力なら消費しない
+- **`perform_action`**（同上）: `action` は `space` `enter` `start_convert` `predict` `next_candidate` `prev_candidate` `commit` `cancel` `backspace` `delete_forward` `move_cursor` `move_cursor_home` `move_cursor_end` `move_focus` `resize_segment` `extend_selection`（方向は `left` / `right`）`delete_learning` `to_katakana` `to_hiragana` `to_hankaku` `toggle_mode` `set_mode`（`hiragana` / `alphanumeric`）`undo_commit`。`space` は入力中なら変換、変換中なら次の候補。**未入力（Direct）では `set_mode` / `toggle_mode` / `undo_commit` 以外を消費しない**（`consumed = false`。フロントが空白・改行・1 文字削除などの既定の処理をする）
+- **選択肢の追加は `select_candidate`（既存）**。候補バーのタップは絶対インデックスで送る
+- Swift の型は `cargo xtask gen-types` で生成してコミット済み（`frontend-macos/Sources/Generated/Protocol.swift`。iOS も同じ型を使う）
+- 未実装: 12 キー以外のレイアウト（QWERTY は既存の `process_key` を使う）、`initialize` の capability 拡張（`platform` / `memory_limit_mb` など。メモリ上限は `nagi_server_new_with_budget` で渡している）、レイアウトの配列を設定で差し替える仕組み（現状は固定表）
+

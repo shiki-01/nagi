@@ -28,6 +28,10 @@ pub mod method {
     pub const GET_SETTINGS: &str = "get_settings";
     /// `update_settings` メソッド（設定の書き込み）
     pub const UPDATE_SETTINGS: &str = "update_settings";
+    /// `insert_reading` メソッド（タッチ入力: ローマ字を経由せず読みを挿入）
+    pub const INSERT_READING: &str = "insert_reading";
+    /// `perform_action` メソッド（タッチ UI のボタンから操作を直接実行）
+    pub const PERFORM_ACTION: &str = "perform_action";
     /// `select_candidate` メソッド
     pub const SELECT_CANDIDATE: &str = "select_candidate";
     /// `reconvert` メソッド
@@ -398,4 +402,156 @@ pub struct StatusResult {
     pub config_path: Option<String>,
     /// 直近の設定読み込みに失敗して旧設定で動いているか
     pub config_error: bool,
+}
+
+// ---- タッチ入力（モバイル。`insert_reading` / `perform_action`） ----
+
+/// 12 キーのキー（行）。レイアウトの描画はフロント、各キーの文字（タップ・フリック）の対応はコアが持つ
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KanaKey {
+    /// あ行（あ い う え お）
+    A,
+    /// か行
+    Ka,
+    /// さ行
+    Sa,
+    /// た行
+    Ta,
+    /// な行
+    Na,
+    /// は行
+    Ha,
+    /// ま行
+    Ma,
+    /// や行（や （ ゆ ） よ）
+    Ya,
+    /// ら行
+    Ra,
+    /// わ行（わ を ん ー 〜）
+    Wa,
+    /// 句読点（、 。 ？ ！ …）
+    Punct,
+}
+
+/// 12 キーの操作
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyGesture {
+    /// タップ（行の先頭の文字。連続してもトグルしない。フリック入力用）
+    Tap,
+    /// トグル入力のタップ（連続して同じキーを押すと、直前の文字を同じ行の次の文字に置き換える）
+    Toggle,
+    /// 左フリック
+    FlickLeft,
+    /// 上フリック
+    FlickUp,
+    /// 右フリック
+    FlickRight,
+    /// 下フリック
+    FlickDown,
+}
+
+/// `insert_reading` の入力
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content", rename_all = "snake_case")]
+pub enum ReadingInput {
+    /// 読み（かな・記号）をそのまま挿入する
+    Text(String),
+    /// 12 キー: キーと操作（タップ・トグル・フリック）から、挿入する文字をコアが決める
+    Key12 {
+        /// キー（行）
+        key: KanaKey,
+        /// 操作
+        gesture: KeyGesture,
+    },
+    /// 直前の文字の濁点・半濁点・小書きを循環させる（「゛゜小」キー。か→が、は→ば→ぱ→は、つ→っ→づ→つ）
+    Variant,
+}
+
+/// `insert_reading` メソッドの要求パラメータ。応答は `process_key` と同じ [`ProcessKeyResult`]
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InsertReadingParams {
+    /// セッション ID
+    pub session_id: String,
+    /// 入力
+    pub input: ReadingInput,
+}
+
+/// 左右の方向
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TouchDirection {
+    /// 左
+    Left,
+    /// 右
+    Right,
+}
+
+/// `perform_action` で実行する操作（タッチ UI のボタンやジェスチャーに対応する）
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content", rename_all = "snake_case")]
+pub enum TouchAction {
+    /// 空白キー: 入力中は変換、変換中は次の候補。未入力なら消費しない（フロントが空白を入れる）
+    Space,
+    /// 改行（確定）キー: 入力中・変換中は確定。未入力なら消費しない（フロントが改行を入れる）
+    Enter,
+    /// 変換を開始する
+    StartConvert,
+    /// 予測変換
+    Predict,
+    /// 次の候補
+    NextCandidate,
+    /// 前の候補
+    PrevCandidate,
+    /// 確定
+    Commit,
+    /// 取消
+    Cancel,
+    /// 1 文字削除（未入力なら消費しない）
+    Backspace,
+    /// カーソル直後を削除
+    DeleteForward,
+    /// 入力中のカーソル移動
+    MoveCursor(TouchDirection),
+    /// カーソルを先頭へ
+    MoveCursorHome,
+    /// カーソルを末尾へ
+    MoveCursorEnd,
+    /// 注目文節の移動
+    MoveFocus(TouchDirection),
+    /// 文節の区切りの伸縮
+    ResizeSegment(TouchDirection),
+    /// 複数文節の選択
+    ExtendSelection(TouchDirection),
+    /// 注目文節の学習を削除
+    DeleteLearning,
+    /// カタカナに変換
+    ToKatakana,
+    /// ひらがなに変換
+    ToHiragana,
+    /// 半角化
+    ToHankaku,
+    /// 入力モードのトグル
+    ToggleMode,
+    /// 入力モードを設定
+    SetMode(InputMode),
+    /// 直前の確定の取消
+    UndoCommit,
+}
+
+/// `perform_action` メソッドの要求パラメータ。応答は `process_key` と同じ [`ProcessKeyResult`]
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerformActionParams {
+    /// セッション ID
+    pub session_id: String,
+    /// 操作
+    pub action: TouchAction,
 }
