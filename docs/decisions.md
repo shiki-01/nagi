@@ -1037,3 +1037,22 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **入力中の候補**: 既存の `compute_composing_items` が先頭文節の `segment_candidates` を呼ぶので、先頭文節の読みが表に完全一致するときだけ絵文字が出る（前方一致・部分一致なし）。エンジンの変更なし。ただし入力中候補は上限 12 件なので、辞書候補が多い読みでは末尾の絵文字が切れる
 - **設定**: `rewriter.emoji` / `rewriter.kaomoji`（bool、既定 true、level=detail、platforms=both、グループ「表記の候補」）。ホットリロード対応（`Tunables` → `Effective`）。`docs/ios-settings.md` の旧 `convert.emoji_candidates` はこの 2 項目に置き換え
 
+
+### H-22. iOS リリース準備のユーザー判断（2026-10-14）
+
+`docs/ios-device-checklist.md` §0 と `docs/ios-release.md` §5 の要判断事項への回答。
+
+- **(a) 診断ログ**: TestFlight 期間中は**入力内容を含めて既定 ON**（現状どおり。判定は `DiagLog.isTestBuild`＝DEBUG または `sandboxReceipt`）。App Store 配布版は**既定 OFF・内容を含めない**。パスワード欄は内容を伏せる（`DiagLog.quote(redact:)`、現状どおり）。`CLAUDE.md` の「ログに入力内容を残さない」に対する、**テスト配布期間に限った例外**として `CLAUDE.md` に一文を追記した。App Store 版への切り替えは `isTestBuild` の判定で自動（コード変更不要）。実装済みの範囲は変更なし。「入力内容を含まない」ログ形式（件数・時間・エラーコードのみ）は App Store 版では未実装で、既定 OFF にして記録自体を止めている（ユーザーが明示的に ON にした場合は内容を含む）
+- **(b) `RequestsOpenAccess`**: `true` のまま（H-18）。審査メモでの用途説明は `ios-release.md` §1.4
+- **(c) iOS の既定モデル**: **small。ただし端末ごとに自動選択**する。`NagiModelRecommendation.recommend(budgetMB:, available:)`（純粋関数。`Shared/ModelRecommendation.swift`）が、`予算 − (モデルのサイズ + 20MB) ≥ 40MB` を満たす最大のモデルを返す。定数: 実行時の見込み 20MB（実測の small ピーク約 78MB に対し、モデル全体 70MB を足しても余る見積り）、安全マージン 40MB。実機の拡張（約 177MB）では small（要 130MB 以上）が選ばれ、xsmall は 80MB 以上で選ばれる。どれも載らなければ推奨なしで、`DataPaths.selectModel` は最小のモデルにする（コア側も 150MB 未満では LLM を読まない。H-8）
+  - **優先順位**: Picker での明示選択 → 推奨 → （予算が測れないとき）既定名 small → 最大サイズ。従来の「未選択のとき xsmall 優先」（H-10 の暫定）は廃止
+  - **予算の取得**: 拡張は `ProductSession.make` で `MemoryProbe.processBudgetMB()`（footprint + `os_proc_available_memory`）を計算して使い、`DataPaths.recordExtensionBudgetMB` で App Group の UserDefaults に記録する。ホストアプリの `os_proc_available_memory` は数 GB を返し拡張の予算の代用にならないため、ホストの表示・Probes・設定は**記録済みの拡張の予算**を使い、拡張が一度も起動していなければ**仮定値 177MB**（H-6/H-9 の実測）で計算する。これにより、ホストの「使用」表示と拡張が実際に読むモデルが（拡張起動後は）一致する
+  - **表示**: データ画面のモデル欄に「推奨: small（この端末の予算 177MB に対して余裕あり）」を出す
+  - **残る確認**: small にすると同期の待ち 30ms を超えた結果が約 0.6 秒後に差し替わる（H-10）。他機種（予算の小さい端末）での実測、予算のばらつき（拡張の起動時のページ状況で footprint + 残りが揺れる）は未確認
+- **暗号化申告**: `ITSAppUsesNonExemptEncryption=false` を維持する。TLS（`ureq`/rustls/ring）は `nagi-ffi` から外し済み（`ios-release.md` §0.2）で、残る `ed25519-dalek`・`sha2` は認証・ハッシュ用途のみ。最終バイナリの確認（`nm`/`strings` で `rustls`/`ring` が無いこと）は CI のビルド後に残る
+- **PrivacyInfo / AppleKeyboards**: `AppleKeyboards` の読み取りは削除済みのまま、マーカーのみで判定する。`CA92.1` の追加も維持
+- **iPad**: iPhone 専用（`TARGETED_DEVICE_FAMILY: "1"`、設定済み）。13 インチのスクリーンショットは不要
+- **表示名**: `Nagi`（設定済み）。App Store のアプリ名 `Nagi 日本語キーボード` は App Store Connect での作成時に確保できるか分かる
+- **診断ログ・Probes（App Store 版）**: About の「開発者向け」セクション（端末情報・Probes・結果）を `DiagLog.isTestBuild` のときだけ表示する（App Store 版では隠す）。キーボード側の検証 UI は元から `isTestBuild` 限定
+- **サイト**: Cloudflare Pages に置く（ドメイン `nagi.shiki-01.com`、DNS・カスタムドメインの設定は後で）。手順は `web/README.md`。`/privacy` の【要確認】欄（提供者名・施行日・アクセスログ・年齢区分・連絡窓口）は**空けておく指示のため触らない**（公開前に埋める必要がある点は変わらない）
+- **未決のまま**: フルアクセス OFF での動作（§0.3）、モデルの配布方針（§4）、U-1、ed25519 更新鍵、カテゴリ・連絡先・TestFlight 外部テスターの扱い

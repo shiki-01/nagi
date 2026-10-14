@@ -46,7 +46,24 @@ SvelteKit は 2.x に固定（3.x は設定 API が変わっており未検証�
   フルアクセスを要求する前提で、サポート文面・ポリシーと審査メモの整合を維持する。
 - 公開前に `/privacy` の【要確認】表示（施行日・提供者名・アクセスログ・子どもの年齢区分）を埋めて取り除く。
 
-## デプロイ（未定。候補）
+## デプロイ（Cloudflare Pages。決定: decisions.md H-22）
 
-`build/` をそのまま置ける静的ホスティング: Cloudflare Pages / GitHub Pages / Netlify / 自前サーバー。
-独自ドメイン `nagi.shiki-01.com` の DNS（CNAME）設定が必要。
+`build/` の静的出力を Cloudflare Pages に置く。独自ドメインは `nagi.shiki-01.com`（DNS・カスタムドメインの設定は後で行う）。
+
+想定手順（Cloudflare ダッシュボード > Workers & Pages > Create > Pages > Git に接続）:
+
+1. リポジトリ `nagi` を接続し、本番ブランチを `main` にする
+2. ビルド設定:
+   - フレームワーク プリセット: なし（None）
+   - ルートディレクトリ（Root directory）: `web`
+   - ビルドコマンド: `npm run build`
+   - ビルド出力ディレクトリ: `build`
+3. 環境変数: `NODE_VERSION` = `22`（CI の `.github/workflows/web.yml` と同じ。`web/.node-version` を置いてもよい）
+4. デプロイ後、Pages プロジェクトの「カスタムドメイン」に `nagi.shiki-01.com` を追加する。`shiki-01.com` の DNS が Cloudflare 管理なら CNAME が自動で作られ、他社 DNS なら `nagi` の CNAME を `<プロジェクト名>.pages.dev` に向ける
+5. 公開後、`https://nagi.shiki-01.com/privacy` と `/support` が 200 で開くことを確認する（App Store Connect の URL が 404 だと審査に通らない）
+
+404.html の扱い: adapter-static の `fallback: '404.html'`（`svelte.config.js`）で `build/404.html` が出力される。Cloudflare Pages は `404.html` があると、**未存在パスにそのファイルを 404 ステータスで返す**（SPA 扱いにはならない）。そのため `_redirects` による全パスの書き換えや SPA フォールバックの設定は**不要**で、置かないこと（置くと 404 が 200 になる）。`prerender` された各ページは `/privacy` のようにディレクトリなしのパスで開く（Pages は `privacy.html` を拡張子なしで配信する）。
+
+【要確認】`trailingSlash` の設定と Pages の配信パスの組み合わせは、実際にデプロイして `/privacy`・`/support`・`/sitemap.xml`・未存在パスの 404 を確認すること（ローカルでは未検証）。
+
+プレビュー（ブランチごとの `*.pages.dev`）は検索に載せたくないため、必要なら `static/robots.txt` ではなく Pages のプレビュー保護（Cloudflare Access）で制限する。

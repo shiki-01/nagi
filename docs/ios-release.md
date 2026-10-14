@@ -79,6 +79,7 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 
 ### 0.6 診断ログ
 
+- **決定済み（H-22）**: TestFlight 期間中は入力内容を含めて既定 ON、App Store 版は既定 OFF・内容を含めない（パスワード欄は伏せる）。`CLAUDE.md` に期間限定の例外として明記。外部テスターへの開示は `/privacy` §7 と About のとおり。以下は判断前の状況メモ。
 - `Shared/DiagLog.swift:30-36`: TestFlight（`sandboxReceipt`）では既定 ON、App Store 配布では OFF。ログは**入力内容を含む**（`docs/ios-device-checklist.md` §0 (a) が未決のまま）。`/privacy` §7 は「TestFlight 期間中の暫定」と開示している。外部テスターに配る前に、(a) の判断（入力内容を含めるか）と、`CLAUDE.md` の「ログに入力内容を残さない」との関係を決める。外部テスターは第三者なので、内部テストより重要
 
 ---
@@ -104,7 +105,7 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 - 現在の設定: ホストアプリの Info.plist に `ITSAppUsesNonExemptEncryption: false`（`project.yml:61`）。これを入れておくと、TestFlight にアップロードするたびの輸出コンプライアンスの質問が省かれる
 - 根拠として言えること: Nagi 自身は暗号化機能を持たない。通信するのは辞書・モデルの取得と更新確認だけ（`/privacy` §5）で、現状の iOS 版は**アプリ内に通信コードが無い**（`URLSession` / `https://` を使う箇所は `AboutView.swift` のリンクのみ。Swift 側を grep）。SHA-256 検証・ed25519 署名検証は認証・ハッシュ用途
 - 根拠として言えないこと: 「バイナリに暗号化の実装が一切含まれない」。**§0.2 のとおり `rustls/ring` がコア経由で入りうる**。ここが解消するまで、`false` の根拠は未確定
-- 判断が付いたら、結論と理由を `docs/decisions.md` に残す
+- **決定済み（H-22）**: `false` を維持する。TLS は `nagi-ffi` から除外済みで、残る暗号関連は認証・ハッシュ用途のみ。最終バイナリの確認は CI のビルド後に残る
 
 ### 1.3 プライバシー申告
 
@@ -151,7 +152,7 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 - サポート URL: `https://nagi.shiki-01.com/support`（`web/README.md`）
 - プライバシーポリシー URL: `https://nagi.shiki-01.com/privacy`
 - マーケティング URL（任意）: `https://nagi.shiki-01.com/`
-- [ ] **サイトが公開されていること**。`web/README.md` のデプロイ先は「未定（候補: Cloudflare Pages ほか）」で、DNS も未設定。**URL が 404 だと審査に通らない**
+- [ ] **サイトが公開されていること**。デプロイ先は Cloudflare Pages に決定（`web/README.md`）だが、プロジェクト作成と DNS は未設定。**URL が 404 だと審査に通らない**
 - [ ] `/privacy` の【要確認】表示（施行日・提供者名・アクセスログの扱い・年齢区分）を埋めて消す（`web/src/routes/privacy/+page.svelte`、`web/README.md` 末尾）。提供者名は個人開発者の氏名または屋号（法務確認の TODO あり）
 - [ ] `/support` の問い合わせ先は GitHub Issues のみ（アカウントが必要）。App Store の「連絡先」とは別に、**メールアドレスなど GitHub を使わない窓口が要るか**はユーザー判断（§5）
 - [ ] `/support` の「現在は TestFlight で検証中の開発版」の文言は、App Store 公開時に直す
@@ -159,7 +160,7 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 ### 1.8 その他
 
 - [ ] 「部分変換で残りが二重に出る」不具合（U-1。`ios-device-checklist.md` §1）が未解決。`/support` に既知の不具合として記載済み。公開前に直すか、機能として説明に出さない（§3）
-- [ ] 暫定の既定モデルの判断（xsmall か small か。`ios-device-checklist.md` §0 (c)）
+- [x] 既定モデルの判断: small を基本に端末の予算で自動選択（H-22）。実機でホームの「推奨」表示と拡張の使用モデルが一致するかは未確認
 - [ ] 実機での確認項目（`ios-device-checklist.md` §3）の消化。特にメモリ警告時の挙動、入力欄の切替、パスワード欄
 - [ ] クラッシュ時の挙動: 拡張がメモリ超過で落ちたときに入力が失われないこと（同 §3 堅牢性）
 
@@ -173,7 +174,7 @@ Apple 側の要件（審査ガイドライン、スクリーンショット寸�
 
 - [ ] §0.1（宣言漏れ）、§0.2（暗号化）、§0.4（表示名）を直す
 - [ ] `/privacy` と `/support` を公開する（§1.7）。Beta App Review 情報にも URL を入れる欄がある
-- [ ] 診断ログの既定の判断（§0.6）。外部テスターでは、入力内容を含むログを既定 ON にすべきではないという立場なら、先に直す
+- [x] 診断ログの既定の判断（§0.6）: TestFlight 期間は入力内容を含めて既定 ON で許容（H-22）。外部テスターへの開示（`/privacy` §7、About、`/support`）が実装と整合していることだけ公開前に確認する
 
 ### 2.2 Beta App Review 情報（App Store Connect > TestFlight > テスト情報）
 
@@ -393,17 +394,17 @@ Nagi は、入力した文章を端末の外へ送らない日本語キーボー
 
 ## 5. 未決・要確認（ユーザー判断）
 
-提出に直接影響が大きい順。
+提出に直接影響が大きい順。**2026-10-14 に判断済みの項目は「決定済み」と付けた**（経緯と理由は `docs/decisions.md` H-22）。
 
 1. **フルアクセス OFF での動作の実機確認と、4.4.1 への対応**（§0.3）。OFF で漢字変換が動くなら `RequestsOpenAccess` を `false` に戻せるか（H-18 の問題: トグルが出ず、セットアップ検出が成立しない）。`true` のまま行くなら、説明文と審査メモをどう書くか
-2. **輸出コンプライアンス**（§0.2）: iOS ビルドから `ureq`（rustls/ring）を外すか、`true` で申告するか。`ITSAppUsesNonExemptEncryption` の最終値
-3. **PrivacyInfo の修正の可否**（§0.1）: `CA92.1` の追加（2 か所）、`AppleKeyboards` の読み取りの削除
-4. **サイトの公開**（§1.7）: ホスティング先・DNS・`/privacy` の【要確認】（提供者名、施行日、アクセスログ、年齢区分）。サポートの連絡手段（メールアドレス等）
+2. **決定済み: `ITSAppUsesNonExemptEncryption=false` を維持**（TLS は除外済み）。**輸出コンプライアンス**（§0.2）: iOS ビルドから `ureq`（rustls/ring）を外すか、`true` で申告するか。`ITSAppUsesNonExemptEncryption` の最終値
+3. **決定済み: 修正する（対応済み）**。**PrivacyInfo の修正の可否**（§0.1）: `CA92.1` の追加（2 か所）、`AppleKeyboards` の読み取りの削除
+4. **サイトの公開**（§1.7）: **ホスティングは Cloudflare Pages に決定**（ドメイン `nagi.shiki-01.com`、DNS は後で設定。手順は `web/README.md`）。**`/privacy` の【要確認】欄は空けておく指示のため未記入のまま**。残り: DNS・`/privacy` の【要確認】（提供者名、施行日、アクセスログ、年齢区分）。サポートの連絡手段（メールアドレス等）
 5. **モデルの配布方針**（§4）: アプリ内ダウンロードを初回の App Store 版に間に合わせるか。間に合わせないなら「取り込みのみ」の版を公開するか（一般ユーザーには使いにくい）、辞書のみの版として公開するか
-6. **診断ログ・Probes の扱い**（§0.6、§1.5）: 既定（TestFlight 外部テストで入力内容を含めるか）、About >「開発者向け」を App Store 版で隠すか
-7. **表示名**（§0.4）: `Nagi Spike` → `Nagi`、拡張の表示名。アプリ名 `Nagi 日本語キーボード`（§3.2）が確保できるか
-8. **iPad 対応**（§0.4）: iPhone 専用にするか（`TARGETED_DEVICE_FAMILY` を指定する）。iPad 対応なら 13 インチのスクリーンショットとキーボードの iPad レイアウトの確認が要る（`ios-device-checklist.md` に iPad の項目はない）
-9. **既定モデル**（`ios-device-checklist.md` §0 (c)）: xsmall か small か。審査・初回体験に影響する
+6. **決定済み: TestFlight 期間は入力内容を含めて既定 ON、App Store 版は既定 OFF・内容を含めない。About の「開発者向け」は App Store 版で隠す**。**診断ログ・Probes の扱い**（§0.6、§1.5）: 既定（TestFlight 外部テストで入力内容を含めるか）、About >「開発者向け」を App Store 版で隠すか
+7. **決定済み: `Nagi`（設定済み）**。**表示名**（§0.4）: `Nagi Spike` → `Nagi`、拡張の表示名。アプリ名 `Nagi 日本語キーボード`（§3.2）が確保できるか
+8. **決定済み: iPhone 専用（`TARGETED_DEVICE_FAMILY: "1"` 設定済み）**。**iPad 対応**（§0.4）: iPhone 専用にするか（`TARGETED_DEVICE_FAMILY` を指定する）。iPad 対応なら 13 インチのスクリーンショットとキーボードの iPad レイアウトの確認が要る（`ios-device-checklist.md` に iPad の項目はない）
+9. **決定済み: small を基本に、端末の予算で自動選択**（`NagiModelRecommendation`。`ios-device-checklist.md` §0 (c)）。**既定モデル**: 審査・初回体験に影響する
 10. **未解決の不具合 U-1**（部分変換で残りが二重に出る）: 公開前に直すか、機能として出さない
 11. **ライセンス**（§0.5、§4.2）: アプリ内に NOTICE 全文と依存クレートのライセンス一覧を入れるか。CC BY-SA モデルを IPA／ODR で配布することの可否（法的確認）
 12. **ed25519 の更新確認鍵**: `core/server/src/update_check.rs` の `UPDATE_PUBLIC_KEY_HEX` はテスト用プレースホルダーのまま（コード内コメントで明記）。更新確認を iOS で有効にする前に本物の鍵に差し替える

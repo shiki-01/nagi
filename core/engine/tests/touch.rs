@@ -19,6 +19,17 @@ fn text(e: &mut Engine) -> String {
 }
 
 #[test]
+fn qwerty_text_input_carries_over_romaji_after_backspace() {
+    let mut e = engine();
+    e.insert_reading("s", &ReadingInput::Text("kypu".into()));
+    assert_eq!(text(&mut e), "kyぷ");
+    e.process_key("s", &parse_key("BackSpace").unwrap());
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "ky");
+    e.insert_reading("s", &ReadingInput::Text("ou".into()));
+    assert_eq!(text(&mut e), "きょう");
+}
+
+#[test]
 fn text_input_goes_straight_to_the_reading() {
     let mut e = engine();
     let r = e.insert_reading("s", &ReadingInput::Text("かな".into()));
