@@ -25,6 +25,10 @@ struct Probe {
     /// 指定されていれば、`convert` はここに送られるまで待つ
     gate: Option<Mutex<mpsc::Receiver<()>>>,
     started: Arc<AtomicUsize>,
+    /// 設定されていれば、`set_active(true)` はここに送られるまで待つ
+    reload_gate: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
+    /// `set_active(true)` に入った回数
+    reload_entered: Arc<AtomicUsize>,
 }
 
 /// テスト側が持つ `Probe` の操作口
@@ -34,6 +38,8 @@ struct Handles {
     ran_inactive: Arc<AtomicUsize>,
     fail_reload: Arc<AtomicBool>,
     started: Arc<AtomicUsize>,
+    reload_gate: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
+    reload_entered: Arc<AtomicUsize>,
 }
 
 fn probe(gate: Option<mpsc::Receiver<()>>) -> (Probe, Handles) {
@@ -42,6 +48,8 @@ fn probe(gate: Option<mpsc::Receiver<()>>) -> (Probe, Handles) {
         ran_inactive: Arc::new(AtomicUsize::new(0)),
         fail_reload: Arc::new(AtomicBool::new(false)),
         started: Arc::new(AtomicUsize::new(0)),
+        reload_gate: Arc::new(Mutex::new(None)),
+        reload_entered: Arc::new(AtomicUsize::new(0)),
     };
     let p = Probe {
         inner: FakeModel::new(&[("こうえんにいく", "公園に行く")]),
@@ -50,6 +58,8 @@ fn probe(gate: Option<mpsc::Receiver<()>>) -> (Probe, Handles) {
         fail_reload: handles.fail_reload.clone(),
         gate: gate.map(Mutex::new),
         started: handles.started.clone(),
+        reload_gate: handles.reload_gate.clone(),
+        reload_entered: handles.reload_entered.clone(),
     };
     (p, handles)
 }
@@ -78,6 +88,13 @@ impl ConversionModel for Probe {
     }
 
     fn set_active(&mut self, active: bool) -> Result<(), InferError> {
+        if active {
+            self.reload_entered.fetch_add(1, Ordering::SeqCst);
+            let gate = self.reload_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                let _ = gate.recv();
+            }
+        }
         if active && self.fail_reload.load(Ordering::SeqCst) {
             return Err(InferError::Other("テスト用の再読み込み失敗".into()));
         }
@@ -455,4 +472,48 @@ fn initialize_capabilities_feed_profile_selection() {
     // capabilities は任意（省略・空でも従来どおり）
     let (r, _runtime, _s) = init(json!({}));
     assert_ne!(r["result"]["profile"], "minimal", "{r}");
+}
+
+#[test]
+fn unload_during_reload_keeps_weights_released_and_states_consistent() {
+    let mut f = fixture("reload-race", None, |_| {});
+    assert!(wait_until(|| uses_llm(&*f.pipeline)));
+    rpc(&mut f.server, "unload_model", json!({}));
+    assert!(wait_until(|| !f.handles.active.load(Ordering::SeqCst)));
+
+    // 再読み込み（set_active(true)）を途中で止め、その間に解放を要求する
+    let (release, gate) = mpsc::channel();
+    *f.handles.reload_gate.lock().unwrap() = Some(gate);
+    let entered = f.handles.reload_entered.load(Ordering::SeqCst);
+    rpc(&mut f.server, "reload_model", json!({}));
+    assert!(wait_until(
+        || f.handles.reload_entered.load(Ordering::SeqCst) > entered
+    ));
+    rpc(&mut f.server, "unload_model", json!({}));
+    release.send(()).unwrap();
+
+    // 重みは解放され、Runtime / Pipeline のどちらも解放中で一致する
+    assert!(wait_until(|| !f.handles.active.load(Ordering::SeqCst)));
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!f.handles.active.load(Ordering::SeqCst));
+    assert!(f.runtime.model_unloaded());
+    assert!(!f.runtime.effective().use_llm);
+    let status = rpc(&mut f.server, "get_status", json!({}));
+    assert_eq!(status["result"]["llm"], false);
+    // 解放中のモデルで推論されず、勝手に再読み込みもされない
+    assert!(!uses_llm(&*f.pipeline));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!f.handles.active.load(Ordering::SeqCst));
+    assert_eq!(f.handles.ran_inactive.load(Ordering::SeqCst), 0);
+    // 再読み込みの完了通知は出ない
+    let lines = f
+        .server
+        .handle_line(&json!({"jsonrpc":"2.0","id":3,"method":"ping"}).to_string());
+    assert!(!lines.iter().any(|l| l.contains("llm_reloaded")), "{lines:?}");
+
+    // その後の明示の再読み込みでは正常に戻る
+    rpc(&mut f.server, "reload_model", json!({}));
+    assert!(wait_until(|| f.runtime.effective().use_llm));
+    assert!(f.handles.active.load(Ordering::SeqCst));
+    assert!(wait_until(|| uses_llm(&*f.pipeline)));
 }

@@ -200,6 +200,8 @@ struct Session {
     last_word: Option<String>,
     /// 確定直後（Direct）の次語候補。入力が始まる・別の操作が来ると消える
     next_words: Vec<BackendCandidate>,
+    /// 直近の操作（モード切替）が、確定を伴わなくても次語候補を保つ
+    keep_next_words: bool,
 }
 
 /// 入力中（変換前）の候補 1 つ
@@ -382,6 +384,7 @@ impl Engine {
             composing_cands: None,
             last_word: None,
             next_words: Vec::new(),
+            keep_next_words: false,
         }
     }
 
@@ -589,6 +592,7 @@ impl Engine {
         self.commit_all(&mut sess, &mut commit);
         // フォーカスを離れたら文脈は続かない（次語予測を出さない）
         sess.last_word = None;
+        sess.next_words.clear();
         let result = self.finish(&mut sess, true, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
@@ -601,6 +605,7 @@ impl Engine {
         sess.state = State::Direct;
         sess.composer.clear();
         sess.last_word = None;
+        sess.next_words.clear();
         let result = self.finish(&mut sess, true, String::new());
         self.sessions.insert(session_id.to_string(), sess);
         result
@@ -1111,10 +1116,20 @@ impl Engine {
     /// Surrounding Text・secure input などの文脈を保存する（secure input 中は文脈を持たない）
     pub fn set_context(&mut self, session_id: &str, ctx: &SetContextParams) {
         let mut sess = self.take_session(session_id);
-        if let Some(app) = &ctx.app_id {
+        if let Some(app) = &ctx.app_id
+            && sess.app_id.as_ref() != Some(app)
+        {
+            // アプリが変わったら、直前の語・次語候補は別のテキストのものになる
             sess.app_id = Some(app.clone());
+            sess.last_word = None;
+            sess.next_words.clear();
         }
         if let Some(secure) = ctx.secure_input {
+            if secure != sess.secure_input {
+                // secure input の出入りをまたいで、確定した語を持ち越さない
+                sess.last_word = None;
+                sess.next_words.clear();
+            }
             sess.secure_input = secure;
             if secure {
                 sess.left_context.clear();
@@ -1135,6 +1150,7 @@ impl Engine {
                 .is_some_and(|w| !before.ends_with(w))
             {
                 sess.last_word = None;
+                sess.next_words.clear();
             }
         }
         self.sessions.insert(session_id.to_string(), sess);
@@ -1333,6 +1349,7 @@ impl Engine {
             Action::SetMode(mode) => {
                 self.commit_all(sess, commit);
                 sess.mode = mode;
+                sess.keep_next_words = true;
                 true
             }
             Action::ToggleMode => {
@@ -1341,6 +1358,7 @@ impl Engine {
                     InputMode::Hiragana => InputMode::Alphanumeric,
                     InputMode::Alphanumeric => InputMode::Hiragana,
                 };
+                sess.keep_next_words = true;
                 true
             }
             Action::CommitAndPassThrough => {
@@ -1693,17 +1711,23 @@ impl Engine {
 
     /// 変換を経て確定した文節を observer（学習など）へ通知する
     fn notify_commit(&self, sess: &mut Session, committed: &[Segment]) {
+        // secure input 中の確定語は、直前の語としても学習としても残さない
+        let secure = sess.secure_input;
+        if secure {
+            sess.last_word = None;
+            sess.next_words.clear();
+        }
         // 次語予測の文脈: 最後の文節が日本語ならその表記（observer が無くても追う）
         let mut prev = sess.last_word.take().unwrap_or_default();
         let mut with_prev: Vec<String> = Vec::with_capacity(committed.len());
         for seg in committed {
-            with_prev.push(prev.clone());
+            with_prev.push(if secure { String::new() } else { prev.clone() });
             prev = match seg.kind {
                 SegmentKind::Japanese => seg.surface.clone(),
                 _ => String::new(),
             };
         }
-        sess.last_word = (!prev.is_empty()).then_some(prev);
+        sess.last_word = (!prev.is_empty() && !secure).then_some(prev);
         let Some(observer) = &self.observer else {
             return;
         };
@@ -2399,12 +2423,17 @@ impl Engine {
     fn refresh_next_words(&self, sess: &mut Session, consumed: bool, committed: bool) {
         if !matches!(sess.state, State::Direct) || !(committed || consumed) {
             sess.next_words.clear();
+            sess.keep_next_words = false;
             return;
         }
         if !committed {
-            // 確定のない消費（モード切替など）は候補をそのまま保つ
+            // 確定のない消費のうち、モード切替だけは候補をそのまま保つ（それ以外は消す）
+            if !std::mem::take(&mut sess.keep_next_words) {
+                sess.next_words.clear();
+            }
             return;
         }
+        sess.keep_next_words = false;
         sess.next_words.clear();
         if !self.config.next_word_enabled || sess.secure_input {
             return;

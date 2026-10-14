@@ -5,7 +5,7 @@
 //! flush は [`crate::Learner`] と同じ流儀（`<path>.lock` の flock・3 者マージ・世代・原子的置換）。
 
 use crate::{
-    LearnConfig, LearnError, LoadReport, calculate_score, create_backup_file, escape_tsv_field,
+    FlushLock, LearnConfig, LearnError, LoadReport, calculate_score, create_backup_file, escape_tsv_field,
     open_lock, system_now, unescape_tsv_field,
 };
 use std::collections::{HashMap, HashSet};
@@ -53,6 +53,8 @@ pub struct NextWordLearner {
     base: HashMap<NextKey, NextRow>,
     generation: u64,
     cleared: bool,
+    /// 解釈できない行のバックアップを取った（flush で捨てる前に 1 度だけ取る）。
+    backed_up: bool,
     /// 最後の同期以降に忘れさせた次語の表記（ファイル側の行も消す）。
     forgotten: HashSet<String>,
 }
@@ -67,6 +69,7 @@ impl NextWordLearner {
             base: HashMap::new(),
             generation: 0,
             cleared: false,
+            backed_up: false,
             forgotten: HashSet::new(),
         }
     }
@@ -175,16 +178,18 @@ impl NextWordLearner {
         if !self.dirty {
             return Ok(false);
         }
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
+        let lock = FlushLock::acquire(path, None)?.ok_or_else(|| {
+            LearnError::Io(io::Error::new(io::ErrorKind::TimedOut, "flock timed out"))
+        })?;
+        self.flush_with_lock(path, &lock)
+    }
+
+    /// 取得済みの [`FlushLock`] の下で書き出す（[`crate::Learner::flush_with_lock`] と同じ分割版）
+    pub fn flush_with_lock(&mut self, path: &Path, _lock: &FlushLock) -> Result<bool, LearnError> {
+        if !self.dirty {
+            return Ok(false);
         }
-        let lock_file = open_lock(path)?;
-        lock_file.lock()?;
-        let result = self.flush_locked(path);
-        drop(lock_file);
-        result?;
+        self.flush_locked(path)?;
         Ok(true)
     }
 
@@ -198,6 +203,11 @@ impl NextWordLearner {
             },
             Err(e) => return Err(e),
         };
+        // 解釈できない行は書き戻すと消える: 消す前にバックアップを取る（load 時と同様。1 度だけ）
+        if disk.skipped_lines > 0 && !self.backed_up {
+            create_backup_file(path)?;
+            self.backed_up = true;
+        }
 
         let gen_changed = disk.generation != self.generation;
         let mut merged: HashMap<NextKey, NextRow> = HashMap::new();
@@ -302,6 +312,7 @@ impl NextWordLearner {
             if data.skipped_lines > 0 {
                 report.skipped_lines = data.skipped_lines;
                 report.backed_up_to = Some(create_backup_file(path)?);
+                learner.backed_up = true;
             }
             Ok(())
         })();

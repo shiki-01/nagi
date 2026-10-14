@@ -149,6 +149,8 @@ pub struct Learner {
     generation: u64,
     /// 最後の同期以降に `clear` した（ファイルの内容を引き継がない）。
     cleared: bool,
+    /// 解釈できない行のバックアップを取った（flush で捨てる前に 1 度だけ取る）。
+    backed_up: bool,
     /// 最後の同期以降に `forget` した `(reading, surface)`。ファイル側の行も消す。
     forgotten: HashSet<(String, String)>,
 }
@@ -180,6 +182,7 @@ impl Learner {
             base: HashMap::new(),
             generation: 0,
             cleared: false,
+            backed_up: false,
             forgotten: HashSet::new(),
         }
     }
@@ -428,20 +431,20 @@ impl Learner {
         if !self.dirty {
             return Ok(false);
         }
-
-        // 親ディレクトリを作成（なければ）
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-
-        let lock_file = open_lock(path)?;
-        lock_file.lock()?;
-        let result = self.flush_locked(path);
         // ロックファイルは消さない（消すと別プロセスが別 inode をロックして排他が崩れる）
-        drop(lock_file);
-        result?;
+        let lock = FlushLock::acquire(path, None)?.ok_or_else(|| {
+            LearnError::Io(io::Error::new(io::ErrorKind::TimedOut, "flock timed out"))
+        })?;
+        self.flush_with_lock(path, &lock)
+    }
+
+    /// 取得済みの [`FlushLock`]（`path` 用）の下で書き出す。他プロセスのロックを待つ部分を
+    /// 呼び出し側が Mutex の外で済ませられるようにするための分割版（本体は [`Self::flush`] と同じ）
+    pub fn flush_with_lock(&mut self, path: &Path, _lock: &FlushLock) -> Result<bool, LearnError> {
+        if !self.dirty {
+            return Ok(false);
+        }
+        self.flush_locked(path)?;
         Ok(true)
     }
 
@@ -458,6 +461,11 @@ impl Learner {
             // 未知のスキーマや空ファイルは上書きしない
             Err(e) => return Err(e),
         };
+        // 解釈できない行は書き戻すと消える: 消す前にバックアップを取る（load 時と同様。1 度だけ）
+        if disk.skipped_lines > 0 && !self.backed_up {
+            create_backup_file(path)?;
+            self.backed_up = true;
+        }
 
         let gen_changed = disk.generation != self.generation;
         let mut merged: HashMap<RowKey, Row> = HashMap::new();
@@ -569,6 +577,7 @@ impl Learner {
             if data.skipped_lines > 0 {
                 report.skipped_lines = data.skipped_lines;
                 report.backed_up_to = Some(create_backup_file(path)?);
+                learner.backed_up = true;
             }
             Ok(())
         })();
@@ -691,6 +700,45 @@ fn parse_tsv_line(line: &str) -> Result<(String, String, u64, u32, u64, String),
     let source = unescape_tsv_field(fields[5])?;
 
     Ok((reading, surface, context_hash, count, last_used, source))
+}
+
+/// 学習ファイルの `<path>.lock` に対する排他ロック。drop で解放する（ロックファイル自体は消さない）。
+#[derive(Debug)]
+pub struct FlushLock {
+    _file: fs::File,
+}
+
+impl FlushLock {
+    /// 排他ロックを取る。`timeout` が `None` ならロックが取れるまで待つ。`Some` なら、その時間内に
+    /// 取れなければ `Ok(None)`（他プロセスが保持している。次回に回す）。親ディレクトリも作る
+    pub fn acquire(
+        path: &Path,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Option<FlushLock>, LearnError> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let file = open_lock(path)?;
+        let Some(timeout) = timeout else {
+            file.lock()?;
+            return Ok(Some(FlushLock { _file: file }));
+        };
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Some(FlushLock { _file: file })),
+                Err(fs::TryLockError::WouldBlock) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(fs::TryLockError::Error(e)) => return Err(e.into()),
+            }
+        }
+    }
 }
 
 /// バックアップファイルを作成。既にあれば `.bak.1`, `.bak.2`, ... を試す。
@@ -1209,6 +1257,44 @@ mod tests {
 
         // 元のファイルはそのまま
         assert!(path.exists());
+    }
+
+    #[test]
+    fn test_flush_backs_up_unparsable_lines_once() {
+        let temp_dir = test_temp_dir();
+        let path = temp_dir.join("flush_bad.tsv");
+        fs::write(
+            &path,
+            "#nagi-learn\tv1\nvalid1\tsurface1\t0000000000000000\t1\t1000000\tlearned\ngarbage\n",
+        )
+        .unwrap();
+        // load を経由しない（別プロセスが後から壊れた行を書いた等）
+        let mut l = Learner::new(LearnConfig::default());
+        l.record("あ", "亜", 0, "learned", 100);
+        assert!(l.flush(&path).unwrap());
+        assert!(path.with_extension("bak").exists(), "捨てる前にバックアップ");
+        assert!(!fs::read_to_string(&path).unwrap().contains("garbage"));
+        l.record("い", "胃", 0, "learned", 101);
+        l.flush(&path).unwrap();
+        assert!(!path.with_extension("bak.1").exists(), "バックアップは 1 度だけ");
+    }
+
+    #[test]
+    fn test_flush_lock_times_out_while_another_holds_it() {
+        let temp_dir = test_temp_dir();
+        let path = temp_dir.join("lock_timeout.tsv");
+        let held = FlushLock::acquire(&path, None).unwrap().unwrap();
+        let start = std::time::Instant::now();
+        let second =
+            FlushLock::acquire(&path, Some(std::time::Duration::from_millis(50))).unwrap();
+        assert!(second.is_none());
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        drop(held);
+        assert!(
+            FlushLock::acquire(&path, Some(std::time::Duration::from_millis(50)))
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

@@ -188,27 +188,39 @@ impl Pipeline {
         }
         self.runtime
             .set_backend_name(backend_name(self.dict.is_some(), true));
-        if self.runtime.model_unloaded()
-            && let Some(llm) = self.llm.get()
-        {
-            // 読み込み中にメモリ逼迫などで解放が要求された: 取り付けた直後に重みを手放す
-            // （再読み込みが要求されるまで辞書のみ）
-            llm.state.unloaded.store(true, Ordering::SeqCst);
-            llm.state.generation.fetch_add(1, Ordering::SeqCst);
-            Self::spawn_set_active(llm.model.clone(), false);
-            return;
+        // 解放・再読み込みの判定（Runtime::evaluate_model）と直列化して、判定と取り付けの間に
+        // 入った解放要求を取りこぼさない
+        let unloaded = self.runtime.serialize_model_changes(|| {
+            if self.runtime.model_unloaded()
+                && let Some(llm) = self.llm.get()
+            {
+                // 読み込み中にメモリ逼迫などで解放が要求された: 取り付けた直後に重みを手放す
+                // （再読み込みが要求されるまで辞書のみ）
+                llm.state.unloaded.store(true, Ordering::SeqCst);
+                let generation = llm.state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+                Self::spawn_set_active(llm.model.clone(), llm.state.clone(), generation, false);
+                true
+            } else {
+                self.runtime.set_llm_loaded(true);
+                false
+            }
+        });
+        if !unloaded {
+            self.warm_up();
         }
-        self.runtime.set_llm_loaded(true);
-        self.warm_up();
     }
 
     /// 別スレッドでモデルの重みを解放 / 再読み込みする（呼び出し側を待たせない。実行中の推論があれば
-    /// それが終わってから）
-    fn spawn_set_active(model: SharedModel, active: bool) {
+    /// それが終わってから）。実行時に世代が `generation` から進んでいる（その後に解放・再読み込みが
+    /// 要求された）要求は捨てる
+    fn spawn_set_active(model: SharedModel, state: Arc<LlmState>, generation: u64, active: bool) {
         let _ = std::thread::Builder::new()
             .name("nagi-llm-active".into())
             .spawn(move || {
                 if let Ok(mut m) = model.lock() {
+                    if state.generation() != generation {
+                        return;
+                    }
                     let _ = m.set_active(active);
                 }
             });
@@ -230,7 +242,12 @@ impl Pipeline {
             // 明示的に解放している間は、プロファイルが上がっても再読み込みしない（reload_model の仕事）
             let should_be_active =
                 current != nagi_profile::Profile::Minimal && !llm.state.is_unloaded();
-            Self::spawn_set_active(llm.model.clone(), should_be_active);
+            Self::spawn_set_active(
+                llm.model.clone(),
+                llm.state.clone(),
+                llm.state.generation(),
+                should_be_active,
+            );
         }
 
         if matches!(
@@ -636,12 +653,12 @@ impl ModelControl for Pipeline {
         // 先に印を付けて、待機中・これから始まる推論が重みに触らないようにする。実行中の推論は
         // 待たず、世代を進めて結果を捨てる
         llm.state.unloaded.store(true, Ordering::SeqCst);
-        llm.state.generation.fetch_add(1, Ordering::SeqCst);
+        let generation = llm.state.generation.fetch_add(1, Ordering::SeqCst) + 1;
         if let Ok(mut cache) = llm.cache.lock() {
             cache.clear();
         }
         self.runtime.set_llm_loaded(false);
-        Self::spawn_set_active(llm.model.clone(), false);
+        Self::spawn_set_active(llm.model.clone(), llm.state.clone(), generation, false);
         self.runtime.push_event(Event {
             level: NotifyLevel::Info,
             code: "llm_unloaded",
@@ -671,11 +688,24 @@ impl ModelControl for Pipeline {
                 }
                 match m.set_active(true) {
                     Ok(()) => {
+                        // 読み込み中に解放が要求された（モデルのロックを握ったまま再確認する）:
+                        // 重みを戻し、unloaded は true のまま通知も出さない
+                        if state.generation() != generation {
+                            let _ = m.set_active(false);
+                            return;
+                        }
                         state.unloaded.store(false, Ordering::SeqCst);
+                        runtime.set_llm_loaded(true);
+                        // 上の確認と状態反映の間に解放が割り込んだ場合（解放側は世代を先に進める）は戻す
+                        if state.generation() != generation {
+                            let _ = m.set_active(false);
+                            state.unloaded.store(true, Ordering::SeqCst);
+                            runtime.set_llm_loaded(false);
+                            return;
+                        }
                         // 読み込み済みなので、ページインを兼ねて 1 回だけ推論しておく（結果は使わない）
                         let _ = m.convert(&Self::request(CALIBRATION_READING, "", None));
                         drop(m);
-                        runtime.set_llm_loaded(true);
                         runtime.push_event(Event {
                             level: NotifyLevel::Info,
                             code: "llm_reloaded",
@@ -685,6 +715,10 @@ impl ModelControl for Pipeline {
                     Err(_) => {
                         let _ = m.set_active(false);
                         drop(m);
+                        if state.generation() != generation {
+                            // 失敗を待つ間に解放などが要求された: その要求の状態を優先する
+                            return;
+                        }
                         runtime.model_reload_failed();
                         runtime.push_event(Event {
                             level: NotifyLevel::Warning,

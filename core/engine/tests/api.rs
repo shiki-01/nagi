@@ -619,6 +619,94 @@ fn selecting_a_next_word_commits_it_and_notifies_the_pair() {
     assert!(r.commit.is_none());
 }
 
+fn secure_ctx(session: &str, secure: Option<bool>) -> nagi_protocol::methods::SetContextParams {
+    nagi_protocol::methods::SetContextParams {
+        session_id: session.into(),
+        secure_input: secure,
+        surrounding_text: None,
+        app_id: None,
+    }
+}
+
+#[test]
+fn word_committed_during_secure_input_is_not_carried_into_later_bigrams() {
+    let (mut e, rec) = next_word_engine(true);
+    e.set_context("s", &secure_ctx("s", Some(true)));
+    let r = convert_and_commit(&mut e, "s");
+    assert!(r.candidates.is_none_or(|c| c.items.is_empty()));
+    e.set_context("s", &secure_ctx("s", Some(false)));
+    convert_and_commit(&mut e, "s");
+    let commits = rec.commits.lock().unwrap();
+    assert_eq!(commits.len(), 2);
+    assert!(commits[0].2 && !commits[1].2);
+    // secure 中の語は、secure でなくなった後の確定の prev_word に入らない
+    let prevs: Vec<&str> = commits[1].3.iter().map(|s| s.prev_word.as_str()).collect();
+    assert_eq!(prevs, ["", "今日は"]);
+    assert!(commits[0].3.iter().all(|s| s.prev_word.is_empty()));
+}
+
+#[test]
+fn next_words_are_dropped_by_reset_focus_out_and_context_change() {
+    type Op = fn(&mut Engine) -> Option<nagi_protocol::methods::ProcessKeyResult>;
+    let ops: [(&str, Op); 4] = [
+        ("reset", |e| Some(e.reset("s"))),
+        ("focus_out", |e| Some(e.focus_out("s"))),
+        ("別テキストの set_context", |e| {
+            e.set_context(
+                "s",
+                &nagi_protocol::methods::SetContextParams {
+                    session_id: "s".into(),
+                    secure_input: None,
+                    surrounding_text: Some(nagi_protocol::methods::SurroundingText {
+                        text: "別の文".into(),
+                        cursor: 3,
+                    }),
+                    app_id: None,
+                },
+            );
+            None
+        }),
+        ("別アプリへの set_context", |e| {
+            e.set_context(
+                "s",
+                &nagi_protocol::methods::SetContextParams {
+                    session_id: "s".into(),
+                    secure_input: None,
+                    surrounding_text: None,
+                    app_id: Some("other.app".into()),
+                },
+            );
+            None
+        }),
+    ];
+    for (name, op) in ops {
+        let (mut e, _rec) = next_word_engine(true);
+        let r = convert_and_commit(&mut e, "s");
+        assert!(r.candidates.is_some_and(|c| c.visible), "{name}: 前提");
+        let direct = op(&mut e);
+        let has_direct = direct.is_some();
+        if let Some(r) = direct {
+            let c = r.candidates.unwrap_or_else(|| panic!("{name}: バーを消す差分"));
+            assert!(!c.visible && c.items.is_empty(), "{name}");
+        }
+        let r = e.select_candidate("s", 0);
+        assert!(r.commit.is_none(), "{name}: 古い次語が挿入された");
+        if !has_direct {
+            let c = r.candidates.unwrap_or_else(|| panic!("{name}: バーを消す差分"));
+            assert!(!c.visible && c.items.is_empty(), "{name}");
+        }
+    }
+}
+
+#[test]
+fn mode_switch_keeps_next_words() {
+    let (mut e, _rec) = next_word_engine(true);
+    convert_and_commit(&mut e, "s");
+    press(&mut e, "s", "Eisu");
+    let r = e.select_candidate("s", 0);
+    assert_eq!(r.commit.as_deref(), Some("天気"));
+}
+
 // ---- ライブ変換（live_convert） ----
 
 #[test]

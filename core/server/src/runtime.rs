@@ -24,6 +24,10 @@ use std::time::{Duration, Instant};
 
 /// 学習ファイルを書き出す最短の間隔（設計書 §4.11: 5 分ごと）
 const FLUSH_INTERVAL: Duration = Duration::from_secs(300);
+/// 定期の flush が他プロセスの学習ファイルのロックを待つ最長時間（超えたら次回に回す）
+const FLUSH_LOCK_TIMEOUT: Duration = Duration::from_millis(100);
+/// 明示の flush（忘却・全削除）が待つ最長時間
+const FLUSH_LOCK_TIMEOUT_FORCED: Duration = Duration::from_secs(2);
 /// 次語予測のバイグラムを保存するファイル名（学習ファイルと同じディレクトリ）
 const NEXT_WORD_FILE: &str = "learning-next.tsv";
 
@@ -223,6 +227,8 @@ pub struct Runtime {
     input_method: Mutex<InputMethod>,
     model: Mutex<ModelState>,
     model_control: Mutex<Option<Weak<dyn ModelControl>>>,
+    /// モデルの解放・再読み込みの判定（状態の更新と実行先への指示）を直列化する
+    model_apply: Mutex<()>,
     reload_delay: Mutex<Duration>,
 }
 
@@ -293,6 +299,7 @@ impl Runtime {
             input_method: Mutex::new(InputMethod::Physical),
             model: Mutex::new(ModelState::default()),
             model_control: Mutex::new(None),
+            model_apply: Mutex::new(()),
             reload_delay: Mutex::new(MODEL_RELOAD_DELAY),
         });
         if let Some(e) = next_load_error {
@@ -612,6 +619,13 @@ impl Runtime {
         }
     }
 
+    /// モデルの解放・再読み込みの判定と直列化して `f` を実行する（`f` の中から
+    /// `unload_model` / `reload_model` / `tick` などの判定を呼ばないこと）
+    pub fn serialize_model_changes<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _serial = self.model_apply.lock().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+
     /// 変換モデルを解放している（解放を要求した）か
     pub fn model_unloaded(&self) -> bool {
         self.model.lock().is_ok_and(|m| m.unloaded)
@@ -669,6 +683,9 @@ impl Runtime {
     /// 戻す条件: どれも解消し、逼迫が `normal` に戻ってから待ち時間（[`MODEL_RELOAD_DELAY`]）が経ち、
     /// `light` 以上で動けること。戻せなければ（失敗も含め）辞書のみで継続する
     fn evaluate_model(&self, immediate: bool) {
+        // 状態の更新から実行先への指示までを直列化する（別スレッドの判定が割り込んで、
+        // Runtime の状態と実際の重みの状態の順序が入れ替わらないように）
+        let _serial = self.model_apply.lock().unwrap_or_else(|e| e.into_inner());
         enum Action {
             Unload,
             Reload,
@@ -987,20 +1004,44 @@ impl Runtime {
         let Some(path) = &self.learn_path else {
             return;
         };
-        let Ok(mut last) = self.last_flush.lock() else {
-            return;
-        };
-        if !force && last.elapsed() < FLUSH_INTERVAL {
+        let due = self
+            .last_flush
+            .lock()
+            .is_ok_and(|last| force || last.elapsed() >= FLUSH_INTERVAL);
+        if !due {
             return;
         }
-        let result = self.learner.lock().map(|mut l| l.flush(path));
+        // 他プロセスの flock を待つのは learner の Mutex の外で、待ち時間に上限を付ける
+        // （変換経路を止めない）。取れなければ次回（定期の poll か次の明示の flush）に回す
+        let timeout = Some(if force {
+            FLUSH_LOCK_TIMEOUT_FORCED
+        } else {
+            FLUSH_LOCK_TIMEOUT
+        });
+        let result = flush_shared(
+            &self.learner,
+            path,
+            timeout,
+            |l| l.is_dirty(),
+            |l, lock| l.flush_with_lock(path, lock),
+        );
         let next_result = match &self.next_path {
-            Some(np) => self.next_learner.lock().map(|mut n| n.flush(np)),
-            None => Ok(Ok(false)),
+            Some(np) => flush_shared(
+                &self.next_learner,
+                np,
+                timeout,
+                |n| n.is_dirty(),
+                |n, lock| n.flush_with_lock(np, lock),
+            ),
+            None => Ok(true),
         };
-        *last = Instant::now();
+        if matches!(result, Ok(true) | Err(_)) && matches!(next_result, Ok(true) | Err(_))
+            && let Ok(mut last) = self.last_flush.lock()
+        {
+            *last = Instant::now();
+        }
         let error = match (result, next_result) {
-            (Ok(Err(e)), _) | (_, Ok(Err(e))) => Some(e),
+            (Err(e), _) | (_, Err(e)) => Some(e),
             _ => None,
         };
         if let Some(e) = error {
@@ -1062,5 +1103,26 @@ mod tests {
         let record = crate::calibration::load(&path).expect("読み込める");
         assert_eq!(record.median_ms, 42.0);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// 学習ファイルの flock を `m` の外で取ってから、短い間だけ `m` を握って書き出す。
+/// 戻り値は「完了した（書くものが無かった場合を含む）」か。ロックが取れず先送りしたら `Ok(false)`
+fn flush_shared<T>(
+    m: &Mutex<T>,
+    path: &std::path::Path,
+    timeout: Option<Duration>,
+    is_dirty: impl Fn(&T) -> bool,
+    flush: impl Fn(&mut T, &nagi_learn::FlushLock) -> Result<bool, nagi_learn::LearnError>,
+) -> Result<bool, nagi_learn::LearnError> {
+    if !m.lock().is_ok_and(|g| is_dirty(&g)) {
+        return Ok(true);
+    }
+    let Some(lock) = nagi_learn::FlushLock::acquire(path, timeout)? else {
+        return Ok(false);
+    };
+    match m.lock() {
+        Ok(mut g) => flush(&mut g, &lock).map(|_| true),
+        Err(_) => Ok(true),
     }
 }
