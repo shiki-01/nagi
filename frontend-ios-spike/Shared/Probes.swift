@@ -586,7 +586,9 @@ struct LLMLoadProbe: ProbeRunner {
         let probeUserDir = FileManager.default.temporaryDirectory.appendingPathComponent("nagi-llm-probe", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: probeUserDir, withIntermediateDirectories: true)
-            let config = "[conversion]\nmodel = '\(model.path)'\n"
+            // プロファイルを固定する。自動切替だと、最初の変換が遅いと minimal に落ちて、以降の変換で
+            // LLM が動かず、推論中のメモリが測れない（連続変換の計測を LLM 有効のまま行うため）
+            let config = "[conversion]\nmodel = '\(model.path)'\n\n[profile]\nmode = \"balanced\"\nauto_switch = false\n"
             try config.write(to: probeUserDir.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
         } catch {
             note = "(d) 設定ファイルの作成に失敗: \(error.localizedDescription) [\(modelDesc)]"
@@ -699,10 +701,11 @@ struct LLMLoadProbe: ProbeRunner {
         metrics["loop_space_p95_ms"] = loopSpaceTimes[min(loopSpaceTimes.count - 1, Int(Double(loopSpaceTimes.count) * 0.95))]
         metrics["loop_space_max_ms"] = loopSpaceTimes.last ?? 0
         metrics["loop_footprint_peak_mb"] = peakFootprint
+        let profileLine = engine.notes.split(separator: "\n").last.map(String.init) ?? ""
         metrics["loop_available_min_mb"] = minAvailable
 
         ok = true
-        note = "LLM ロード成功 実行元: \(runner) モデル: \(modelDesc) | 変換結果: kyouhaiitenkidesune → \(surface)"
+        note = "LLM ロード成功 実行元: \(runner) モデル: \(modelDesc) | 変換結果: kyouhaiitenkidesune → \(surface) | \(profileLine)"
         #else
         note = "LLM 非対応ビルド（NAGI_LLM フラグが無い）"
         ok = false
