@@ -26,13 +26,13 @@
 
 方針: `NagiSpike` を製品版 `Nagi` に昇格させ、プロジェクトを 1 つにする。
 
-### 2.1 識別子（提案。確定は別途）
+### 2.1 識別子（ホストの bundle id は `com.shiki01.nagi` で確定。他は提案）
 
 | 項目 | 現状（スパイク） | 統合後（提案） |
 | --- | --- | --- |
-| ホストアプリ bundle id | `com.shiki.inputmethod.NagiSpike` | `com.shiki.nagi.ios` |
-| キーボード拡張 bundle id | `com.shiki.inputmethod.NagiSpike.Keyboard` | `com.shiki.nagi.ios.keyboard`（ホストの子である必要がある） |
-| App Group | `group.com.shiki.nagi.spike` | `group.com.shiki.nagi` |
+| ホストアプリ bundle id | `com.shiki.inputmethod.NagiSpike` | `com.shiki01.nagi` |
+| キーボード拡張 bundle id | `com.shiki.inputmethod.NagiSpike.Keyboard` | `com.shiki01.nagi.keyboard`（ホストの子である必要がある） |
+| App Group | `group.com.shiki.nagi.spike` | `group.com.shiki01.nagi` |
 
 - macOS IME の `com.shiki.inputmethod.Nagi` とは別の ID にする。iOS 側に `.inputmethod.` は不要。
 - App Group は Apple Developer のポータルで登録が必要。変更するとスパイクで蓄積した共有データは引き継がれない。
@@ -64,7 +64,7 @@
 
 1. Certificates, Identifiers & Profiles で次を登録する。
    - App ID（ホスト、キーボード拡張）
-   - App Group（`group.com.shiki.nagi`）と、両 App ID への割り当て
+   - App Group（`group.com.shiki01.nagi`）と、両 App ID への割り当て
 2. App Store Connect → Apps → 新規 App を作成する。
    - プラットフォーム: iOS、名前、主要言語（日本語）、bundle id（§2.1）、SKU（任意の一意な文字列）。
    - アプリ名は他のアプリと重複できない。 `[要確認]` "Nagi" が使用可能か。
