@@ -27,6 +27,8 @@ targets:
     sources:
       - path: App
       - path: Shared
+      # コアのプロトコルの型（typeshare で生成。macOS フロントエンドと共有）
+      - path: ../frontend-macos/Sources/Generated
       - path: Resources/data
         type: folder
         optional: true
@@ -90,6 +92,7 @@ targets:
     sources:
       - path: Keyboard
       - path: Shared
+      - path: ../frontend-macos/Sources/Generated
       - path: Resources/data
         type: folder
         optional: true

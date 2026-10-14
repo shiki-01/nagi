@@ -1,10 +1,16 @@
 import UIKit
 import SwiftUI
 
-class KeyboardViewController: UIInputViewController {
+/// 製品版キーボードと検証用の画面（Probe）の切り替え
+final class KeyboardScreen: ObservableObject {
+    @Published var showProbes = false
+}
+
+class KeyboardViewController: UIInputViewController, KeyboardHost {
     private let store = SharedStore.shared
-    private var containerView: UIView?
-    private var swiftUIView: KeyboardSwiftUIView?
+    private var model: KeyboardModel?
+    private let screen = KeyboardScreen()
+    private var hostingController: UIHostingController<KeyboardRoot>?
 
     override func viewDidLoad() {
         LaunchBaseline.capture()
@@ -13,9 +19,24 @@ class KeyboardViewController: UIInputViewController {
         setupUI()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        model?.focusIn()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        // 変換中の文字列は確定してから離れる
+        model?.focusOut()
+        super.viewWillDisappear(animated)
+    }
+
     private func setupUI() {
-        // SwiftUI ホストをコンテナとして使う
-        swiftUIView = KeyboardSwiftUIView(
+        // コアのセッション。辞書やモデルが無ければ、画面にメッセージを出す
+        let model = KeyboardModel(outcome: ProductSession.make(store: store))
+        model.host = self
+        self.model = model
+
+        let probeView = KeyboardSwiftUIView(
             store: store,
             insertTextHandler: { [weak self] text in
                 self?.textDocumentProxy.insertText(text)
@@ -27,33 +48,67 @@ class KeyboardViewController: UIInputViewController {
                 self?.advanceToNextInputMode()
             }
         )
-
-        let hostView = UIHostingController(rootView: swiftUIView!)
+        let root = KeyboardRoot(model: model, screen: screen, probeView: probeView)
+        let hostView = UIHostingController(rootView: root)
+        hostingController = hostView
         addChild(hostView)
-
-        let containerView = UIView()
-        self.view.addSubview(containerView)
-        containerView.translatesAutoresizingMaskIntoConstraints = false
-
-        NSLayoutConstraint.activate([
-            containerView.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
-            containerView.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
-            containerView.topAnchor.constraint(equalTo: self.view.topAnchor),
-            containerView.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
-        ])
 
         self.view.addSubview(hostView.view)
         hostView.view.translatesAutoresizingMaskIntoConstraints = false
-
         NSLayoutConstraint.activate([
             hostView.view.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
             hostView.view.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
             hostView.view.topAnchor.constraint(equalTo: self.view.topAnchor),
             hostView.view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
         ])
-
         hostView.didMove(toParent: self)
-        self.containerView = containerView
+
+        // キーボードの高さ（候補バー 44 + キー 4 行）。優先度を下げて OS の制約と衝突しないようにする
+        let height = view.heightAnchor.constraint(equalToConstant: 270)
+        height.priority = UILayoutPriority(999)
+        height.isActive = true
+    }
+
+    // MARK: - KeyboardHost
+
+    func hostInsertText(_ text: String) {
+        textDocumentProxy.insertText(text)
+    }
+
+    func hostDeleteBackward() {
+        textDocumentProxy.deleteBackward()
+    }
+
+    func hostSetMarkedText(_ text: String) {
+        textDocumentProxy.setMarkedText(text, selectedRange: NSRange(location: text.utf16.count, length: 0))
+    }
+
+    func hostUnmarkText() {
+        textDocumentProxy.unmarkText()
+    }
+
+    func hostAdvanceToNextInputMode() {
+        advanceToNextInputMode()
+    }
+}
+
+/// 製品版キーボードと検証用の画面を切り替えるルート
+struct KeyboardRoot: View {
+    @ObservedObject var model: KeyboardModel
+    @ObservedObject var screen: KeyboardScreen
+    let probeView: KeyboardSwiftUIView
+
+    var body: some View {
+        if screen.showProbes {
+            ZStack(alignment: .topTrailing) {
+                probeView
+                Button("閉じる") { screen.showProbes = false }
+                    .font(.system(size: 13))
+                    .padding(8)
+            }
+        } else {
+            NagiKeyboardView(model: model, onShowProbes: { screen.showProbes = true })
+        }
     }
 }
 

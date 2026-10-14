@@ -927,3 +927,14 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - Swift の型は `cargo xtask gen-types` で生成してコミット済み（`frontend-macos/Sources/Generated/Protocol.swift`。iOS も同じ型を使う）
 - 未実装: 12 キー以外のレイアウト（QWERTY は既存の `process_key` を使う）、`initialize` の capability 拡張（`platform` / `memory_limit_mb` など。メモリ上限は `nagi_server_new_with_budget` で渡している）、レイアウトの配列を設定で差し替える仕組み（現状は固定表）
 
+### H-12. iOS 製品版キーボードの構成（段階 1、2026-10-14、要レビュー）
+
+`frontend-ios-spike/` の拡張に、製品版のキーボードを追加した。検証用の画面（Probe）は残し、候補バー右端の「検証」ボタンで切り替える（実測を続けるため）。
+
+- **ロジックはコアに置く**: Swift は「キー操作をコアへ送り、返った差分を反映する」だけ。`insert_reading`（12 キー: タップ・フリック・濁点循環）と `perform_action`（空白・改行・削除・カーソル・モード）を使い、`select_candidate` で候補を選ぶ（H-11）
+- **型**: `frontend-macos/Sources/Generated/Protocol.swift`（typeshare）を、ホストと拡張の両ターゲットのソースに含める（`project.yml`）。JSON-RPC の封筒だけ Swift 側で持つ（`Shared/NagiSession.swift`）
+- **構成**: `NagiSession`（型付きの JSON-RPC。非同期通知は C ABI の `nagi_set_waker`、H-10）→ `KeyboardModel`（状態。`KeyboardHost` 経由でホストの入力欄を操作）→ `NagiKeyboardView`（SwiftUI の 12 キーと候補バー）。`ProductSession` が App Group の辞書・モデルからセッションを作る
+- **変換中の表示**: ホストの入力欄に `setMarkedText`（下線付き）で出し、確定は「確定文字列を変換中の表示に置き換えて `unmarkText`」。未入力のとき、コアが消費しない空白・改行・削除（`consumed = false`）はフロントがホストに直接入れる
+- **起動時の設定**: `<App Group>/user/config.toml` を自動生成（先頭の `# nagi:generated` 行があるファイルだけ起動のたびに作り直す）。`sync_budget_ms = 30`、更新確認なし、モデルは xsmall を優先（H-10）。メモリ上限は `nagi_server_new_with_budget` で渡す（H-8）
+- **未実装（次の段階）**: BackSpace の長押し連打、トグル入力の切り替え設定（現状はフリック入力固定）、`set_context`（直前のテキストを LLM の文脈に渡す）、ホストの入力欄が外部から変わったときの追従、QWERTY・英数・記号のレイアウト、候補の展開表示、本体アプリ（有効化の案内・設定）。**Swift はローカルでコンパイルできず、確認は CI（Xcode 26.3）のみ**
+

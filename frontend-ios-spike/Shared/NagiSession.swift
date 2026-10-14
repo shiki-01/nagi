@@ -1,0 +1,126 @@
+import Foundation
+
+/// コアの JSON-RPC を型付き（`Protocol.swift`）で扱うセッション。
+///
+/// 呼び出しの直列化は `NagiEngine` が持つキューが行う。ここの `request` と通知のコールバックは、
+/// 呼び出した（またはハンドラが渡される）スレッドで実行されるので、UI から使うときはメインキューで呼ぶこと
+final class NagiSession {
+    let engine: NagiEngine
+    let sessionId: String
+    private(set) var profile = ""
+
+    /// 非同期通知（LLM が同期の待ち時間を超えた分の完了、ライブ変換の結果）
+    var onPreeditUpdate: ((UpdatePreeditParams) -> Void)?
+    var onCandidatesUpdate: ((UpdateCandidatesParams) -> Void)?
+
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+    private var nextId = 1
+
+    private struct Request<P: Encodable>: Encodable {
+        let jsonrpc = "2.0"
+        let id: Int
+        let method: String
+        let params: P
+    }
+
+    private struct Response<R: Decodable>: Decodable {
+        let result: R?
+    }
+
+    private struct Header: Decodable {
+        let id: Int?
+        let method: String?
+    }
+
+    private struct ParamsBox<P: Decodable>: Decodable {
+        let params: P
+    }
+
+    /// `initialize` まで済ませる。コアが応答しなければ nil
+    init?(engine: NagiEngine, sessionId: String = "keyboard") {
+        self.engine = engine
+        self.sessionId = sessionId
+        let params = InitializeParams(
+            protocol_version: 1,
+            client_name: "nagi-ios",
+            client_version: "0.1",
+            os: "ios"
+        )
+        guard let result: InitializeResult = request("initialize", params) else { return nil }
+        profile = result.profile
+    }
+
+    /// 要求を送り、応答の `result` を返す。同じ呼び出しに続いて返った通知は、コールバックに渡す
+    func request<P: Encodable, R: Decodable>(_ method: String, _ params: P) -> R? {
+        let id = nextId
+        nextId += 1
+        guard let data = try? encoder.encode(Request(id: id, method: method, params: params)),
+              let line = String(data: data, encoding: .utf8) else { return nil }
+        var result: R?
+        for response in engine.send(line: line) {
+            guard let bytes = response.data(using: .utf8),
+                  let header = try? decoder.decode(Header.self, from: bytes) else { continue }
+            if header.id == id {
+                result = (try? decoder.decode(Response<R>.self, from: bytes))?.result
+            } else if let notification = header.method {
+                dispatchNotification(notification, bytes)
+            }
+        }
+        return result
+    }
+
+    private func dispatchNotification(_ method: String, _ bytes: Data) {
+        switch method {
+        case "update_preedit":
+            if let box = try? decoder.decode(ParamsBox<UpdatePreeditParams>.self, from: bytes) {
+                onPreeditUpdate?(box.params)
+            }
+        case "update_candidates":
+            if let box = try? decoder.decode(ParamsBox<UpdateCandidatesParams>.self, from: bytes) {
+                onCandidatesUpdate?(box.params)
+            }
+        default:
+            break
+        }
+    }
+
+    /// 次のリクエストを待たずに届く通知（非同期の LLM 結果など）の受け取りを始める。
+    /// コールバックはメインキューで呼ばれる
+    func startNotifications() {
+        engine.startNotifications { [weak self] lines in
+            for line in lines {
+                guard let self = self, let bytes = line.data(using: .utf8),
+                      let header = try? self.decoder.decode(Header.self, from: bytes),
+                      let method = header.method else { continue }
+                self.dispatchNotification(method, bytes)
+            }
+        }
+    }
+
+    func stopNotifications() {
+        engine.stopNotifications()
+    }
+
+    // MARK: - メソッド
+
+    func insert(_ input: ReadingInput) -> ProcessKeyResult? {
+        request("insert_reading", InsertReadingParams(session_id: sessionId, input: input))
+    }
+
+    func perform(_ action: TouchAction) -> ProcessKeyResult? {
+        request("perform_action", PerformActionParams(session_id: sessionId, action: action))
+    }
+
+    func selectCandidate(_ index: Int) -> ProcessKeyResult? {
+        request("select_candidate", SelectCandidateParams(session_id: sessionId, index: UInt32(index)))
+    }
+
+    func focusIn() -> ProcessKeyResult? {
+        request("focus_in", SessionParams(session_id: sessionId))
+    }
+
+    func focusOut() -> ProcessKeyResult? {
+        request("focus_out", SessionParams(session_id: sessionId))
+    }
+}
