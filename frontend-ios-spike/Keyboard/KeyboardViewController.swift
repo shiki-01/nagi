@@ -47,14 +47,18 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     }
 
     override func viewWillDisappear(_ animated: Bool) {
-        // 変換中の文字列は確定してから離れる
+        // 変換中の文字列は確定してから離れる。LLM も速やかに手放す（再表示の focusIn で読み直す）
         model?.focusOut()
+        model?.suspendLLM()
         super.viewWillDisappear(animated)
     }
 
     private func setupUI() {
         // コアのセッション。辞書やモデルが無ければ、画面にメッセージを出す
-        let model = KeyboardModel(outcome: ProductSession.make(store: store))
+        // 空きメモリが足りないとき（別アプリから切り替えた直後など）は LLM を読み込まず辞書のみで始め、
+        // 空きができてから読み込む（旧インスタンスと合わせてメモリが倍になるのを避ける。H-26）
+        let deferLLM = ProductSession.shouldDeferLLM(store: store)
+        let model = KeyboardModel(outcome: ProductSession.make(store: store, noLLM: deferLLM), llmDeferred: deferLLM)
         model.host = self
         self.model = model
 

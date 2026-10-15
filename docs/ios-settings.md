@@ -147,7 +147,8 @@
 | `keyboard.key_label_size` | キー文字の大きさ | float 0.8–1.4（倍率） | 1.0 | D | kbd | 新規(iOS) | Dynamic Type との関係は `a11y.*` で整理 |
 | `keyboard.show_globe` | 地球儀キーを出す | bool | 自動（OS の `needsInputModeSwitchKey`） | D | kbd | 新規(iOS) | 他のキーボードへ切り替えられない端末では常に出す |
 | `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS・要実機確認) | **触覚の発生にはフルアクセスが要る**（`UIFeedbackGenerator` は拡張では制限あり。要実機確認） |
-| `keyboard.sound` | キー入力の音 | choice: `off` / `system` | `off` | S | kbd | 既存(iOS・要実機確認) | 端末の「キーボードのクリック」設定に従う（`UIDevice.playInputClick`）。独自音源は持たない |
+| `keyboard.sound` | キー入力の音 | choice: `off` / `system` | `system` | S | kbd | 既存(iOS・要実機確認) | 端末の「キーボードのクリック」設定に従う（`UIDevice.playInputClick`）。独自音源は持たない。**既定は `system`**（実装 `IOSSettings.swift` の `defaultValue`）。端末側のクリック設定がオフなら鳴らない |
+| `keyboard.haptic_engine` | 触覚の方式（互換モード） | choice: `standard` / `compat` | `standard` | D | kbd | 実装済み(iOS・要実機確認) | `standard` は `UIImpactFeedbackGenerator`、`compat` は「標準」が働かない端末向けで、システムサウンド（Peek など）の振動で知らせる（`AudioServicesPlaySystemSound`）。`keyboard.haptic` が `off` のときは働かない |
 | `keyboard.sound_volume` | 音量 | float 0–1 | 0.5 | - | kbd | 新規(iOS) | `system` では OS が音量を決めるため非表示 |
 | `keyboard.theme` | テーマ | choice: `system` / `light` / `dark`（ユーザー定義は未実装） | `system` | S | kbd | 実装済み(iOS・要実機確認) | 拡張のビューの `overrideUserInterfaceStyle` で上書き |
 | `keyboard.accent` | アクセントカラー | choice: `blue` / `green` / `orange` / `pink` / `gray` | `blue` | S | kbd | 実装済み(iOS・要実機確認) | 確定キー・選択中の候補・シフト等の色。任意色（sRGB 16 進）は未実装。旧 ID `keyboard.accent_color` |

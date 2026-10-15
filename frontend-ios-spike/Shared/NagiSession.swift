@@ -205,6 +205,20 @@ final class NagiSession {
         request("get_status", EmptyResult())
     }
 
+    /// 変換モデルだけを解放して辞書のみで動く状態にする（`reload_model` まで戻らない）。成功すれば true
+    @discardableResult
+    func unloadModel() -> Bool {
+        let result: EmptyResult? = request("unload_model", EmptyResult())
+        return result != nil
+    }
+
+    /// 解放した変換モデルを読み込み直す（読み込みは裏で行われ、完了までは辞書のみ）。成功すれば true
+    @discardableResult
+    func reloadModel() -> Bool {
+        let result: EmptyResult? = request("reload_model", EmptyResult())
+        return result != nil
+    }
+
     /// 12 キーの文字表と濁点・小書きの循環（表示専用。入力される文字の決定はコアが行う）
     func getKeyTable() -> KeyTableResult? {
         request("get_key_table", EmptyResult())

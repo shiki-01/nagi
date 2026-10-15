@@ -60,6 +60,20 @@ enum ProductSession {
         )?.path
     }
 
+    /// 起動時（作り直し時を含む）に LLM の読み込みを待つべきか。使うモデルが載る空きメモリが無いとき true。
+    /// 別アプリへ切り替えた直後は旧インスタンスがまだメモリを持っているため、そこで読み込むと一時的に倍になる（H-26）。
+    /// true のときは辞書のみで始め、空きができてから読み込む（`KeyboardModel`）
+    static func shouldDeferLLM(store: SharedStore) -> Bool {
+        guard case .found(_, let files, _) = DataPaths.modelStatus(appGroupId: store.appGroupId) else { return false }
+        let budgetMB = MemoryProbe.processBudgetMB()
+        let file = DataPaths.selectModel(
+            from: files,
+            preferredName: DataPaths.preferredModelName(appGroupId: store.appGroupId),
+            budgetMB: budgetMB > 0 ? budgetMB : nil
+        )
+        return !NagiModelRecommendation.canLoadNow(file, availableMB: MemoryProbe.getAvailableMemoryMB())
+    }
+
     /// 自動生成した設定ファイルの目印（1 行目）。続けて ` body=<本文のハッシュ>` を付ける。
     /// 本文がハッシュと一致する（誰も編集していない）ファイルだけ、起動のたびに作り直す。
     /// 設定画面（コアの `update_settings`）が書き換えたファイルは、本文が変わるのでハッシュが合わず、

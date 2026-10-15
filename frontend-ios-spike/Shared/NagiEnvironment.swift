@@ -13,7 +13,7 @@ final class NagiEnvironmentReporter {
     private var memoryPressure: MemoryPressureState = .normal
     private var lastMemoryWarning: Date?
     /// メモリ逼迫を「通常」へ戻すまでの猶予（秒）。警告のあと、この間は報告を維持する
-    private let memoryPressureHold: TimeInterval = 60
+    private let memoryPressureHold: TimeInterval = 10
     /// 逼迫を解く予約の世代（新しい警告で古い予約を無効にする）
     private var releaseGeneration = 0
 
@@ -36,7 +36,7 @@ final class NagiEnvironmentReporter {
 
     /// OS のメモリ警告を記録する。`didReceiveMemoryWarning` はプロセスが強制終了に近いという OS の警告なので、
     /// コアには常に `critical` で伝える（コアが LLM を解放する。H-16）。`memoryPressureHold` 秒後に自動で
-    /// 通常へ戻し、`onChange` を呼ぶ（呼び出し側が `normal` をコアへ送る。コアは更に約 30 秒後に LLM を再読み込みする）
+    /// 通常へ戻し、`onChange` を呼ぶ（呼び出し側が `normal` をコアへ送り、空きメモリが足りれば `reload_model` で即座に読み直す。H-26）
     func noteMemoryWarning() {
         lastMemoryWarning = Date()
         memoryPressure = .critical

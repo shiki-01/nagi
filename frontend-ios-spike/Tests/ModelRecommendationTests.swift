@@ -52,4 +52,56 @@ final class ModelRecommendationTests: XCTestCase {
         XCTAssertTrue(NagiModelRecommendation.summary(budgetMB: 60, available: [small, xsmall]).hasPrefix("推奨なし"))
         XCTAssertEqual(NagiModelRecommendation.summary(budgetMB: 177, available: []), "")
     }
+
+    // MARK: LLM を読み込んでよいか（H-26）
+
+    /// 境界: small は 70 + 40 = 110MB 以上の空きで読み込む（辞書・拡張本体は使用量に含まれるので、オーバーヘッドは足さない）
+    func testCanLoadNowBoundary() {
+        XCTAssertTrue(NagiModelRecommendation.canLoadNow(small, availableMB: 110))
+        XCTAssertFalse(NagiModelRecommendation.canLoadNow(small, availableMB: 109.9))
+        XCTAssertTrue(NagiModelRecommendation.canLoadNow(xsmall, availableMB: 60))
+        XCTAssertFalse(NagiModelRecommendation.canLoadNow(xsmall, availableMB: 59))
+    }
+
+    /// 旧インスタンスがメモリを持っている間（空きが少ない）は待ち、解放されて空きが戻れば読み込む
+    func testCanLoadNowWaitsWhileOldInstanceHoldsMemory() {
+        XCTAssertFalse(NagiModelRecommendation.canLoadNow(small, availableMB: 60))
+        XCTAssertTrue(NagiModelRecommendation.canLoadNow(small, availableMB: 140))
+    }
+
+    /// 起動直後の実測（拡張の上限 177MB で、辞書込みの使用が 30MB 前後 = 空き約 147MB）なら small も読み込める
+    func testCanLoadNowOnTypicalFreshExtension() {
+        XCTAssertTrue(NagiModelRecommendation.canLoadNow(small, availableMB: 147))
+    }
+
+    /// モデルが無いなら待つものがない
+    func testCanLoadNowWithoutModel() {
+        XCTAssertTrue(NagiModelRecommendation.canLoadNow(nil, availableMB: 0))
+    }
+
+    /// 読み込み判定は推奨の安全マージンと整合する: 予算全体で余裕あり（fits）なら、使用量が
+    /// オーバーヘッド分以下の新規起動の空きで読み込める
+    func testCanLoadNowConsistentWithFits() {
+        let budget: UInt64 = 177
+        XCTAssertTrue(NagiModelRecommendation.fits(small, budgetMB: budget))
+        let available = Double(budget) - NagiModelRecommendation.runtimeOverheadMB
+        XCTAssertTrue(NagiModelRecommendation.canLoadNow(small, availableMB: available))
+    }
+
+    // MARK: 簡易モードの注意の猶予
+
+    func testNoticeHiddenWithinDelay() {
+        let start = Date(timeIntervalSince1970: 1000)
+        XCTAssertFalse(NagiModelRecommendation.shouldShowDictionaryOnlyNotice(since: start, now: start))
+        XCTAssertFalse(NagiModelRecommendation.shouldShowDictionaryOnlyNotice(since: start, now: start.addingTimeInterval(10)))
+    }
+
+    func testNoticeShownAfterDelay() {
+        let start = Date(timeIntervalSince1970: 1000)
+        XCTAssertTrue(NagiModelRecommendation.shouldShowDictionaryOnlyNotice(since: start, now: start.addingTimeInterval(10.1)))
+    }
+
+    func testNoticeHiddenWhenNotDictionaryOnly() {
+        XCTAssertFalse(NagiModelRecommendation.shouldShowDictionaryOnlyNotice(since: nil, now: Date()))
+    }
 }

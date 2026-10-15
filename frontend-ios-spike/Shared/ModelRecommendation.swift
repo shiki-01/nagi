@@ -43,6 +43,25 @@ enum NagiModelRecommendation {
             }
     }
 
+    /// いまモデルを読み込んでよいか（H-26）。`availableMB` は `os_proc_available_memory` の残り。
+    /// 辞書・拡張本体は既に使用量に含まれているので、`runtimeOverheadMB` は足さず、モデル分 + 安全マージンだけを求める
+    /// （`fits` が予算全体で見るのと同じ安全マージンを使う）。別アプリへ切り替えた直後など、旧インスタンスがまだ
+    /// メモリを持っている間は残りが足りず、false になる。`file` が nil（モデル無し）なら待つものがないので true
+    static func canLoadNow(_ file: DataPaths.ModelFile?, availableMB: Double) -> Bool {
+        guard let file = file else { return true }
+        return availableMB >= sizeMB(file) + safetyMarginMB
+    }
+
+    /// 辞書のみの状態を画面（簡易モードの注意）に出すまでの猶予（秒）。切替直後の数秒は旧インスタンスの解放待ちで
+    /// 自然に解消するため、注意を出さない（H-26）
+    static let dictionaryOnlyNoticeDelay: TimeInterval = 10
+
+    /// 辞書のみの状態が `since` から続いていて、猶予を超えたら注意を出す。`since` が nil（辞書のみではない）なら出さない
+    static func shouldShowDictionaryOnlyNotice(since: Date?, now: Date) -> Bool {
+        guard let since = since else { return false }
+        return now.timeIntervalSince(since) > dictionaryOnlyNoticeDelay
+    }
+
     /// 画面に出す説明（「推奨: small（この端末の予算 177MB に対して余裕あり）」）
     static func summary(budgetMB: UInt64, available: [DataPaths.ModelFile]) -> String {
         guard !available.isEmpty else { return "" }

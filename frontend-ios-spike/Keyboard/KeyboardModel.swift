@@ -67,8 +67,19 @@ final class KeyboardModel: ObservableObject {
     private var dictionaryOnly = false
     /// メモリ警告でコアが LLM を解放した（逼迫が解けて再読み込みされるまで、辞書のみ表示の注意を出す）
     private var llmReleasedByMemory = false
-    /// 逼迫が解けたあと、LLM の再読み込みを確かめる予約が済んでいるか
-    private var llmRecheckScheduled = false
+    /// 起動時に空きメモリが足りず、LLM を読み込まずに辞書のみで始めた（空きができたらコアを作り直して読み込む。H-26）
+    private var llmDeferred = false
+    /// キーボードを閉じる（`viewWillDisappear`）ときに `unload_model` で LLM を手放した（再表示で `reload_model`）
+    private var llmSuspended = false
+    /// キーボードが表示中か（`focusIn` で true、`suspendLLM` で false）
+    private var isVisible = false
+    /// LLM の復帰を試みる予約が済んでいるか
+    private var llmRestoreScheduled = false
+    /// `reload_model` を最後に送った時刻（読み込み中に重ねて送らない）
+    private var lastReloadRequest: Date?
+    /// 辞書のみの状態になった時刻（表示中のみ。簡易モードの注意を出すまでの猶予の起点）
+    private var dictionaryOnlySince: Date?
+    private var noticeCheckScheduled = false
     /// 生成時の注意（設定の保存先を作れないなど）。メモリの注意は別に重ねて出す
     private var baseWarning: String?
     /// コアが続けて応答しなかった回数（応答すれば 0 に戻る）
@@ -125,8 +136,10 @@ final class KeyboardModel: ObservableObject {
     private let contextLength = 20
 
     /// - toggleInput: 設定ファイルが読めないときの既定（通常は設定 `input.toggle_input` で上書きされる）
-    init(outcome: ProductSession.Outcome, toggleInput: Bool = false) {
+    /// - llmDeferred: 空きメモリが足りず LLM を読み込まずに作ったセッションか（`ProductSession.shouldDeferLLM`）
+    init(outcome: ProductSession.Outcome, toggleInput: Bool = false, llmDeferred: Bool = false) {
         self.session = outcome.session
+        self.llmDeferred = llmDeferred && outcome.session != nil
         self.message = outcome.message
         self.warning = outcome.warning
         self.baseWarning = outcome.warning
@@ -179,20 +192,35 @@ final class KeyboardModel: ObservableObject {
         let params = environment.snapshot()
         session.setEnvironment(params)
         DiagLog.log("set_environment (\(reason)) \(NagiEnvironmentReporter.describe(params))")
-        guard llmReleasedByMemory else { return }
-        if params.memory_pressure == .normal {
-            // コアは逼迫が解けてから少し待って LLM を読み直すので、しばらく様子を見て注意を消す
-            refreshLLMNotice()
-            scheduleLLMRecheck(attempts: 6)
-        }
+        // 逼迫が解けたら、コアの自動再読み込み（約 30 秒後）を待たず、空きメモリを確かめて読み込む
+        if params.memory_pressure == .normal { scheduleLLMRestore(after: 0.5) }
     }
 
     // MARK: - 堅牢性（メモリ警告・コアの異常）
 
     private static let memoryNotice = "メモリ不足のため、変換を簡易モード（辞書のみ）に切り替えました"
 
+    /// 辞書のみで動いている（LLM を読み込んでいない・手放している）か
+    private var isDictionaryOnly: Bool { llmReleasedByMemory || llmDeferred || llmSuspended }
+
+    /// 簡易モードの注意は、辞書のみの状態が `dictionaryOnlyNoticeDelay` 秒を超えて続いたときだけ出す
+    /// （別アプリへの切替直後などの一時的な辞書のみでは出さない。閉じている間は数えない。H-26）
     private func updateWarning() {
-        warning = llmReleasedByMemory ? Self.memoryNotice : baseWarning
+        if isDictionaryOnly && isVisible {
+            if dictionaryOnlySince == nil { dictionaryOnlySince = Date() }
+        } else {
+            dictionaryOnlySince = nil
+        }
+        let show = NagiModelRecommendation.shouldShowDictionaryOnlyNotice(since: dictionaryOnlySince, now: Date())
+        warning = show ? Self.memoryNotice : baseWarning
+        if dictionaryOnlySince != nil, !show, !noticeCheckScheduled {
+            noticeCheckScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + NagiModelRecommendation.dictionaryOnlyNoticeDelay + 0.1) { [weak self] in
+                guard let self = self else { return }
+                self.noticeCheckScheduled = false
+                self.updateWarning()
+            }
+        }
     }
 
     /// OS のメモリ警告（`didReceiveMemoryWarning`）。拡張はメモリ上限を超えると強制終了されるので、
@@ -222,26 +250,53 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    /// 注意を出している間、コアが LLM を読み直したか確かめて、読み直されていれば注意を消す
-    private func refreshLLMNotice() {
-        guard llmReleasedByMemory, !dictionaryOnly, let status = session?.getStatus() else { return }
-        if status.llm {
-            llmReleasedByMemory = false
-            updateWarning()
-            DiagLog.log("llm reloaded by core")
+    /// 辞書のみの状態から LLM を復帰させる必要があるか（永続的な辞書のみ `dictionaryOnly` は対象外）
+    private var needsLLMRestore: Bool { !dictionaryOnly && isDictionaryOnly && isVisible && session != nil }
+
+    /// LLM の復帰を試みる予約（空きメモリが足りるまで 2 秒おきに繰り返す）
+    private func scheduleLLMRestore(after delay: TimeInterval = 2) {
+        guard !llmRestoreScheduled, needsLLMRestore else { return }
+        llmRestoreScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self else { return }
+            self.llmRestoreScheduled = false
+            self.tryRestoreLLM()
         }
     }
 
-    /// 逼迫が解けたあと、コアの再読み込み（約 30 秒後）に間に合うよう、間隔をあけて数回確かめる
-    private func scheduleLLMRecheck(attempts: Int) {
-        guard !llmRecheckScheduled, attempts > 0 else { return }
-        llmRecheckScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self = self else { return }
-            self.llmRecheckScheduled = false
-            self.refreshLLMNotice()
-            if self.llmReleasedByMemory { self.scheduleLLMRecheck(attempts: attempts - 1) }
+    /// LLM を復帰させる。読み込み済みなら注意を消す。メモリ逼迫が続いている間・空きメモリが足りない間は待つ。
+    /// コアがモデルを持っている（解放しただけ）なら `reload_model`、起動時に読み込まなかった（モデルを持たない）なら
+    /// コアを作り直す（入力中の文字列があれば確定してしまうので、入力が終わるまで待つ）
+    private func tryRestoreLLM() {
+        guard needsLLMRestore, let session = session else { return }
+        defer { scheduleLLMRestore() }
+        if !llmDeferred, let status = session.getStatus(), status.llm {
+            llmReleasedByMemory = false
+            llmSuspended = false
+            updateWarning()
+            DiagLog.log("llm restored")
+            return
         }
+        guard environment.snapshot().memory_pressure == .normal else { return }
+        guard !ProductSession.shouldDeferLLM(store: store) else { return }
+        if llmDeferred {
+            guard !hasPreedit else { return }
+            DiagLog.log("llm deferred: memory available, restart core")
+            scheduleRestartCore(noLLM: false, reason: "llm deferred (memory available)")
+        } else if lastReloadRequest.map({ Date().timeIntervalSince($0) > 15 }) ?? true {
+            lastReloadRequest = Date()
+            DiagLog.log("reload_model ok=\(session.reloadModel()) available=\(Int(MemoryProbe.getAvailableMemoryMB()))MB")
+        }
+    }
+
+    /// キーボードを閉じるとき（`viewWillDisappear`）: LLM を速やかに手放す。別アプリへ切り替えた先のキーボードが
+    /// LLM を読み込む間、旧インスタンスがメモリを持ち続けて一時的に倍になるのを避ける（H-26）。再表示（`focusIn`）で読み直す
+    func suspendLLM() {
+        isVisible = false
+        updateWarning()
+        guard let session = session, !dictionaryOnly, !llmDeferred else { return }
+        llmSuspended = true
+        DiagLog.log("unload_model (keyboard hidden) ok=\(session.unloadModel())")
     }
 
     /// 作り直しの予約が済んでいるか
@@ -273,13 +328,18 @@ final class KeyboardModel: ObservableObject {
         keepPreeditInHost()
         session = nil
         if noLLM { dictionaryOnly = true }
-        let outcome = ProductSession.make(store: store, noLLM: dictionaryOnly)
+        // 空きメモリが足りなければ辞書のみで始め、空きができてから読み込む（旧コアは上で手放し済み）
+        let deferNow = !dictionaryOnly && ProductSession.shouldDeferLLM(store: store)
+        let outcome = ProductSession.make(store: store, noLLM: dictionaryOnly || deferNow)
         session = outcome.session
         message = outcome.message
         baseWarning = outcome.warning
         // 新しいコアの revision は 0 から数え直す（旧コアの値を持ち越すと、新しい通知を古いと誤って捨てる）
         lastRevision = 0
         llmReleasedByMemory = dictionaryOnly && outcome.session != nil
+        llmSuspended = false
+        lastReloadRequest = nil
+        llmDeferred = deferNow && outcome.session != nil
         updateWarning()
         consecutiveFailures = 0
         lastSentContext = nil
@@ -690,6 +750,7 @@ final class KeyboardModel: ObservableObject {
 
     func focusIn() {
         toggleState = nil
+        isVisible = true
         // 直接入力に倒れている（コアが作れていない・応答しなかった）ときは、フォーカスのたびに作り直しを試みる
         if session == nil {
             restartCore(noLLM: dictionaryOnly, reason: "focusIn: no session")
@@ -706,6 +767,9 @@ final class KeyboardModel: ObservableObject {
         sendLayoutGeometry()
         if let result = session?.focusIn() { apply(result, origin: "response(focus_in)") }
         scheduleContextUpdate(delay: 0)
+        // 閉じている間に手放した LLM、または起動時に待たせた LLM を、空きメモリを確かめて読み込む
+        updateWarning()
+        scheduleLLMRestore(after: 0.3)
     }
 
     /// ホストアプリでの変更をコアに反映する。`config.toml` の更新時刻が変わっていれば `reload_config`

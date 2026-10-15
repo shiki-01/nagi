@@ -1120,3 +1120,15 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **テスト**: romaji の `strokes_*`・`flicks_*`（BS・巻き戻し・引き継ぎ・カーソル・Delete・部分確定・`clear`・`load_pieces`）、fuzzy の座標の単調性（境界に近いほど安い）・座標なしで M1 と同一・打鍵列の不一致時のフォールバック・非 QWERTY の隣接・フリック角度、`server/tests/fuzzy.rs` の `m2`（`reading` つき候補、補正候補の確定と学習（入力中・Space 変換の両方）、`set_layout_geometry` で `q` を `n` の下に置くと `kaqji` が補正される / `m` を遠ざけると補正されない / 12 キーの配置は無視される、境界の座標で補正される・`use_touch_coords=false` で座標を無視、座標なしの `insert_reading` と物理キーが同じ結果、JSON-RPC の受け付け）
 - **デバッグビルドの展開予算**: `EXPANSION_BUDGET_MS` を debug では 50ms にした（release 2ms）。debug は約 10 倍遅く、2ms ではテスト（`kamji` の補正）が不安定に落ちたため。release の挙動は変えていない
 - **未解決・次の段階**: `distance`（フリックの距離）と `mode` は未使用。文節に割れた入力の文節ごとの打鍵列の対応（今は読みからの復元）。M3（LLM 再採点）。Swift 側（geometry の送信、`touch` / `flick` の送信、`reading` の「もしかして: ○○」表示、iOS の config で `enabled = true`）。`CandidateView` の Swift の `init` に `reading:` が増えたので、`frontend-macos/Tests/.../PreeditAndCandidateTests.swift` と `frontend-ios-spike/Tests/CandidateKindTests.swift` の生成呼び出しに `reading: nil` が必要
+
+### H-26. キーボード切替時のメモリ一時倍増への対策（LLM の遅延ロード・非表示時の解放・簡易モード注意の猶予）（2026-10-15、要レビュー）
+
+- **事象**: キーボードを開いたまま別アプリへ切り替え、切替先でもキーボードが開いていると、旧拡張インスタンスが生きている間に新インスタンスが LLM をロードしてメモリが一時的に倍になり、オレンジのメモリ警告 → 辞書のみモードになる。他の状況では再現しない。
+- **LLM ロードの遅延**: 起動時（コア作り直し時を含む）に `os_proc_available_memory` の空きが `NagiModelRecommendation.canLoadNow(model, availableMB)`（モデルのサイズ + 安全マージン 40MB。純粋関数）に満たなければ、辞書のみで始める（`ProductSession.shouldDeferLLM`）。辞書・拡張本体は既に使用量に含まれるので、`fits`（予算全体の式）のオーバーヘッド 20MB は足さない。マージンは `fits` と同じ定数で整合させた。空きが足りるまで 2 秒おきに確かめ、足りたら読み込む（`KeyboardModel.tryRestoreLLM`）。
+  - **`reload_model` を使えない場合がある**: コアは起動時に読み込んだモデルのオブジェクトに対して重みを出し入れする（`Pipeline::unload_model` / `reload_model`）。`no_llm`・メモリ上限不足で起動するとモデルのオブジェクトが無く、`reload_model` では読み込めない。そのため **起動時に待たせた場合はコアを作り直して**（`restartCore`。入力中の文字列があれば入力が終わるまで待つ）読み込み、**一度読み込んだあとに解放しただけ**（メモリ警告・非表示）の場合は `reload_model` で読み込む。コア側の変更（起動時にモデルを持たない状態で始める口）が望ましければ別途判断。
+- **非表示時の解放**: `viewWillDisappear` で `focusOut` のあとに `unload_model`（`KeyboardModel.suspendLLM`）。再表示の `focusIn` から、空きメモリを確かめて `reload_model`。旧インスタンスが先に軽くなるので、切替先の読み込みと重ならない。再読み込みは重い（small で約 0.6 秒）ので、短時間の表示・非表示の往復では辞書のみの時間が増える。
+- **簡易モード（辞書のみ）の注意**: 辞書のみの状態が **10 秒を超えて**続いた場合のみ出す（`NagiModelRecommendation.shouldShowDictionaryOnlyNotice`）。閉じている間は数えず、再表示から数え直す。切替直後の一時的な辞書のみでは出さない。
+- **メモリ警告後の再読み込みの待ち時間**: 従来は 逼迫の保持 60 秒（`memoryPressureHold`）+ コアの自動再読み込みの待ち 30 秒（`MODEL_RELOAD_DELAY`）+ 確認の間隔 15 秒 = 最長約 105 秒。**保持を 10 秒**にし、通常に戻ったら 30 秒を待たず、空きメモリが足りることを確かめて `reload_model`（即時）を送るようにした。確認の間隔は 2 秒。合計 約 10〜12 秒。
+  - **理由**: 警告の直接の原因は切替直後の一時的な倍増で、旧インスタンスの解放（遅くとも数秒）で解消する。60 秒 + 30 秒は長すぎる。警告が再発する危険は、保持 10 秒に加えて空きメモリの確認（モデル + 40MB）で抑える。確認が通らなければ待ち続ける。
+- **未確認（実機）**: 旧インスタンスのメモリが新インスタンスの `os_proc_available_memory` に反映されるか（プロセスが別なら反映されず、遅延ロードの判定は効かず、非表示時の解放が効く）。拡張の複数インスタンスが同一プロセスか別プロセスかの確認。`viewWillDisappear` が別アプリへの切替で確実に呼ばれるか。診断ログの `unload_model (keyboard hidden)` `reload_model ok=` `llm restored` で追う。
+
