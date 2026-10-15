@@ -75,14 +75,22 @@ jobs:
         working-directory: frontend-ios-spike
         run: |
           mkdir -p build
-          set -o pipefail
+          # 失敗したテストをジョブのログに出すため、終了コードを控えてから要約を表示する
+          set +e
           xcodebuild test \
             -project NagiSpike.xcodeproj \
             -scheme NagiSpikeTests \
             -destination "id=$SIM_UDID" \
             -resultBundlePath build/NagiSpikeTests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            | tee build/xcodebuild-test.log | tail -n 80
+            > build/xcodebuild-test.log 2>&1
+          code=$?
+          set -e
+          echo "---- 失敗したテスト・エラー ----"
+          grep -E "error:|Test Case .* failed|XCTAssert|Failing tests|\*\* TEST (FAILED|SUCCEEDED)" build/xcodebuild-test.log | sort -u | head -n 80 || true
+          echo "---- 末尾 40 行 ----"
+          tail -n 40 build/xcodebuild-test.log
+          exit $code
 
       - uses: actions/upload-artifact@v4
         if: always()
