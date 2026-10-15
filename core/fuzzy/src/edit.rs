@@ -24,8 +24,23 @@ pub const COST_TRANSPOSE: f32 = 2.0;
 pub const COST_VOICING: f32 = 1.5;
 /// フリックの隣り合う方向への誤り（中央↔各方向、周回で隣の方向）
 pub const COST_ROW_NEAR: f32 = 2.5;
+/// フリックの角度が隣の方向との境界にあるときの取り違えのコスト（境界から離れるほど
+/// [`COST_ROW_NEAR`] に近づく）。どちらの方向とも言える動きなので、通常より軽い
+pub const COST_FLICK_BOUNDARY: f32 = 1.5;
 /// フリックの反対方向への誤り
 pub const COST_ROW_FAR: f32 = 3.0;
+
+/// タッチ位置のばらつき（標準偏差）の既定。キー間隔を 1 とした値。
+///
+/// 実際の指のばらつき（親指の QWERTY で概ねキー間隔の 0.2〜0.35 倍）より大きい 0.5 にしている。
+/// 評価（`nagi-fuzzy-eval`、`docs/decisions.md` H-25）で、モデルの σ をノイズの σ と同じにすると
+/// 累積コスト上限（4.5）に対して座標つきの置換が高くなり過ぎ、ノイズが大きい（0.32）ときに
+/// M1（離散）より悪化した。σ を 0.25 → 0.35 → 0.45 → 0.55 → 0.7 と変えると、上位 5 件の正解率は
+/// ノイズ 0.25 で 48 → 59 → 64 → 70 → 70%、0.32 で 23 → 36 → 44 → 50 → 55%（M1 は 49 / 36%）と
+/// 単調に上がる一方、クリーン入力の誤訂正は 0.55 から現れる（0.13%、0.7 で 0.25%）。
+/// 誤訂正率が 0% のまま正解率が頭打ちに近い手前の 0.5 を採った。ばらつきを広めに見る方が安全
+/// （境界から遠い打鍵も、辞書で成立すれば補正候補になる）
+pub const DEFAULT_TOUCH_SIGMA: f32 = 0.5;
 
 /// 累積コスト上限の既定（置換 2 回、または転置 + 置換 程度）
 pub const DEFAULT_MAX_COST: f32 = 4.5;
@@ -148,6 +163,10 @@ pub struct Params {
     pub deadline: Option<Duration>,
     /// 有効にする操作
     pub kinds: EditKinds,
+    /// 打鍵のタッチ座標を置換コストに使うか（`input.fuzzy.use_touch_coords`）。座標のない打鍵は常に離散コスト
+    pub use_touch: bool,
+    /// タッチ位置のばらつき（指の位置の標準偏差。キー間隔を 1 とする）。[`DEFAULT_TOUCH_SIGMA`]
+    pub touch_sigma: f32,
 }
 
 impl Default for Params {
@@ -158,6 +177,8 @@ impl Default for Params {
             max_nodes: 2500,
             deadline: Some(Duration::from_millis(2)),
             kinds: EditKinds::ALL,
+            use_touch: true,
+            touch_sigma: DEFAULT_TOUCH_SIGMA,
         }
     }
 }

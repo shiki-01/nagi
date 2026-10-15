@@ -423,6 +423,14 @@ pub fn definitions() -> Vec<SettingDef> {
             SettingKind::Text,
         ),
         def(
+            "input.fuzzy.use_touch_coords",
+            "入力",
+            "タッチ位置を補正に使う",
+            "画面のキーを押した位置（隣のキーとの境界に近いか）やフリックの角度を、タイプミスの補正の手がかりにします。境界に近い打鍵ほど補正候補が出やすくなります。",
+            SettingKind::Bool,
+        )
+        .platforms(SettingPlatforms::Ios),
+        def(
             "learning.enabled",
             "学習",
             "学習する",
@@ -560,6 +568,7 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         "input.fuzzy.strength" => Some(Text(config.input.fuzzy.strength.as_str().to_string())),
         "input.fuzzy.max_candidates" => Some(n(config.input.fuzzy.max_candidates)),
         "input.fuzzy.kinds" => Some(Text(config.input.fuzzy.kinds.clone())),
+        "input.fuzzy.use_touch_coords" => Some(Bool(config.input.fuzzy.use_touch_coords)),
         "rewriter.emoji" => Some(Bool(config.rewriter.emoji)),
         "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
         "userdict.enabled" => Some(Bool(config.userdict.enabled)),

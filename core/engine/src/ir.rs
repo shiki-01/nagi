@@ -15,6 +15,8 @@ pub struct Candidate {
     pub surface: String,
     /// 出所（複数の供給元が同じ表記を出した場合は複数）
     pub sources: Vec<CandidateSource>,
+    /// 曖昧入力の候補の、補正後の読み。選ぶとこの読みで確定・学習する
+    pub reading: Option<String>,
 }
 
 /// 文節ごとの候補セット（遅延生成）

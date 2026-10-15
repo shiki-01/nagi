@@ -10,8 +10,14 @@
 
 use nagi_config::FuzzySection;
 use nagi_dict::{Dictionary, Overlay};
+use nagi_engine::TypingHint;
 use nagi_engine::touch::{DakutenOrder, key_table};
-use nagi_fuzzy::{Correction, EditKinds, Fuzzy, KanaTable, Params, ReadingIndex, covered};
+use nagi_fuzzy::{
+    Correction, EditKinds, Fuzzy, KanaTable, Key, KeyLayout, Params, ReadingIndex, covered,
+};
+use nagi_protocol::SetLayoutGeometryParams;
+use nagi_romaji::RomajiTable;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// 編集コスト 1.0 を Mozc 辞書のコスト尺度に換算する係数。
@@ -29,7 +35,8 @@ pub const LEXICON_COST_PER_EDIT_COST: f32 = 500.0;
 pub const VALID_READING_PENALTY: f32 = 5.0;
 
 /// 展開に使う時間の上限の目安（ミリ秒）。同期予算 `sync_budget` が小さければそちらに合わせる
-pub const EXPANSION_BUDGET_MS: u64 = 2;
+/// （debug ビルドは release の 10 倍ほど遅く、2ms ではテストが不安定になるので緩める）
+pub const EXPANSION_BUDGET_MS: u64 = if cfg!(debug_assertions) { 50 } else { 2 };
 
 /// 辞書に問い合わせる補正読みの最大数（展開は上位をこれだけ返す。各々 Viterbi を 1 回走らせる）
 const MAX_EXPANDED: usize = 30;
@@ -45,6 +52,10 @@ pub struct FuzzySettings {
     pub max_candidates: usize,
     /// 有効な補正の種類（`input.fuzzy.kinds`）
     pub kinds: EditKinds,
+    /// タッチ座標（キー内の位置・フリックの角度）を補正のコストに使うか（`input.fuzzy.use_touch_coords`）
+    pub use_touch: bool,
+    /// タッチ位置のばらつき（標準偏差。キー間隔を 1 とする）。設定項目ではなく評価用の調整値
+    pub touch_sigma: f32,
 }
 
 impl Default for FuzzySettings {
@@ -61,6 +72,8 @@ impl FuzzySettings {
             max_cost: section.strength.max_cost(),
             max_candidates: section.max_candidates,
             kinds: EditKinds::parse(&section.kinds),
+            use_touch: section.use_touch_coords,
+            touch_sigma: nagi_fuzzy::DEFAULT_TOUCH_SIGMA,
         }
     }
 }
@@ -91,7 +104,30 @@ impl ReadingIndex for DictIndex<'_> {
 
 /// 曖昧入力の提案器（隣接表などを 1 度だけ作って使い回す）
 pub struct FuzzyEngine {
+    /// 内蔵の QWERTY 配置
     fuzzy: Fuzzy,
+    kana: KanaTable,
+    /// フロントが渡したキー矩形から作った配置（直近の 1 つ）。同じ内容なら作り直さない
+    custom: Mutex<Option<(SetLayoutGeometryParams, Arc<Fuzzy>)>>,
+}
+
+/// フロントのキー矩形から配置を作る（ラベルが 1 文字の英字のキーだけ。同じ文字は最初のキー）
+fn layout_from_geometry(geometry: &SetLayoutGeometryParams) -> KeyLayout {
+    let mut keys: Vec<Key> = Vec::new();
+    for (label, k) in geometry.letter_keys() {
+        if keys.iter().any(|x| x.label == label) {
+            continue;
+        }
+        keys.push(Key {
+            id: k.id.clone(),
+            label,
+            x: k.x as f32,
+            y: k.y as f32,
+            w: k.w as f32,
+            h: k.h as f32,
+        });
+    }
+    KeyLayout { keys }
 }
 
 impl Default for FuzzyEngine {
@@ -123,9 +159,32 @@ impl FuzzyEngine {
             .iter()
             .map(|c| c.iter().map(|s| first(s)).collect())
             .collect();
+        let kana = KanaTable::new(&rows, &cycles);
         FuzzyEngine {
-            fuzzy: Fuzzy::qwerty(KanaTable::new(&rows, &cycles)),
+            fuzzy: Fuzzy::qwerty(kana.clone()),
+            kana,
+            custom: Mutex::new(None),
         }
+    }
+
+    /// 使う配置: フロントが渡したキー矩形（使えるものなら）、無ければ内蔵の QWERTY
+    fn fuzzy_for(&self, geometry: Option<&SetLayoutGeometryParams>) -> Arc<Fuzzy> {
+        let Some(geometry) = geometry.filter(|g| g.is_usable_for_fuzzy()) else {
+            return Arc::new(self.fuzzy.clone());
+        };
+        let mut cache = self.custom.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached, fuzzy)) = cache.as_ref()
+            && cached == geometry
+        {
+            return fuzzy.clone();
+        }
+        let fuzzy = Arc::new(Fuzzy::new(
+            &layout_from_geometry(geometry),
+            self.kana.clone(),
+            RomajiTable::standard(),
+        ));
+        *cache = Some((geometry.clone(), fuzzy.clone()));
+        fuzzy
     }
 
     /// 補正読みの展開だけ（辞書の枝刈り付き。表記への変換・採否の判定はしない）
@@ -133,6 +192,7 @@ impl FuzzyEngine {
         &self,
         dict: &Dictionary,
         reading: &str,
+        typing: &TypingHint<'_>,
         settings: &FuzzySettings,
         budget: Duration,
     ) -> Vec<Correction> {
@@ -141,9 +201,17 @@ impl FuzzyEngine {
             max_results: MAX_EXPANDED,
             deadline: Some(budget.min(Duration::from_millis(EXPANSION_BUDGET_MS))),
             kinds: settings.kinds,
+            use_touch: settings.use_touch,
+            touch_sigma: settings.touch_sigma,
             ..Params::default()
         };
-        self.fuzzy.corrections(reading, &DictIndex(dict), &params)
+        self.fuzzy_for(typing.geometry).corrections_with(
+            reading,
+            typing.strokes,
+            typing.flicks,
+            &DictIndex(dict),
+            &params,
+        )
     }
 
     /// `reading`（入力中の読み）の補正の提案を、良い順に最大 `settings.max_candidates` 件返す。
@@ -155,6 +223,7 @@ impl FuzzyEngine {
         dict: &Dictionary,
         overlay: &Overlay,
         reading: &str,
+        typing: &TypingHint<'_>,
         settings: &FuzzySettings,
         known: bool,
         budget: Duration,
@@ -169,7 +238,7 @@ impl FuzzyEngine {
         {
             return Vec::new();
         }
-        let corrections = self.expand(dict, reading, settings, budget);
+        let corrections = self.expand(dict, reading, typing, settings, budget);
         if corrections.is_empty() {
             return Vec::new();
         }

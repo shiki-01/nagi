@@ -370,6 +370,9 @@ pub struct FuzzySection {
     pub max_candidates: usize,
     /// 使う補正の種類（`substitute,delete,insert,transpose,voicing` のカンマ区切り）。既定: 全部。
     pub kinds: String,
+    /// タッチ座標（キー内の位置・フリックの角度）を補正のコストに使うか。既定: true。
+    /// 座標を送らない入力（物理キーボード）には影響しない。
+    pub use_touch_coords: bool,
 }
 
 /// `input.fuzzy.kinds` の既定値（全種類）。
@@ -382,6 +385,7 @@ impl Default for FuzzySection {
             strength: FuzzyStrength::Normal,
             max_candidates: 3,
             kinds: FUZZY_KINDS_ALL.to_string(),
+            use_touch_coords: true,
         }
     }
 }
@@ -831,7 +835,13 @@ const KNOWN_KEYS: &[&str] = &[
 ];
 
 /// `[input.fuzzy]` の既知キー。
-const FUZZY_KEYS: &[&str] = &["enabled", "strength", "max_candidates", "kinds"];
+const FUZZY_KEYS: &[&str] = &[
+    "enabled",
+    "strength",
+    "max_candidates",
+    "kinds",
+    "use_touch_coords",
+];
 
 /// 各セクションの既知キー。
 fn get_known_section_keys(section: &str) -> &'static [&'static str] {

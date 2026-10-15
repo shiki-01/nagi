@@ -4,7 +4,9 @@
 //! 辞書との接続は `nagi-server` 側の実装が行う。
 
 use crate::observer::CommitContext;
+use nagi_protocol::SetLayoutGeometryParams;
 use nagi_protocol::view::CandidateSource;
+use nagi_romaji::Stroke;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -34,6 +36,19 @@ pub struct BackendCandidate {
     pub surface: String,
     /// 出所
     pub sources: Vec<CandidateSource>,
+    /// 曖昧入力（出所 `Fuzzy`）の候補の、補正後の読み。補正でなければ `None`
+    pub reading: Option<String>,
+}
+
+/// 曖昧入力の追加情報（実際の打鍵列とキー配置）。どちらも任意で、無ければ読みからの復元・内蔵の QWERTY
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TypingHint<'a> {
+    /// 入力中の読みの元になった実際の打鍵列（タッチ座標つきでもよい）。読みを再現しなければ使われない
+    pub strokes: Option<&'a [Stroke]>,
+    /// 読みの各文字を出したかな 12 キーのフリック（角度[度]、距離）。読みと同じ長さのときだけ使われる
+    pub flicks: Option<&'a [Option<(f32, f32)>]>,
+    /// フロントが渡したキー矩形（`set_layout_geometry`）
+    pub geometry: Option<&'a SetLayoutGeometryParams>,
 }
 
 /// バックエンドの非同期処理が完了したことの通知。`convert_sentence` に渡された引数と同じ値を持つ
@@ -66,15 +81,16 @@ pub trait ConversionBackend: Send + Sync {
 
     /// 曖昧入力（タイプミス補正）の「もしかして」候補（良い順、最大 `limit` 件。出所は
     /// [`CandidateSource::Fuzzy`]）。`reading` は入力中の読み全体で、辞書でそのまま意味を持つなら
-    /// 出さない。無効・非対応なら空（既定実装は非対応）。`segment_candidates` も文節の読みに対して
+    /// 出さない。`typing` は実際の打鍵列とキー配置（任意）。無効・非対応なら空（既定実装は非対応）。`segment_candidates` も文節の読みに対して
     /// 同じ候補を含みうるが、こちらは文節に分かれる前の読み全体用
     fn fuzzy_candidates(
         &self,
         reading: &str,
+        typing: &TypingHint<'_>,
         left_context: &str,
         limit: usize,
     ) -> Vec<BackendCandidate> {
-        let _ = (reading, left_context, limit);
+        let _ = (reading, typing, left_context, limit);
         Vec::new()
     }
 
@@ -248,6 +264,7 @@ impl ConversionBackend for MockBackend {
             .map(|surface| BackendCandidate {
                 surface,
                 sources: vec![CandidateSource::SystemDict],
+                reading: None,
             })
             .collect()
     }
@@ -270,6 +287,7 @@ impl ConversionBackend for MockBackend {
             .map(|surface| BackendCandidate {
                 surface,
                 sources: vec![CandidateSource::Learned],
+                reading: None,
             })
             .collect()
     }
@@ -284,6 +302,7 @@ impl ConversionBackend for MockBackend {
             .map(|surface| BackendCandidate {
                 surface,
                 sources: vec![CandidateSource::Learned],
+                reading: None,
             })
             .collect()
     }

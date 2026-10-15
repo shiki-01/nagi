@@ -130,6 +130,10 @@ pub struct CandidateView {
     /// 残りの読みは入力中のまま続く（部分変換）
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub covers: Option<u32>,
+    /// 曖昧入力（出所 `Fuzzy`）の候補で、補正後の読み（「もしかして: かんじ」の表示用）。
+    /// 選ぶとこの読みで確定し、学習する。補正でない候補は `None`
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reading: Option<String>,
 }
 
 /// 候補ウィンドウの状態

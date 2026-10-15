@@ -13,11 +13,12 @@
 //!   辞書の結果で応答する。推論は続行して結果をキャッシュに入れる
 //! - **縮退**: モデルが無い・エラー・`minimal` プロファイルでは辞書だけ、辞書も無ければ読みのまま
 
-use crate::fuzzy::FuzzyEngine;
+use crate::fuzzy::{FuzzyEngine, Suggestion};
 use crate::runtime::{Effective, Event, ModelControl, Runtime};
 use nagi_dict::{Dictionary, Overlay};
 use nagi_engine::{
-    BackendCandidate, BackendSegment, BackendSentence, CommitContext, Completion, ConversionBackend,
+    BackendCandidate, BackendSegment, BackendSentence, CommitContext, Completion,
+    ConversionBackend, TypingHint,
 };
 use nagi_infer::{ConversionModel, ConvertRequest};
 use nagi_learn::context_hash;
@@ -583,19 +584,23 @@ impl Pipeline {
         eff: &Effective,
         overlay: &Overlay,
         known: bool,
-    ) -> Vec<String> {
+        typing: &TypingHint<'_>,
+    ) -> Vec<Suggestion> {
         let Some(dict) = &self.dict else {
             return Vec::new();
         };
         if !eff.fuzzy.enabled {
             return Vec::new();
         }
-        self.fuzzy
-            .get_or_init(FuzzyEngine::new)
-            .suggest(dict, overlay, reading, &eff.fuzzy, known, eff.sync_budget)
-            .into_iter()
-            .map(|s| s.surface)
-            .collect()
+        self.fuzzy.get_or_init(FuzzyEngine::new).suggest(
+            dict,
+            overlay,
+            reading,
+            typing,
+            &eff.fuzzy,
+            known,
+            eff.sync_budget,
+        )
     }
 
     /// 優先順で LLM より前にある出所（学習・ユーザー辞書）の結果で、文節の表記を置き換える
@@ -664,6 +669,7 @@ fn merge_by_order(
                     None => out.push(BackendCandidate {
                         surface,
                         sources: vec![*source],
+                        reading: None,
                     }),
                 }
             }
@@ -927,14 +933,30 @@ impl ConversionBackend for Pipeline {
         groups.push((CandidateSource::Rewriter, rewriter_candidates));
 
         // 曖昧入力: 通常の候補にすでにある表記は重ねない
-        let fuzzy: Vec<String> = self
-            .fuzzy_suggestions(reading, &eff, &overlay, known)
+        // 文節の候補には実際の打鍵列を対応づけられないので、読みからの復元で推定する
+        let fuzzy: Vec<Suggestion> = self
+            .fuzzy_suggestions(reading, &eff, &overlay, known, &TypingHint::default())
             .into_iter()
-            .filter(|f| !groups.iter().any(|(_, items)| items.contains(f)))
+            .filter(|f| {
+                !groups
+                    .iter()
+                    .any(|(_, items)| items.iter().any(|i| *i == f.surface))
+            })
             .collect();
-        groups.push((CandidateSource::Fuzzy, fuzzy));
+        groups.push((
+            CandidateSource::Fuzzy,
+            fuzzy.iter().map(|f| f.surface.clone()).collect(),
+        ));
 
         let mut out = merge_by_order(&eff.ranking, groups);
+        for c in &mut out {
+            if c.sources == [CandidateSource::Fuzzy] {
+                c.reading = fuzzy
+                    .iter()
+                    .find(|f| f.surface == c.surface)
+                    .map(|f| f.reading.clone());
+            }
+        }
         truncate_keeping_fuzzy(&mut out, limit);
         out
     }
@@ -942,6 +964,7 @@ impl ConversionBackend for Pipeline {
     fn fuzzy_candidates(
         &self,
         reading: &str,
+        typing: &TypingHint<'_>,
         left_context: &str,
         limit: usize,
     ) -> Vec<BackendCandidate> {
@@ -958,12 +981,13 @@ impl ConversionBackend for Pipeline {
             .any(|(_, score)| *score > 0.0)
             || !overlay.lookup(reading).is_empty()
             || !overlay.snippets(reading).is_empty();
-        self.fuzzy_suggestions(reading, &eff, &overlay, known)
+        self.fuzzy_suggestions(reading, &eff, &overlay, known, typing)
             .into_iter()
             .take(limit)
-            .map(|surface| BackendCandidate {
-                surface,
+            .map(|s| BackendCandidate {
+                surface: s.surface,
                 sources: vec![CandidateSource::Fuzzy],
+                reading: Some(s.reading),
             })
             .collect()
     }
@@ -984,6 +1008,7 @@ impl ConversionBackend for Pipeline {
             .map(|(surface, _)| BackendCandidate {
                 surface,
                 sources: vec![CandidateSource::Learned],
+                reading: None,
             })
             .collect()
     }
@@ -1002,6 +1027,7 @@ impl ConversionBackend for Pipeline {
                 out.push(BackendCandidate {
                     surface,
                     sources: vec![CandidateSource::Learned],
+                    reading: None,
                 });
             }
         }
@@ -1010,6 +1036,7 @@ impl ConversionBackend for Pipeline {
                 out.push(BackendCandidate {
                     surface: entry.surface.clone(),
                     sources: vec![CandidateSource::UserDict],
+                    reading: None,
                 });
             }
         }

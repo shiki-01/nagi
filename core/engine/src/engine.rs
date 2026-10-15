@@ -7,7 +7,7 @@
 //! `preedit` / `candidates` / `mode` と、確定文字列）をまとめて返す。
 
 use crate::action::{Action, Direction};
-use crate::backend::{BackendCandidate, BackendSegment, Completion, ConversionBackend};
+use crate::backend::{BackendCandidate, BackendSegment, Completion, ConversionBackend, TypingHint};
 use crate::ir::{
     Candidate, CandidateSet, CandidateSource, CursorPos, Preedit, Segment, SegmentKind,
 };
@@ -17,13 +17,15 @@ use crate::observer::{CommitContext, CommitObserver, CommittedSegment};
 use crate::touch;
 use nagi_protocol::key::{KeyEvent, KeyKind};
 use nagi_protocol::methods::{
-    KanaKey, KeyGesture, ProcessKeyResult, ReadingInput, RestoreSessionParams, SetContextParams,
-    TouchAction, TouchDirection,
+    FlickDetail, KanaKey, KeyGesture, ProcessKeyResult, ReadingInput, RestoreSessionParams,
+    SetContextParams, SetLayoutGeometryParams, TouchAction, TouchDirection, TouchPoint,
 };
 use nagi_protocol::utf16;
 use nagi_protocol::view::{CandidateView, CandidatesView, InputMode, PreeditView};
 use nagi_rewriter::Rewriter;
-use nagi_romaji::{Composer, Piece, PieceKind, PunctuationStyle, RomajiTable, ShiftLetterMode};
+use nagi_romaji::{
+    Composer, Piece, PieceKind, PunctuationStyle, RomajiTable, ShiftLetterMode, Stroke,
+};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -182,6 +184,8 @@ struct Session {
     /// フロントが報告したアプリケーション識別子
     app_id: Option<String>,
     secure_input: bool,
+    /// フロントが渡したキー矩形（曖昧入力のキー近接用）
+    geometry: Option<Arc<SetLayoutGeometryParams>>,
     revision: u64,
     sent: Sent,
     /// 非同期の LLM 完了に対応する差し替え対象。未操作なら差し替える
@@ -218,6 +222,37 @@ struct ComposingItem {
     /// 先頭から何文字（Unicode スカラー）の読みを置き換えるか
     covers: usize,
     sources: Vec<CandidateSource>,
+    /// 曖昧入力の候補の、補正後の読み
+    reading: Option<String>,
+}
+
+/// 曖昧入力に渡す、入力中の読みの元になった実際の打鍵列とキー矩形（所有版。`hint` で借りる）
+#[derive(Default)]
+struct TypingSnapshot {
+    strokes: Option<Vec<Stroke>>,
+    flicks: Option<Vec<Option<(f32, f32)>>>,
+    geometry: Option<Arc<SetLayoutGeometryParams>>,
+}
+
+impl TypingSnapshot {
+    /// `reading` が Composer の入力全体のときだけ、その打鍵列・フリックを取る
+    /// （一部の読みや、変換結果から戻した読みでは対応が取れないので渡さない）
+    fn of(sess: &Session, reading: &str) -> Self {
+        let whole = sess.composer.text() == reading;
+        TypingSnapshot {
+            strokes: whole.then(|| sess.composer.strokes()),
+            flicks: whole.then(|| sess.composer.flicks()),
+            geometry: sess.geometry.clone(),
+        }
+    }
+
+    fn hint(&self) -> TypingHint<'_> {
+        TypingHint {
+            strokes: self.strokes.as_deref(),
+            flicks: self.flicks.as_deref(),
+            geometry: self.geometry.as_deref(),
+        }
+    }
 }
 
 /// 入力中（変換前）の候補の一覧。`reading` が現在の入力と一致する間だけ表示と選択に使う
@@ -290,6 +325,8 @@ pub struct Engine {
     table: Arc<RomajiTable>,
     sessions: HashMap<String, Session>,
     observer: Option<Arc<dyn CommitObserver>>,
+    /// フロントが渡したキー矩形の既定（`set_layout_geometry` の `session_id` 省略）
+    geometry: Option<Arc<SetLayoutGeometryParams>>,
 }
 
 fn tail_chars(s: &str, n: usize) -> String {
@@ -298,6 +335,16 @@ fn tail_chars(s: &str, n: usize) -> String {
 }
 
 fn push_candidate(items: &mut Vec<Candidate>, surface: &str, sources: &[CandidateSource]) {
+    push_candidate_with(items, surface, sources, None);
+}
+
+/// 補正後の読み（曖昧入力の候補）つきで候補を足す
+fn push_candidate_with(
+    items: &mut Vec<Candidate>,
+    surface: &str,
+    sources: &[CandidateSource],
+    reading: Option<&str>,
+) {
     if let Some(existing) = items.iter_mut().find(|c| c.surface == surface) {
         for s in sources {
             if !existing.sources.contains(s) {
@@ -308,6 +355,7 @@ fn push_candidate(items: &mut Vec<Candidate>, surface: &str, sources: &[Candidat
         items.push(Candidate {
             surface: surface.to_string(),
             sources: sources.to_vec(),
+            reading: reading.map(str::to_string),
         });
     }
 }
@@ -324,6 +372,30 @@ impl Engine {
             table,
             sessions: HashMap::new(),
             observer: None,
+            geometry: None,
+        }
+    }
+
+    /// `set_layout_geometry` メソッド: キーボードのキー矩形を受け取り、曖昧入力のキー配置に使う。
+    /// `session_id` があればそのセッションだけ、無ければ既存のすべてのセッションと以後の新しい
+    /// セッションの既定にする。曖昧入力に使えない配置（英字キーが 10 個未満。12 キーのかななど）は無視する
+    pub fn set_layout_geometry(&mut self, params: &SetLayoutGeometryParams) {
+        if !params.is_usable_for_fuzzy() {
+            return;
+        }
+        let geometry = Arc::new(params.clone());
+        match &params.session_id {
+            Some(id) => {
+                let mut sess = self.take_session(id);
+                sess.geometry = Some(geometry);
+                self.sessions.insert(id.clone(), sess);
+            }
+            None => {
+                for sess in self.sessions.values_mut() {
+                    sess.geometry = Some(geometry.clone());
+                }
+                self.geometry = Some(geometry);
+            }
         }
     }
 
@@ -376,6 +448,7 @@ impl Engine {
             left_context: String::new(),
             app_id: None,
             secure_input: false,
+            geometry: self.geometry.clone(),
             revision: 0,
             sent: Sent {
                 preedit: PreeditView::default(),
@@ -424,11 +497,24 @@ impl Engine {
     /// `insert_reading` メソッド（タッチ入力）: ローマ字を経由せず、読み（かな）を挿入する。
     /// 12 キーのキー・操作（タップ・トグル・フリック）や、濁点・小書きの循環もここで解決する
     pub fn insert_reading(&mut self, session_id: &str, input: &ReadingInput) -> ProcessKeyResult {
+        self.insert_reading_touch(session_id, input, None, None)
+    }
+
+    /// `insert_reading` に、タッチ位置（QWERTY の 1 文字のキー内の相対位置）とフリックの角度・距離
+    /// （12 キー）を足したもの。曖昧入力が使う任意の情報で、省略すれば `insert_reading` と同じ。
+    /// 座標は preedit の間だけ Composer が持ち、確定・破棄・フォーカス喪失で消える
+    pub fn insert_reading_touch(
+        &mut self,
+        session_id: &str,
+        input: &ReadingInput,
+        touch: Option<TouchPoint>,
+        flick: Option<FlickDetail>,
+    ) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
         sess.origins.clear();
         sess.last_commit = None;
         let mut commit = String::new();
-        let consumed = self.apply_reading(&mut sess, input, &mut commit);
+        let consumed = self.apply_reading(&mut sess, input, touch, flick, &mut commit);
         let result = self.finish(&mut sess, consumed, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
@@ -516,7 +602,14 @@ impl Engine {
         Some(mapped)
     }
 
-    fn apply_reading(&self, sess: &mut Session, input: &ReadingInput, commit: &mut String) -> bool {
+    fn apply_reading(
+        &self,
+        sess: &mut Session,
+        input: &ReadingInput,
+        touch: Option<TouchPoint>,
+        flick: Option<FlickDetail>,
+        commit: &mut String,
+    ) -> bool {
         match input {
             ReadingInput::Text(text) => {
                 sess.touch_toggle = None;
@@ -524,7 +617,19 @@ impl Engine {
                 let Some(first) = chars.next() else {
                     return false;
                 };
-                self.insert_char(sess, first, commit);
+                // 座標は 1 文字の入力にだけ意味がある
+                let touch = touch
+                    .filter(|_| text.chars().count() == 1)
+                    .map(|t| (t.x as f32, t.y as f32));
+                self.insert_stroke(
+                    sess,
+                    Stroke {
+                        ch: first,
+                        touch,
+                        flick: None,
+                    },
+                    commit,
+                );
                 for c in chars {
                     sess.composer.insert_char(c);
                 }
@@ -555,7 +660,18 @@ impl Engine {
                 }
                 let index = touch::gesture_index(*gesture);
                 let ch = chars[index];
-                self.insert_char(sess, ch, commit);
+                let flick = flick
+                    .filter(|_| !matches!(gesture, KeyGesture::Tap | KeyGesture::Toggle))
+                    .map(|f| (f.angle_deg as f32, f.distance as f32));
+                self.insert_stroke(
+                    sess,
+                    Stroke {
+                        ch,
+                        touch: None,
+                        flick,
+                    },
+                    commit,
+                );
                 sess.touch_toggle = (*gesture == KeyGesture::Toggle).then(|| TouchToggle {
                     key: *key,
                     index,
@@ -663,7 +779,8 @@ impl Engine {
         let mut sess = self.take_session(session_id);
         let current = self.candidate_reading(&sess);
         let result = if current.as_deref() == Some(reading) {
-            let items = self.compute_composing_items(reading, &sess.left_context);
+            let typing = TypingSnapshot::of(&sess, reading);
+            let items = self.compute_composing_items(reading, &sess.left_context, &typing);
             sess.composing_cands = Some(ComposingCands {
                 reading: reading.to_string(),
                 items,
@@ -678,7 +795,12 @@ impl Engine {
     }
 
     /// 入力中の候補: 読み全体の最良の変換、先頭の文節の候補（部分変換）、ひらがな・カタカナ
-    fn compute_composing_items(&self, reading: &str, left_context: &str) -> Vec<ComposingItem> {
+    fn compute_composing_items(
+        &self,
+        reading: &str,
+        left_context: &str,
+        typing: &TypingSnapshot,
+    ) -> Vec<ComposingItem> {
         let left = tail_chars(left_context, LEFT_CONTEXT_CHARS);
         let total = reading.chars().count();
         let mut items: Vec<ComposingItem> = Vec::new();
@@ -701,12 +823,13 @@ impl Engine {
                         surface,
                         covers,
                         sources,
+                        reading: None,
                     });
                 }
             };
         // 曖昧入力の「もしかして」候補は、通常の候補が上限まで埋めても押し出されないよう枠を取っておく
         let is_fuzzy = |sources: &[CandidateSource]| sources == [CandidateSource::Fuzzy];
-        let mut fuzzy: Vec<(String, usize)> = Vec::new();
+        let mut fuzzy: Vec<(String, usize, Option<String>)> = Vec::new();
 
         let best = self.backend.convert_sentence(reading, &left);
         let joined: String = best.iter().map(|s| s.reading.as_str()).collect();
@@ -730,19 +853,23 @@ impl Engine {
             let from_first =
                 self.backend
                     .segment_candidates(&first.reading, &left, COMPOSING_CANDIDATES_LIMIT);
-            for c in &from_first {
-                if is_fuzzy(&c.sources) {
-                    fuzzy.push((c.surface.clone(), covers));
+            // 先頭の文節だけへの補正（文節に割れた入力。実際の打鍵列は文節に対応づけられないので、
+            // 読みからの復元で推定する）
+            if best.len() > 1 {
+                for c in &from_first {
+                    if is_fuzzy(&c.sources) {
+                        fuzzy.push((c.surface.clone(), covers, c.reading.clone()));
+                    }
                 }
             }
-            // 文節に分かれてしまった入力の読み全体への補正（タイプミスで文節が割れた場合）
-            if best.len() > 1 {
-                for c in self
-                    .backend
-                    .fuzzy_candidates(reading, &left, COMPOSING_CANDIDATES_LIMIT)
-                {
-                    fuzzy.push((c.surface, total));
-                }
+            // 読み全体への補正。実際の打鍵列・タッチ座標・キー矩形はここで使う
+            for c in self.backend.fuzzy_candidates(
+                reading,
+                &typing.hint(),
+                &left,
+                COMPOSING_CANDIDATES_LIMIT,
+            ) {
+                fuzzy.push((c.surface, total, c.reading));
             }
             let normal_cap = COMPOSING_CANDIDATES_LIMIT.saturating_sub(fuzzy.len().min(3));
             push(surface, total, sources, normal_cap);
@@ -752,13 +879,15 @@ impl Engine {
                 }
             }
         }
-        for (surface, covers) in fuzzy {
+        let mut corrections: Vec<(String, usize, Option<String>)> = Vec::new();
+        for (surface, covers, corrected) in fuzzy {
             push(
-                surface,
+                surface.clone(),
                 covers,
                 vec![CandidateSource::Fuzzy],
                 COMPOSING_CANDIDATES_LIMIT,
             );
+            corrections.push((surface, covers, corrected));
         }
         push(
             reading.to_string(),
@@ -772,6 +901,16 @@ impl Engine {
             vec![CandidateSource::Kana],
             COMPOSING_CANDIDATES_LIMIT,
         );
+        // 補正候補に補正後の読みを付ける（通常の候補と同じ表記なら統合済みなので付けない）
+        for (surface, covers, corrected) in corrections {
+            if let Some(item) = items
+                .iter_mut()
+                .find(|i| i.surface == surface && i.covers == covers)
+                && item.sources == [CandidateSource::Fuzzy]
+            {
+                item.reading = corrected;
+            }
+        }
         items
     }
 
@@ -796,7 +935,8 @@ impl Engine {
         self.notify_commit(
             sess,
             &[Segment {
-                reading: prefix.clone(),
+                // 曖昧入力の補正候補は、補正後の読みで確定・学習する
+                reading: item.reading.clone().unwrap_or_else(|| prefix.clone()),
                 surface: item.surface.clone(),
                 kind: SegmentKind::Japanese,
                 candidates: None,
@@ -1272,7 +1412,8 @@ impl Engine {
             return false;
         }
         let reading = cc.reading.clone();
-        let items = self.compute_composing_items(&reading, &sess.left_context);
+        let typing = TypingSnapshot::of(sess, &reading);
+        let items = self.compute_composing_items(&reading, &sess.left_context, &typing);
         if items == cc.items {
             return false;
         }
@@ -1451,6 +1592,10 @@ impl Engine {
     }
 
     fn insert_char(&self, sess: &mut Session, c: char, commit: &mut String) {
+        self.insert_stroke(sess, Stroke::key(c), commit);
+    }
+
+    fn insert_stroke(&self, sess: &mut Session, stroke: Stroke, commit: &mut String) {
         if matches!(sess.state, State::Converting(_)) {
             // 変換結果を確定して新しい入力を始める
             self.commit_all(sess, commit);
@@ -1462,7 +1607,7 @@ impl Engine {
         }
         // 文字の入力（追記）でライブ変換の抑制を解く（G-46）
         sess.live_suppressed = false;
-        sess.composer.insert_char(c);
+        sess.composer.insert_stroke(stroke);
         sess.state = State::Composing;
     }
 
@@ -1792,8 +1937,15 @@ impl Engine {
         let mut left = sess.left_context.clone();
         let mut segments = Vec::with_capacity(committed.len());
         for (seg, prev_word) in committed.iter().zip(with_prev) {
+            // 曖昧入力の補正候補を選んだ文節は、補正後の読みで学習する
+            let reading = seg
+                .candidates
+                .as_ref()
+                .and_then(|set| set.items.iter().find(|c| c.surface == seg.surface))
+                .and_then(|c| c.reading.clone())
+                .unwrap_or_else(|| seg.reading.clone());
             segments.push(CommittedSegment {
-                reading: seg.reading.clone(),
+                reading,
                 surface: seg.surface.clone(),
                 kind: seg.kind,
                 left_context: tail_chars(&left, LEFT_CONTEXT_CHARS),
@@ -1987,11 +2139,14 @@ impl Engine {
     fn start_converting_fuzzy(&self, sess: &Session) -> Option<Conv> {
         let reading = sess.composer.leftover_reading()?;
         let left = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
-        if self
-            .backend
-            .fuzzy_candidates(&reading, &left, COMPOSING_CANDIDATES_LIMIT)
-            .is_empty()
-        {
+        let typing = TypingSnapshot::of(sess, &reading);
+        let fuzzy = self.backend.fuzzy_candidates(
+            &reading,
+            &typing.hint(),
+            &left,
+            COMPOSING_CANDIDATES_LIMIT,
+        );
+        if fuzzy.is_empty() {
             return None;
         }
         let mut conv = Conv {
@@ -2008,6 +2163,20 @@ impl Engine {
             sentence_alternatives: None,
         };
         self.ensure_candidates(&sess.left_context, &mut conv, 0);
+        // 文節の候補（打鍵列なしの推定）の補正候補を、実際の打鍵列・座標で求めたものに差し替える
+        if let Some(set) = conv.segments[0].candidates.as_mut() {
+            let fuzzy_only = |c: &Candidate| c.sources == [CandidateSource::Fuzzy];
+            let selected_surface = set.items[set.selected].surface.clone();
+            set.items.retain(|c| !fuzzy_only(c));
+            for c in &fuzzy {
+                push_candidate_with(&mut set.items, &c.surface, &c.sources, c.reading.as_deref());
+            }
+            set.selected = set
+                .items
+                .iter()
+                .position(|c| c.surface == selected_surface)
+                .unwrap_or(0);
+        }
         Some(conv)
     }
 
@@ -2052,24 +2221,32 @@ impl Engine {
                 })
                 .collect();
             let surface: String = segments.iter().map(|s| s.surface.as_str()).collect();
-            items.push(Candidate { surface, sources });
+            items.push(Candidate {
+                surface,
+                sources,
+                reading: None,
+            });
             alternatives.push(segments);
         }
-        // 曖昧入力: 文全体の補正の候補（打った通りの読みに、補正後の表記を当てたもの）を末尾に足す
+        // 曖昧入力: 文全体の補正の候補（補正後の読みと表記）を末尾に足す
         if self.config.fuzzy_input {
-            for c in self
-                .backend
-                .fuzzy_candidates(reading, &context, COMPOSING_CANDIDATES_LIMIT)
-            {
+            let typing = TypingSnapshot::of(sess, reading);
+            for c in self.backend.fuzzy_candidates(
+                reading,
+                &typing.hint(),
+                &context,
+                COMPOSING_CANDIDATES_LIMIT,
+            ) {
                 if items.iter().any(|i| i.surface == c.surface) {
                     continue;
                 }
                 items.push(Candidate {
                     surface: c.surface.clone(),
                     sources: vec![CandidateSource::Fuzzy],
+                    reading: c.reading.clone(),
                 });
                 alternatives.push(vec![Segment {
-                    reading: reading.to_string(),
+                    reading: c.reading.unwrap_or_else(|| reading.to_string()),
                     surface: c.surface,
                     kind: SegmentKind::Japanese,
                     candidates: None,
@@ -2157,7 +2334,7 @@ impl Engine {
                 });
             push_candidate(&mut items, &seg.surface, &current_sources);
             for c in &from_backend {
-                push_candidate(&mut items, &c.surface, &c.sources);
+                push_candidate_with(&mut items, &c.surface, &c.sources, c.reading.as_deref());
             }
             push_candidate(&mut items, &seg.reading, &[CandidateSource::Kana]);
             push_candidate(&mut items, &katakana, &[CandidateSource::Kana]);
@@ -2481,6 +2658,7 @@ impl Engine {
                         surface: c.surface.clone(),
                         sources: c.sources.clone(),
                         covers: None,
+                        reading: None,
                     })
                     .collect(),
                 selected: 0,
@@ -2500,6 +2678,7 @@ impl Engine {
                         surface: c.surface.clone(),
                         sources: c.sources.clone(),
                         covers: None,
+                        reading: c.reading.clone(),
                     })
                     .collect(),
                 selected: set.selected as u32,
@@ -2523,6 +2702,7 @@ impl Engine {
                         surface: i.surface.clone(),
                         sources: i.sources.clone(),
                         covers: (i.covers < total).then_some(i.covers as u32),
+                        reading: i.reading.clone(),
                     })
                     .collect(),
                 selected: 0,

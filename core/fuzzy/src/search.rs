@@ -10,8 +10,8 @@ use crate::edit::{
 };
 use crate::index::{Frontier, ReadingIndex};
 use crate::kana::KanaTable;
-use crate::layout::Adjacency;
-use nagi_romaji::{Emit, RomajiConverter, RomajiTable};
+use crate::layout::{Adjacency, TouchModel};
+use nagi_romaji::{Emit, RomajiConverter, RomajiTable, Stroke};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
@@ -169,13 +169,20 @@ fn append_emits(kana: &mut String, emits: Vec<Emit>) -> bool {
 /// ローマ字探索の設定
 pub(crate) struct RomajiSearch<'a> {
     pub adjacency: &'a Adjacency,
+    pub touch: &'a TouchModel,
     pub table: &'a Arc<RomajiTable>,
 }
 
 impl RomajiSearch<'_> {
-    /// 打鍵列 `typed` の補正読みを、コストの小さい順に返す
-    pub fn run(&self, typed: &str, index: &dyn ReadingIndex, params: &Params) -> Vec<Correction> {
-        let t: Vec<char> = typed.chars().collect();
+    /// 打鍵列 `strokes` の補正読みを、コストの小さい順に返す。座標つきの打鍵の置換は、
+    /// 離散コスト（隣接順位）の代わりにタッチ位置のガウス尤度で評価する
+    pub fn run(
+        &self,
+        strokes: &[Stroke],
+        index: &dyn ReadingIndex,
+        params: &Params,
+    ) -> Vec<Correction> {
+        let t: Vec<char> = strokes.iter().map(|s| s.ch).collect();
         let started = Instant::now();
         let mut search: Search<RomajiConverter> = Search::new(params.max_cost);
         search.push(Node {
@@ -205,7 +212,7 @@ impl RomajiSearch<'_> {
             if search.is_stale(&node, node.state.pending()) {
                 continue;
             }
-            self.expand(&node, &t, index, params, &mut search);
+            self.expand(&node, &t, strokes, index, params, &mut search);
         }
         search.results
     }
@@ -215,6 +222,7 @@ impl RomajiSearch<'_> {
         &self,
         node: &Node<RomajiConverter>,
         t: &[char],
+        strokes: &[Stroke],
         index: &dyn ReadingIndex,
         params: &Params,
         search: &mut Search<RomajiConverter>,
@@ -295,11 +303,19 @@ impl RomajiSearch<'_> {
             // 隣接キーへの置換（本来は隣のキーを打つつもりだった）
             if kinds.substitute {
                 for nb in self.adjacency.neighbors(c) {
+                    let cost = strokes[i]
+                        .touch
+                        .filter(|_| params.use_touch)
+                        .and_then(|rel| {
+                            self.touch
+                                .substitute_cost(c, nb.label, rel, params.touch_sigma)
+                        })
+                        .unwrap_or_else(|| substitute_cost(nb.rank));
                     child(
                         search,
                         &[nb.label],
                         i + 1,
-                        substitute_cost(nb.rank),
+                        cost,
                         Some(EditOp {
                             kind: EditKind::Substitute,
                             pos: i,
@@ -368,6 +384,8 @@ impl RomajiSearch<'_> {
 /// かな探索（かな直接入力。濁点・小書きの付け忘れと、同じ行内の隣の文字）
 pub(crate) struct KanaSearch<'a> {
     pub table: &'a KanaTable,
+    /// 読みの各文字を出したフリックの角度・距離（読みと同じ長さのときだけ使う）
+    pub flicks: Option<&'a [Option<(f32, f32)>]>,
 }
 
 impl KanaSearch<'_> {
@@ -428,7 +446,14 @@ impl KanaSearch<'_> {
                 }
             }
             if params.kinds.substitute {
+                let flick = self
+                    .flicks
+                    .filter(|f| params.use_touch && f.len() == n)
+                    .and_then(|f| f[i]);
                 for &(r, cost) in self.table.row_neighbors(c) {
+                    let cost = flick
+                        .and_then(|fl| self.table.flick_cost(c, r, fl))
+                        .unwrap_or(cost);
                     options.push((
                         r,
                         cost,

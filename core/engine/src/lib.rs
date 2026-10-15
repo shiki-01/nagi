@@ -16,7 +16,7 @@ pub mod touch;
 pub use action::{Action, Direction};
 pub use backend::{
     BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend, KanaBackend,
-    MockBackend,
+    MockBackend, TypingHint,
 };
 pub use engine::{Engine, EngineConfig, InitialView, SessionSnapshot, StateKind};
 pub use ir::{Candidate, CandidateSet, CursorPos, Preedit, Segment};

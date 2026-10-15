@@ -19,13 +19,14 @@ pub mod layout;
 pub mod reverse;
 mod search;
 
-pub use edit::{Correction, EditKind, EditKinds, EditOp, Params};
+pub use edit::{Correction, DEFAULT_TOUCH_SIGMA, EditKind, EditKinds, EditOp, Params};
 pub use index::{ReadingIndex, WordSet, covered, viable_prefix};
 pub use kana::KanaTable;
-pub use layout::{Adjacency, DEFAULT_REACH, Key, KeyLayout, Neighbor};
+pub use layout::{Adjacency, DEFAULT_REACH, Key, KeyLayout, Neighbor, TouchModel};
+pub use nagi_romaji::Stroke;
 pub use reverse::ReverseRomaji;
 
-use nagi_romaji::RomajiTable;
+use nagi_romaji::{Emit, RomajiConverter, RomajiTable};
 use std::sync::Arc;
 
 /// 展開する読みの最小・最大の文字数。短すぎると誤補正が増え（1〜2 文字は何でも辞書語になる）、
@@ -38,6 +39,7 @@ pub const MAX_READING_CHARS: usize = 24;
 #[derive(Debug, Clone)]
 pub struct Fuzzy {
     adjacency: Adjacency,
+    touch: TouchModel,
     kana: KanaTable,
     table: Arc<RomajiTable>,
     reverse: ReverseRomaji,
@@ -48,6 +50,7 @@ impl Fuzzy {
     pub fn new(layout: &KeyLayout, kana: KanaTable, table: Arc<RomajiTable>) -> Self {
         Fuzzy {
             adjacency: Adjacency::from_layout(layout, DEFAULT_REACH),
+            touch: TouchModel::new(layout),
             kana,
             reverse: ReverseRomaji::new(&table),
             table,
@@ -64,15 +67,52 @@ impl Fuzzy {
         &self.adjacency
     }
 
+    /// 実際の打鍵列 `strokes` を変換し直すと `reading` になるか（打鍵列が使えるかの確認）
+    pub fn strokes_reproduce(&self, strokes: &[Stroke], reading: &str) -> bool {
+        let mut conv = RomajiConverter::new(self.table.clone());
+        let mut out = String::new();
+        let mut push = |emits: Vec<Emit>| {
+            for e in emits {
+                match e {
+                    Emit::Converted(t) => out.push_str(&t),
+                    Emit::Raw(c) => out.push(c),
+                }
+            }
+        };
+        for s in strokes {
+            push(conv.feed(s.ch));
+        }
+        push(conv.flush());
+        out == reading
+    }
+
     /// 入力中の読み `reading`（ひらがなと、未変換のまま残った英小文字だけ）の補正読みを、
     /// コストの小さい順に最大 `params.max_results` 件返す。`reading` 自身は含まない。
     ///
-    /// 読みを打鍵列（ローマ字）に戻して打ち間違いを展開する。読みに英字が無ければ、かな直接入力の
+    /// `strokes` は読みの元になった実際の打鍵列（Composer が保持。タッチ座標つきでもよい）。
+    /// 変換し直すと `reading` になるときだけ使い、`None` や一致しないとき（かな直接入力・
+    /// `restore_session` 後など）は、読みから最短綴りを復元（`ReverseRomaji`）して代わりにする。
+    ///
+    /// 打鍵列に対して打ち間違いを展開する。読みに英字が無ければ、かな直接入力の
     /// 誤り（濁点・小書き・同じ行内の隣）も展開する。展開した読みのうち辞書で成立しないものは
     /// 途中で捨てる（`index`）
     pub fn corrections(
         &self,
         reading: &str,
+        strokes: Option<&[Stroke]>,
+        index: &dyn ReadingIndex,
+        params: &Params,
+    ) -> Vec<Correction> {
+        self.corrections_with(reading, strokes, None, index, params)
+    }
+
+    /// [`Fuzzy::corrections`] に、読みの各文字を出したかな 12 キーのフリック（角度・距離。読みと同じ長さ）を
+    /// 足したもの。方向の閾値に近いフリックは、隣の方向への取り違えが安くなる
+    pub fn corrections_with(
+        &self,
+        reading: &str,
+        strokes: Option<&[Stroke]>,
+        flicks: Option<&[Option<(f32, f32)>]>,
         index: &dyn ReadingIndex,
         params: &Params,
     ) -> Vec<Correction> {
@@ -88,15 +128,32 @@ impl Fuzzy {
             return Vec::new();
         }
         let mut all: Vec<Correction> = Vec::new();
-        if let Some(typed) = self.reverse.to_romaji(reading) {
+        let actual = strokes.filter(|s| !s.is_empty() && self.strokes_reproduce(s, reading));
+        let restored: Vec<Stroke>;
+        let strokes = match actual {
+            Some(s) => Some(s),
+            None => {
+                restored = self
+                    .reverse
+                    .to_romaji(reading)
+                    .map(|t| t.chars().map(Stroke::key).collect())
+                    .unwrap_or_default();
+                (!restored.is_empty()).then_some(restored.as_slice())
+            }
+        };
+        if let Some(strokes) = strokes {
             let search = search::RomajiSearch {
                 adjacency: &self.adjacency,
+                touch: &self.touch,
                 table: &self.table,
             };
-            all.extend(search.run(&typed, index, params));
+            all.extend(search.run(strokes, index, params));
         }
         if reading.chars().all(|c| !c.is_ascii()) {
-            let search = search::KanaSearch { table: &self.kana };
+            let search = search::KanaSearch {
+                table: &self.kana,
+                flicks,
+            };
             all.extend(search.run(reading, index, params));
         }
         all.retain(|c| c.reading != reading);

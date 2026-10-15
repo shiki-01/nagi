@@ -36,6 +36,8 @@ pub mod method {
     pub const RELOAD_MODEL: &str = "reload_model";
     /// `insert_reading` メソッド（タッチ入力: ローマ字を経由せず読みを挿入）
     pub const INSERT_READING: &str = "insert_reading";
+    /// `set_layout_geometry` メソッド（タッチ入力: キーボードのキー矩形。曖昧入力のキー近接に使う）
+    pub const SET_LAYOUT_GEOMETRY: &str = "set_layout_geometry";
     /// `perform_action` メソッド（タッチ UI のボタンから操作を直接実行）
     pub const PERFORM_ACTION: &str = "perform_action";
     /// `select_candidate` メソッド
@@ -517,6 +519,107 @@ pub struct InsertReadingParams {
     pub session_id: String,
     /// 入力
     pub input: ReadingInput,
+}
+
+/// キー内のタッチ位置。押されたキーの矩形内の相対位置（左上が (0, 0)、右下が (1, 1)。
+/// 座標系に依存しないので、フロントはキーのローカル座標を幅・高さで割って送る）。
+/// 曖昧入力（`input.fuzzy.use_touch_coords`）が、隣のキーとの境界に近い打鍵ほど打ち間違いとして
+/// 補正しやすくするのに使う。preedit の間だけメモリに持ち、確定・破棄・フォーカス喪失で消す（ログに出さない）
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TouchPoint {
+    /// 横の相対位置（0..1）
+    pub x: f64,
+    /// 縦の相対位置（0..1）
+    pub y: f64,
+}
+
+/// フリックの詳細（12 キーのかな入力）。方向が閾値に近いときに、隣の方向を低コストで候補にする
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FlickDetail {
+    /// フリックの角度（度。右 = 0、上 = 90、左 = 180、下 = 270 または -90。反時計回り）
+    pub angle_deg: f64,
+    /// 指を動かした距離（キー幅を 1 とする）
+    pub distance: f64,
+}
+
+/// `insert_reading` メソッドの要求パラメータ（座標つき）。[`InsertReadingParams`] に任意項目を足した上位互換で、
+/// 項目を省略すれば `InsertReadingParams` と同じ。サーバーは `insert_reading` をこの型で受ける
+/// （既存のフロントが `InsertReadingParams` のまま送っても動く）
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InsertReadingTouchParams {
+    /// セッション ID
+    pub session_id: String,
+    /// 入力
+    pub input: ReadingInput,
+    /// `input` が QWERTY の 1 文字（`ReadingInput::Text`）のときの、キー内のタッチ位置
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub touch: Option<TouchPoint>,
+    /// `input` が 12 キーのフリック（`ReadingInput::Key12`）のときの、角度と距離
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub flick: Option<FlickDetail>,
+}
+
+/// キー矩形 1 つ（`set_layout_geometry`）
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayoutKey {
+    /// フロントのキー ID（識別用。補正には使わない）
+    pub id: String,
+    /// キーで入力される文字（QWERTY の英字キーは `"q"` など 1 文字。大文字表示でも構わない）。
+    /// 英字以外のキー（Shift・空白・数字など）は無視される
+    pub label: String,
+    /// 左端
+    pub x: f64,
+    /// 上端
+    pub y: f64,
+    /// 幅
+    pub w: f64,
+    /// 高さ
+    pub h: f64,
+}
+
+/// `set_layout_geometry` メソッドの要求パラメータ。応答は [`EmptyResult`]。
+///
+/// キーボードのキー矩形を渡すと、曖昧入力のキー近接（どのキーが隣か）を、内蔵の QWERTY ではなく
+/// このレイアウトから導出する（QWERTY 以外・カスタム配列でも使える）。座標系はキーボード view の
+/// ローカル座標（左上が原点、`width` × `height`）で、`keys` も同じ座標系。単位は問わない
+/// （正規化座標 0..1 でもよい）。受け取るまでは内蔵の QWERTY を使う。英字キーが 10 個未満の
+/// レイアウト（12 キーのかななど）は無視される
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetLayoutGeometryParams {
+    /// 対象セッション。省略するとすべてのセッションの既定にする
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub session_id: Option<String>,
+    /// レイアウトの識別子（同じ識別子・内容なら再計算しない）
+    pub layout_id: String,
+    /// モード（例：`qwerty`、`kana12`。診断用）
+    pub mode: String,
+    /// キー矩形
+    pub keys: Vec<LayoutKey>,
+    /// キーボード view の幅
+    pub width: f64,
+    /// キーボード view の高さ
+    pub height: f64,
+}
+
+impl SetLayoutGeometryParams {
+    /// 曖昧入力に使えるキー（ラベルが 1 文字の英字）を、小文字の文字とともに返す
+    pub fn letter_keys(&self) -> impl Iterator<Item = (char, &LayoutKey)> {
+        self.keys.iter().filter_map(|k| {
+            let mut it = k.label.chars();
+            let c = it.next()?.to_ascii_lowercase();
+            (it.next().is_none() && c.is_ascii_lowercase()).then_some((c, k))
+        })
+    }
+
+    /// 曖昧入力のキー配置として使えるか（英字キーが 10 個以上）
+    pub fn is_usable_for_fuzzy(&self) -> bool {
+        self.letter_keys().count() >= 10
+    }
 }
 
 /// 左右の方向

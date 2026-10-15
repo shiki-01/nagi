@@ -11,10 +11,11 @@ use nagi_protocol::jsonrpc::{
     ErrorObject, Notification, Request, Response, error_code, parse_message,
 };
 use nagi_protocol::methods::{
-    ConfigError, EmptyResult, InitializeParams, InitializeResult, InsertReadingParams,
+    ConfigError, EmptyResult, InitializeParams, InitializeResult, InsertReadingTouchParams,
     NotifyParams, PerformActionParams, ProcessKeyParams, ReconvertParams, ReloadConfigResult,
     RestoreSessionParams, SelectCandidateParams, ServerCapabilities, SessionParams,
-    SetContextParams, SetEnvironmentParams, UpdateCandidatesParams, UpdatePreeditParams, method,
+    SetContextParams, SetEnvironmentParams, SetLayoutGeometryParams, UpdateCandidatesParams,
+    UpdatePreeditParams, method,
 };
 use nagi_protocol::settings::{UpdateSettingsParams, UpdateSettingsResult};
 use nagi_protocol::view::InputMode;
@@ -452,11 +453,23 @@ impl Server {
             }
             method::INSERT_READING => {
                 self.require_initialized()?;
-                let p: InsertReadingParams = params(req)?;
-                let result = self.engine_lock().insert_reading(&p.session_id, &p.input);
+                // 座標つき（上位互換）の型で受ける。座標を省略した `InsertReadingParams` も読める
+                let p: InsertReadingTouchParams = params(req)?;
+                let result = self.engine_lock().insert_reading_touch(
+                    &p.session_id,
+                    &p.input,
+                    p.touch,
+                    p.flick,
+                );
                 self.maybe_schedule_live_conversion(&p.session_id);
                 self.maybe_schedule_composing_candidates(&p.session_id);
                 to_value(result)
+            }
+            method::SET_LAYOUT_GEOMETRY => {
+                self.require_initialized()?;
+                let p: SetLayoutGeometryParams = params(req)?;
+                self.engine_lock().set_layout_geometry(&p);
+                to_value(EmptyResult {})
             }
             method::PERFORM_ACTION => {
                 self.require_initialized()?;

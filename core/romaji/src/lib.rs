@@ -370,6 +370,31 @@ pub struct Piece {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// 実際に打たれた 1 打鍵（曖昧入力が「実際の打鍵列」から打ち間違いを推定するための記録）
+pub struct Stroke {
+    /// 打たれた ASCII 文字（キーの ID）
+    pub ch: char,
+    /// タッチ位置（押されたキーの矩形内の相対位置。左上が (0, 0)、右下が (1, 1)）。
+    /// 物理キーボードや座標を送らないフロントでは `None`
+    pub touch: Option<(f32, f32)>,
+    /// かな 12 キーのフリック（角度[度]、距離[キー幅]）。`ch` が打たれたかな（非 ASCII）のとき、
+    /// その文字を出したフリックの様子。曖昧入力が、方向の閾値に近いフリックを隣の方向と取り違えた
+    /// 可能性として使う
+    pub flick: Option<(f32, f32)>,
+}
+
+impl Stroke {
+    /// 座標なしの打鍵
+    pub const fn key(ch: char) -> Self {
+        Stroke {
+            ch,
+            touch: None,
+            flick: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 /// ローマ字入力バッファ・カーソル管理
 ///
@@ -381,6 +406,12 @@ pub struct Composer {
     /// (文字, 種別, ローマ字の取りこぼしか)。3 つ目は、テーブルに当たらず素通しされた ASCII 小文字
     /// （Shift 入力や数字・literal モードの英字ではない）。Backspace の引き継ぎ（H-23）で使う
     chars: Vec<(char, PieceKind, bool)>,
+    /// `chars` と同じ長さ。各文字を作った打鍵（実際の打鍵列。曖昧入力用）。1 つの打鍵から複数の文字
+    /// （`kya` → きゃ）ができるときは先頭の文字に全部を持たせ、残りは空にする。かな直接入力・
+    /// 数字・復元した文字は空
+    keys: Vec<Vec<Stroke>>,
+    /// 保留中のローマ字を作った打鍵（`converter.pending()` と同じ文字数）
+    pending_keys: Vec<Stroke>,
     cursor: usize,
     literal_mode: bool, // Shift+英字で開始した literal モード
     /// Backspace 後に残った未変換のローマ字を保留に戻すか（`input.romaji_carryover`）
@@ -394,6 +425,8 @@ impl Composer {
             converter: RomajiConverter::new(table),
             shift_letter,
             chars: Vec::new(),
+            keys: Vec::new(),
+            pending_keys: Vec::new(),
             cursor: 0,
             literal_mode: false,
             carryover: true,
@@ -418,6 +451,13 @@ impl Composer {
     ///
     /// ASCII 大文字は Shift 押下で打たれたものとして Literal になる。
     pub fn insert_char(&mut self, ch: char) {
+        self.insert_stroke(Stroke::key(ch));
+    }
+
+    /// 1 打鍵を挿入する（`insert_char` と同じ。タッチ座標つき）。座標は preedit の間だけ持ち、
+    /// 確定・破棄（`clear`）・部分確定で消える
+    pub fn insert_stroke(&mut self, stroke: Stroke) {
+        let ch = stroke.ch;
         if ch.is_control() {
             return;
         }
@@ -430,11 +470,37 @@ impl Composer {
             self.insert_at_cursor(ch, PieceKind::Literal);
         } else if !ch.is_ascii() {
             self.flush_pending();
-            self.insert_at_cursor(ch, PieceKind::Japanese);
+            let keys = if stroke.flick.is_some() {
+                vec![stroke]
+            } else {
+                Vec::new()
+            };
+            self.insert_marked(ch, PieceKind::Japanese, false, keys);
         } else {
             let emits = self.converter.feed(ch);
+            self.pending_keys.push(stroke);
             self.insert_emits(emits);
         }
+    }
+
+    /// 入力中の文字を作った実際の打鍵列（保留を除く。`text()` と同じ順）。
+    /// 打鍵が分からない文字（かな直接入力・復元した文字など）の分は含まれないので、
+    /// 使う側は `text()` を再現できるか確かめること
+    pub fn strokes(&self) -> Vec<Stroke> {
+        self.keys
+            .iter()
+            .flatten()
+            .filter(|s| s.ch.is_ascii())
+            .copied()
+            .collect()
+    }
+
+    /// 各文字（`text()` と同じ順）を出したかな 12 キーのフリック（角度[度]、距離）。フリックでない文字は `None`
+    pub fn flicks(&self) -> Vec<Option<(f32, f32)>> {
+        self.keys
+            .iter()
+            .map(|k| k.iter().find_map(|s| s.flick))
+            .collect()
     }
 
     /// 先頭から `n` 文字を取り除く（部分変換で先頭だけを確定したあと、残りを入力中に残す）。
@@ -443,6 +509,7 @@ impl Composer {
         self.flush_pending();
         let n = n.min(self.chars.len());
         self.chars.drain(..n);
+        self.keys.drain(..n);
         self.cursor = self.cursor.saturating_sub(n);
     }
 
@@ -468,6 +535,7 @@ impl Composer {
             return false;
         };
         *slot = (ch, PieceKind::Japanese, false);
+        self.keys[i].clear();
         true
     }
 
@@ -488,13 +556,26 @@ impl Composer {
     /// そうでなければ保留の末尾 1 文字、保留も無ければカーソル直前の 1 文字を削除する
     pub fn backspace(&mut self) -> bool {
         match self.converter.backspace() {
-            Backspace::Pending => true,
+            Backspace::Pending => {
+                self.pending_keys.pop();
+                true
+            }
             Backspace::Rollback { retract } => {
                 // 巻き戻せるのは直前の feed 直後だけ（カーソル移動等は履歴を破棄する）ので、
                 // 出力はカーソル直前に並んでいる
                 let n = retract.min(self.cursor);
                 self.cursor -= n;
                 self.chars.drain(self.cursor..self.cursor + n);
+                // 打鍵列: 消した出力を作った打鍵 + 保留の打鍵の並びのうち、最後の 1 つ（今消した
+                // キー）を除いたものが、巻き戻した保留の打鍵
+                let mut all: Vec<Stroke> = self
+                    .keys
+                    .drain(self.cursor..self.cursor + n)
+                    .flatten()
+                    .collect();
+                all.append(&mut self.pending_keys);
+                all.pop();
+                self.pending_keys = all;
                 true
             }
             Backspace::Nothing => {
@@ -502,6 +583,7 @@ impl Composer {
                     return false;
                 }
                 self.cursor -= 1;
+                self.keys.remove(self.cursor);
                 let (_, kind, _) = self.chars.remove(self.cursor);
                 if self.carryover && kind == PieceKind::Japanese {
                     self.carry_over_fragment();
@@ -533,6 +615,11 @@ impl Composer {
                 let n = fragment.len() - start;
                 self.cursor -= n;
                 self.chars.drain(self.cursor..self.cursor + n);
+                self.pending_keys = self
+                    .keys
+                    .drain(self.cursor..self.cursor + n)
+                    .flatten()
+                    .collect();
                 self.converter.restore_pending(&candidate);
                 return;
             }
@@ -546,6 +633,7 @@ impl Composer {
             return false;
         }
         self.chars.remove(self.cursor);
+        self.keys.remove(self.cursor);
         true
     }
 
@@ -625,6 +713,8 @@ impl Composer {
             .iter()
             .flat_map(|p| p.text.chars().map(move |c| (c, p.kind, false)))
             .collect();
+        self.keys = vec![Vec::new(); self.chars.len()];
+        self.pending_keys.clear();
         self.cursor = cursor.min(self.chars.len());
     }
 
@@ -666,26 +756,41 @@ impl Composer {
     /// バッファをクリアする
     pub fn clear(&mut self) {
         self.chars.clear();
+        self.keys.clear();
+        self.pending_keys.clear();
         self.converter.clear();
         self.cursor = 0;
         self.literal_mode = false;
     }
 
     fn insert_at_cursor(&mut self, ch: char, kind: PieceKind) {
-        self.insert_marked(ch, kind, false);
+        self.insert_marked(ch, kind, false, Vec::new());
     }
 
-    fn insert_marked(&mut self, ch: char, kind: PieceKind, raw: bool) {
+    fn insert_marked(&mut self, ch: char, kind: PieceKind, raw: bool, keys: Vec<Stroke>) {
         self.chars.insert(self.cursor, (ch, kind, raw));
+        self.keys.insert(self.cursor, keys);
         self.cursor += 1;
     }
 
+    /// 変換器の出力を挿入する。出力になった打鍵（保留の打鍵のうち、変換器の保留に残らなかった分）を
+    /// 出力の文字に割り当てる: 素通しは 1 文字に 1 打鍵、変換結果（出力の最後）は残り全部を先頭の文字に
     fn insert_emits(&mut self, emits: Vec<Emit>) {
+        let keep = self.converter.pending().chars().count();
+        let used = self.pending_keys.len().saturating_sub(keep);
+        let mut consumed: std::collections::VecDeque<Stroke> =
+            self.pending_keys.drain(..used).collect();
         for emit in emits {
             match emit {
                 Emit::Converted(text) => {
+                    let mut keys: Vec<Stroke> = consumed.drain(..).collect();
                     for ch in text.chars() {
-                        self.insert_at_cursor(ch, PieceKind::Japanese);
+                        self.insert_marked(
+                            ch,
+                            PieceKind::Japanese,
+                            false,
+                            std::mem::take(&mut keys),
+                        );
                     }
                 }
                 Emit::Raw(c) => {
@@ -694,7 +799,8 @@ impl Composer {
                     } else {
                         PieceKind::Japanese
                     };
-                    self.insert_marked(c, kind, c.is_ascii_lowercase());
+                    let keys: Vec<Stroke> = consumed.pop_front().into_iter().collect();
+                    self.insert_marked(c, kind, c.is_ascii_lowercase(), keys);
                 }
             }
         }
@@ -2039,5 +2145,155 @@ mod tests {
             .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
             .count();
         assert_eq!(lines, RomajiTable::standard().entries.len());
+    }
+
+    // ---- 打鍵列の保持（曖昧入力 M2） ----
+
+    fn typed(composer: &Composer) -> String {
+        composer.strokes().iter().map(|s| s.ch).collect()
+    }
+
+    /// 打鍵列を変換し直すと、保持している文字と一致すること（フォールバック判定の前提）
+    fn replays(composer: &mut Composer) -> bool {
+        let strokes = composer.strokes();
+        let mut conv = RomajiConverter::new(RomajiTable::standard());
+        let mut out = String::new();
+        for s in &strokes {
+            for e in conv.feed(s.ch) {
+                match e {
+                    Emit::Converted(t) => out.push_str(&t),
+                    Emit::Raw(c) => out.push(c),
+                }
+            }
+        }
+        for e in conv.flush() {
+            match e {
+                Emit::Converted(t) => out.push_str(&t),
+                Emit::Raw(c) => out.push(c),
+            }
+        }
+        out == composer.text()
+    }
+
+    #[test]
+    fn strokes_follow_typing_and_flush() {
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "kyouha");
+        assert_eq!(typed(&c), "kyouha");
+        assert!(replays(&mut c));
+        // 保留 (n) は確定するまで打鍵列に入らない
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "kan");
+        assert_eq!(typed(&c), "ka");
+        c.flush_pending();
+        assert_eq!(typed(&c), "kan");
+        // 取りこぼし（m）も打鍵として残る
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "kamji");
+        c.flush_pending();
+        assert_eq!(typed(&c), "kamji");
+        assert!(replays(&mut c));
+    }
+
+    #[test]
+    fn strokes_follow_backspace_rollback_and_carryover() {
+        // 保留の BS
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "kak");
+        c.backspace();
+        insert_string(&mut c, "i");
+        assert_eq!(typed(&c), "kai");
+        // G-49 巻き戻し: kk → っ + k を BS
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "kk");
+        assert_eq!(typed(&c), "k");
+        c.backspace();
+        insert_string(&mut c, "a");
+        c.flush_pending();
+        assert_eq!(c.text(), "か");
+        assert_eq!(typed(&c), "ka");
+        assert!(replays(&mut c));
+        // 引き継ぎ: kypu → BS → ou
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "kypu");
+        c.backspace();
+        insert_string(&mut c, "ou");
+        c.flush_pending();
+        assert_eq!(c.text(), "きょう");
+        assert_eq!(typed(&c), "kyou");
+        assert!(replays(&mut c));
+    }
+
+    #[test]
+    fn strokes_follow_cursor_delete_and_remove_front() {
+        let (mut c, _) = setup_composer();
+        insert_string(&mut c, "kanji");
+        c.flush_pending();
+        c.move_left();
+        c.move_left();
+        // カーソルが文中: 挿入は文中の打鍵として並ぶ
+        insert_string(&mut c, "su");
+        c.flush_pending();
+        assert_eq!(c.text(), "かすんじ");
+        assert_eq!(typed(&c), "kasunji");
+        assert!(replays(&mut c));
+        // 先頭の部分確定
+        c.remove_front(2);
+        assert_eq!(c.text(), "んじ");
+        assert_eq!(typed(&c), "nji");
+        // 文中の削除
+        c.move_home();
+        assert!(c.delete());
+        assert_eq!(typed(&c), "ji");
+        c.clear();
+        assert!(c.strokes().is_empty());
+    }
+
+    #[test]
+    fn strokes_keep_touch_until_cleared() {
+        let (mut c, _) = setup_composer();
+        c.insert_stroke(Stroke {
+            ch: 'k',
+            touch: Some((0.9, 0.5)),
+            flick: None,
+        });
+        c.insert_stroke(Stroke::key('a'));
+        let s = c.strokes();
+        assert_eq!(s[0].touch, Some((0.9, 0.5)));
+        assert_eq!(s[1].touch, None);
+        c.clear();
+        assert!(c.strokes().is_empty());
+        // 復元した文字・かな直接入力には打鍵が無い
+        c.load_pieces(
+            &[Piece {
+                kind: PieceKind::Japanese,
+                text: "かな".into(),
+            }],
+            2,
+        );
+        assert!(c.strokes().is_empty());
+    }
+
+    #[test]
+    fn flicks_follow_kana_chars() {
+        let (mut c, _) = setup_composer();
+        c.insert_stroke(Stroke {
+            ch: 'か',
+            touch: None,
+            flick: Some((100.0, 0.8)),
+        });
+        c.insert_char('き');
+        c.insert_stroke(Stroke {
+            ch: 'く',
+            touch: None,
+            flick: Some((80.0, 0.9)),
+        });
+        assert_eq!(c.flicks(), [Some((100.0, 0.8)), None, Some((80.0, 0.9))]);
+        assert!(c.strokes().is_empty());
+        c.move_left();
+        assert!(c.backspace());
+        assert_eq!(c.flicks(), [Some((100.0, 0.8)), Some((80.0, 0.9))]);
+        c.remove_front(1);
+        assert_eq!(c.flicks(), [Some((80.0, 0.9))]);
     }
 }
