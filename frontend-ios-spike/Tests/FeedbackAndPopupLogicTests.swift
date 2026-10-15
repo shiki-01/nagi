@@ -32,20 +32,20 @@ final class FeedbackAndPopupLogicTests: XCTestCase {
 
     // MARK: LongPressCancel
 
-    func testCancelOnlyBelowHalfKeyHeightPastBottom() {
+    func testCancelOnlyBelowHeightFactorPastBottom() {
         let h = 46.0
+        let margin = h * LongPressCancel.heightFactor // 0.3 倍 = 13.8
         XCTAssertFalse(LongPressCancel.isCancelled(y: -30, keyHeight: h))   // 上
         XCTAssertFalse(LongPressCancel.isCancelled(y: 20, keyHeight: h))    // キー内
         XCTAssertFalse(LongPressCancel.isCancelled(y: h, keyHeight: h))     // 下端
-        XCTAssertFalse(LongPressCancel.isCancelled(y: h + 22.9, keyHeight: h))
-        XCTAssertFalse(LongPressCancel.isCancelled(y: h + 23, keyHeight: h)) // ちょうど 0.5 倍は境界（超えたら取り消し）
-        XCTAssertTrue(LongPressCancel.isCancelled(y: h + 23.1, keyHeight: h))
+        XCTAssertFalse(LongPressCancel.isCancelled(y: h + margin, keyHeight: h)) // ちょうどは境界（超えたら取り消し）
+        XCTAssertTrue(LongPressCancel.isCancelled(y: h + margin + 0.1, keyHeight: h))
         XCTAssertTrue(LongPressCancel.isCancelled(y: 200, keyHeight: h))
     }
 
     func testCancelScalesWithKeyHeightAndIgnoresInvalid() {
-        XCTAssertFalse(LongPressCancel.isCancelled(y: 60 + 29, keyHeight: 60))
-        XCTAssertTrue(LongPressCancel.isCancelled(y: 60 + 31, keyHeight: 60))
+        XCTAssertFalse(LongPressCancel.isCancelled(y: 60 + 17, keyHeight: 60))
+        XCTAssertTrue(LongPressCancel.isCancelled(y: 60 + 19, keyHeight: 60))
         XCTAssertFalse(LongPressCancel.isCancelled(y: 500, keyHeight: 0))
         XCTAssertFalse(LongPressCancel.isCancelled(y: .nan, keyHeight: 46))
     }
