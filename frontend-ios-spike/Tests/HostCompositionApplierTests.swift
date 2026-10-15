@@ -8,6 +8,9 @@ private final class TextViewHost: KeyboardHost {
     let window: UIWindow
     let textView: UITextView
 
+    /// true なら adjustTextPosition 相当を無視する（実機で非同期のため確定に間に合わないホストの模擬）
+    var ignoreAdjust = false
+
     init(initialText: String = "") {
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
         textView = UITextView(frame: window.bounds)
@@ -49,6 +52,7 @@ private final class TextViewHost: KeyboardHost {
     func hostUnmarkText() { textView.unmarkText() }
 
     func hostAdjustCursor(by offset: Int) {
+        if ignoreAdjust { return }
         let length = (textView.text ?? "").utf16.count
         let target = min(max(textView.selectedRange.location + offset, 0), length)
         textView.selectedRange = NSRange(location: target, length: 0)
@@ -212,6 +216,42 @@ final class HostCompositionApplierTests: XCTestCase {
         applier.commit("今日は")
         XCTAssertEqual(host.text, "前今日は")
         XCTAssertFalse(host.hasMarkedText)
+    }
+
+    // MARK: (c2) 変換中のキャレットが先頭にある状態からの確定（adjustTextPosition が効かないホスト）
+
+    func testCommitFromCaretAtStartDoesNotErasePrecedingText() {
+        let host = TextViewHost(initialText: "前の文章。")
+        host.ignoreAdjust = true
+        let applier = makeApplier(host)
+        applier.setMarked("きょうは", cursor: 0)
+        XCTAssertEqual(host.caret, "前の文章。".utf16.count, "キャレットが変換中の先頭にある")
+
+        applier.commit("今日は")
+        XCTAssertEqual(host.text, "前の文章。今日は", "手前の文字が消えない")
+        XCTAssertFalse(host.hasMarkedText)
+        XCTAssertEqual(host.caret, "前の文章。今日は".utf16.count)
+        XCTAssertTrue(applier.verifyTail(committed: "今日は"))
+    }
+
+    func testPartialCommitFromCaretAtStartDoesNotErasePrecedingText() {
+        let host = TextViewHost(initialText: "前")
+        host.ignoreAdjust = true
+        let applier = makeApplier(host)
+        applier.setMarked("今日はいい天気", cursor: 0)
+        applier.commit("今日は")
+        applier.setMarked("いいてんき", cursor: 0)
+        applier.commit("いい天気")
+        XCTAssertEqual(host.text, "前今日はいい天気")
+        XCTAssertFalse(host.hasMarkedText)
+    }
+
+    func testMarkedCursorIsAlwaysAtEndWhileConverting() {
+        XCTAssertEqual(HostCompositionApplier.markedCursor(coreCursor: 0, text: "きょう", converting: true), 3)
+        XCTAssertEqual(HostCompositionApplier.markedCursor(coreCursor: 1, text: "きょう", converting: true), 3)
+        XCTAssertEqual(HostCompositionApplier.markedCursor(coreCursor: 1, text: "きょう", converting: false), 1)
+        XCTAssertEqual(HostCompositionApplier.markedCursor(coreCursor: 99, text: "きょう", converting: false), 3)
+        XCTAssertEqual(HostCompositionApplier.markedCursor(coreCursor: -2, text: "きょう", converting: false), 0)
     }
 
     // MARK: (d) 連続する setMarked の更新

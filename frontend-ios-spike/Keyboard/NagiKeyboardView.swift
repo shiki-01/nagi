@@ -150,6 +150,8 @@ private struct RowView: View {
                         pressedKey = pressed ? "\(rowIndex):\(index)" : nil
                     }
                     .frame(width: cellWidth(key, total: geo.size.width), height: rowHeight)
+                    // 押下中のキーを兄弟キーより手前に描く（右隣のキーの下にポップアップが隠れないように）
+                    .zIndex(pressedKey == "\(rowIndex):\(index)" ? 10 : 0)
                 }
             }
         }
@@ -384,7 +386,8 @@ private func touchPoint(_ location: CGPoint, in size: CGSize) -> TouchPoint? {
 
 /// 長押しでポップアップを出すキー。`flick.long_press_ms` 押し続けると、キーの上に候補キーを並べる。
 /// 指を滑らせて選び、離すと実行する（text / action / shortcut / toggle / layout）。
-/// 長押しになる前に離したときは通常のタップ。ポップアップが出たあと、キーの下へ大きく外れて離すと取り消し
+/// 長押しになる前に離したときは通常のタップ。ポップアップが出たあと、指がキーの下端より下へキーの高さの 0.5 倍以上離れた状態で離すと取り消し
+/// （そのときポップアップは半透明になり「取り消し」と表示する）
 private struct LongPressKeyView: View {
     let popup: [LayoutKeyDef]
     let content: KeyFaceContent
@@ -500,21 +503,24 @@ private struct LongPressKeyView: View {
         return left
     }
 
-    /// 指の位置から選択中の項目を決める。キーの下へ大きく外れていれば nil（取り消し）。
+    /// 指の位置から選択中の項目を決める。キーの下端より下へキーの高さの 0.5 倍以上離れていれば nil（取り消し。`LongPressCancel`）。
     /// 左右に外れたときは端の項目
     private func index(at location: CGPoint, keyWidth: CGFloat) -> Int? {
-        if location.y > height + 24 { return nil }
+        if LongPressCancel.isCancelled(y: Double(location.y), keyHeight: Double(height)) { return nil }
         let width = itemWidth(keyWidth: keyWidth)
         guard width > 0 else { return nil }
         let raw = Int(((location.x - popupLeft(keyWidth: keyWidth)) / width).rounded(.down))
         return min(max(raw, 0), popup.count - 1)
     }
 
+    /// ポップアップが出ていて、指が取り消しの位置にある
+    private var cancelled: Bool { popupShown && selected == nil }
+
     private func popupView(keyWidth: CGFloat) -> some View {
         let width = itemWidth(keyWidth: keyWidth)
         return HStack(spacing: 0) {
             ForEach(Array(popup.enumerated()), id: \.offset) { offset, item in
-                let isSelected = (selected == offset)
+                let isSelected = (selected == offset) && !cancelled
                 Group {
                     if let icon = item.icon {
                         Image(systemName: icon).font(.system(size: 18))
@@ -533,6 +539,19 @@ private struct LongPressKeyView: View {
         .background(RoundedRectangle(cornerRadius: keyCorner).fill(Color(UIColor.secondarySystemBackground)))
         .overlay(RoundedRectangle(cornerRadius: keyCorner).stroke(Color(UIColor.separator), lineWidth: 0.5))
         .fixedSize()
+        .opacity(cancelled ? 0.4 : 1)
+        .overlay(alignment: .top) {
+            if cancelled {
+                Text("取り消し")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.red))
+                    .offset(y: -8)
+                    .fixedSize()
+            }
+        }
         .offset(x: popupLeft(keyWidth: keyWidth), y: -(height + 6))
         .allowsHitTesting(false)
     }

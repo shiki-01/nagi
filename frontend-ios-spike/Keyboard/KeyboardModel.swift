@@ -403,15 +403,20 @@ final class KeyboardModel: ObservableObject {
         var index = 0
         var replaceCount = 0
         var upper = false
-        if let state = toggleState, state.keyId == key.id, state.layoutId == layoutDef.id, cycle.count > 1,
-           now.timeIntervalSince(state.at) * 1000 < Double(ios.toggleTimeoutMs) {
-            index = (state.index + 1) % cycle.count
+        var continued = false
+        if let state = toggleState, state.keyId == key.id, state.layoutId == layoutDef.id,
+           ToggleCycle.isContinuation(
+               cycleCount: cycle.count, elapsedMs: now.timeIntervalSince(state.at) * 1000, timeoutMs: ios.toggleTimeoutMs
+           ) {
+            index = ToggleCycle.nextIndex(previous: state.index, cycleCount: cycle.count)
             replaceCount = state.last.count
             upper = state.upper
+            continued = true
         } else if layoutDef.mode != .kana {
             upper = shiftState != .off
             if shiftState == .once { shiftState = .off }
         }
+        DiagLog.log("toggle key=\(key.id) index=\(index) continued=\(continued) hadState=\(toggleState != nil) timeout=\(ios.toggleTimeoutMs)")
         let base = cycle[index]
         let text = (layoutDef.mode != .kana && upper) ? base.uppercased() : base
         if layoutDef.mode == .kana {
@@ -770,8 +775,13 @@ final class KeyboardModel: ObservableObject {
     func hostTextChanged() {
         // 自分の操作の結果ではない変更（カーソル移動・他アプリによる書き換え）が起きたら、
         // 直前のトグル入力の「置き換え」は続けない
-        if toggleState != nil, Date().timeIntervalSince(lastOwnHostOperation) > ownOperationWindow {
-            toggleState = nil
+        // （ホストからの通知は遅れて届くことがある。本文の末尾が直前に入れた文字のままなら、続きとみなして残す）
+        if let state = toggleState, Date().timeIntervalSince(lastOwnHostOperation) > ownOperationWindow {
+            let context = host?.hostContextBeforeInput()
+            if context == nil || !(context ?? "").hasSuffix(state.last) {
+                DiagLog.log("toggleState dropped by external text change")
+                toggleState = nil
+            }
         }
         scheduleContextUpdate(delay: 0.05)
         refreshClipboardState()
@@ -905,7 +915,9 @@ final class KeyboardModel: ObservableObject {
     private func showPreedit(_ view: PreeditView) {
         preedit = view.text
         isConverting = view.focus != nil
-        let cursor = Int(view.cursor)
+        let cursor = HostCompositionApplier.markedCursor(
+            coreCursor: Int(view.cursor), text: view.text, converting: view.focus != nil
+        )
         guard view.text != shownMarked || cursor != shownCursor else { return }
         lastOwnHostOperation = Date()
         if view.text.isEmpty {

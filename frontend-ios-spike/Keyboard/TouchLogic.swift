@@ -78,3 +78,30 @@ enum WordBoundary {
         return count
     }
 }
+
+/// トグルキー（ガラケー式）の押下が「直前の文字の置き換え」になるかと、次の文字の位置を決める
+enum ToggleCycle {
+    /// 同じキーの続けての押下で、直前の文字を次の候補に置き換えるか。
+    /// cycle が 2 要素以上で、経過時間（ミリ秒）が 0 以上かつタイムアウト未満のとき true
+    static func isContinuation(cycleCount: Int, elapsedMs: Double, timeoutMs: Int) -> Bool {
+        cycleCount > 1 && elapsedMs.isFinite && elapsedMs >= 0 && elapsedMs < Double(timeoutMs)
+    }
+
+    /// 次の文字の位置。直前の位置が無ければ（新しい押下）先頭、あれば 1 つ進めて末尾の次は先頭に戻る
+    static func nextIndex(previous: Int?, cycleCount: Int) -> Int {
+        guard cycleCount > 0, let previous = previous else { return 0 }
+        return (previous + 1) % cycleCount
+    }
+}
+
+/// 長押しポップアップの取り消し判定
+enum LongPressCancel {
+    /// キーの下端より下へ、キーの高さのこの倍率以上離れたら取り消し
+    static let heightFactor = 0.5
+
+    /// 指の y（キー内の座標。上端が 0、下端が keyHeight）が取り消しの位置か
+    static func isCancelled(y: Double, keyHeight: Double) -> Bool {
+        guard y.isFinite, keyHeight > 0 else { return false }
+        return y > keyHeight + keyHeight * heightFactor
+    }
+}

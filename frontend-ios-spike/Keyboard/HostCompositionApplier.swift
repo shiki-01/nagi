@@ -62,6 +62,14 @@ final class HostCompositionApplier {
 
     // MARK: - 変換中の表示
 
+    /// ホストへ渡す `setMarkedText` のキャレット位置（UTF-16）。
+    /// 変換中（注目文節あり）はコアの cursor に関わらず常に末尾（確定時にキャレットが手前に残らないように）。
+    /// 入力中は、コアの cursor を編集カーソルとして使う
+    static func markedCursor(coreCursor: Int, text: String, converting: Bool) -> Int {
+        let end = text.utf16.count
+        return converting ? end : min(max(coreCursor, 0), end)
+    }
+
     /// 変換中の文字列を表示・更新する
     func setMarked(_ text: String, cursor: Int) {
         operationCount += 1
@@ -127,13 +135,16 @@ final class HostCompositionApplier {
             DiagLog.log("host insertText \(quote(text))")
             host?.hostInsertText(text)
         } else {
-            let caretToEnd = max(0, shownMarked.utf16.count - shownCursor)
-            DiagLog.log("host commit \(quote(text)) delete=\(shownMarked.count) caretToEnd=\(caretToEnd) shownMarked=\(quote(shownMarked))")
+            let end = shownMarked.utf16.count
+            DiagLog.log("host commit \(quote(text)) delete=\(shownMarked.count) cursor=\(shownCursor)/\(end) shownMarked=\(quote(shownMarked))")
+            // キャレットが変換中の文字列の途中（先頭など）にあると、後ろへ消すと手前の本文を削ってしまう。
+            // adjustTextPosition は実機で非同期に効くため頼らず、同じ文字列の setMarkedText（置換範囲が同じ）で
+            // キャレットを末尾へ置いてから確定する
+            if shownCursor != end {
+                host?.hostSetMarkedText(shownMarked, cursor: end)
+            }
             // 範囲を確定扱いにして平文にする
             host?.hostUnmarkText()
-            // キャレットが変換中の文字列の途中にあると、後ろへ消すと手前の本文を削ってしまう。
-            // 先にキャレットを変換中だった文字列の末尾へ寄せる
-            if caretToEnd > 0 { host?.hostAdjustCursor(by: caretToEnd) }
             for _ in 0..<shownMarked.count { host?.hostDeleteBackward() }
             host?.hostInsertText(text)
         }
