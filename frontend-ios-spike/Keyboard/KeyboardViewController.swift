@@ -105,11 +105,6 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         textDocumentProxy.setMarkedText(text, selectedRange: NSRange(location: position, length: 0))
     }
 
-    func hostReplaceMarkedAndCommit(_ text: String) {
-        textDocumentProxy.setMarkedText(text, selectedRange: NSRange(location: text.utf16.count, length: 0))
-        textDocumentProxy.unmarkText()
-    }
-
     func hostUnmarkText() {
         textDocumentProxy.unmarkText()
     }

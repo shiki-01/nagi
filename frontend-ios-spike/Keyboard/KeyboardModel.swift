@@ -1,28 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// ホストアプリのテキスト入力欄への操作（`UIInputViewController` が実装する）
-protocol KeyboardHost: AnyObject {
-    func hostInsertText(_ text: String)
-    func hostDeleteBackward()
-    /// 変換中の文字列（下線付き）を表示する。`cursor` はその中のカーソル位置（UTF-16）
-    func hostSetMarkedText(_ text: String, cursor: Int)
-    /// 変換中の表示を消す（確定した文字列は別に `hostInsertText` で入れる）
-    func hostClearMarkedText()
-    func hostReplaceMarkedAndCommit(_ text: String)
-    /// 変換中の範囲を確定扱いにする（文字は消さない）
-    func hostUnmarkText()
-    /// 変換中でないときのカーソル移動（文字数単位）
-    func hostAdjustCursor(by offset: Int)
-    func hostAdvanceToNextInputMode()
-    /// キーボードを閉じる
-    func hostDismissKeyboard()
-    /// カーソル手前のテキスト（`documentContextBeforeInput`。変換中の文字列を含みうる）
-    func hostContextBeforeInput() -> String?
-    /// パスワード欄など、学習・文脈の送信・ログを止めるべき入力欄か
-    func hostIsSecure() -> Bool
-}
-
 /// 候補バーに出す候補 1 つ
 struct CandidateItem: Identifiable {
     let id: Int
@@ -73,7 +51,11 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var clipboardHasText = false
     private var pasteboardObserver: NSObjectProtocol?
 
-    weak var host: KeyboardHost?
+    weak var host: KeyboardHost? {
+        didSet { applier.host = host }
+    }
+    /// ホストの変換中の文字列と確定の手順（`HostCompositionApplier`）。表示中の変換中の文字列もここが持つ
+    private let applier = HostCompositionApplier()
 
     /// コアのセッション。メモリ警告やコアの異常で作り直す・手放すことがあるので var。nil のときはキーを直接ホストへ入れる
     private var session: NagiSession?
@@ -112,8 +94,8 @@ final class KeyboardModel: ObservableObject {
     /// 自分の操作の結果とみなす猶予（秒）
     private let ownOperationWindow: TimeInterval = 0.5
     /// ホストに表示している変換中の文字列とカーソル位置
-    private var shownMarked = ""
-    private var shownCursor = 0
+    private var shownMarked: String { applier.shownMarked }
+    private var shownCursor: Int { applier.shownCursor }
     /// 読み込み済みレイアウトの控え（id → 定義）。フォーカスが戻るたびに破棄して読み直す
     private var layoutCache: [String: KeyboardLayoutDef] = [:]
     /// シフトを直前に押した時刻（2 回連続の判定）
@@ -307,12 +289,7 @@ final class KeyboardModel: ObservableObject {
 
     /// 変換中の文字列をホストの入力欄に残す（下線を外して確定扱いにする）。表示も空にする
     private func keepPreeditInHost() {
-        if !shownMarked.isEmpty {
-            DiagLog.log("keep preedit in host len=\(shownMarked.count)")
-            host?.hostUnmarkText()
-        }
-        shownMarked = ""
-        shownCursor = 0
+        applier.keepInHost()
         preedit = ""
         isConverting = false
         candidates = []
@@ -810,8 +787,7 @@ final class KeyboardModel: ObservableObject {
             if let result = session.focusOut() { lastRevision = max(lastRevision, result.revision) }
             if let result = session.focusIn() { lastRevision = max(lastRevision, result.revision) }
         }
-        shownMarked = ""
-        shownCursor = 0
+        applier.reset()
         preedit = ""
         isConverting = false
         candidates = []
@@ -891,30 +867,11 @@ final class KeyboardModel: ObservableObject {
             hostDeleteBackward(Int(n))
         }
         if let commit = result.commit, !commit.isEmpty {
-            // 変換中の表示（下線）を消してから、確定した文字列を通常のテキストとして入れる
-            if shownMarked.isEmpty {
-                hostInsert(commit)
-            } else if let rest = result.preedit?.text, !rest.isEmpty {
-                // 部分確定（確定と残りの入力中が同時に来る）。ホスト側の変換中の範囲の追跡に頼ると
-                // 実機で範囲がずれて二重になるため、本文を確定的に直す:
-                // 範囲を確定扱いにして、表示中の文字数だけ戻して消し、確定文字列を入れる
-                // （残りは直後の showPreedit が新しい変換中として入れる）
-                DiagLog.log("host partialCommit \(logText(commit)) delete=\(shownMarked.count) caretToEnd=\(max(0, shownMarked.utf16.count - shownCursor)) shownMarked=\(logText(shownMarked))")
-                host?.hostUnmarkText()
-                // キャレットが変換中の文字列の途中にあると、後ろへ消すと手前の本文を削ってしまう。
-                // 先にキャレットを変換中だった文字列の末尾へ寄せる
-                let toEnd = shownMarked.utf16.count - shownCursor
-                if toEnd > 0 { host?.hostAdjustCursor(by: toEnd) }
-                for _ in 0..<shownMarked.count { host?.hostDeleteBackward() }
-                host?.hostInsertText(commit)
-            } else {
-                // 変換中の範囲を確定文字列で置き換えて確定する（残りの入力中の文字列が
-                // 平文として残らないよう、挿入ではなく置換で扱う）
-                DiagLog.log("host replaceMarkedAndCommit \(logText(commit)) shownMarked=\(logText(shownMarked))")
-                host?.hostReplaceMarkedAndCommit(commit)
-            }
-            shownMarked = ""
-            shownCursor = 0
+            // 部分確定・全文確定とも同じ決定的な手順（範囲を確定扱い → 表示中の文字数だけ消す → 挿入）。
+            // ホスト側の変換中の範囲の追跡に頼る置換は、実機で範囲がずれて二重になる。
+            // 残りの変換中は、直後の showPreedit が新しい変換中として入れる
+            lastOwnHostOperation = Date()
+            applier.commit(commit)
             // 確定した文字列を文脈に含めるため、ホストが反映したあとに送る
             scheduleContextUpdate(delay: 0.15)
         }
@@ -952,15 +909,11 @@ final class KeyboardModel: ObservableObject {
         guard view.text != shownMarked || cursor != shownCursor else { return }
         lastOwnHostOperation = Date()
         if view.text.isEmpty {
-            DiagLog.log("host clearMarked")
-            host?.hostClearMarkedText()
+            applier.clear()
             scheduleContextUpdate(delay: 0.15)
         } else {
-            DiagLog.log("host setMarked \(logText(view.text)) cursor=\(cursor)")
-            host?.hostSetMarkedText(view.text, cursor: cursor)
+            applier.setMarked(view.text, cursor: cursor)
         }
-        shownMarked = view.text
-        shownCursor = cursor
     }
 
     private func showCandidates(_ view: CandidatesView) {
@@ -985,12 +938,14 @@ final class KeyboardModel: ObservableObject {
     // MARK: - ホストへの操作（ログ付き）
 
     private func hostInsert(_ text: String) {
+        applier.flushPending()
         lastOwnHostOperation = Date()
         DiagLog.log("host insertText \(logText(text))")
         host?.hostInsertText(text)
     }
 
     private func hostDeleteBackward(_ count: Int) {
+        applier.flushPending()
         lastOwnHostOperation = Date()
         DiagLog.log("host deleteBackward x\(count)")
         for _ in 0..<count { host?.hostDeleteBackward() }

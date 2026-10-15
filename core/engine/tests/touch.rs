@@ -192,6 +192,46 @@ fn space_shows_the_candidate_list_immediately() {
     assert!(shown.visible);
 }
 
+/// Space 変換のあとの ←/→ は注目文節を動かす（文全体表示のメガ文節も、最初の移動で文節に分かれて動く）。
+/// 文節が 1 つだけなら動く先がないので、注目は変わらない（応答は消費する）
+#[test]
+fn space_then_arrows_move_the_focused_segment() {
+    use nagi_engine::MockBackend;
+    let backend = MockBackend::new().with_sentence(
+        "きょうはあめ",
+        vec![
+            ("きょう", vec!["今日", "京"]),
+            ("は", vec!["は"]),
+            ("あめ", vec!["雨", "飴"]),
+        ],
+    );
+    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
+    e.insert_reading("s", &ReadingInput::Text("きょうはあめ".into()));
+    let r = e.perform_action("s", &TouchAction::Space);
+    assert!(r.consumed);
+    let focus = |e: &mut Engine| e.snapshot("s").unwrap().preedit.focus;
+    assert_eq!(focus(&mut e), Some(0));
+    let r = e.perform_action("s", &TouchAction::MoveFocus(TouchDirection::Right));
+    assert!(r.consumed);
+    assert_eq!(focus(&mut e), Some(1));
+    e.perform_action("s", &TouchAction::MoveFocus(TouchDirection::Right));
+    assert_eq!(focus(&mut e), Some(2));
+    e.perform_action("s", &TouchAction::MoveFocus(TouchDirection::Right));
+    assert_eq!(focus(&mut e), Some(2), "右端では動かない");
+    e.perform_action("s", &TouchAction::MoveFocus(TouchDirection::Left));
+    assert_eq!(focus(&mut e), Some(1));
+
+    // 文節が 1 つだけ: 動く先がなく、注目は変わらない
+    let mut e = engine();
+    e.insert_reading("s", &ReadingInput::Text("かな".into()));
+    e.perform_action("s", &TouchAction::Space);
+    for d in [TouchDirection::Right, TouchDirection::Left] {
+        let r = e.perform_action("s", &TouchAction::MoveFocus(d));
+        assert!(r.consumed);
+        assert_eq!(e.snapshot("s").unwrap().preedit.focus, Some(0));
+    }
+}
+
 // ---- 入力中（変換前）の候補と部分変換 ----
 
 fn mock_engine() -> Engine {
