@@ -73,7 +73,11 @@ final class HostCompositionApplierTests: XCTestCase {
 
     /// 次のメインキューの周回まで進める（確定直後の再開の遅延を待つ）
     private func spinMainQueue() {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        // RunLoop.run(until:) はソースが無いとすぐ戻るため、メインキューへ積んだ式の完了を待つ。
+        // キューは先入れ先出しなので、先に積まれた再開の処理が終わってから fulfill される
+        let done = expectation(description: "main queue drained")
+        DispatchQueue.main.async { done.fulfill() }
+        wait(for: [done], timeout: 2)
     }
 
     // MARK: (a) 部分確定のあとの全文確定
