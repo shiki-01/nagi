@@ -90,13 +90,14 @@ fn get_settings_returns_defaults_and_not_explicit() {
         item(&snap, "conversion.n_threads")["requires_restart"],
         true
     );
-    // タッチ入力のみの項目（濁点の循環順）以外は両方
+    // タッチ入力のみの項目（濁点の循環順・タッチ座標の利用）以外は両方
     assert!(items.iter().all(|i| {
-        let expected = if i["key"] == "input.dakuten_cycle" {
-            "ios"
-        } else {
-            "both"
-        };
+        let expected =
+            if i["key"] == "input.dakuten_cycle" || i["key"] == "input.fuzzy.use_touch_coords" {
+                "ios"
+            } else {
+                "both"
+            };
         i["platforms"] == expected
     }));
     assert_eq!(item(&snap, "conversion.model")["value"], Value::Null);

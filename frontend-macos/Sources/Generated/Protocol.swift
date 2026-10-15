@@ -32,11 +32,15 @@ public struct CandidateView: Codable {
 	/// `None` は読み全体（変換中の候補は常に `None`）。短い値の候補を選ぶと、その分だけ確定し、
 	/// 残りの読みは入力中のまま続く（部分変換）
 	public let covers: UInt32?
+	/// 曖昧入力（出所 `Fuzzy`）の候補で、補正後の読み（「もしかして: かんじ」の表示用）。
+	/// 選ぶとこの読みで確定し、学習する。補正でない候補は `None`
+	public let reading: String?
 
-	public init(surface: String, sources: [CandidateSource], covers: UInt32?) {
+	public init(surface: String, sources: [CandidateSource], covers: UInt32?, reading: String?) {
 		self.surface = surface
 		self.sources = sources
 		self.covers = covers
+		self.reading = reading
 	}
 }
 
@@ -170,6 +174,19 @@ public struct ConfigError: Codable {
 /// 空の結果（`ping` / `shutdown` / `focus_in`）
 public struct EmptyResult: Codable {
 	public init() {}
+}
+
+/// フリックの詳細（12 キーのかな入力）。方向が閾値に近いときに、隣の方向を低コストで候補にする
+public struct FlickDetail: Codable {
+	/// フリックの角度（度。右 = 0、上 = 90、左 = 180、下 = 270 または -90。反時計回り）
+	public let angle_deg: Double
+	/// 指を動かした距離（キー幅を 1 とする）
+	public let distance: Double
+
+	public init(angle_deg: Double, distance: Double) {
+		self.angle_deg = angle_deg
+		self.distance = distance
+	}
 }
 
 /// 小数項目の範囲
@@ -341,6 +358,43 @@ public struct InsertReadingParams: Codable {
 	}
 }
 
+/// キー内のタッチ位置。押されたキーの矩形内の相対位置（左上が (0, 0)、右下が (1, 1)。
+/// 座標系に依存しないので、フロントはキーのローカル座標を幅・高さで割って送る）。
+/// 曖昧入力（`input.fuzzy.use_touch_coords`）が、隣のキーとの境界に近い打鍵ほど打ち間違いとして
+/// 補正しやすくするのに使う。preedit の間だけメモリに持ち、確定・破棄・フォーカス喪失で消す（ログに出さない）
+public struct TouchPoint: Codable {
+	/// 横の相対位置（0..1）
+	public let x: Double
+	/// 縦の相対位置（0..1）
+	public let y: Double
+
+	public init(x: Double, y: Double) {
+		self.x = x
+		self.y = y
+	}
+}
+
+/// `insert_reading` メソッドの要求パラメータ（座標つき）。[`InsertReadingParams`] に任意項目を足した上位互換で、
+/// 項目を省略すれば `InsertReadingParams` と同じ。サーバーは `insert_reading` をこの型で受ける
+/// （既存のフロントが `InsertReadingParams` のまま送っても動く）
+public struct InsertReadingTouchParams: Codable {
+	/// セッション ID
+	public let session_id: String
+	/// 入力
+	public let input: ReadingInput
+	/// `input` が QWERTY の 1 文字（`ReadingInput::Text`）のときの、キー内のタッチ位置
+	public let touch: TouchPoint?
+	/// `input` が 12 キーのフリック（`ReadingInput::Key12`）のときの、角度と距離
+	public let flick: FlickDetail?
+
+	public init(session_id: String, input: ReadingInput, touch: TouchPoint?, flick: FlickDetail?) {
+		self.session_id = session_id
+		self.input = input
+		self.touch = touch
+		self.flick = flick
+	}
+}
+
 /// 整数項目の範囲
 public struct IntRange: Codable {
 	/// 最小値
@@ -475,6 +529,32 @@ public struct KeyTableResult: Codable {
 	public init(keys: [KeyTableEntry], variants: [[String]]) {
 		self.keys = keys
 		self.variants = variants
+	}
+}
+
+/// キー矩形 1 つ（`set_layout_geometry`）
+public struct LayoutKey: Codable {
+	/// フロントのキー ID（識別用。補正には使わない）
+	public let id: String
+	/// キーで入力される文字（QWERTY の英字キーは `"q"` など 1 文字。大文字表示でも構わない）。
+	/// 英字以外のキー（Shift・空白・数字など）は無視される
+	public let label: String
+	/// 左端
+	public let x: Double
+	/// 上端
+	public let y: Double
+	/// 幅
+	public let w: Double
+	/// 高さ
+	public let h: Double
+
+	public init(id: String, label: String, x: Double, y: Double, w: Double, h: Double) {
+		self.id = id
+		self.label = label
+		self.x = x
+		self.y = y
+		self.w = w
+		self.h = h
 	}
 }
 
@@ -982,6 +1062,37 @@ public struct SetContextParams: Codable {
 		self.surrounding_text = surrounding_text
 		self.app_id = app_id
 		self.secure_input = secure_input
+	}
+}
+
+/// `set_layout_geometry` メソッドの要求パラメータ。応答は [`EmptyResult`]。
+/// 
+/// キーボードのキー矩形を渡すと、曖昧入力のキー近接（どのキーが隣か）を、内蔵の QWERTY ではなく
+/// このレイアウトから導出する（QWERTY 以外・カスタム配列でも使える）。座標系はキーボード view の
+/// ローカル座標（左上が原点、`width` × `height`）で、`keys` も同じ座標系。単位は問わない
+/// （正規化座標 0..1 でもよい）。受け取るまでは内蔵の QWERTY を使う。英字キーが 10 個未満の
+/// レイアウト（12 キーのかななど）は無視される
+public struct SetLayoutGeometryParams: Codable {
+	/// 対象セッション。省略するとすべてのセッションの既定にする
+	public let session_id: String?
+	/// レイアウトの識別子（同じ識別子・内容なら再計算しない）
+	public let layout_id: String
+	/// モード（例：`qwerty`、`kana12`。診断用）
+	public let mode: String
+	/// キー矩形
+	public let keys: [LayoutKey]
+	/// キーボード view の幅
+	public let width: Double
+	/// キーボード view の高さ
+	public let height: Double
+
+	public init(session_id: String?, layout_id: String, mode: String, keys: [LayoutKey], width: Double, height: Double) {
+		self.session_id = session_id
+		self.layout_id = layout_id
+		self.mode = mode
+		self.keys = keys
+		self.width = width
+		self.height = height
 	}
 }
 

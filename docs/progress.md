@@ -204,3 +204,8 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 
 - 実装済み: 新クレート `nagi-fuzzy`（QWERTY 隣接表、置換・脱落・挿入・転置・濁点/小書き・同じ行内の隣、辞書の trie による枝刈り付き探索）、`CandidateSource::Fuzzy`、`Pipeline` / エンジンへの統合（入力中の候補・Space 変換の「もしかして」候補）、設定 `input.fuzzy.{enabled,strength,max_candidates,kinds}`（既定オフ）、評価 `nagi-fuzzy-eval`（正解率 約 40%、クリーン入力の誤訂正 0%、展開 p50 1.6ms）
 - 未完了: Swift 側（iOS の設定 UI は汎用フォームに自動で出る想定。候補の「もしかして」ラベルの追従）、実機での確認、M2（タッチ座標・実際の打鍵列）、M3（LLM 再採点）、補正後の読みを候補に持たせる表示
+
+## 曖昧入力 M2（2026-10-15、決定は decisions.md H-25）
+
+- 実装済み: Composer が実際の打鍵列（`Stroke`）を保持（BS・G-49 巻き戻し・引き継ぎ・カーソル移動・部分確定に追従）、`set_layout_geometry`（キー矩形から隣接を導出）、`insert_reading` の任意の `touch` / `flick`（`InsertReadingTouchParams`）、座標つきのガウス尤度の置換コスト、`CandidateView.reading`（補正後の読み。選ぶとその読みで確定・学習）、設定 `input.fuzzy.use_touch_coords`（既定 true・detail・ios）、評価 `nagi-fuzzy-eval` に座標ノイズモデル（M1 比で上位 5 件の正解率 +9〜+23pt、クリーン入力の誤訂正 0〜0.13%）
+- 未完了: Swift 側（geometry の送信、touch / flick の送信、`reading` つき候補の「もしかして: ○○」表示、`CandidateView` の init に `reading:` が増えたことへのテスト追従、iOS の生成 config で `[input.fuzzy] enabled = true`）、実機での確認、M3（LLM 再採点）

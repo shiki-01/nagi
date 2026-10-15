@@ -270,6 +270,36 @@ mod engine_flow {
     }
 
     #[test]
+    fn json_rpc_accepts_geometry_touch_and_the_old_insert_reading_shape() {
+        let mut s = server(fuzzy_config(true));
+        // set_layout_geometry は空の結果を返す（英字キーが足りない配置は無視される）
+        let r = send(
+            &mut s,
+            "set_layout_geometry",
+            json!({"layout_id":"k12","mode":"kana12","width":1.0,"height":1.0,
+                   "keys":[{"id":"a","label":"あ","x":0.0,"y":0.0,"w":0.3,"h":0.2}]}),
+        );
+        assert_eq!(r["result"], json!({}), "{r}");
+        // 座標なしの従来の形（InsertReadingParams）と、座標つきの形のどちらも受け付ける
+        for (i, ch) in "kamji".chars().enumerate() {
+            let mut params =
+                json!({"session_id":"s","input":{"type":"text","content":ch.to_string()}});
+            if i == 2 {
+                params["touch"] = json!({"x":0.02,"y":0.5});
+            }
+            let r = send(&mut s, "insert_reading", params);
+            assert_eq!(r["result"]["consumed"], true, "{r}");
+        }
+        let r = send(
+            &mut s,
+            "insert_reading",
+            json!({"session_id":"s","input":{"type":"key12","content":{"key":"a","gesture":"flick_left"}},
+                   "flick":{"angle_deg":135.0,"distance":0.8}}),
+        );
+        assert_eq!(r["result"]["consumed"], true, "{r}");
+    }
+
+    #[test]
     fn typing_keeps_the_typed_reading() {
         // 補正は候補にだけ混ざり、入力中の読みは打った通りのまま
         let mut s = server(fuzzy_config(true));

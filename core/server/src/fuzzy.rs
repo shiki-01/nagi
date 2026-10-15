@@ -218,6 +218,7 @@ impl FuzzyEngine {
     ///
     /// `known` は、学習・ユーザー辞書などで読みがすでに意味を持つとき（クリーンとみなして何も出さない）。
     /// `budget` は展開に使える時間の上限
+    #[allow(clippy::too_many_arguments)] // 辞書・overlay・読み・打鍵・設定・既知・予算は別々の出所
     pub fn suggest(
         &self,
         dict: &Dictionary,

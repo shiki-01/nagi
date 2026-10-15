@@ -937,11 +937,7 @@ impl ConversionBackend for Pipeline {
         let fuzzy: Vec<Suggestion> = self
             .fuzzy_suggestions(reading, &eff, &overlay, known, &TypingHint::default())
             .into_iter()
-            .filter(|f| {
-                !groups
-                    .iter()
-                    .any(|(_, items)| items.iter().any(|i| *i == f.surface))
-            })
+            .filter(|f| !groups.iter().any(|(_, items)| items.contains(&f.surface)))
             .collect();
         groups.push((
             CandidateSource::Fuzzy,
