@@ -319,6 +319,73 @@ impl Default for ConversionSection {
     }
 }
 
+/// 曖昧入力（タイプミス補正）の強さ。補正として許す打ち間違いの量（累積コスト上限）を決める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FuzzyStrength {
+    /// 控えめ（1 操作まで程度）。
+    Gentle,
+    /// 標準（2 操作程度）。既定。
+    Normal,
+    /// 強め（3 操作程度。誤補正が増える）。
+    Aggressive,
+}
+
+impl FuzzyStrength {
+    /// 文字列表現を返す。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FuzzyStrength::Gentle => "gentle",
+            FuzzyStrength::Normal => "normal",
+            FuzzyStrength::Aggressive => "aggressive",
+        }
+    }
+
+    /// 補正の累積コスト上限（`nagi-fuzzy` の編集コストと同じ尺度。置換 2.0〜3.0・転置 2.0 など）。
+    pub fn max_cost(&self) -> f32 {
+        match self {
+            FuzzyStrength::Gentle => 3.0,
+            FuzzyStrength::Normal => 4.5,
+            FuzzyStrength::Aggressive => 6.5,
+        }
+    }
+}
+
+impl fmt::Display for FuzzyStrength {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// 曖昧入力（`[input.fuzzy]`）。キー配置に応じたタイプミスを「もしかして」候補として混ぜる。
+/// 入力中の読みは打った通りに保ち、自動で置き換えない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FuzzySection {
+    /// 曖昧入力（補正候補）を使うかどうか。既定: false。
+    pub enabled: bool,
+    /// 補正の強さ。既定: Normal。
+    pub strength: FuzzyStrength,
+    /// 候補に混ぜる補正候補の最大数。1〜5。既定: 3。
+    pub max_candidates: usize,
+    /// 使う補正の種類（`substitute,delete,insert,transpose,voicing` のカンマ区切り）。既定: 全部。
+    pub kinds: String,
+}
+
+/// `input.fuzzy.kinds` の既定値（全種類）。
+pub const FUZZY_KINDS_ALL: &str = "substitute,delete,insert,transpose,voicing";
+
+impl Default for FuzzySection {
+    fn default() -> Self {
+        FuzzySection {
+            enabled: false,
+            strength: FuzzyStrength::Normal,
+            max_candidates: 3,
+            kinds: FUZZY_KINDS_ALL.to_string(),
+        }
+    }
+}
+
 /// 入力セクション。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -332,6 +399,8 @@ pub struct InputSection {
     pub dakuten_cycle: DakutenCycle,
     /// Backspace で文字を消したとき、残った未変換のローマ字を保留に戻して続けて入力できるようにする（H-23）。既定: true。
     pub romaji_carryover: bool,
+    /// 曖昧入力（タイプミス補正の候補）。
+    pub fuzzy: FuzzySection,
 }
 
 impl Default for InputSection {
@@ -341,6 +410,7 @@ impl Default for InputSection {
             punctuation: Punctuation::default(),
             dakuten_cycle: DakutenCycle::SmallFirst,
             romaji_carryover: true,
+            fuzzy: FuzzySection::default(),
         }
     }
 }
@@ -604,6 +674,14 @@ impl Config {
             ));
         }
 
+        // input.fuzzy.max_candidates: 1 <= max_candidates <= 5
+        if !(1..=5).contains(&self.input.fuzzy.max_candidates) {
+            errors.push(format!(
+                "input.fuzzy.max_candidates は 1 から 5 の間である必要があります: {}",
+                self.input.fuzzy.max_candidates
+            ));
+        }
+
         // live_conversion_delay_ms: 0 <= live_conversion_delay_ms <= 5000
         if !(0..=5000).contains(&self.conversion.live_conversion_delay_ms) {
             errors.push(format!(
@@ -709,7 +787,7 @@ fn line_at(source: &str, pos: usize) -> u32 {
 /// `section.key`（または `section`）が書かれている行番号（1 始まり）。`[section]` ヘッダを
 /// 追跡して同名キーの取り違えを避ける。見つからなければ 0
 fn locate(source: &str, path: &str) -> u32 {
-    let (section, key) = match path.split_once('.') {
+    let (section, key) = match path.rsplit_once('.') {
         Some((s, k)) => (s, Some(k)),
         None => (path, None),
     };
@@ -752,6 +830,9 @@ const KNOWN_KEYS: &[&str] = &[
     "update",
 ];
 
+/// `[input.fuzzy]` の既知キー。
+const FUZZY_KEYS: &[&str] = &["enabled", "strength", "max_candidates", "kinds"];
+
 /// 各セクションの既知キー。
 fn get_known_section_keys(section: &str) -> &'static [&'static str] {
     match section {
@@ -777,6 +858,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "punctuation",
             "dakuten_cycle",
             "romaji_carryover",
+            "fuzzy",
         ],
         "ranking" => &["source_order"],
         "learning" => &[
@@ -808,6 +890,16 @@ fn find_unknown_keys(table: &toml::Table) -> Vec<String> {
             for sub in section.keys() {
                 if !known.contains(&sub.as_str()) {
                     unknown.push(format!("{key}.{sub}"));
+                }
+            }
+            // 入れ子のテーブル（`[input.fuzzy]`）
+            if key == "input"
+                && let Some(fuzzy) = section.get("fuzzy").and_then(|v| v.as_table())
+            {
+                for sub in fuzzy.keys() {
+                    if !FUZZY_KEYS.contains(&sub.as_str()) {
+                        unknown.push(format!("input.fuzzy.{sub}"));
+                    }
                 }
             }
         }
@@ -1571,6 +1663,41 @@ min_chars = 3
             "literal_continue"
         );
         assert_eq!(format!("{}", ShiftLetter::SingleUpper), "single_upper");
+    }
+
+    #[test]
+    fn fuzzy_section_defaults_parse_and_validate() {
+        let d = Config::default();
+        assert!(!d.input.fuzzy.enabled, "既定はオフ");
+        assert_eq!(d.input.fuzzy.strength, FuzzyStrength::Normal);
+        assert_eq!(d.input.fuzzy.max_candidates, 3);
+        assert_eq!(d.input.fuzzy.kinds, FUZZY_KINDS_ALL);
+        assert_eq!(FuzzyStrength::Gentle.max_cost(), 3.0);
+        assert_eq!(FuzzyStrength::Normal.max_cost(), 4.5);
+        assert_eq!(FuzzyStrength::Aggressive.max_cost(), 6.5);
+        assert_eq!(FuzzyStrength::Aggressive.to_string(), "aggressive");
+
+        let source = "[input.fuzzy]\nenabled = true\nstrength = \"aggressive\"\nmax_candidates = 5\nkinds = \"voicing\"\n";
+        let (c, issues) = parse(source).expect("parse");
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(c.input.fuzzy.enabled);
+        assert_eq!(c.input.fuzzy.strength, FuzzyStrength::Aggressive);
+        assert_eq!(c.input.fuzzy.max_candidates, 5);
+        assert_eq!(c.input.fuzzy.kinds, "voicing");
+
+        // 範囲外はエラー（行番号付き）、入れ子の未知キーは警告
+        let bad = "[input]\nromaji_carryover = true\n[input.fuzzy]\nmax_candidates = 6\n";
+        let issues = parse(bad).expect_err("範囲外");
+        assert_eq!(issues[0].line, 4, "{issues:?}");
+        assert!(issues[0].message.contains("input.fuzzy.max_candidates"));
+        let (_, issues) = parse("[input.fuzzy]\nbogus = 1\n").expect("parse");
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("input.fuzzy.bogus") && i.line == 2),
+            "{issues:?}"
+        );
+        assert!(parse("[input.fuzzy]\nstrength = \"x\"\n").is_err());
     }
 
     #[test]

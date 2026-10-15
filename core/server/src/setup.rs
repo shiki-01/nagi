@@ -164,6 +164,7 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
                 DakutenCycle::DakutenFirst => DakutenOrder::DakutenFirst,
             },
             romaji_carryover: config.input.romaji_carryover,
+            fuzzy_input: config.input.fuzzy.enabled,
         },
         events,
     )
@@ -634,6 +635,14 @@ mod tests {
             engine_config_from(&config).0.dakuten_order,
             DakutenOrder::DakutenFirst
         );
+    }
+
+    #[test]
+    fn engine_config_from_maps_fuzzy_input() {
+        let mut config = Config::default();
+        assert!(!engine_config_from(&config).0.fuzzy_input);
+        config.input.fuzzy.enabled = true;
+        assert!(engine_config_from(&config).0.fuzzy_input);
     }
 
     #[test]

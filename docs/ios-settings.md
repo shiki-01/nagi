@@ -38,6 +38,10 @@
 | `input.dakuten_key_enabled` | 濁点キーを出す | bool | true | D | kbd | 新規(iOS) | OFF にすると、濁点はフリック・長押しのみ |
 | `input.shift_letter` | Shift + 英字の動作 | choice: `literal_continue` / `single_upper` | `literal_continue` | D | core:input.shift_letter | 既存(GUI) | QWERTY のみ有効 |
 | `input.romaji_carryover` | 消したローマ字を引き継ぐ | bool | true | D | core:input.romaji_carryover | 実装済み(core)（platforms=both） | QWERTY（ローマ字）入力のみ有効。Backspace で残った未変換のローマ字を保留に戻す（H-23） |
+| `input.fuzzy.enabled` | タイプミスの補正候補（曖昧入力） | bool | false | S | core:input.fuzzy.enabled | 実装済み(core)（platforms=both。simple） | キー配置から考えられる打ち間違いを「もしかして」候補として変換候補に混ぜる（出所 `fuzzy`）。入力中の読みは打った通りのまま（自動置換しない）。M1 は隣接キー + 辞書のみ（H-24）。QWERTY（ローマ字）は隣接キー・打ち忘れ・余計な打鍵・転置、12 キーは濁点・小書きの付け忘れと同じ行内の隣の文字。Swift 側の追従は設定 UI の汎用フォームのみ（出所 `fuzzy` の候補は既存の候補バーにそのまま並ぶ） |
+| `input.fuzzy.strength` | 補正の強さ | choice: `gentle` / `normal` / `aggressive` | `normal` | S | core:input.fuzzy.strength | 実装済み(core)（platforms=both。simple） | 累積コスト上限 3.0 / 4.5 / 6.5。強めは探索が 2ms で打ち切られやすく、評価では正解率が下がった（H-24） |
+| `input.fuzzy.max_candidates` | 補正候補の最大数 | int 1–5, step 1 | 3 | D | core:input.fuzzy.max_candidates | 実装済み(core)（platforms=both） | 候補に混ぜる補正候補の上限 |
+| `input.fuzzy.kinds` | 補正する打ち間違いの種類 | text（カンマ区切り） | `substitute,delete,insert,transpose,voicing` | D | core:input.fuzzy.kinds | 実装済み(core)（platforms=both） | 隣接キー置換 / 打ち忘れ / 余計な打鍵 / 打ち順の入れ替え / 濁点・小書き。汎用フォームでは自由入力のテキスト |
 | `input.punctuation` | 句読点の種類 | choice: `、。` / `，．` / `，。` | `、。` | S | core:input.punctuation | 既存(GUI) | 12 キーの「、。?!」キーの先頭にも反映 |
 | `input.auto_commit_ms` | 一定時間入力が無ければ自動確定 | int 0–10000（0 = 無効）, step 500 | 0 | D | kbd+core | 新規(core) | 入力を失わない原則との兼ね合いで既定は無効 |
 | `input.auto_space_alpha` | 英単語の後に自動でスペース | bool | false | D | core:input.auto_space_alpha | 新規(core) | 英字入力の予測（backlog 3 章）と同時に検討 |

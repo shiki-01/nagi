@@ -1,0 +1,15 @@
+[package]
+name = "nagi-fuzzy"
+description = "Nagi 曖昧入力: キー配置に基づくタイプミスの補正候補の展開（辞書の枝刈り付き）。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+nagi-romaji.workspace = true
+
+[lints]
+workspace = true

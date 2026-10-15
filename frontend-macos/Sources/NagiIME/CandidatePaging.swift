@@ -28,6 +28,7 @@ public enum CandidatePaging {
         case .systemDict: return "辞書"
         case .kana: return "かな"
         case .rewriter: return "変換"
+        case .fuzzy: return "もしかして"
         }
     }
 

@@ -389,6 +389,40 @@ pub fn definitions() -> Vec<SettingDef> {
             SettingKind::Bool,
         ),
         def(
+            "input.fuzzy.enabled",
+            "入力",
+            "タイプミスの補正候補（曖昧入力）",
+            "キー配置から考えられる打ち間違い（隣のキーの押し間違い・打ち忘れ・打ち順の入れ替え・濁点の付け忘れなど）を、「もしかして」の候補として変換候補に混ぜます。入力中の文字は打った通りのままで、自動では置き換えません。",
+            SettingKind::Bool,
+        )
+        .simple(),
+        def(
+            "input.fuzzy.strength",
+            "入力",
+            "補正の強さ",
+            "どこまでの打ち間違いを補正の候補にするかです。強いほど拾える代わりに、不要な候補も増えます。",
+            choice(&[
+                ("gentle", "控えめ"),
+                ("normal", "標準"),
+                ("aggressive", "強め"),
+            ]),
+        )
+        .simple(),
+        def(
+            "input.fuzzy.max_candidates",
+            "入力",
+            "補正候補の最大数",
+            "変換候補に混ぜる「もしかして」候補の最大数です。",
+            int(1, 5, 1),
+        ),
+        def(
+            "input.fuzzy.kinds",
+            "入力",
+            "補正する打ち間違いの種類",
+            "カンマ区切りで指定します: substitute（隣のキー）, delete（打ち忘れ）, insert（余計な打鍵）, transpose（打ち順の入れ替え）, voicing（濁点・小書きの付け忘れ）。",
+            SettingKind::Text,
+        ),
+        def(
             "learning.enabled",
             "学習",
             "学習する",
@@ -522,6 +556,10 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         }
         "input.dakuten_cycle" => Some(Text(config.input.dakuten_cycle.as_str().to_string())),
         "input.romaji_carryover" => Some(Bool(config.input.romaji_carryover)),
+        "input.fuzzy.enabled" => Some(Bool(config.input.fuzzy.enabled)),
+        "input.fuzzy.strength" => Some(Text(config.input.fuzzy.strength.as_str().to_string())),
+        "input.fuzzy.max_candidates" => Some(n(config.input.fuzzy.max_candidates)),
+        "input.fuzzy.kinds" => Some(Text(config.input.fuzzy.kinds.clone())),
         "rewriter.emoji" => Some(Bool(config.rewriter.emoji)),
         "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
         "userdict.enabled" => Some(Bool(config.userdict.enabled)),
@@ -586,8 +624,36 @@ pub fn validate_value(def: &SettingDef, value: &SettingValue) -> Result<(), Stri
     }
 }
 
+/// `section.key` に分ける。セクションは入れ子でもよい（`input.fuzzy.enabled` → `input.fuzzy` と `enabled`）
 fn split_key(key: &str) -> Option<(&str, &str)> {
-    key.split_once('.')
+    key.rsplit_once('.')
+}
+
+/// 入れ子のテーブルを（無ければ作りながら）辿る。途中がテーブルでなければ `None`
+fn table_at_or_create<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    path: &str,
+) -> Option<&'a mut toml_edit::Table> {
+    let mut table = doc.as_table_mut();
+    for segment in path.split('.') {
+        table = table
+            .entry(segment)
+            .or_insert_with(toml_edit::table)
+            .as_table_mut()?;
+    }
+    Some(table)
+}
+
+/// 入れ子のテーブルを（作らずに）辿る
+fn table_at<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
+    path: &str,
+) -> Option<&'a mut toml_edit::Table> {
+    let mut table = doc.as_table_mut();
+    for segment in path.split('.') {
+        table = table.get_mut(segment)?.as_table_mut()?;
+    }
+    Some(table)
 }
 
 /// TOML の値を項目の型に読み替える。型が合わなければ `None`
@@ -621,7 +687,13 @@ pub fn read(source: Option<&str>) -> Result<Vec<SettingState>, String> {
         .map(|def| {
             let default = from_config(&defaults, def.key);
             let explicit_value = split_key(def.key)
-                .and_then(|(s, k)| doc.get(s)?.get(k))
+                .and_then(|(s, k)| {
+                    let mut item = doc.as_item();
+                    for segment in s.split('.') {
+                        item = item.get(segment)?;
+                    }
+                    item.get(k)
+                })
                 .and_then(|item| read_toml_value(&def, item));
             let explicit = explicit_value.is_some();
             SettingState {
@@ -676,12 +748,9 @@ pub fn apply_changes(
         }
         match value {
             Some(value) => {
-                let table = match doc.entry(section).or_insert_with(toml_edit::table) {
-                    toml_edit::Item::Table(t) => t,
-                    _ => {
-                        errors.push(fail("config.toml のセクションの形式が不正です"));
-                        continue;
-                    }
+                let Some(table) = table_at_or_create(&mut doc, section) else {
+                    errors.push(fail("config.toml のセクションの形式が不正です"));
+                    continue;
                 };
                 let mut new = to_toml_value(value);
                 // 既存の値は、キー（直前のコメント）と値の前後の空白・行末コメントを保ったまま置き換える
@@ -696,7 +765,7 @@ pub fn apply_changes(
                 }
             }
             None => {
-                if let Some(table) = doc.get_mut(section).and_then(toml_edit::Item::as_table_mut) {
+                if let Some(table) = table_at(&mut doc, section) {
                     table.remove(name);
                 }
             }
@@ -885,6 +954,74 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.userdict.enabled && !c.snippet.enabled);
         assert_eq!(c.input.dakuten_cycle, crate::DakutenCycle::DakutenFirst);
+    }
+
+    #[test]
+    fn fuzzy_definitions_and_nested_toml_editing() {
+        let defs = definitions();
+        let get = |k: &str| defs.iter().find(|d| d.key == k).unwrap();
+        for (key, level) in [
+            ("input.fuzzy.enabled", SettingLevel::Simple),
+            ("input.fuzzy.strength", SettingLevel::Simple),
+            ("input.fuzzy.max_candidates", SettingLevel::Detail),
+            ("input.fuzzy.kinds", SettingLevel::Detail),
+        ] {
+            assert_eq!(get(key).level, level, "{key}");
+            assert_eq!(get(key).platforms, SettingPlatforms::Both, "{key}");
+        }
+        assert_eq!(get("input.fuzzy.kinds").kind, SettingKind::Text);
+        // 既定は読み出せて、オフ
+        let states = read(None).unwrap();
+        let enabled = states
+            .iter()
+            .find(|s| s.def.key == "input.fuzzy.enabled")
+            .unwrap();
+        assert_eq!(enabled.value, Some(SettingValue::Bool(false)));
+
+        // 入れ子のテーブルへ書き込み、コメントを保ち、読み戻せる
+        let src = "[input]\n# 句読点\npunctuation = \"、。\"\n\n[input.fuzzy]\n# 補正\nenabled = false # 行末\n";
+        let r = apply_changes(
+            Some(src),
+            &[
+                set("input.fuzzy.enabled", SettingValue::Bool(true)),
+                set("input.fuzzy.strength", SettingValue::Text("gentle".into())),
+                set("input.fuzzy.max_candidates", SettingValue::Int(9)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(r.applied.len(), 2);
+        assert_eq!(r.errors.len(), 1);
+        assert!(
+            r.source.contains("# 補正")
+                && r.source.contains("# 行末")
+                && r.source.contains("# 句読点")
+        );
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(c.input.fuzzy.enabled);
+        assert_eq!(c.input.fuzzy.strength, crate::FuzzyStrength::Gentle);
+        let states = read(Some(&r.source)).unwrap();
+        let st = states
+            .iter()
+            .find(|s| s.def.key == "input.fuzzy.strength")
+            .unwrap();
+        assert!(st.explicit);
+        assert_eq!(st.value, Some(SettingValue::Text("gentle".into())));
+
+        // 無い状態から書く・明示指定の削除
+        let r = apply_changes(
+            None,
+            &[set(
+                "input.fuzzy.kinds",
+                SettingValue::Text("voicing".into()),
+            )],
+        )
+        .unwrap();
+        let (c, _) = crate::parse(&r.source).unwrap();
+        assert_eq!(c.input.fuzzy.kinds, "voicing");
+        let r = apply_changes(Some(&r.source), &[("input.fuzzy.kinds".to_string(), None)]).unwrap();
+        let (c, _) = crate::parse(&r.source).unwrap();
+        assert_eq!(c.input.fuzzy.kinds, crate::FUZZY_KINDS_ALL);
     }
 
     #[test]

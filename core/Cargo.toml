@@ -6,6 +6,7 @@ members = [
     "learn",
     "profile",
     "romaji",
+    "fuzzy",
     "dict",
     "infer",
     "protocol",
@@ -26,6 +27,7 @@ authors = ["shiki"]
 [workspace.dependencies]
 nagi-engine = { path = "engine" }
 nagi-romaji = { path = "romaji" }
+nagi-fuzzy = { path = "fuzzy" }
 nagi-dict = { path = "dict" }
 nagi-infer = { path = "infer" }
 nagi-config = { path = "config" }

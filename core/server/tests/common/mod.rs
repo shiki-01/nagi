@@ -19,6 +19,11 @@ const POS_DEFS: &str = "\
 ";
 
 pub fn dict() -> Arc<Dictionary> {
+    dict_with_extra("")
+}
+
+/// 基本の辞書に、`extra`（`読み\t左ID\t右ID\tコスト\t表記` の行）を足した辞書
+pub fn dict_with_extra(extra: &str) -> Arc<Dictionary> {
     let n = 6;
     let mut cost = vec![100u32; n * n];
     for (rid, lid) in [
@@ -57,6 +62,7 @@ pub fn dict() -> Arc<Dictionary> {
 ",
     )
     .unwrap();
+    b.add_dictionary_text("extra", extra).unwrap();
     b.set_pos_defs_text(POS_DEFS).unwrap();
     b.set_connection_text(&lines.join("\n"), ConnectionLayout::RidMajor)
         .unwrap();

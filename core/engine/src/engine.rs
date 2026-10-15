@@ -76,6 +76,9 @@ pub struct EngineConfig {
     pub dakuten_order: touch::DakutenOrder,
     /// Backspace で残った未変換のローマ字を保留に戻すか（`input.romaji_carryover`。H-23）
     pub romaji_carryover: bool,
+    /// 曖昧入力（`input.fuzzy.enabled`）。ローマ字の取りこぼしが混ざる入力にも入力中の候補と
+    /// Space 変換の候補を出し、補正の候補（出所 `Fuzzy`）を混ぜられるようにする
+    pub fuzzy_input: bool,
 }
 
 impl Default for EngineConfig {
@@ -95,6 +98,7 @@ impl Default for EngineConfig {
             beam_width: 3,
             dakuten_order: touch::DakutenOrder::default(),
             romaji_carryover: true,
+            fuzzy_input: false,
         }
     }
 }
@@ -621,7 +625,7 @@ impl Engine {
     /// まだその読みの候補を作っていないときだけ `Some`（サーバーがデバウンス後の更新を決めるのに使う）
     pub fn composing_candidate_reading(&self, session_id: &str) -> Option<String> {
         let sess = self.sessions.get(session_id)?;
-        let reading = Self::candidate_reading(sess)?;
+        let reading = self.candidate_reading(sess)?;
         match &sess.composing_cands {
             Some(c) if c.reading == reading => None,
             _ => Some(reading),
@@ -629,13 +633,22 @@ impl Engine {
     }
 
     /// 入力中の候補を作れる状態なら、現在の読み
-    fn candidate_reading(sess: &Session) -> Option<String> {
+    fn candidate_reading(&self, sess: &Session) -> Option<String> {
         if !matches!(sess.state, State::Composing) || sess.composer.has_pending() {
             return None;
         }
         let pieces = sess.composer.pieces();
-        if pieces.is_empty() || pieces.iter().any(|p| p.kind != PieceKind::Japanese) {
+        if pieces.is_empty() {
             return None;
+        }
+        if pieces.iter().any(|p| p.kind != PieceKind::Japanese) {
+            // 曖昧入力: ローマ字の取りこぼし（`kamji` の m など）だけが混ざる入力も、
+            // 打った通りの読みとして候補（補正の「もしかして」を含む）を作る
+            return self
+                .config
+                .fuzzy_input
+                .then(|| sess.composer.leftover_reading())
+                .flatten();
         }
         Some(pieces.iter().map(|p| p.text.as_str()).collect())
     }
@@ -648,7 +661,7 @@ impl Engine {
         reading: &str,
     ) -> Option<ProcessKeyResult> {
         let mut sess = self.take_session(session_id);
-        let current = Self::candidate_reading(&sess);
+        let current = self.candidate_reading(&sess);
         let result = if current.as_deref() == Some(reading) {
             let items = self.compute_composing_items(reading, &sess.left_context);
             sess.composing_cands = Some(ComposingCands {
@@ -669,27 +682,31 @@ impl Engine {
         let left = tail_chars(left_context, LEFT_CONTEXT_CHARS);
         let total = reading.chars().count();
         let mut items: Vec<ComposingItem> = Vec::new();
-        let mut push = |surface: String, covers: usize, sources: Vec<CandidateSource>| {
-            if surface.is_empty() || items.len() >= COMPOSING_CANDIDATES_LIMIT {
-                return;
-            }
-            if let Some(existing) = items
-                .iter_mut()
-                .find(|i| i.surface == surface && i.covers == covers)
-            {
-                for s in sources {
-                    if !existing.sources.contains(&s) {
-                        existing.sources.push(s);
-                    }
+        let mut push =
+            |surface: String, covers: usize, sources: Vec<CandidateSource>, cap: usize| {
+                if surface.is_empty() || items.len() >= cap {
+                    return;
                 }
-            } else {
-                items.push(ComposingItem {
-                    surface,
-                    covers,
-                    sources,
-                });
-            }
-        };
+                if let Some(existing) = items
+                    .iter_mut()
+                    .find(|i| i.surface == surface && i.covers == covers)
+                {
+                    for s in sources {
+                        if !existing.sources.contains(&s) {
+                            existing.sources.push(s);
+                        }
+                    }
+                } else {
+                    items.push(ComposingItem {
+                        surface,
+                        covers,
+                        sources,
+                    });
+                }
+            };
+        // 曖昧入力の「もしかして」候補は、通常の候補が上限まで埋めても押し出されないよう枠を取っておく
+        let is_fuzzy = |sources: &[CandidateSource]| sources == [CandidateSource::Fuzzy];
+        let mut fuzzy: Vec<(String, usize)> = Vec::new();
 
         let best = self.backend.convert_sentence(reading, &left);
         let joined: String = best.iter().map(|s| s.reading.as_str()).collect();
@@ -703,7 +720,6 @@ impl Engine {
                     }
                 }
             }
-            push(surface, total, sources);
             // 先頭の文節の候補。複数の文節なら先頭だけを置き換える部分変換、1 文節なら読み全体の別の候補
             let first = &best[0];
             let covers = if best.len() > 1 {
@@ -711,22 +727,58 @@ impl Engine {
             } else {
                 total
             };
-            for c in
+            let from_first =
                 self.backend
-                    .segment_candidates(&first.reading, &left, COMPOSING_CANDIDATES_LIMIT)
-            {
-                push(c.surface, covers, c.sources);
+                    .segment_candidates(&first.reading, &left, COMPOSING_CANDIDATES_LIMIT);
+            for c in &from_first {
+                if is_fuzzy(&c.sources) {
+                    fuzzy.push((c.surface.clone(), covers));
+                }
+            }
+            // 文節に分かれてしまった入力の読み全体への補正（タイプミスで文節が割れた場合）
+            if best.len() > 1 {
+                for c in self
+                    .backend
+                    .fuzzy_candidates(reading, &left, COMPOSING_CANDIDATES_LIMIT)
+                {
+                    fuzzy.push((c.surface, total));
+                }
+            }
+            let normal_cap = COMPOSING_CANDIDATES_LIMIT.saturating_sub(fuzzy.len().min(3));
+            push(surface, total, sources, normal_cap);
+            for c in from_first {
+                if !is_fuzzy(&c.sources) {
+                    push(c.surface, covers, c.sources, normal_cap);
+                }
             }
         }
-        push(reading.to_string(), total, vec![CandidateSource::Kana]);
-        push(to_katakana(reading), total, vec![CandidateSource::Kana]);
+        for (surface, covers) in fuzzy {
+            push(
+                surface,
+                covers,
+                vec![CandidateSource::Fuzzy],
+                COMPOSING_CANDIDATES_LIMIT,
+            );
+        }
+        push(
+            reading.to_string(),
+            total,
+            vec![CandidateSource::Kana],
+            COMPOSING_CANDIDATES_LIMIT,
+        );
+        push(
+            to_katakana(reading),
+            total,
+            vec![CandidateSource::Kana],
+            COMPOSING_CANDIDATES_LIMIT,
+        );
         items
     }
 
     /// 入力中の候補を選ぶ: 候補が置き換える読みの先頭部分を確定し、残りは入力中のまま続ける。
     /// 候補が現在の入力と対応していなければ何もしない（`false`）
     fn select_composing(&self, sess: &mut Session, index: usize, commit: &mut String) -> bool {
-        let Some(reading) = Self::candidate_reading(sess) else {
+        let Some(reading) = self.candidate_reading(sess) else {
             return false;
         };
         let Some(item) = sess
@@ -1215,7 +1267,7 @@ impl Engine {
             return false;
         };
         if !done.iter().any(|d| d.reading == cc.reading)
-            || Self::candidate_reading(sess).as_deref() != Some(cc.reading.as_str())
+            || self.candidate_reading(sess).as_deref() != Some(cc.reading.as_str())
         {
             return false;
         }
@@ -1850,6 +1902,13 @@ impl Engine {
         // Space 変換は常に新しく変換する（古いライブ変換結果を持ち越さない。G-44）
         sess.live_conversion = None;
         if how == Start::Convert
+            && self.config.fuzzy_input
+            && let Some(conv) = self.start_converting_fuzzy(sess)
+        {
+            sess.state = State::Converting(conv);
+            return;
+        }
+        if how == Start::Convert
             && self.config.initial_view == InitialView::Sentence
             && pieces.len() == 1
             && pieces[0].kind == PieceKind::Japanese
@@ -1921,6 +1980,37 @@ impl Engine {
         });
     }
 
+    /// 曖昧入力: ローマ字の取りこぼしが混ざる入力（`kamji` の m など）で、補正の候補があれば、
+    /// 入力全体を 1 つの文節（表記は打った通りの読み）にして候補ウィンドウを開く。文節に割れると
+    /// 補正は読み全体に対して働かないため。補正の候補が無ければ `None`（通常の変換に任せる）。
+    /// 打った通りの読みが先頭の候補なので、そのまま確定すれば打った通りになる（自動置換はしない）
+    fn start_converting_fuzzy(&self, sess: &Session) -> Option<Conv> {
+        let reading = sess.composer.leftover_reading()?;
+        let left = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
+        if self
+            .backend
+            .fuzzy_candidates(&reading, &left, COMPOSING_CANDIDATES_LIMIT)
+            .is_empty()
+        {
+            return None;
+        }
+        let mut conv = Conv {
+            segments: vec![Segment {
+                reading: reading.clone(),
+                surface: reading,
+                kind: SegmentKind::Japanese,
+                candidates: None,
+                chunk_id: 0,
+            }],
+            focus: 0,
+            visible: true,
+            range_anchor: None,
+            sentence_alternatives: None,
+        };
+        self.ensure_candidates(&sess.left_context, &mut conv, 0);
+        Some(conv)
+    }
+
     /// `initial_view = sentence` かつ入力全体が1つの日本語 Piece のときに、文全体のN-bestを
     /// 候補ウィンドウに載せた単一の「メガ文節」を作る。候補が2件未満（多様性が無い）なら
     /// `None` を返し、呼び出し側は通常の（1-best・文節ごとの）変換にフォールバックする
@@ -1964,6 +2054,28 @@ impl Engine {
             let surface: String = segments.iter().map(|s| s.surface.as_str()).collect();
             items.push(Candidate { surface, sources });
             alternatives.push(segments);
+        }
+        // 曖昧入力: 文全体の補正の候補（打った通りの読みに、補正後の表記を当てたもの）を末尾に足す
+        if self.config.fuzzy_input {
+            for c in self
+                .backend
+                .fuzzy_candidates(reading, &context, COMPOSING_CANDIDATES_LIMIT)
+            {
+                if items.iter().any(|i| i.surface == c.surface) {
+                    continue;
+                }
+                items.push(Candidate {
+                    surface: c.surface.clone(),
+                    sources: vec![CandidateSource::Fuzzy],
+                });
+                alternatives.push(vec![Segment {
+                    reading: reading.to_string(),
+                    surface: c.surface,
+                    kind: SegmentKind::Japanese,
+                    candidates: None,
+                    chunk_id: 0,
+                }]);
+            }
         }
         if alternatives.len() < 2 {
             return None;
@@ -2396,7 +2508,7 @@ impl Engine {
             };
         }
         // 入力中（変換前）の候補。現在の入力と対応しているものだけを出す
-        if let Some(reading) = Self::candidate_reading(sess)
+        if let Some(reading) = self.candidate_reading(sess)
             && let Some(cc) = sess
                 .composing_cands
                 .as_ref()

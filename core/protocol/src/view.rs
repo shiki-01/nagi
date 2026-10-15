@@ -113,6 +113,8 @@ pub enum CandidateSource {
     Kana,
     /// Rewriter（正規化・変換済み）
     Rewriter,
+    /// 曖昧入力（タイプミス補正の「もしかして」候補。`input.fuzzy.enabled`）
+    Fuzzy,
 }
 
 /// 単一の候補

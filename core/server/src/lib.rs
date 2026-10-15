@@ -4,6 +4,7 @@
 //! （キーの文字・preedit・確定文字列）はログに一切出さない。
 //!
 //! - [`setup`] — 起動オプション・設定・辞書・モデル・学習・ユーザー辞書の読み込み
+//! - [`fuzzy`] — 曖昧入力（タイプミス補正の「もしかして」候補）
 //! - [`pipeline`] — 学習 → ユーザー辞書 → LLM → システム辞書 の変換パイプライン
 //! - [`runtime`] — 環境プロファイル・学習・ユーザー辞書・ランキング設定・通知の共有状態
 //! - [`learning`] — 確定を学習に記録する observer
@@ -13,6 +14,7 @@
 //! - [`update_check`] — アップデート確認（`config.toml` の `[update] auto_check`）
 
 pub mod calibration;
+pub mod fuzzy;
 pub mod learning;
 pub mod pipeline;
 pub mod runtime;

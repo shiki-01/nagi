@@ -112,10 +112,39 @@ dakuten_cycle = "small_first"
 # false: 残ったローマ字はそのまま確定した文字として残る
 romaji_carryover = true
 
+[input.fuzzy]
+# 曖昧入力（タイプミスの補正候補）
+# true: キー配置から考えられる打ち間違い（隣のキーの押し間違い・打ち忘れ・余計な打鍵・
+#       隣り合う 2 文字の入れ替え・濁点や小書きの付け忘れ）を、辞書で変換できるものだけ
+#       「もしかして」の候補として通常の候補の後ろに混ぜる。
+#       入力中の読みは打った通りのままで、自動では置き換えない
+# false: 補正候補を出さない（既定）
+enabled = false
+
+# 補正の強さ（許す打ち間違いの量）
+# "gentle": 控えめ（1 操作まで程度）
+# "normal": 標準（2 操作程度）（既定）
+# "aggressive": 強め（3 操作程度。誤った候補も増える）
+strength = "normal"
+
+# 候補に混ぜる補正候補の最大数
+# 1-5 の範囲。既定: 3
+max_candidates = 3
+
+# 補正する打ち間違いの種類（カンマ区切り）
+# substitute: 隣のキーへの置き換え（かな入力では同じ行内の隣の文字）
+# delete:     打ち忘れ（1 文字の補い）
+# insert:     余計な打鍵（重複・隣のキーの触れ）の削除
+# transpose:  隣り合う 2 文字の入れ替え
+# voicing:    濁点・半濁点・小書きの付け忘れ / 付け過ぎ（かな入力）
+# 既定: すべて
+kinds = "substitute,delete,insert,transpose,voicing"
+
 [ranking]
 # 候補の優先順序（候補の出所）
 # 設定された順序で候補を並べ替える
-# 既知の出所: learned / user_dict / llm / system_dict / kana / rewriter
+# 既知の出所: learned / user_dict / llm / system_dict / kana / rewriter / fuzzy
+# （fuzzy = 曖昧入力の補正候補。省略すると最後に付く）
 # 既定: 学習キャッシュ → ユーザー辞書 → LLM → システム辞書 → ひらがな → Rewriter
 source_order = [
     "learned",

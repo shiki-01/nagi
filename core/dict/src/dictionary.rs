@@ -481,6 +481,25 @@ impl Dictionary {
         }
     }
 
+    /// 読みが `prefix` で始まる語（`prefix` 自身を含む）が辞書にあるか。曖昧入力（`nagi-fuzzy`）が、
+    /// 展開した読みの候補のうち辞書に接頭辞が無いものを早期に捨てるために使う。語の一覧は作らない
+    pub fn has_reading_prefix(&self, prefix: &str) -> bool {
+        use fst::{IntoStreamer, Streamer};
+        let mut stream = self.trie.range().ge(prefix.as_bytes()).into_stream();
+        stream
+            .next()
+            .is_some_and(|(key, _)| key.starts_with(prefix.as_bytes()))
+    }
+
+    /// `text` の先頭から始まる辞書の読みのバイト長（短い順）。語の一覧は作らない
+    /// （[`Dictionary::common_prefix_lookup`] の軽量版）
+    pub fn reading_prefix_lens(&self, text: &str) -> Vec<usize> {
+        self.common_prefix_groups(text.as_bytes())
+            .into_iter()
+            .map(|(_, len)| len)
+            .collect()
+    }
+
     /// 完全一致するグループ番号
     pub(crate) fn group_of(&self, reading: &str) -> Option<u32> {
         self.trie.get(reading.as_bytes()).map(|v| v as u32)

@@ -13,6 +13,7 @@
 //!   辞書の結果で応答する。推論は続行して結果をキャッシュに入れる
 //! - **縮退**: モデルが無い・エラー・`minimal` プロファイルでは辞書だけ、辞書も無ければ読みのまま
 
+use crate::fuzzy::FuzzyEngine;
 use crate::runtime::{Effective, Event, ModelControl, Runtime};
 use nagi_dict::{Dictionary, Overlay};
 use nagi_engine::{
@@ -106,6 +107,8 @@ pub struct Pipeline {
     runtime: Arc<Runtime>,
     completions: Arc<Completions>,
     rewriter: RewriterChain,
+    /// 曖昧入力の提案器（隣接表などを最初に使うときに作る。無効な間は作らない）
+    fuzzy: OnceLock<FuzzyEngine>,
 }
 
 /// dict・LLM の有無からバックエンド名を決める（`Pipeline::new` と `name()` の重複を1箇所にまとめる）
@@ -161,6 +164,7 @@ impl Pipeline {
             runtime,
             completions: Arc::new(Completions::new()),
             rewriter: RewriterChain::default_chain(),
+            fuzzy: OnceLock::new(),
         }
     }
 
@@ -571,6 +575,29 @@ impl Pipeline {
         out
     }
 
+    /// 曖昧入力の補正候補（「もしかして」）。無効・辞書なし・読みが既知（学習・ユーザー辞書・辞書語）なら空。
+    /// 展開は `EXPANSION_BUDGET_MS` と同期予算のうち短い方で打ち切る
+    fn fuzzy_suggestions(
+        &self,
+        reading: &str,
+        eff: &Effective,
+        overlay: &Overlay,
+        known: bool,
+    ) -> Vec<String> {
+        let Some(dict) = &self.dict else {
+            return Vec::new();
+        };
+        if !eff.fuzzy.enabled {
+            return Vec::new();
+        }
+        self.fuzzy
+            .get_or_init(FuzzyEngine::new)
+            .suggest(dict, overlay, reading, &eff.fuzzy, known, eff.sync_budget)
+            .into_iter()
+            .map(|s| s.surface)
+            .collect()
+    }
+
     /// 優先順で LLM より前にある出所（学習・ユーザー辞書）の結果で、文節の表記を置き換える
     fn apply_preferences(
         &self,
@@ -621,6 +648,7 @@ fn merge_by_order(
         CandidateSource::SystemDict,
         CandidateSource::Kana,
         CandidateSource::Rewriter,
+        CandidateSource::Fuzzy,
     ];
     let mut out: Vec<BackendCandidate> = Vec::new();
     for source in order.iter().chain(default_order.iter()) {
@@ -642,6 +670,25 @@ fn merge_by_order(
         }
     }
     out
+}
+
+/// 候補を `limit` 件に切り詰める。曖昧入力の候補（出所が `Fuzzy` だけ）は、通常の候補が多くても
+/// 押し出されないよう、通常の候補の方を切る（並びは変えない）
+fn truncate_keeping_fuzzy(out: &mut Vec<BackendCandidate>, limit: usize) {
+    let is_fuzzy = |c: &BackendCandidate| c.sources == [CandidateSource::Fuzzy];
+    let n_fuzzy = out.iter().filter(|c| is_fuzzy(c)).count().min(limit);
+    let mut keep_normal = limit - n_fuzzy;
+    let mut keep_fuzzy = n_fuzzy;
+    out.retain(|c| {
+        let slot = if is_fuzzy(c) {
+            &mut keep_fuzzy
+        } else {
+            &mut keep_normal
+        };
+        let keep = *slot > 0;
+        *slot = slot.saturating_sub(1);
+        keep
+    });
 }
 
 impl ModelControl for Pipeline {
@@ -821,6 +868,8 @@ impl ConversionBackend for Pipeline {
             .collect();
         user.extend(overlay.snippets(reading).iter().cloned());
         groups.push((CandidateSource::UserDict, user));
+        // 学習・ユーザー辞書に読みがあるときは、意図した入力とみなして補正候補を出さない
+        let known = groups.iter().any(|(_, items)| !items.is_empty());
 
         // LLM とシステム辞書
         if let Some(dict) = &self.dict {
@@ -877,9 +926,46 @@ impl ConversionBackend for Pipeline {
         );
         groups.push((CandidateSource::Rewriter, rewriter_candidates));
 
+        // 曖昧入力: 通常の候補にすでにある表記は重ねない
+        let fuzzy: Vec<String> = self
+            .fuzzy_suggestions(reading, &eff, &overlay, known)
+            .into_iter()
+            .filter(|f| !groups.iter().any(|(_, items)| items.contains(f)))
+            .collect();
+        groups.push((CandidateSource::Fuzzy, fuzzy));
+
         let mut out = merge_by_order(&eff.ranking, groups);
-        out.truncate(limit);
+        truncate_keeping_fuzzy(&mut out, limit);
         out
+    }
+
+    fn fuzzy_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendCandidate> {
+        let eff = self.runtime.effective();
+        if !eff.fuzzy.enabled || self.dict.is_none() {
+            return Vec::new();
+        }
+        let overlay = self.runtime.overlay();
+        let hash = context_hash(&tail(left_context, HASH_CONTEXT_CHARS));
+        let known = self
+            .runtime
+            .learn_lookup(reading, hash)
+            .iter()
+            .any(|(_, score)| *score > 0.0)
+            || !overlay.lookup(reading).is_empty()
+            || !overlay.snippets(reading).is_empty();
+        self.fuzzy_suggestions(reading, &eff, &overlay, known)
+            .into_iter()
+            .take(limit)
+            .map(|surface| BackendCandidate {
+                surface,
+                sources: vec![CandidateSource::Fuzzy],
+            })
+            .collect()
     }
 
     fn predict_next(

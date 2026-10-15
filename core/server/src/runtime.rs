@@ -4,6 +4,7 @@
 //! JSON-RPC サーバー（[`crate::server::Server`]）が同じ [`Runtime`] を `Arc` で共有する。
 //! 設定の再読み込み・`set_environment`・レイテンシ計測は、すべてここを通して反映される。
 
+use crate::fuzzy::FuzzySettings;
 use nagi_config::{Config, ProfileMode};
 use nagi_dict::Overlay;
 use nagi_learn::{LearnConfig, Learner, NextWordLearner};
@@ -112,6 +113,8 @@ pub struct Tunables {
     pub emoji_enabled: bool,
     /// `rewriter.kaomoji`
     pub kaomoji_enabled: bool,
+    /// `input.fuzzy.*`（曖昧入力）
+    pub fuzzy: FuzzySettings,
 }
 
 /// 出所名（`ranking.source_order` の要素）を出所に直す
@@ -123,6 +126,7 @@ pub fn parse_source(name: &str) -> Option<CandidateSource> {
         "system_dict" => CandidateSource::SystemDict,
         "kana" => CandidateSource::Kana,
         "rewriter" => CandidateSource::Rewriter,
+        "fuzzy" => CandidateSource::Fuzzy,
         _ => return None,
     })
 }
@@ -172,6 +176,7 @@ impl Tunables {
             snippet_enabled: config.snippet.enabled,
             emoji_enabled: config.rewriter.emoji,
             kaomoji_enabled: config.rewriter.kaomoji,
+            fuzzy: FuzzySettings::from_config(&config.input.fuzzy),
         }
     }
 }
@@ -200,6 +205,8 @@ pub struct Effective {
     pub emoji: bool,
     /// 読みからの顔文字候補（`rewriter.kaomoji`）
     pub kaomoji: bool,
+    /// 曖昧入力（`input.fuzzy.*`）
+    pub fuzzy: FuzzySettings,
 }
 
 /// 実行時の共有状態
@@ -839,6 +846,7 @@ impl Runtime {
             beam_width,
             emoji: t.emoji_enabled,
             kaomoji: t.kaomoji_enabled,
+            fuzzy: t.fuzzy,
         }
     }
 

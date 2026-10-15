@@ -1,6 +1,6 @@
 //! Nagi ローマ字変換: Mozc 互換 TSV テーブルと入力バッファ（Composer）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -55,6 +55,19 @@ pub enum TableError {
 pub struct RomajiTable {
     // 入力 -> (出力, 保留) のマッピング
     entries: HashMap<String, (String, String)>,
+    // どれかのエントリの真の接頭辞（空でない）の集合。`has_longer_prefix` を全エントリの走査なしで答える
+    prefixes: HashSet<String>,
+}
+
+/// エントリのキーの真の接頭辞（空でない）を全部集める
+fn proper_prefixes(entries: &HashMap<String, (String, String)>) -> HashSet<String> {
+    let mut prefixes = HashSet::new();
+    for key in entries.keys() {
+        for (i, _) in key.char_indices().skip(1) {
+            prefixes.insert(key[..i].to_string());
+        }
+    }
+    prefixes
 }
 
 impl RomajiTable {
@@ -105,7 +118,8 @@ impl RomajiTable {
             entries.insert(input, (output, pending));
         }
 
-        Ok(RomajiTable { entries })
+        let prefixes = proper_prefixes(&entries);
+        Ok(RomajiTable { entries, prefixes })
     }
 
     /// 句読点スタイルを適用した新しいテーブルを生成する
@@ -128,7 +142,15 @@ impl RomajiTable {
             }
         }
 
-        RomajiTable { entries }
+        let prefixes = proper_prefixes(&entries);
+        RomajiTable { entries, prefixes }
+    }
+
+    /// テーブルの全エントリ `(入力, 出力, 保留)`（順不同。曖昧入力が仮名→ローマ字の逆引きを作るために使う）
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.entries
+            .iter()
+            .map(|(input, (output, pending))| (input.as_str(), output.as_str(), pending.as_str()))
     }
 
     /// テーブルから入力に対応する出力と保留を取得する
@@ -138,9 +160,10 @@ impl RomajiTable {
 
     /// 入力がテーブルのいずれかのエントリの接頭辞であり、かつそれより長いエントリが存在するかを検査
     fn has_longer_prefix(&self, input: &str) -> bool {
-        self.entries
-            .keys()
-            .any(|k| k.starts_with(input) && k.len() > input.len())
+        if input.is_empty() {
+            return !self.entries.is_empty();
+        }
+        self.prefixes.contains(input)
     }
 }
 
@@ -153,7 +176,7 @@ pub enum Emit {
     Raw(char),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// ローマ字→ひらがな変換器
 pub struct RomajiConverter {
     table: Arc<RomajiTable>,
@@ -573,6 +596,25 @@ impl Composer {
         pieces
     }
 
+    /// 曖昧入力（タイプミス補正）の対象になる入力全体の読み。保留中のローマ字が無く、バッファの
+    /// 全体が日本語の文字か、ローマ字の取りこぼし（テーブルに当たらず素通しされた英小文字）だけで、
+    /// 取りこぼしを 1 文字以上含むときだけ `Some`（取りこぼしが無い入力は、通常の読みとして扱う）。
+    /// Shift 入力・数字・literal モードの英字を含む入力は意図した英数字なので `None`
+    pub fn leftover_reading(&self) -> Option<String> {
+        if self.has_pending() || self.chars.is_empty() {
+            return None;
+        }
+        let mut leftovers = 0;
+        for &(_, kind, leftover) in &self.chars {
+            match (kind, leftover) {
+                (PieceKind::Japanese, _) => {}
+                (PieceKind::Literal, true) => leftovers += 1,
+                (PieceKind::Literal, false) => return None,
+            }
+        }
+        (leftovers > 0).then(|| self.chars.iter().map(|&(c, _, _)| c).collect())
+    }
+
     /// バッファを Piece 列で置き換える（エンジン再起動後の復元・変換取消用）
     ///
     /// 保留と literal_mode はクリアされる。`cursor` は文字数単位で、範囲外は末尾に丸める。
@@ -667,6 +709,39 @@ mod tests {
         let table = RomajiTable::standard();
         let composer = Composer::new(table.clone(), ShiftLetterMode::LiteralContinue);
         (composer, table)
+    }
+
+    #[test]
+    fn leftover_reading_only_for_romaji_leftovers() {
+        let (mut c, _) = setup_composer();
+        for ch in "kamji".chars() {
+            c.insert_char(ch);
+        }
+        // m は変換できずに残った英小文字。取りこぼしを含む入力の全体が読みになる
+        assert_eq!(c.leftover_reading().as_deref(), Some("かmじ"));
+        // 取りこぼしの無い入力、保留のある入力は対象外
+        let (mut c, _) = setup_composer();
+        for ch in "kanji".chars() {
+            c.insert_char(ch);
+        }
+        assert_eq!(c.leftover_reading(), None);
+        let (mut c, _) = setup_composer();
+        for ch in "kamj".chars() {
+            c.insert_char(ch);
+        }
+        assert!(c.has_pending());
+        assert_eq!(c.leftover_reading(), None);
+        // Shift 入力・数字を含むなら意図した英数字（対象外）
+        let (mut c, _) = setup_composer();
+        for ch in "kamjiX".chars() {
+            c.insert_char(ch);
+        }
+        assert_eq!(c.leftover_reading(), None);
+        let (mut c, _) = setup_composer();
+        for ch in "kamji1".chars() {
+            c.insert_char(ch);
+        }
+        assert_eq!(c.leftover_reading(), None);
     }
 
     fn insert_string(composer: &mut Composer, s: &str) {

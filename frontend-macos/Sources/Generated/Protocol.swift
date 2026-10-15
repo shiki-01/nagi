@@ -18,6 +18,8 @@ public enum CandidateSource: String, Codable {
 	case kana
 	/// Rewriter（正規化・変換済み）
 	case rewriter
+	/// 曖昧入力（タイプミス補正の「もしかして」候補。`input.fuzzy.enabled`）
+	case fuzzy
 }
 
 /// 単一の候補

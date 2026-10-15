@@ -13,12 +13,17 @@ name = "imserver"
 path = "src/main.rs"
 
 [[bin]]
+name = "nagi-fuzzy-eval"
+path = "src/bin/nagi_fuzzy_eval.rs"
+
+[[bin]]
 name = "nagi-eval"
 path = "src/bin/nagi_eval.rs"
 
 [dependencies]
 nagi-engine.workspace = true
 nagi-romaji.workspace = true
+nagi-fuzzy.workspace = true
 nagi-protocol.workspace = true
 nagi-dict.workspace = true
 nagi-infer.workspace = true

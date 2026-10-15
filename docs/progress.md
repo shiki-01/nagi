@@ -200,3 +200,7 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 - 実装済み: Rewriter `EmojiRewriter`（`core/rewriter/src/emoji.rs`）、表 `config/emoji.tsv`（`include_str!` 同梱。絵文字 413 読み・顔文字 101 読み）、設定 `rewriter.emoji` / `rewriter.kaomoji`（既定 true・detail・both）
 - 未完了: iOS 側の設定 UI 追従（`IOSSettings.swift`）、実機での見え方の確認
 
+## 曖昧入力 M1（2026-10-15、決定は decisions.md H-24）
+
+- 実装済み: 新クレート `nagi-fuzzy`（QWERTY 隣接表、置換・脱落・挿入・転置・濁点/小書き・同じ行内の隣、辞書の trie による枝刈り付き探索）、`CandidateSource::Fuzzy`、`Pipeline` / エンジンへの統合（入力中の候補・Space 変換の「もしかして」候補）、設定 `input.fuzzy.{enabled,strength,max_candidates,kinds}`（既定オフ）、評価 `nagi-fuzzy-eval`（正解率 約 40%、クリーン入力の誤訂正 0%、展開 p50 1.6ms）
+- 未完了: Swift 側（iOS の設定 UI は汎用フォームに自動で出る想定。候補の「もしかして」ラベルの追従）、実機での確認、M2（タッチ座標・実際の打鍵列）、M3（LLM 再採点）、補正後の読みを候補に持たせる表示

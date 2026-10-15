@@ -850,6 +850,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nagi-fuzzy"
+version = "0.0.1"
+dependencies = [
+ "nagi-romaji",
+]
+
+[[package]]
 name = "nagi-infer"
 version = "0.0.1"
 dependencies = [
@@ -899,6 +906,7 @@ dependencies = [
  "nagi-config",
  "nagi-dict",
  "nagi-engine",
+ "nagi-fuzzy",
  "nagi-infer",
  "nagi-learn",
  "nagi-profile",
