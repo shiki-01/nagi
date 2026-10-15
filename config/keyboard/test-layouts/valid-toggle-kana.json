@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "id": "test-toggle-kana",
+  "name": "テスト: かな toggle",
+  "mode": "kana",
+  "rows": [
+    {"keys": [
+      {"id": "ta", "kind": "toggle", "cycle": ["あ", "い", "う", "え", "お"], "label": "あ",
+        "longPress": [{"label": "1", "kind": "text", "text": "1"}]},
+      {"id": "tk", "kind": "toggle", "cycle": ["か", "き", "く", "け", "こ"], "label": "か",
+        "longPress": [{"label": "2", "kind": "text", "text": "2"}]},
+      {"id": "ts", "kind": "toggle", "cycle": ["さ", "し", "す", "せ", "そ"], "label": "さ"},
+      {"id": "bs", "kind": "action", "action": "backspace", "label": "⌫", "style": "function", "width": 0.9}
+    ]},
+    {"keys": [
+      {"id": "left", "kind": "action", "action": "moveLeft", "label": "←", "style": "function", "width": 0.8},
+      {"id": "tt", "kind": "toggle", "cycle": ["た", "ち", "つ", "て", "と"], "label": "た"},
+      {"id": "tn", "kind": "toggle", "cycle": ["な", "に", "ぬ", "ね", "の"], "label": "な"},
+      {"id": "space", "kind": "action", "action": "space", "label": "空白", "style": "function", "width": 0.9}
+    ]},
+    {"keys": [
+      {"id": "right", "kind": "action", "action": "moveRight", "label": "→", "style": "function", "width": 0.8},
+      {"id": "paren", "kind": "shortcut", "label": "（）",
+        "steps": [{"text": "（）"}, {"action": "moveLeft"}],
+        "longPress": [{"label": "「」", "kind": "shortcut", "steps": [{"text": "「」"}, {"action": "moveLeft"}]}]},
+      {"id": "th", "kind": "toggle", "cycle": ["は", "ひ", "ふ", "へ", "ほ"], "label": "は"},
+      {"id": "enter", "kind": "action", "action": "enter", "label": "改行", "style": "function", "width": 0.9}
+    ]},
+    {"keys": [
+      {"id": "globe", "kind": "action", "action": "globe", "label": "🌐", "style": "function", "width": 0.8},
+      {"id": "alpha", "kind": "layout", "target": "alpha", "label": "ABC", "style": "function"},
+      {"id": "num", "kind": "layout", "target": "numbers", "label": "123", "style": "function"},
+      {"id": "sp", "kind": "spacer", "width": 0.9}
+    ]}
+  ]
+}

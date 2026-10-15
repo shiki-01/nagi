@@ -33,6 +33,9 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         }
         lastDocumentIdentifier = textDocumentProxy.documentIdentifier
         model?.focusIn()
+        // 触覚・クリック音: フルアクセスの有無を渡し、focusIn で読み直した設定でジェネレータを準備する
+        NagiKeyFeedback.fullAccess = hasFullAccess
+        NagiKeyFeedback.prepare()
         // focusIn で読み直した設定の高さを反映する
         heightConstraint?.constant = CGFloat(NagiKeyMetrics.totalHeight)
         applyTheme()
@@ -67,6 +70,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
                 self?.advanceToNextInputMode()
             }
         )
+        // 触覚ジェネレータを結びつけるビュー（iOS 17.5 以降）
+        NagiKeyFeedback.anchorView = view
         let root = KeyboardRoot(model: model, screen: screen, probeView: probeView)
         let hostView = UIHostingController(rootView: root)
         hostingController = hostView

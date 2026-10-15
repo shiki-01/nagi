@@ -214,10 +214,15 @@ struct NagiIOSSettings: Codable, Equatable {
             kind: NagiIOSSettings.choice([("off", "オフ"), ("light", "弱"), ("medium", "中"), ("heavy", "強")]),
             isSimple: true, defaultValue: .string("light")),
         NagiIOSSettingDef(
+            key: Key.keyboardHapticEngine, group: "キーボード", label: "触覚の方式（互換モード）",
+            description: "「標準」が働かない端末向けの切替です。「互換」はシステムサウンド（Peek など）の振動でキー入力を知らせます。触覚が「オフ」のときは働きません。",
+            kind: NagiIOSSettings.choice([("standard", "標準"), ("compat", "互換")]),
+            isSimple: false, defaultValue: .string("standard")),
+        NagiIOSSettingDef(
             key: Key.keyboardSound, group: "キーボード", label: "キー入力の音",
             description: "端末の「キーボードのクリック」設定に従ってクリック音を鳴らします。",
             kind: NagiIOSSettings.choice([("off", "オフ"), ("system", "システムのクリック音")]),
-            isSimple: true, defaultValue: .string("off")),
+            isSimple: true, defaultValue: .string("system")),
         NagiIOSSettingDef(
             key: Key.keyboardTheme, group: "キーボード", label: "テーマ",
             description: "キーボードの明るさです。「システム」は端末の外観（ライト/ダーク）に従います。",
@@ -267,6 +272,7 @@ struct NagiIOSSettings: Codable, Equatable {
         static let keyboardKeySpacingPt = "keyboard.key_spacing_pt"
         static let keyboardKeyCornerPt = "keyboard.key_corner_pt"
         static let keyboardHaptic = "keyboard.haptic"
+        static let keyboardHapticEngine = "keyboard.haptic_engine"
         static let keyboardSound = "keyboard.sound"
     }
 
@@ -335,6 +341,8 @@ struct NagiIOSSettings: Codable, Equatable {
     var oneHanded: String { string(Key.keyboardOneHanded) }
     var oneHandedWidth: Double { double(Key.keyboardOneHandedWidth) }
     var haptic: String { string(Key.keyboardHaptic) }
+    /// 触覚の方式（`standard` / `compat`）
+    var hapticEngine: String { string(Key.keyboardHapticEngine) }
     var soundEnabled: Bool { string(Key.keyboardSound) == "system" }
     var spaceSwipe: Bool { bool(Key.spaceSwipe) }
     var spaceSwipeStepPt: Double { double(Key.spaceSwipeStepPt) }

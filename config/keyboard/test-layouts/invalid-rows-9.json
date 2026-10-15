@@ -1,0 +1,11 @@
+{"schema": 1, "id": "test-invalid-rows", "name": "無効: 9 行", "mode": "kana", "rows": [
+  {"height": 0.4, "keys": [{"id": "k1", "kind": "text", "text": "a"}]},
+  {"height": 0.4, "keys": [{"id": "k2", "kind": "text", "text": "a"}]},
+  {"height": 0.4, "keys": [{"id": "k3", "kind": "text", "text": "a"}]},
+  {"height": 0.4, "keys": [{"id": "k4", "kind": "text", "text": "a"}]},
+  {"height": 0.4, "keys": [{"id": "k5", "kind": "text", "text": "a"}]},
+  {"height": 0.4, "keys": [{"id": "k6", "kind": "text", "text": "a"}]},
+  {"height": 0.4, "keys": [{"id": "k7", "kind": "text", "text": "a"}]},
+  {"height": 0.4, "keys": [{"id": "k8", "kind": "text", "text": "a"}]},
+  {"height": 0.4, "keys": [{"id": "k9", "kind": "text", "text": "a"}]}
+]}

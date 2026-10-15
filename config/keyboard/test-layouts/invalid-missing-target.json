@@ -1,0 +1,1 @@
+{"schema": 1, "id": "test-invalid-target", "name": "無効: 存在しない target", "mode": "kana", "rows": [{"keys": [{"id": "a", "kind": "layout", "target": "no-such-layout", "label": "?"}]}]}

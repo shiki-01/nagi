@@ -87,6 +87,9 @@ struct NagiAboutView<Developer: View>: View {
                         NavigationLink("端末情報・App Group・Probes・結果") {
                             developer
                         }
+                        NavigationLink("ファイル確認（config.toml・学習・辞書）") {
+                            NagiFileInspectorView()
+                        }
                     }
                 }
             }

@@ -86,6 +86,76 @@ enum DiagLog {
         return "\"\(out)\"(u16=\(count))"
     }
 
+    // MARK: - 表示用（ホストアプリの入力テスト）
+
+    /// ログの概要（本文は読まず、サイズと行数、最終更新だけ）
+    struct Summary: Equatable {
+        var lineCount: Int
+        var byteCount: Int
+        var modified: Date?
+
+        static let empty = Summary(lineCount: 0, byteCount: 0, modified: nil)
+    }
+
+    /// ログの概要を取る。ファイルは最大 `maxBytes` 程度なので、改行を数えるだけ
+    static func summary() -> Summary {
+        queue.sync {
+            guard let url = fileURL, let data = try? Data(contentsOf: url) else { return .empty }
+            let modified = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+            return Summary(lineCount: lineCount(in: data), byteCount: data.count, modified: modified)
+        }
+    }
+
+    /// 改行で終わる行の数（末尾が改行で終わらない最後の行も 1 行と数える）
+    static func lineCount(in data: Data) -> Int {
+        if data.isEmpty { return 0 }
+        var count = 0
+        for byte in data where byte == 0x0A { count += 1 }
+        return data.last == 0x0A ? count : count + 1
+    }
+
+    /// 概要を 1 行の文言にする（時刻は `timeZone` で表示。既定は端末のタイムゾーン）
+    static func summaryText(_ summary: Summary, timeZone: TimeZone = .current) -> String {
+        if summary.lineCount == 0 && summary.byteCount == 0 { return "ログは空です" }
+        let size: String
+        if summary.byteCount < 1024 {
+            size = "\(summary.byteCount) B"
+        } else {
+            size = String(format: "%.1f KB", Double(summary.byteCount) / 1024)
+        }
+        var text = "\(summary.lineCount) 行 / \(size)"
+        if let modified = summary.modified {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = timeZone
+            f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            text += " / 最終更新 \(f.string(from: modified))"
+        }
+        return text
+    }
+
+    /// 全文の末尾の `maxLines` 行（古い順）。末尾の改行で空行が増えないようにする
+    static func tailLines(of text: String, maxLines: Int) -> [String] {
+        guard maxLines > 0, !text.isEmpty else { return [] }
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if lines.last == "" { lines.removeLast() }
+        return Array(lines.suffix(maxLines))
+    }
+
+    /// 共有用に、ログのコピーを一時ディレクトリに作る（ログが空なら nil）
+    static func exportCopy() -> URL? {
+        queue.sync {
+            guard let url = fileURL, let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+            let dest = FileManager.default.temporaryDirectory.appendingPathComponent("nagi-keyboard.log")
+            do {
+                try data.write(to: dest, options: .atomic)
+                return dest
+            } catch {
+                return nil
+            }
+        }
+    }
+
     // MARK: - 内部
 
     /// App Group の `diag/keyboard.log`。App Group が無ければプロセス固有の Application Support

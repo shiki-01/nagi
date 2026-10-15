@@ -5,10 +5,6 @@ struct KeyboardTestView: View {
     @State private var multiline = ""
     @State private var singleLine = ""
     @FocusState private var focusedField: Field?
-    /// 診断ログ（D-1）の記録の有無と、表示中の内容
-    @State private var diagEnabled = DiagLog.isEnabled
-    @State private var diagLog = ""
-    @State private var diagCopied = false
 
     private enum Field {
         case multiline, singleLine
@@ -49,48 +45,22 @@ struct KeyboardTestView: View {
                     }
                 }
 
-                Section("診断ログ（D-1）") {
-                    Toggle("キーボードの動作を記録する", isOn: Binding(
-                        get: { diagEnabled },
-                        set: { newValue in
-                            diagEnabled = newValue
-                            DiagLog.isEnabled = newValue
-                        }
-                    ))
-                    Text("入力した文字を含みます。既定では TestFlight・開発用ビルドでのみ有効で、App Store 配布では無効です。直近 \(DiagLog.maxBytes / 1024)KB 程度だけ残ります。")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                    HStack {
-                        Button("表示を更新") { diagLog = DiagLog.read() }
-                        Spacer()
-                        Button(diagCopied ? "コピーしました" : "コピー") {
-                            diagLog = DiagLog.read()
-                            UIPasteboard.general.string = diagLog
-                            diagCopied = true
-                        }
-                        Spacer()
-                        Button("消去", role: .destructive) {
-                            DiagLog.clear()
-                            diagLog = ""
-                            diagCopied = false
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    if diagLog.isEmpty {
-                        Text("（空）").font(.footnote).foregroundColor(.secondary)
-                    } else {
-                        Text(diagLog)
-                            .font(.system(size: 10, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
+                NagiDiagLogSection()
+
+                // 入力欄の種類（パスワード欄など）を試す欄。App Store 版には出さない
+                if DiagLog.isTestBuild {
+                    NagiInputKindsSection()
                 }
             }
-            .onAppear { diagLog = DiagLog.read() }
             .navigationTitle("入力テスト")
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("閉じる") { focusedField = nil }
+                    Button("閉じる") {
+                        focusedField = nil
+                        // 入力欄の種類のテスト欄（フォーカス管理の外）も閉じる
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
                 }
             }
         }

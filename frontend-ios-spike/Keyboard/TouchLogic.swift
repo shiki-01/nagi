@@ -105,3 +105,17 @@ enum LongPressCancel {
         return y > keyHeight + keyHeight * heightFactor
     }
 }
+
+/// 触覚の互換モード（システムサウンドで振動を鳴らす）の対応表
+enum HapticMapping {
+    /// 触覚の強さ（`keyboard.haptic`）に対応するシステムサウンド ID。`off` や未知の値は nil。
+    /// 1519 = Peek（弱）、1520 = Pop（中）、1521 = 3 連（強）
+    static func systemSoundID(for haptic: String) -> UInt32? {
+        switch haptic {
+        case "light": return 1519
+        case "medium": return 1520
+        case "heavy": return 1521
+        default: return nil
+        }
+    }
+}

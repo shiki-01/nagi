@@ -374,6 +374,10 @@ struct LayoutManagerView: View {
                         }
                     }
                 }
+                // 実機での確認用（TestFlight・開発用ビルドのみ。App Store 版には出さない）
+                if DiagLog.isTestBuild {
+                    testSection
+                }
             }
             .navigationTitle("レイアウト")
             .toolbar {
@@ -432,6 +436,110 @@ struct LayoutManagerView: View {
             }
             .onAppear(perform: reload)
             .onReceive(inbox.$changeCount) { _ in reload() }
+        }
+    }
+
+    // MARK: テスト用
+
+    private var testSection: some View {
+        Section {
+            ForEach(NagiTestLayouts.cases) { testCase in
+                testRow(testCase)
+            }
+            hugeRow
+        } header: {
+            Text("テスト用")
+        } footer: {
+            Text("「取り込む」は貼り付け・ファイルと同じ経路（検証 → 保存）、「nagi:// で開く」は URL スキーム経由（確認ダイアログが出ます）で取り込みます。結果が「期待結果」と一致するかを確認してください。")
+        }
+    }
+
+    private func testRow(_ testCase: NagiTestLayoutCase) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(testCase.title).font(.subheadline)
+            Text("\(testCase.id).json ・ 期待結果: \(testCase.expectationText)")
+                .font(.caption)
+                .foregroundColor(testCase.isValid ? .secondary : .orange)
+            HStack {
+                Button("取り込む") { importTestLayout(testCase) }
+                Spacer()
+                Button("nagi:// で開く") { openTestLayoutURL(testCase) }
+            }
+            .buttonStyle(.borderless)
+            if testCase.isValid, let layoutId = testCase.layoutId, let mode = testCase.assignMode,
+               userRows.contains(where: { $0.id == layoutId }) {
+                HStack {
+                    Button(mode == .kana ? "かなに割り当てる" : "英字に割り当てる") {
+                        LayoutAssignment.set(id: layoutId, for: mode)
+                        reload()
+                    }
+                    Spacer()
+                    if layoutId == assignedKana || layoutId == assignedAlpha {
+                        Text("割り当て中").font(.caption).foregroundColor(.green)
+                    }
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var hugeRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("巨大な data（約 800KB の JSON）").font(.subheadline)
+            Text("生成して実行。期待結果: 取り込む → \(NagiTestLayouts.hugeExpectationImport) / URL → \(NagiTestLayouts.hugeExpectationURL)")
+                .font(.caption)
+                .foregroundColor(.orange)
+            HStack {
+                Button("生成して取り込む") {
+                    let data = NagiTestLayouts.hugeLayoutJSON()
+                    prepare({ data }) { error in
+                        if let error = error {
+                            notice = "エラー: \(error)\n期待結果: \(NagiTestLayouts.hugeExpectationImport)"
+                        }
+                    }
+                }
+                Spacer()
+                Button("生成して nagi:// で開く") {
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        let url = NagiLayoutURL.url(forJSON: NagiTestLayouts.hugeLayoutJSON())
+                        DispatchQueue.main.async { openTestURL(url) }
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func importTestLayout(_ testCase: NagiTestLayoutCase) {
+        guard let url = NagiTestLayouts.url(for: testCase), let data = try? Data(contentsOf: url) else {
+            notice = "エラー: テスト用ファイルを読めません（\(testCase.id).json）"
+            return
+        }
+        prepare({ data }) { error in
+            if let error = error {
+                notice = "エラー: \(error)\n期待結果: \(testCase.expectationText)"
+            }
+        }
+    }
+
+    private func openTestLayoutURL(_ testCase: NagiTestLayoutCase) {
+        guard let file = NagiTestLayouts.url(for: testCase), let data = try? Data(contentsOf: file) else {
+            notice = "エラー: テスト用ファイルを読めません（\(testCase.id).json）"
+            return
+        }
+        openTestURL(NagiLayoutURL.url(forJSON: data))
+    }
+
+    /// 自アプリの URL スキームを開く（onOpenURL → 確認ダイアログ → 取り込み）
+    private func openTestURL(_ url: URL?) {
+        guard let url = url else {
+            notice = "エラー: URL を作れませんでした"
+            return
+        }
+        UIApplication.shared.open(url) { opened in
+            if !opened { notice = "エラー: URL を開けませんでした" }
         }
     }
 
