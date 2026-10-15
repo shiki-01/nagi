@@ -80,6 +80,58 @@ final class TouchLogicTests: XCTestCase {
     func testKatakanaLongVowelMark() {
         XCTAssertEqual(WordBoundary.deleteCount(before: "あのコーヒー"), 4)
     }
+
+    // MARK: FlickCancel
+
+    func testFlickWithinTwoKeysIsNotCancelled() {
+        // キー 40×50: 横 80・縦 100 まではフリックのまま
+        XCTAssertFalse(FlickCancel.isCancelled(dx: 0, dy: 0, keyWidth: 40, keyHeight: 50))
+        XCTAssertFalse(FlickCancel.isCancelled(dx: 80, dy: 0, keyWidth: 40, keyHeight: 50))
+        XCTAssertFalse(FlickCancel.isCancelled(dx: -80, dy: -100, keyWidth: 40, keyHeight: 50))
+    }
+
+    func testFlickBeyondTwoKeysIsCancelled() {
+        XCTAssertTrue(FlickCancel.isCancelled(dx: 80.5, dy: 0, keyWidth: 40, keyHeight: 50))
+        XCTAssertTrue(FlickCancel.isCancelled(dx: -81, dy: 0, keyWidth: 40, keyHeight: 50))
+        XCTAssertTrue(FlickCancel.isCancelled(dx: 0, dy: 101, keyWidth: 40, keyHeight: 50))
+        XCTAssertTrue(FlickCancel.isCancelled(dx: 0, dy: -101, keyWidth: 40, keyHeight: 50))
+    }
+
+    func testFlickCancelIgnoresInvalidValues() {
+        XCTAssertFalse(FlickCancel.isCancelled(dx: .nan, dy: 0, keyWidth: 40, keyHeight: 50))
+        XCTAssertFalse(FlickCancel.isCancelled(dx: 0, dy: .infinity, keyWidth: 40, keyHeight: 50))
+        XCTAssertFalse(FlickCancel.isCancelled(dx: 500, dy: 500, keyWidth: 0, keyHeight: 50))
+        XCTAssertFalse(FlickCancel.isCancelled(dx: 500, dy: 500, keyWidth: 40, keyHeight: -1))
+    }
+
+    // MARK: LongPressCancel
+
+    func testLongPressCancelBelowKey() {
+        XCTAssertEqual(LongPressCancel.heightFactor, 0.3, accuracy: 1e-9)
+        // キーの高さ 50: 下端 50 から 15 を超えたら取り消し
+        XCTAssertFalse(LongPressCancel.isCancelled(y: 25, keyHeight: 50))
+        XCTAssertFalse(LongPressCancel.isCancelled(y: 65, keyHeight: 50))
+        XCTAssertTrue(LongPressCancel.isCancelled(y: 65.5, keyHeight: 50))
+        XCTAssertFalse(LongPressCancel.isCancelled(y: .nan, keyHeight: 50))
+        XCTAssertFalse(LongPressCancel.isCancelled(y: 999, keyHeight: 0))
+    }
+
+    func testLongPressCancelSideways() {
+        // ポップアップ: 左端 -20・幅 120（項目 40 × 3）。左は -60 未満、右は 140 を超えたら取り消し
+        func cancelled(_ x: Double, _ y: Double = 25) -> Bool {
+            LongPressCancel.isCancelled(x: x, y: y, keyHeight: 50, popupLeft: -20, popupWidth: 120, itemWidth: 40)
+        }
+        XCTAssertFalse(cancelled(0))
+        XCTAssertFalse(cancelled(-60))
+        XCTAssertFalse(cancelled(140))
+        XCTAssertTrue(cancelled(-60.5))
+        XCTAssertTrue(cancelled(141))
+        // 下へ外れたときも取り消し（横が範囲内でも）
+        XCTAssertTrue(cancelled(0, 66))
+        // 最下段のキーで下へずらせなくても、横へずらせば取り消せる
+        XCTAssertTrue(cancelled(-100, 40))
+        XCTAssertFalse(cancelled(.nan))
+    }
 }
 
 final class ThemeTests: XCTestCase {
@@ -109,6 +161,18 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(s.theme, "system")
         XCTAssertEqual(s.accent, "blue")
         XCTAssertTrue(s.pasteButton)
+        XCTAssertEqual(s.soundMode, "compat")
+        XCTAssertTrue(s.soundEnabled)
+        XCTAssertEqual(s.commitMethod, "insert")
+        s.set(NagiIOSSettings.Key.keyboardSound, .string("off"))
+        XCTAssertFalse(s.soundEnabled)
+        s.set(NagiIOSSettings.Key.keyboardSound, .string("system"))
+        XCTAssertEqual(s.soundMode, "system")
+        XCTAssertTrue(s.soundEnabled)
+        s.set(NagiIOSSettings.Key.keyboardCommitMethod, .string("delete"))
+        XCTAssertEqual(s.commitMethod, "delete")
+        s.set(NagiIOSSettings.Key.keyboardCommitMethod, .string("replace"))
+        XCTAssertEqual(s.commitMethod, "insert")
         s.set(NagiIOSSettings.Key.keyboardTheme, .string("dark"))
         XCTAssertEqual(s.theme, "dark")
         s.set(NagiIOSSettings.Key.keyboardTheme, .string("sepia"))

@@ -24,8 +24,20 @@ enum ShiftState {
 /// キーボードの状態と操作。ロジック（文字の決定・変換・確定）はコアが持ち、ここはキー操作をコアへ送り、
 /// 返ってきた描画差分（確定・プリエディット・候補）をホストと画面に反映するだけにする
 final class KeyboardModel: ObservableObject {
+    /// プロセスで 1 つのモデル（とコア）。同じプロセス内で `UIInputViewController` が作り直されても、
+    /// コア（LLM 込み）を新しく作らずにこれを引き継ぐ（旧インスタンスと二重に持たない）。メインスレッドからのみ読み書きする
+    nonisolated(unsafe) static var processShared: KeyboardModel?
+
     /// 変換中の文字列（候補バーの左に出す）
     @Published private(set) var preedit = ""
+    /// 変換中の文節 1 つ（候補バーで注目文節を区別して出す）
+    struct PreeditPart: Identifiable {
+        let id: Int
+        let text: String
+        let focused: Bool
+    }
+    /// 変換中（注目文節あり）の文節列。変換中でなければ空
+    @Published private(set) var preeditParts: [PreeditPart] = []
     /// 候補
     @Published private(set) var candidates: [CandidateItem] = []
     /// 候補が確定直後の次語予測か（候補バーで薄く区別し、展開パネルは開かない）
@@ -97,6 +109,9 @@ final class KeyboardModel: ObservableObject {
     /// 直前に反映した、かな・英字モードのレイアウトの割り当て（変わったら表示中のレイアウトを切り替える）
     private var appliedAssignment: (kana: String, alpha: String)
     private var lastRevision: UInt32 = 0
+    /// 直近の変換中の文字列の文節数と注目文節（候補を選んだあと次の文節へ進むかの判定に使う）
+    private var segmentCount = 0
+    private var focusIndex: Int?
     /// キー領域の直近の大きさ（view が報告する）と、コアへ最後に送ったレイアウト幾何（曖昧入力用。同じ内容は送り直さない）
     private var layoutGeometrySize: CGSize?
     private var lastSentGeometry: LayoutGeometry.Snapshot?
@@ -347,10 +362,27 @@ final class KeyboardModel: ObservableObject {
         if session != nil { scheduleContextUpdate(delay: 0.1) }
     }
 
+    /// 同じプロセスで新しいキーボードのインスタンス（VC）がこのモデルを引き継ぐ。
+    /// 旧ホストに変換中の文字列を下線を外して残し（失わない）、コアの入力中の状態を片付ける。
+    /// 文脈・幾何は新しいホストで送り直す。`host` の差し替えは呼び出し側が行う
+    func handOverToNewHost() {
+        DiagLog.log("model handed over to new keyboard instance hadPreedit=\(hasPreedit)")
+        toggleState = nil
+        keepPreeditInHost()
+        if let session = session, let result = session.focusOut() {
+            // 確定した文字列は旧ホストに入れない（上で残した）。revision だけ進める
+            lastRevision = max(lastRevision, result.revision)
+        }
+        lastSentContext = nil
+        lastSentGeometry = nil
+        layoutGeometrySize = nil
+    }
+
     /// 変換中の文字列をホストの入力欄に残す（下線を外して確定扱いにする）。表示も空にする
     private func keepPreeditInHost() {
         applier.keepInHost()
         preedit = ""
+        preeditParts = []
         isConverting = false
         candidates = []
         isNextWordCandidates = false
@@ -386,6 +418,7 @@ final class KeyboardModel: ObservableObject {
         // 描画が参照する値を先に更新してから、@Published で再描画を起こす
         NagiKeyMetrics.current = settings
         toggleInput = settings.toggleInput
+        applier.commitMethod = HostCompositionApplier.CommitMethod(rawValue: settings.commitMethod) ?? .insert
         if settings != ios { ios = settings }
         refreshClipboardState()
     }
@@ -736,16 +769,24 @@ final class KeyboardModel: ObservableObject {
         host?.hostAdvanceToNextInputMode()
     }
 
-    /// 候補を選ぶ。変換中は選んでから確定し、入力中（変換前）は選んだ候補が置き換える読みの部分を
-    /// コアが確定する（部分変換。残りは入力中のまま続く）
+    /// 候補を選ぶ。変換中は選んだあと、後ろに文節が残っていれば次の文節へ進み、最後の文節（または文節が 1 つ）なら確定する。
+    /// 入力中（変換前）は選んだ候補が置き換える読みの部分をコアが確定する（部分変換。残りは入力中のまま続く）
     func selectCandidate(_ index: Int) {
         guard let session = session else { return }
         toggleState = nil
         let converting = isConverting
+        // 選ぶ前の注目文節と文節数で判定する（選んだ結果で文節が変わっても、選んだ文節の後ろが残っているかで決める）
+        let focusBefore = focusIndex
+        let countBefore = segmentCount
         isExpanded = false
-        DiagLog.log("select_candidate index=\(index) converting=\(converting)")
+        DiagLog.log("select_candidate index=\(index) converting=\(converting) focus=\(focusBefore.map { String($0) } ?? "-")/\(countBefore)")
         if let result = session.selectCandidate(index) { apply(result, origin: "response(select_candidate)") }
-        if converting, let result = session.perform(.commit) { apply(result, origin: "response(commit)") }
+        guard converting else { return }
+        if let focus = focusBefore, focus < countBefore - 1 {
+            send("move_focus right") { $0.perform(.moveFocus(.right)) }
+        } else if let result = session.perform(.commit) {
+            apply(result, origin: "response(commit)")
+        }
     }
 
     func focusIn() {
@@ -840,12 +881,12 @@ final class KeyboardModel: ObservableObject {
         // 自分の操作の結果ではない変更（カーソル移動・他アプリによる書き換え）が起きたら、
         // 直前のトグル入力の「置き換え」は続けない
         // （ホストからの通知は遅れて届くことがある。本文の末尾が直前に入れた文字のままなら、続きとみなして残す）
-        if let state = toggleState, Date().timeIntervalSince(lastOwnHostOperation) > ownOperationWindow {
-            let context = host?.hostContextBeforeInput()
-            if context == nil || !(context ?? "").hasSuffix(state.last) {
-                DiagLog.log("toggleState dropped by external text change")
-                toggleState = nil
-            }
+        // ホストの文脈は非同期で古いこと・取れないことがあるので、nil のときは捨てない
+        // （末尾が直前の文字と一致しないことを確認できたときだけ捨てる）
+        if let state = toggleState, Date().timeIntervalSince(lastOwnHostOperation) > ownOperationWindow,
+           let context = host?.hostContextBeforeInput(), !context.hasSuffix(state.last) {
+            DiagLog.log("toggleState dropped by external text change tail=\(logText(String(context.suffix(4)))) last=\(logText(state.last))")
+            toggleState = nil
         }
         scheduleContextUpdate(delay: 0.05)
         refreshClipboardState()
@@ -863,6 +904,7 @@ final class KeyboardModel: ObservableObject {
         }
         applier.reset()
         preedit = ""
+        preeditParts = []
         isConverting = false
         candidates = []
         isNextWordCandidates = false
@@ -977,6 +1019,17 @@ final class KeyboardModel: ObservableObject {
     }
 
     private func showPreedit(_ view: PreeditView) {
+        // 注目文節の表示（候補バー）。ホストの変換中の表示とは別に、毎回更新する
+        if let focus = view.focus {
+            let focused = Int(focus)
+            preeditParts = view.segments.enumerated().map { index, segment in
+                PreeditPart(id: index, text: segment.surface, focused: index == focused)
+            }
+        } else {
+            preeditParts = []
+        }
+        segmentCount = view.segments.count
+        focusIndex = view.focus.map { Int($0) }
         preedit = view.text
         isConverting = view.focus != nil
         let cursor = HostCompositionApplier.markedCursor(

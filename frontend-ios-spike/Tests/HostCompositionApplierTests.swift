@@ -71,8 +71,13 @@ private final class TextViewHost: KeyboardHost {
 }
 
 final class HostCompositionApplierTests: XCTestCase {
-    private func makeApplier(_ host: TextViewHost, deferResume: Bool = false) -> HostCompositionApplier {
-        HostCompositionApplier(host: host, deferResumeAfterCommit: deferResume, verifyDelay: nil)
+    /// 既存のテストは旧方式（`.delete`）の手順を確かめるもの。`.insert` / `.mark` は下の (e) で確かめる
+    private func makeApplier(
+        _ host: TextViewHost, deferResume: Bool = false, method: HostCompositionApplier.CommitMethod = .delete
+    ) -> HostCompositionApplier {
+        let applier = HostCompositionApplier(host: host, deferResumeAfterCommit: deferResume, verifyDelay: nil)
+        applier.commitMethod = method
+        return applier
     }
 
     /// 次のメインキューの周回まで進める（確定直後の再開の遅延を待つ）
@@ -282,6 +287,67 @@ final class HostCompositionApplierTests: XCTestCase {
         XCTAssertEqual(host.text, "かな")
         XCTAssertFalse(host.hasMarkedText)
         XCTAssertEqual(applier.shownMarked, "")
+    }
+
+    // MARK: (e) 確定の方式 `.insert` / `.mark`
+
+    private let replacingMethods: [HostCompositionApplier.CommitMethod] = [.insert, .mark]
+
+    func testDefaultCommitMethodIsInsert() {
+        XCTAssertEqual(HostCompositionApplier().commitMethod, .insert)
+    }
+
+    func testFullCommitOnlyWithReplacingMethods() {
+        for method in replacingMethods {
+            let host = TextViewHost()
+            let applier = makeApplier(host, method: method)
+            applier.setMarked("きょうはてんき", cursor: 7)
+            applier.commit("今日は天気")
+            XCTAssertEqual(host.text, "今日は天気", method.rawValue)
+            XCTAssertFalse(host.hasMarkedText, method.rawValue)
+            XCTAssertEqual(host.caret, "今日は天気".utf16.count, method.rawValue)
+            XCTAssertTrue(applier.verifyTail(committed: "今日は天気"), method.rawValue)
+        }
+    }
+
+    func testPartialThenFullCommitWithReplacingMethodsDoesNotDuplicate() {
+        for method in replacingMethods {
+            let host = TextViewHost()
+            let applier = makeApplier(host, method: method)
+            applier.setMarked("今日はいい天気ですね", cursor: 10)
+            applier.commit("今日は")
+            applier.setMarked("いいてんきですね", cursor: 8)
+            XCTAssertEqual(host.text, "今日はいいてんきですね", method.rawValue)
+            XCTAssertEqual(host.markedString, "いいてんきですね", method.rawValue)
+            applier.commit("いい天気ですね")
+            XCTAssertEqual(host.text, "今日はいい天気ですね", method.rawValue)
+            XCTAssertFalse(host.hasMarkedText, method.rawValue)
+        }
+    }
+
+    func testCommitAfterExistingTextWithReplacingMethodsKeepsPrecedingText() {
+        for method in replacingMethods {
+            let host = TextViewHost(initialText: "こんにちは。")
+            let applier = makeApplier(host, method: method)
+            applier.setMarked("きょう", cursor: 3)
+            applier.commit("今日")
+            XCTAssertEqual(host.text, "こんにちは。今日", method.rawValue)
+            XCTAssertFalse(host.hasMarkedText, method.rawValue)
+            XCTAssertEqual(host.caret, "こんにちは。今日".utf16.count, method.rawValue)
+        }
+    }
+
+    func testCommitFromCaretAtStartWithReplacingMethodsKeepsPrecedingText() {
+        for method in replacingMethods {
+            let host = TextViewHost(initialText: "前の文章。")
+            host.ignoreAdjust = true
+            let applier = makeApplier(host, method: method)
+            applier.setMarked("きょうは", cursor: 0)
+            XCTAssertEqual(host.caret, "前の文章。".utf16.count, "キャレットが変換中の先頭にある (\(method.rawValue))")
+            applier.commit("今日は")
+            XCTAssertEqual(host.text, "前の文章。今日は", "手前の文字が消えない (\(method.rawValue))")
+            XCTAssertFalse(host.hasMarkedText, method.rawValue)
+        }
     }
 
     func testVerifyTailReportsMismatch() {

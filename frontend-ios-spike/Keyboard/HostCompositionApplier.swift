@@ -17,8 +17,15 @@ protocol KeyboardHost: AnyObject {
     func hostDismissKeyboard()
     /// カーソル手前のテキスト（`documentContextBeforeInput`。変換中の文字列を含みうる）
     func hostContextBeforeInput() -> String?
+    /// カーソル後ろのテキスト（`documentContextAfterInput`。診断ログ用。取れなければ nil）
+    func hostContextAfterInput() -> String?
     /// パスワード欄など、学習・文脈の送信・ログを止めるべき入力欄か
     func hostIsSecure() -> Bool
+}
+
+extension KeyboardHost {
+    /// 既定は取れない（テスト用のホストなど）
+    func hostContextAfterInput() -> String? { nil }
 }
 
 /// 変換中の文字列（マーク）と確定の手順をホストへ適用する。
@@ -26,10 +33,24 @@ protocol KeyboardHost: AnyObject {
 /// `textDocumentProxy.setMarkedText` は非同期の XPC で、直前の `unmarkText` / `deleteBackward` / `insertText`
 /// の直後に作った変換中の範囲をホスト側が追跡できず、次の `setMarkedText` による置換が効かないことが実機で起きた
 /// （部分確定のあとの全文確定で、変換中のはずの文字が平文で残って二重になる）。
-/// そのため確定は常に「範囲を確定扱いにする → 表示中の文字数だけ deleteBackward → insertText」の決定的な手順にし、
-/// 置換（`setMarkedText(commit)` → `unmarkText`）には頼らない。
+/// その対策として確定を「範囲を確定扱いにする → 表示中の文字数だけ deleteBackward → insertText」の決定的な手順
+/// （`.delete`）にしたが、実機では手前の本文を消すことがあった（UITextView のテストでは再現しない）。
+/// 失敗しても本文を消さない `.insert`（insertText だけで変換中の範囲を置き換える）を既定にし、
+/// 方式は設定 `keyboard.commit_method` で切り替えられるようにする（診断用）。
 final class HostCompositionApplier {
+    /// 変換中の文字列がある状態での確定の方式
+    enum CommitMethod: String {
+        /// `insertText` だけ（UITextInput の insertText は変換中の範囲を置き換えて確定する）
+        case insert
+        /// 確定文字列を `setMarkedText`（キャレットは末尾）で入れてから `unmarkText`
+        case mark
+        /// 範囲を確定扱いにしてから表示中の文字数だけ消して入れる（旧方式）
+        case delete
+    }
+
     weak var host: KeyboardHost?
+    /// 確定の方式（`KeyboardModel` が設定から入れる）
+    var commitMethod: CommitMethod = .insert
 
     /// ホストに表示している（べき）変換中の文字列とカーソル位置（UTF-16）。
     /// 確定直後の再開を遅らせている間は、ホストへの反映が済んでいなくてもこの値が最新
@@ -125,7 +146,7 @@ final class HostCompositionApplier {
 
     // MARK: - 確定
 
-    /// `text` を確定する。変換中の文字列があれば、それを消して `text` に置き換える（部分確定・全文確定とも同じ手順）。
+    /// `text` を確定する。変換中の文字列があれば、それを `text` に置き換える（部分確定・全文確定とも同じ手順。方式は `commitMethod`）。
     /// 呼び出し側は、残りの変換中があれば確定の後に `setMarked` で入れる
     func commit(_ text: String) {
         guard !text.isEmpty else { return }
@@ -136,17 +157,32 @@ final class HostCompositionApplier {
             host?.hostInsertText(text)
         } else {
             let end = shownMarked.utf16.count
-            DiagLog.log("host commit \(quote(text)) delete=\(shownMarked.count) cursor=\(shownCursor)/\(end) shownMarked=\(quote(shownMarked))")
-            // キャレットが変換中の文字列の途中（先頭など）にあると、後ろへ消すと手前の本文を削ってしまう。
-            // adjustTextPosition は実機で非同期に効くため頼らず、同じ文字列の setMarkedText（置換範囲が同じ）で
-            // キャレットを末尾へ置いてから確定する
-            if shownCursor != end {
-                host?.hostSetMarkedText(shownMarked, cursor: end)
+            if DiagLog.isEnabled {
+                // 確定前のホストの文脈（手前の本文が消える不具合の切り分け用）
+                let before = String((host?.hostContextBeforeInput() ?? "").suffix(8))
+                let after = String((host?.hostContextAfterInput() ?? "").prefix(4))
+                DiagLog.log("host commit \(quote(text)) method=\(commitMethod.rawValue) delete=\(shownMarked.count) cursor=\(shownCursor)/\(end) shownMarked=\(quote(shownMarked)) before=\(quote(before)) after=\(quote(after))")
             }
-            // 範囲を確定扱いにして平文にする
-            host?.hostUnmarkText()
-            for _ in 0..<shownMarked.count { host?.hostDeleteBackward() }
-            host?.hostInsertText(text)
+            switch commitMethod {
+            case .insert:
+                // 変換中の範囲を確定文字列で置き換えて確定する。失敗しても手前の本文は消さない
+                host?.hostInsertText(text)
+            case .mark:
+                // 確定文字列を変換中として入れ（キャレットは末尾）、下線を外す
+                host?.hostSetMarkedText(text, cursor: text.utf16.count)
+                host?.hostUnmarkText()
+            case .delete:
+                // キャレットが変換中の文字列の途中（先頭など）にあると、後ろへ消すと手前の本文を削ってしまう。
+                // adjustTextPosition は実機で非同期に効くため頼らず、同じ文字列の setMarkedText（置換範囲が同じ）で
+                // キャレットを末尾へ置いてから確定する
+                if shownCursor != end {
+                    host?.hostSetMarkedText(shownMarked, cursor: end)
+                }
+                // 範囲を確定扱いにして平文にする
+                host?.hostUnmarkText()
+                for _ in 0..<shownMarked.count { host?.hostDeleteBackward() }
+                host?.hostInsertText(text)
+            }
         }
         shownMarked = ""
         shownCursor = 0
@@ -182,7 +218,10 @@ final class HostCompositionApplier {
         let units = Array(shownMarked.utf16)
         let upTo = min(max(shownCursor, 0), units.count)
         let expected = committed + String(decoding: units[0..<upTo], as: UTF16.self)
-        if context.hasSuffix(expected) { return true }
+        if context.hasSuffix(expected) {
+            DiagLog.log("host verify ok tail=\(quote(expected))")
+            return true
+        }
         let actual = String(context.suffix(max(expected.count, 1) + 4))
         DiagLog.log("host MISMATCH expected tail=\(quote(expected)) actual tail=\(quote(actual)) shownMarked=\(quote(shownMarked))")
         return false

@@ -16,22 +16,48 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     /// 直近に見た入力欄の識別子（`textDocumentProxy.documentIdentifier`）。変わったら入力欄が切り替わっている
     private var lastDocumentIdentifier: UUID?
 
+    /// このプロセスで作った VC の数（診断ログでインスタンスを区別する。メインスレッドからのみ読み書きする）
+    nonisolated(unsafe) private static var instanceCounter = 0
+    /// この VC の通し番号（生成時に採番する）
+    private let instanceNumber: Int = {
+        KeyboardViewController.instanceCounter += 1
+        return KeyboardViewController.instanceCounter
+    }()
+
+    /// 表示中のキーボードのプロセス ID を置く App Group の UserDefaults のキー。
+    /// 表示中のままプロセスが終わった（viewWillDisappear が来なかった）ことを、次のプロセスで検出する
+    private static let visiblePidKey = "keyboardVisiblePid"
+
+    /// 共有のモデルの現在のホストが自分か（旧 VC が遅れて呼ばれても、新しい VC の状態を壊さないための判定）
+    private var isCurrentHost: Bool { model?.host === self }
+
     override func viewDidLoad() {
         LaunchBaseline.capture()
         super.viewDidLoad()
 
+        let reuseModel = KeyboardModel.processShared != nil
+        let stats = MemoryProbe.getStats()
+        DiagLog.log("viewDidLoad instance=#\(instanceNumber) pid=\(getpid()) reuseModel=\(reuseModel) footprint=\(Int(stats.physFootprintMB))MB available=\(Int(stats.availableMemoryMB))MB")
         setupUI()
     }
 
+    deinit {
+        DiagLog.log("keyboard VC deinit instance=#\(instanceNumber)")
+    }
+
     override func viewWillAppear(_ animated: Bool) {
+        DiagLog.log("viewWillAppear instance=#\(instanceNumber) currentHost=\(isCurrentHost)")
         super.viewWillAppear(animated)
         // ホストアプリのセットアップ状況表示用のマーカー（OnboardingView.swift の NagiSetupMarker が読む）
         if let defaults = UserDefaults(suiteName: SharedStore.shared.appGroupId) {
             let now = Date().timeIntervalSince1970
             defaults.set(now, forKey: "keyboardLastSeen")
             if hasFullAccess { defaults.set(now, forKey: "fullAccessLastSeen") }
+            defaults.set(Int(getpid()), forKey: Self.visiblePidKey)
         }
         lastDocumentIdentifier = textDocumentProxy.documentIdentifier
+        // 再表示で別の VC から戻る場合に備え、常に自分をホストにしてから focusIn する
+        model?.host = self
         model?.focusIn()
         // 触覚・クリック音: フルアクセスの有無を渡し、focusIn で読み直した設定でジェネレータを準備する
         NagiKeyFeedback.fullAccess = hasFullAccess
@@ -47,18 +73,33 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     }
 
     override func viewWillDisappear(_ animated: Bool) {
-        // 変換中の文字列は確定してから離れる。LLM も速やかに手放す（再表示の focusIn で読み直す）
-        model?.focusOut()
-        model?.suspendLLM()
+        let current = isCurrentHost
+        DiagLog.log("viewWillDisappear instance=#\(instanceNumber) currentHost=\(current)")
+        // 変換中の文字列は確定してから離れる。LLM も速やかに手放す（再表示の focusIn で読み直す）。
+        // 共有のモデルが既に別の VC のものなら触らない（新しい VC の状態を壊さない）
+        if current {
+            model?.focusOut()
+            model?.suspendLLM()
+            UserDefaults(suiteName: SharedStore.shared.appGroupId)?.removeObject(forKey: Self.visiblePidKey)
+        }
         super.viewWillDisappear(animated)
     }
 
     private func setupUI() {
-        // コアのセッション。辞書やモデルが無ければ、画面にメッセージを出す
-        // 空きメモリが足りないとき（別アプリから切り替えた直後など）は LLM を読み込まず辞書のみで始め、
-        // 空きができてから読み込む（旧インスタンスと合わせてメモリが倍になるのを避ける。H-26）
-        let deferLLM = ProductSession.shouldDeferLLM(store: store)
-        let model = KeyboardModel(outcome: ProductSession.make(store: store, noLLM: deferLLM), llmDeferred: deferLLM)
+        let model: KeyboardModel
+        if let existing = KeyboardModel.processShared {
+            // 同じプロセスで VC が作り直された: コアを作らずに引き継ぐ（旧 VC が残っていてもコアを二重に持たない）
+            existing.handOverToNewHost()
+            model = existing
+        } else {
+            reportPreviousProcessEndedWhileVisible()
+            // コアのセッション。辞書やモデルが無ければ、画面にメッセージを出す
+            // 空きメモリが足りないとき（別アプリから切り替えた直後など）は LLM を読み込まず辞書のみで始め、
+            // 空きができてから読み込む（旧インスタンスと合わせてメモリが倍になるのを避ける。H-26）
+            let deferLLM = ProductSession.shouldDeferLLM(store: store)
+            model = KeyboardModel(outcome: ProductSession.make(store: store, noLLM: deferLLM), llmDeferred: deferLLM)
+            KeyboardModel.processShared = model
+        }
         model.host = self
         self.model = model
 
@@ -97,6 +138,16 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         height.priority = UILayoutPriority(999)
         height.isActive = true
         heightConstraint = height
+    }
+
+    /// 前のプロセスが表示中のまま終わった（viewWillDisappear が来なかった）なら記録して、印を消す
+    private func reportPreviousProcessEndedWhileVisible() {
+        guard let defaults = UserDefaults(suiteName: SharedStore.shared.appGroupId),
+              let old = defaults.object(forKey: Self.visiblePidKey) as? Int else { return }
+        if old != Int(getpid()) {
+            DiagLog.log("previous keyboard process pid=\(old) ended while visible (no viewWillDisappear)")
+        }
+        defaults.removeObject(forKey: Self.visiblePidKey)
     }
 
     // MARK: - KeyboardHost
@@ -139,6 +190,10 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         textDocumentProxy.documentContextBeforeInput
     }
 
+    func hostContextAfterInput() -> String? {
+        textDocumentProxy.documentContextAfterInput
+    }
+
     func hostIsSecure() -> Bool {
         let proxy = textDocumentProxy
         if proxy.isSecureTextEntry ?? false { return true }
@@ -155,6 +210,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     /// （強制終了される前に軽くする）
     override func didReceiveMemoryWarning() {
         super.didReceiveMemoryWarning()
+        // 共有のモデルは現在のホストの VC だけが扱う（同じプロセスの VC には同じ警告が届く）
+        guard isCurrentHost else { return }
         model?.handleMemoryWarning()
     }
 
@@ -166,13 +223,15 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         super.textDidChange(textInput)
         // 入力欄そのものが切り替わったときは、状態を初期化する（入力中の文字は前の欄で確定扱い）
         let identifier = textDocumentProxy.documentIdentifier
+        // 旧 VC に遅れて届いた通知では、共有のモデル（新しい VC の状態）に触らない
+        let current = isCurrentHost
         if let last = lastDocumentIdentifier, last != identifier {
             lastDocumentIdentifier = identifier
-            model?.hostDocumentChanged()
+            if current { model?.hostDocumentChanged() }
         } else if lastDocumentIdentifier == nil {
             lastDocumentIdentifier = identifier
         }
-        model?.hostTextChanged()
+        if current { model?.hostTextChanged() }
     }
 }
 

@@ -220,9 +220,9 @@ struct NagiIOSSettings: Codable, Equatable {
             isSimple: false, defaultValue: .string("standard")),
         NagiIOSSettingDef(
             key: Key.keyboardSound, group: "キーボード", label: "キー入力の音",
-            description: "端末の「キーボードのクリック」設定に従ってクリック音を鳴らします。",
-            kind: NagiIOSSettings.choice([("off", "オフ"), ("system", "システムのクリック音")]),
-            isSimple: true, defaultValue: .string("system")),
+            description: "「互換」はシステムのキーボードのクリック音を直接鳴らします（消音スイッチに従います）。「システム」は端末の「キーボードのクリック」設定に従います。",
+            kind: NagiIOSSettings.choice([("off", "オフ"), ("compat", "クリック音（互換）"), ("system", "システムのクリック音")]),
+            isSimple: true, defaultValue: .string("compat")),
         NagiIOSSettingDef(
             key: Key.keyboardTheme, group: "キーボード", label: "テーマ",
             description: "キーボードの明るさです。「システム」は端末の外観（ライト/ダーク）に従います。",
@@ -239,6 +239,13 @@ struct NagiIOSSettings: Codable, Equatable {
             key: Key.candbarPasteButton, group: "キーボード", label: "候補バーに「貼り付け」を出す",
             description: "入力中でなく、クリップボードに文字があるときだけ、候補バーの左端に出します。押したときだけクリップボードを読みます（iOS の貼り付け許可の確認が出ることがあります）。",
             kind: .bool, isSimple: false, defaultValue: .bool(true)),
+        NagiIOSSettingDef(
+            key: Key.keyboardCommitMethod, group: "キーボード", label: "確定の方式（診断用）",
+            description: "変換中の文字列を確定するときの、入力欄への反映の手順です。確定で手前の文字が消えるなどの不具合を切り分けるときだけ変えてください。",
+            kind: NagiIOSSettings.choice([
+                ("insert", "置き換え（既定）"), ("mark", "確定文字列を下線付きにしてから確定"), ("delete", "消してから入れる（旧方式）"),
+            ]),
+            isSimple: false, defaultValue: .string("insert")),
     ]
 
     private static let definitionsByKey: [String: NagiIOSSettingDef] =
@@ -274,6 +281,7 @@ struct NagiIOSSettings: Codable, Equatable {
         static let keyboardHaptic = "keyboard.haptic"
         static let keyboardHapticEngine = "keyboard.haptic_engine"
         static let keyboardSound = "keyboard.sound"
+        static let keyboardCommitMethod = "keyboard.commit_method"
     }
 
     // MARK: 読み書き
@@ -343,7 +351,11 @@ struct NagiIOSSettings: Codable, Equatable {
     var haptic: String { string(Key.keyboardHaptic) }
     /// 触覚の方式（`standard` / `compat`）
     var hapticEngine: String { string(Key.keyboardHapticEngine) }
-    var soundEnabled: Bool { string(Key.keyboardSound) == "system" }
+    var soundEnabled: Bool { string(Key.keyboardSound) != "off" }
+    /// キー入力の音の方式（`off` / `compat` / `system`）
+    var soundMode: String { string(Key.keyboardSound) }
+    /// 確定の方式（`insert` / `mark` / `delete`。`HostCompositionApplier.CommitMethod`）
+    var commitMethod: String { string(Key.keyboardCommitMethod) }
     var spaceSwipe: Bool { bool(Key.spaceSwipe) }
     var spaceSwipeStepPt: Double { double(Key.spaceSwipeStepPt) }
     var backspaceSwipe: Bool { bool(Key.backspaceSwipe) }

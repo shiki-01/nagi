@@ -94,15 +94,37 @@ enum ToggleCycle {
     }
 }
 
+/// フリックの取り消し判定
+enum FlickCancel {
+    /// 押した位置から、キーの幅（横）・高さ（縦）のこの倍率を超えて動かしたら取り消し
+    /// （ポップアップの方向のセルの外側を越えて大きく動かした）
+    static let factor = 2.0
+
+    /// 押した位置からの移動量（dx, dy）が取り消しの範囲か。値が有限でない・キーの大きさが 0 以下なら false
+    static func isCancelled(dx: Double, dy: Double, keyWidth: Double, keyHeight: Double) -> Bool {
+        guard dx.isFinite, dy.isFinite, keyWidth > 0, keyHeight > 0 else { return false }
+        return abs(dx) > keyWidth * factor || abs(dy) > keyHeight * factor
+    }
+}
+
 /// 長押しポップアップの取り消し判定
 enum LongPressCancel {
     /// キーの下端より下へ、キーの高さのこの倍率以上離れたら取り消し
-    static let heightFactor = 0.5
+    static let heightFactor = 0.3
 
     /// 指の y（キー内の座標。上端が 0、下端が keyHeight）が取り消しの位置か
     static func isCancelled(y: Double, keyHeight: Double) -> Bool {
         guard y.isFinite, keyHeight > 0 else { return false }
         return y > keyHeight + keyHeight * heightFactor
+    }
+
+    /// 指の位置（キー内の座標）が取り消しの位置か。下は `isCancelled(y:keyHeight:)` と同じ。
+    /// 横は、ポップアップ（左端 `popupLeft`・幅 `popupWidth`）の外側へ項目 1 つ分（`itemWidth`）を超えて離れたら取り消し
+    /// （最下段のキーでも横へずらせば取り消せる）
+    static func isCancelled(x: Double, y: Double, keyHeight: Double, popupLeft: Double, popupWidth: Double, itemWidth: Double) -> Bool {
+        if isCancelled(y: y, keyHeight: keyHeight) { return true }
+        guard x.isFinite, popupLeft.isFinite, popupWidth.isFinite, itemWidth.isFinite else { return false }
+        return x < popupLeft - itemWidth || x > popupLeft + popupWidth + itemWidth
     }
 }
 

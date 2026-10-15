@@ -386,7 +386,8 @@ private func touchPoint(_ location: CGPoint, in size: CGSize) -> TouchPoint? {
 
 /// 長押しでポップアップを出すキー。`flick.long_press_ms` 押し続けると、キーの上に候補キーを並べる。
 /// 指を滑らせて選び、離すと実行する（text / action / shortcut / toggle / layout）。
-/// 長押しになる前に離したときは通常のタップ。ポップアップが出たあと、指がキーの下端より下へキーの高さの 0.5 倍以上離れた状態で離すと取り消し
+/// 長押しになる前に離したときは通常のタップ。ポップアップが出たあと、指がキーの下端より下へキーの高さの 0.3 倍以上、
+/// またはポップアップの左右の外側へ項目 1 つ分を超えて離れた状態で離すと取り消し
 /// （そのときポップアップは半透明になり「取り消し」と表示する）
 private struct LongPressKeyView: View {
     let popup: [LayoutKeyDef]
@@ -503,13 +504,17 @@ private struct LongPressKeyView: View {
         return left
     }
 
-    /// 指の位置から選択中の項目を決める。キーの下端より下へキーの高さの 0.5 倍以上離れていれば nil（取り消し。`LongPressCancel`）。
-    /// 左右に外れたときは端の項目
+    /// 指の位置から選択中の項目を決める。キーの下端より下へキーの高さの 0.3 倍以上、またはポップアップの左右の外側へ
+    /// 項目 1 つ分を超えて離れていれば nil（取り消し。`LongPressCancel`）。左右に少し外れたときは端の項目
     private func index(at location: CGPoint, keyWidth: CGFloat) -> Int? {
-        if LongPressCancel.isCancelled(y: Double(location.y), keyHeight: Double(height)) { return nil }
         let width = itemWidth(keyWidth: keyWidth)
         guard width > 0 else { return nil }
-        let raw = Int(((location.x - popupLeft(keyWidth: keyWidth)) / width).rounded(.down))
+        let left = popupLeft(keyWidth: keyWidth)
+        if LongPressCancel.isCancelled(
+            x: Double(location.x), y: Double(location.y), keyHeight: Double(height),
+            popupLeft: Double(left), popupWidth: Double(width * CGFloat(popup.count)), itemWidth: Double(width)
+        ) { return nil }
+        let raw = Int(((location.x - left) / width).rounded(.down))
         return min(max(raw, 0), popup.count - 1)
     }
 
@@ -721,7 +726,8 @@ private struct FlickChars {
 }
 
 /// フリックできるキー。タップは `.tap`、一定以上動かして離すと動かした向きのフリック。
-/// 押している間は、上下左右の文字をポップアップで案内する
+/// 押している間は、上下左右の文字をポップアップで案内する。
+/// キーの幅・高さの 2 倍を超えて動かすと取り消し（ポップアップを半透明にして「取り消し」と出し、離しても入力しない。`FlickCancel`）
 private struct FlickKeyView: View {
     let key: LayoutKeyDef
     let content: KeyFaceContent
@@ -750,8 +756,26 @@ private struct FlickKeyView: View {
         )
         .overlay(
             GeometryReader { geo in
-                if let drag = drag, chars.hasAny, NagiKeyMetrics.current.flickPopup {
-                    FlickPopup(chars: chars, selected: Self.gesture(for: drag), size: geo.size)
+                if let drag = drag {
+                    let cancelled = Self.isCancelled(drag, keySize: keySize)
+                    ZStack {
+                        if chars.hasAny, NagiKeyMetrics.current.flickPopup {
+                            FlickPopup(chars: chars, selected: Self.gesture(for: drag), size: geo.size)
+                                .opacity(cancelled ? 0.4 : 1)
+                        }
+                        if cancelled {
+                            // 長押しの取り消し（LongPressKeyView）と同じ見た目。キーの中央に出す
+                            Text("取り消し")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.red))
+                                .fixedSize()
+                                .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                        }
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
                 }
             }
             .allowsHitTesting(false)
@@ -768,6 +792,8 @@ private struct FlickKeyView: View {
                 .onEnded { value in
                     reported = false
                     onPress(false)
+                    // 取り消しの範囲で離したときは、入力もフィードバックもしない
+                    if Self.isCancelled(value.translation, keySize: keySize) { return }
                     NagiKeyFeedback.keyDown()
                     let gesture = Self.gesture(for: value.translation)
                     var detail: FlickDetail?
@@ -798,6 +824,14 @@ private struct FlickKeyView: View {
                 onPress(false)
             }
         }
+    }
+
+    /// 移動量が取り消しの範囲か（キーの幅・高さの `FlickCancel.factor` 倍を超えた）
+    static func isCancelled(_ translation: CGSize, keySize: CGSize) -> Bool {
+        FlickCancel.isCancelled(
+            dx: Double(translation.width), dy: Double(translation.height),
+            keyWidth: Double(keySize.width), keyHeight: Double(keySize.height)
+        )
     }
 
     /// 移動量から操作を決める（小さな移動はタップ）
@@ -911,7 +945,14 @@ private struct CandidateBar: View {
                         .foregroundColor(.orange)
                         .lineLimit(2)
                 }
-                if model.hasPreedit {
+                if model.isConverting && model.preeditParts.count > 1 {
+                    // 変換中で文節が複数あれば、注目文節を太字・アクセント色で区別する
+                    // （iOS の marked text には属性を付けられないため、ここが注目文節の主な表示）
+                    segmentsText(model.preeditParts)
+                        .font(.system(size: 14))
+                        .underline()
+                        .lineLimit(1)
+                } else if model.hasPreedit {
                     Text(model.preedit)
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
@@ -949,6 +990,16 @@ private struct CandidateBar: View {
         .padding(.horizontal, 8)
         .frame(height: 44)
         .background(Color(UIColor.systemGray5))
+    }
+
+    /// 文節ごとの Text を連結する（注目文節は太字・アクセント色、ほかは secondary）
+    private func segmentsText(_ parts: [KeyboardModel.PreeditPart]) -> Text {
+        parts.reduce(Text(verbatim: "")) { result, part in
+            let piece: Text = part.focused
+                ? Text(verbatim: part.text).bold().foregroundColor(themeAccent)
+                : Text(verbatim: part.text).foregroundColor(.secondary)
+            return result + piece
+        }
     }
 }
 

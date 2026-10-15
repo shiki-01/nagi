@@ -27,6 +27,8 @@ final class IOSSettingsTests: XCTestCase {
         XCTAssertEqual(s.oneHandedWidth, 0.8, accuracy: 1e-9)
         XCTAssertEqual(s.haptic, "light")
         XCTAssertTrue(s.soundEnabled)
+        XCTAssertEqual(s.soundMode, "compat")
+        XCTAssertEqual(s.commitMethod, "insert")
         XCTAssertEqual(s.hapticEngine, "standard")
         XCTAssertEqual(s.toggleTimeoutMs, 1000)
         XCTAssertEqual(s.flickThresholdPoints, 14, accuracy: 1e-9)

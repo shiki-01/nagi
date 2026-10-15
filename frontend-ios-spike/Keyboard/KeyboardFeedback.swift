@@ -58,7 +58,7 @@ enum NagiKeyFeedback {
             generatorStyle = settings.haptic
             created.prepare()
         }
-        DiagLog.log("feedback prepare haptic=\(settings.haptic) engine=\(settings.hapticEngine) sound=\(settings.soundEnabled) fullAccess=\(fullAccess) generator=\(generator != nil)")
+        DiagLog.log("feedback prepare haptic=\(settings.haptic) engine=\(settings.hapticEngine) sound=\(settings.soundMode) fullAccess=\(fullAccess) generator=\(generator != nil)")
     }
 
     /// キーを押したときに呼ぶ（メインスレッド）
@@ -89,13 +89,20 @@ enum NagiKeyFeedback {
             }
         }
         if settings.soundEnabled {
-            // 端末の「キーボードのクリック」がオンのときだけ鳴る。入力ビュー階層に UIInputViewAudioFeedback に
-            // 準拠したビューが要る（下の拡張。`UIInputView` は `UIView` の子孫なので準拠を引き継ぐ。
-            // それでも鳴らない端末では、`loadView` で `UIInputView` のサブクラスを `inputView` に据える案が次の手）
+            let mode = settings.soundMode
             if shouldLog {
-                DiagLog.log("click play enabled=\(settings.soundEnabled) anchorView=\(anchorView != nil)")
+                DiagLog.log("click play mode=\(mode) anchorView=\(anchorView != nil)")
             }
-            UIDevice.current.playInputClick()
+            if mode == "compat" {
+                // システムのキーボードのクリック音（1104）を直接鳴らす。端末の「キーボードのクリック」設定には
+                // 従わず、消音スイッチに従う
+                AudioServicesPlaySystemSound(1104)
+            } else {
+                // 端末の「キーボードのクリック」がオンのときだけ鳴る。入力ビュー階層に UIInputViewAudioFeedback に
+                // 準拠したビューが要る（下の拡張。`UIInputView` は `UIView` の子孫なので準拠を引き継ぐ。
+                // それでも鳴らない端末では、`loadView` で `UIInputView` のサブクラスを `inputView` に据える案が次の手）
+                UIDevice.current.playInputClick()
+            }
         }
     }
 }
