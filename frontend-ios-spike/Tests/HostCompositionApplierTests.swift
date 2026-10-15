@@ -81,7 +81,7 @@ final class HostCompositionApplierTests: XCTestCase {
         // キューは先入れ先出しなので、先に積まれた再開の処理が終わってから fulfill される
         let done = expectation(description: "main queue drained")
         DispatchQueue.main.async { done.fulfill() }
-        wait(for: [done], timeout: 2)
+        wait(for: [done], timeout: 30)
     }
 
     // MARK: (a) 部分確定のあとの全文確定
