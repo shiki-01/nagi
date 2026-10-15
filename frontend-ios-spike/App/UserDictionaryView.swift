@@ -194,7 +194,8 @@ final class NagiUserDictModel: ObservableObject {
 
     // MARK: - 取り込み
 
-    func importFile(_ url: URL) {
+    /// - startedAt: 渡すと、結果の文言にそこからの所要時間を足す（性能確認用）
+    func importFile(_ url: URL, startedAt: Date? = nil) {
         if let block = writeBlock() {
             message = block
             return
@@ -203,6 +204,10 @@ final class NagiUserDictModel: ObservableObject {
         // 取り込み中は busy で他の書き込みが止まるので、この時点の内容を判定に使ってよい
         let ownSnapshot = own
         let readOnlySnapshot = readOnly
+        let elapsedText: () -> String = {
+            guard let startedAt = startedAt else { return "" }
+            return String(format: "\n所要時間（生成を含む）: %.2f 秒", Date().timeIntervalSince(startedAt))
+        }
         queue.async { [weak self] in
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
@@ -236,11 +241,11 @@ final class NagiUserDictModel: ObservableObject {
                     return
                 }
                 if prepared.added.isEmpty {
-                    self.message = prepared.summary
+                    self.message = prepared.summary + elapsedText()
                     return
                 }
                 self.commit(self.own + prepared.added) { [weak self] error in
-                    self?.message = error ?? prepared.summary
+                    self?.message = error ?? (prepared.summary + elapsedText())
                 }
             }
         }
@@ -307,6 +312,11 @@ struct NagiUserDictionaryView: View {
     @StateObject private var model = NagiUserDictModel()
     @State private var editing: NagiUserDictEditTarget?
     @State private var showingImporter = false
+    // テスト用（テストビルドのみ）
+    @State private var sampleURLs: [NagiTestSamples.DictSample: URL] = [:]
+    @State private var bulkProgress: Double?
+    @State private var bulkLabel = ""
+    @State private var confirmingClear = false
 
     var body: some View {
         List {
@@ -364,6 +374,12 @@ struct NagiUserDictionaryView: View {
             } footer: {
                 Text("取り込みは \(NagiUserDictStore.ownFileName) に追記します（同じ読み・単語は除外）。書き出しはこのアプリで編集できる登録だけです。品詞が「スニペット」の行は定型文（本文の改行は \\n）として扱います。")
             }
+
+            // 実機での確認用（TestFlight・開発用ビルドのみ。App Store 版には出さない）
+            if DiagLog.isTestBuild {
+                testSamplesSection
+                testToolsSection
+            }
         }
         .navigationTitle("ユーザー辞書")
         .searchable(text: $model.query, prompt: "読み・単語・コメントで検索")
@@ -380,7 +396,10 @@ struct NagiUserDictionaryView: View {
                 .accessibilityLabel("登録を追加")
             }
         }
-        .onAppear { model.start() }
+        .onAppear {
+            model.start()
+            if DiagLog.isTestBuild { prepareSampleFiles() }
+        }
         .fileImporter(
             isPresented: $showingImporter,
             allowedContentTypes: [.tabSeparatedText, .plainText, .data],
@@ -403,6 +422,198 @@ struct NagiUserDictionaryView: View {
             Button("OK") {}
         } message: {
             Text(model.message ?? "")
+        }
+    }
+
+    // MARK: - テスト用（テストビルドのみ）
+
+    private var testSamplesSection: some View {
+        Section {
+            ForEach(NagiTestSamples.DictSample.allCases, id: \.self) { sample in
+                VStack(alignment: .leading, spacing: 4) {
+                    if let url = sampleURLs[sample] {
+                        ShareLink(item: url) {
+                            Label("\(sample.title) を共有・保存", systemImage: "square.and.arrow.up")
+                        }
+                    } else {
+                        Text("\(sample.title)（準備中）").font(.subheadline)
+                    }
+                    Text("期待結果: \(sample.expectation)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        } header: {
+            Text("テスト用: サンプル TSV")
+        } footer: {
+            Text("共有シートの「“ファイル”に保存」で保存し、上の「Mozc TSV を取り込む」で選びます。")
+        }
+    }
+
+    private var testToolsSection: some View {
+        Section {
+            Button("500 件の辞書を生成して取り込む") { runBulk(count: 500) }
+                .buttonStyle(.borderless)
+                .disabled(!model.canWrite || bulkProgress != nil)
+            Button("5000 件の辞書を生成して取り込む") { runBulk(count: 5000) }
+                .buttonStyle(.borderless)
+                .disabled(!model.canWrite || bulkProgress != nil)
+            if let progress = bulkProgress {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: progress)
+                    Text(bulkLabel).font(.caption)
+                }
+            } else if model.busy {
+                HStack {
+                    ProgressView()
+                    Text("取り込み中…").font(.caption)
+                }
+            }
+            Button("読み取り専用サンプル（\(NagiTestSamples.readonlySampleFileName)）を作る") { createReadonlySample() }
+                .buttonStyle(.borderless)
+            Button("読み取り専用サンプルを削除") { deleteReadonlySample() }
+                .buttonStyle(.borderless)
+            Button("user_dict/ を空にする", role: .destructive) { confirmingClear = true }
+                .buttonStyle(.borderless)
+                .confirmationDialog(
+                    "user_dict/ のファイルをすべて削除しますか？", isPresented: $confirmingClear, titleVisibility: .visible
+                ) {
+                    Button("削除", role: .destructive) { clearUserDict() }
+                    Button("キャンセル", role: .cancel) {}
+                } message: {
+                    Text("\(NagiUserDictStore.ownFileName) を含む、登録がすべて消えます。")
+                }
+        } header: {
+            Text("テスト用: 性能・読み取り専用・初期化")
+        } footer: {
+            Text("一括生成は同じ読みを重複として除外するため、2 回目以降は「重複のため除外」になります。読み取り専用サンプルは、編集できないファイルとして「読み取り専用」欄に出ます。")
+        }
+    }
+
+    /// 共有用のサンプルファイルを一時ディレクトリに作る（バックグラウンド）
+    private func prepareSampleFiles() {
+        DispatchQueue.global(qos: .utility).async {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("NagiUserDictSamples", isDirectory: true)
+            var urls: [NagiTestSamples.DictSample: URL] = [:]
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                for sample in NagiTestSamples.DictSample.allCases {
+                    let url = dir.appendingPathComponent(sample.fileName)
+                    try NagiTestSamples.dictSampleData(sample).write(to: url, options: .atomic)
+                    urls[sample] = url
+                }
+            } catch {
+                // 作れたものだけ出す
+            }
+            DispatchQueue.main.async { sampleURLs = urls }
+        }
+    }
+
+    /// `count` 件の TSV をバックグラウンドで生成し、ファイルの取り込みと同じ経路で取り込む
+    private func runBulk(count: Int) {
+        guard model.canWrite, bulkProgress == nil else { return }
+        let startedAt = Date()
+        bulkProgress = 0
+        bulkLabel = "\(count) 件を生成中…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let text = NagiTestSamples.bulkTSV(count: count) { value in
+                DispatchQueue.main.async { bulkProgress = value }
+            }
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("nagi-bulk-\(count).tsv")
+            do {
+                try Data(text.utf8).write(to: url, options: .atomic)
+            } catch {
+                DispatchQueue.main.async {
+                    bulkProgress = nil
+                    model.message = "一時ファイルを作れませんでした: \(error.localizedDescription)"
+                }
+                return
+            }
+            DispatchQueue.main.async {
+                bulkProgress = nil
+                model.importFile(url, startedAt: startedAt)
+            }
+        }
+    }
+
+    private func createReadonlySample() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let located = NagiUserDictStore.locate()
+            var result: String
+            if let dir = located.userDict, let userDir = located.userDir {
+                do {
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    try Data(NagiTestSamples.readonlySampleText.utf8)
+                        .write(to: dir.appendingPathComponent(NagiTestSamples.readonlySampleFileName), options: .atomic)
+                    NagiUserDictStore.notifyKeyboard(userDir: userDir)
+                    result = "\(NagiTestSamples.readonlySampleFileName) を作りました。「読み取り専用」欄に 2 件出れば成功です"
+                } catch {
+                    result = "作れませんでした: \(error.localizedDescription)"
+                }
+            } else {
+                result = located.message ?? "保存先がありません"
+            }
+            DispatchQueue.main.async {
+                model.message = result
+                model.start()
+            }
+        }
+    }
+
+    private func deleteReadonlySample() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let located = NagiUserDictStore.locate()
+            var result: String
+            if let dir = located.userDict, let userDir = located.userDir {
+                let url = dir.appendingPathComponent(NagiTestSamples.readonlySampleFileName)
+                if FileManager.default.fileExists(atPath: url.path) {
+                    do {
+                        try FileManager.default.removeItem(at: url)
+                        NagiUserDictStore.notifyKeyboard(userDir: userDir)
+                        result = "\(NagiTestSamples.readonlySampleFileName) を削除しました"
+                    } catch {
+                        result = "削除できませんでした: \(error.localizedDescription)"
+                    }
+                } else {
+                    result = "\(NagiTestSamples.readonlySampleFileName) はありません"
+                }
+            } else {
+                result = located.message ?? "保存先がありません"
+            }
+            DispatchQueue.main.async {
+                model.message = result
+                model.start()
+            }
+        }
+    }
+
+    /// user_dict/ の中身をすべて削除する（ディレクトリ自体は残す）
+    private func clearUserDict() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let located = NagiUserDictStore.locate()
+            var result: String
+            if let dir = located.userDict, let userDir = located.userDir {
+                let fileManager = FileManager.default
+                var removed = 0
+                var failure: String?
+                let names = (try? fileManager.contentsOfDirectory(atPath: dir.path)) ?? []
+                for name in names {
+                    do {
+                        try fileManager.removeItem(at: dir.appendingPathComponent(name))
+                        removed += 1
+                    } catch {
+                        failure = "\(name) を削除できませんでした: \(error.localizedDescription)"
+                    }
+                }
+                NagiUserDictStore.notifyKeyboard(userDir: userDir)
+                result = failure ?? "user_dict/ の \(removed) 件を削除しました"
+            } else {
+                result = located.message ?? "保存先がありません"
+            }
+            DispatchQueue.main.async {
+                model.message = result
+                model.start()
+            }
         }
     }
 

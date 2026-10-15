@@ -33,6 +33,10 @@ targets:
       - path: ../config/keyboard/presets
         type: folder
         buildPhase: resources
+      # 実機確認用のテストレイアウト（レイアウトタブの「テスト用」。テストビルドのみ UI を出す）
+      - path: ../config/keyboard/test-layouts
+        type: folder
+        buildPhase: resources
       - path: Resources/data
         type: folder
         optional: true
@@ -181,6 +185,7 @@ targets:
       # ProductSession / コアに依存しない純粋な処理（Mozc TSV の解析、nagi://layout の URL）
       - path: Shared/MozcTSV.swift
       - path: Shared/LayoutURL.swift
+      - path: Shared/TestAids.swift
       - path: Keyboard/KanaKeyTable.swift
       - path: Keyboard/CandidateKind.swift
       - path: Keyboard/TouchLogic.swift
@@ -190,6 +195,10 @@ targets:
       - path: ../frontend-macos/Sources/Generated
       # 同梱レイアウト（JSON）の検証用。バンドル内の presets/ フォルダとして入る
       - path: ../config/keyboard/presets
+        type: folder
+        buildPhase: resources
+      # 実機確認用のテストレイアウト（有効 / 無効の期待どおりに検証されることの確認用）
+      - path: ../config/keyboard/test-layouts
         type: folder
         buildPhase: resources
 
