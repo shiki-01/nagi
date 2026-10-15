@@ -6,7 +6,7 @@ final class CandidateKindTests: XCTestCase {
         _ items: [(String, [CandidateSource], UInt32?)], visible: Bool = true
     ) -> CandidatesView {
         CandidatesView(
-            items: items.map { CandidateView(surface: $0.0, sources: $0.1, covers: $0.2) },
+            items: items.map { CandidateView(surface: $0.0, sources: $0.1, covers: $0.2, reading: nil) },
             selected: 0, page_size: 9, visible: visible)
     }
 
@@ -36,5 +36,26 @@ final class CandidateKindTests: XCTestCase {
         // 1 つでも次語の形でなければ全体を通常の候補として扱う
         let mixed = view([("です", [.learned], nil), ("今日", [.systemDict], nil)])
         XCTAssertEqual(classifyCandidates(mixed, hasPreedit: false), .conversion)
+    }
+
+    // MARK: - 曖昧入力（補正候補）
+
+    func testFuzzyCandidatesAreConversionWhileComposing() {
+        let v = view([("感じ", [.fuzzy], nil), ("幹事", [.systemDict], nil)])
+        XCTAssertEqual(classifyCandidates(v, hasPreedit: true), .conversion)
+    }
+
+    func testFuzzyCandidatesAreNeverNextWord() {
+        // 出所が learned のみでなければ次語候補ではない
+        let v = view([("感じ", [.fuzzy], nil)])
+        XCTAssertEqual(classifyCandidates(v, hasPreedit: false), .conversion)
+    }
+
+    func testFuzzyHint() {
+        XCTAssertEqual(fuzzyHint(sources: [.fuzzy], reading: "かんじ"), "もしかして: かんじ")
+        XCTAssertEqual(fuzzyHint(sources: [.fuzzy], reading: nil), "もしかして")
+        XCTAssertEqual(fuzzyHint(sources: [.fuzzy], reading: ""), "もしかして")
+        XCTAssertNil(fuzzyHint(sources: [.systemDict], reading: "かんじ"))
+        XCTAssertEqual(fuzzyHint(sources: [.llm, .fuzzy], reading: "かんじ"), "もしかして: かんじ")
     }
 }

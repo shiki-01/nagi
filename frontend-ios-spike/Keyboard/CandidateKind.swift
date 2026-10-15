@@ -22,3 +22,12 @@ func classifyCandidates(_ view: CandidatesView, hasPreedit: Bool) -> CandidateKi
     let allNextWord = view.items.allSatisfy { $0.covers == nil && $0.sources == [.learned] }
     return allNextWord ? .nextWord : .conversion
 }
+
+/// 曖昧入力（タイプミス補正）の候補に付ける「もしかして」の表示。出所に `fuzzy` を含まない候補は nil。
+/// 補正後の読み（`CandidateView.reading`）があれば「もしかして: かんじ」の形にする。
+/// 候補の種類の判定（`classifyCandidates`）には影響しない（補正候補は入力中の変換候補として扱う）
+func fuzzyHint(sources: [CandidateSource], reading: String?) -> String? {
+    guard sources.contains(.fuzzy) else { return nil }
+    guard let reading = reading, !reading.isEmpty else { return "もしかして" }
+    return "もしかして: \(reading)"
+}

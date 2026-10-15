@@ -144,6 +144,10 @@ enum ProductSession {
         if let modelPath = modelPath {
             body += "model = '\(modelPath)'\n"
         }
+        // 曖昧入力（キー配置に応じたタイプミス補正の「もしかして」候補）は iOS では既定オン
+        // （コアの既定はオフ。decisions.md H-25）。設定画面で変えられる。
+        // 本文が変わるのでハッシュも変わり、以前の生成物（誰も編集していないもの）は次の起動で作り直される
+        body += "\n[input.fuzzy]\nenabled = true\n"
         let config = "\(generatedMarker) body=\(bodyHash(body))\n" + body
         // 内容が同じなら書かない（ユーザー辞書画面を開くたびに更新時刻を進めて reload_config を誘発しない）
         if config == existing { return }

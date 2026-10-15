@@ -823,14 +823,14 @@ private struct NagiLayoutPreview: View {
         .frame(height: 30 * CGFloat(row.height))
     }
 
-    private func keyWidth(_ key: LayoutKey, weights: Double, total: CGFloat, count: Int) -> CGFloat {
+    private func keyWidth(_ key: LayoutKeyDef, weights: Double, total: CGFloat, count: Int) -> CGFloat {
         guard weights > 0 else { return 0 }
         let available = total - 3 * CGFloat(max(count - 1, 0))
         return max(0, available * CGFloat(key.width / weights))
     }
 
     @ViewBuilder
-    private func previewKey(_ key: LayoutKey) -> some View {
+    private func previewKey(_ key: LayoutKeyDef) -> some View {
         if key.kind == .spacer {
             Color.clear
         } else {
@@ -859,7 +859,7 @@ private struct NagiLayoutPreview: View {
         }
     }
 
-    private func label(of key: LayoutKey) -> String {
+    private func label(of key: LayoutKeyDef) -> String {
         if let label = key.label, !label.isEmpty { return label }
         if let text = key.text { return text }
         if let kana = key.kana { return String(kana.prefix(1)) }

@@ -38,7 +38,7 @@ struct VisibleCondition: Codable {
     }
 }
 
-struct LayoutKey: Codable {
+struct LayoutKeyDef: Codable {
     var id: String
     /// 行内の幅の比（既定 1）
     var width: Double
@@ -66,7 +66,7 @@ struct LayoutKey: Codable {
     var steps: [ShortcutStep]?
     // layout
     var target: String?
-    var longPress: [LayoutKey]?
+    var longPress: [LayoutKeyDef]?
     var visible: VisibleCondition?
     /// JSON で id が指定されていたか（省略時は補った id。検証では「指定あり」のものだけ形式を見る）
     var idGiven = true
@@ -100,7 +100,7 @@ struct LayoutKey: Codable {
         action = try c.decodeIfPresent(String.self, forKey: .action)
         steps = try c.decodeIfPresent([ShortcutStep].self, forKey: .steps)
         target = try c.decodeIfPresent(String.self, forKey: .target)
-        longPress = try c.decodeIfPresent([LayoutKey].self, forKey: .longPress)
+        longPress = try c.decodeIfPresent([LayoutKeyDef].self, forKey: .longPress)
         // 条件の形が想定と違っても、レイアウト全体は無効にしない（v1 では使わない）
         visible = (try? c.decodeIfPresent(VisibleCondition.self, forKey: .visible)) ?? nil
     }
@@ -133,7 +133,7 @@ struct LayoutKey: Codable {
 struct LayoutRow: Codable {
     /// 行の高さの比（既定 1）
     var height: Double
-    var keys: [LayoutKey]
+    var keys: [LayoutKeyDef]
 
     enum CodingKeys: String, CodingKey {
         case height, keys
@@ -142,10 +142,10 @@ struct LayoutRow: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         height = try c.decodeIfPresent(Double.self, forKey: .height) ?? 1
-        keys = try c.decode([LayoutKey].self, forKey: .keys)
+        keys = try c.decode([LayoutKeyDef].self, forKey: .keys)
     }
 
-    init(height: Double, keys: [LayoutKey]) {
+    init(height: Double, keys: [LayoutKeyDef]) {
         self.height = height
         self.keys = keys
     }
@@ -265,7 +265,7 @@ enum LayoutValidation {
     }
 
     /// 1 つのキー（行内のキー）の検証
-    static func keyError(_ key: LayoutKey, validTargets: Set<String>?) -> String? {
+    static func keyError(_ key: LayoutKeyDef, validTargets: Set<String>?) -> String? {
         if !matches(key.id, keyIdPattern) || !key.idGiven {
             return "キー「\(key.idGiven ? key.id : "(id なし)")」の id は英数字・_ . - で 32 文字以内にしてください"
         }
@@ -317,7 +317,7 @@ enum LayoutValidation {
     }
 
     /// 長押しの 1 項目（kind は text / action / shortcut のみ。label 必須）
-    private static func popupError(_ item: LayoutKey, owner: String) -> String? {
+    private static func popupError(_ item: LayoutKeyDef, owner: String) -> String? {
         if item.idGiven && !matches(item.id, keyIdPattern) { return "\(owner) の longPress の id が不正です" }
         if !inRange(item.label, 1, labelMax) { return "\(owner) の longPress の label は 1〜\(labelMax) 文字で指定してください" }
         if item.longPress != nil { return "\(owner) の longPress の中に longPress は置けません" }
@@ -493,8 +493,8 @@ enum LayoutLoader {
         return KeyboardLayoutDef(
             id: "builtin-minimal", name: "minimal", mode: .custom,
             rows: [LayoutRow(height: 1, keys: [
-                LayoutKey(id: "globe", kind: .action, label: "🌐", action: "globe"),
-                LayoutKey(id: "bs", kind: .action, label: "⌫", action: "backspace"),
+                LayoutKeyDef(id: "globe", kind: .action, label: "🌐", action: "globe"),
+                LayoutKeyDef(id: "bs", kind: .action, label: "⌫", action: "backspace"),
             ])]
         )
     }

@@ -29,6 +29,8 @@ struct CandidateItem: Identifiable {
     let surface: String
     /// 入力中（変換前）の候補で、先頭の何文字分の読みを置き換えるか。nil は読み全体
     let covers: Int?
+    /// 曖昧入力（タイプミス補正）の候補の「もしかして: かんじ」表示。補正候補でなければ nil
+    var hint: String? = nil
 }
 
 /// 英字のシフトの状態
@@ -102,6 +104,9 @@ final class KeyboardModel: ObservableObject {
     /// 直前に反映した、かな・英字モードのレイアウトの割り当て（変わったら表示中のレイアウトを切り替える）
     private var appliedAssignment: (kana: String, alpha: String)
     private var lastRevision: UInt32 = 0
+    /// キー領域の直近の大きさ（view が報告する）と、コアへ最後に送ったレイアウト幾何（曖昧入力用。同じ内容は送り直さない）
+    private var layoutGeometrySize: CGSize?
+    private var lastSentGeometry: LayoutGeometry.Snapshot?
     /// 自分のホスト操作（挿入・削除・マーク）の直近の時刻。`textDidChange` が自分の操作の結果か外部の変更かの判定に使う
     private var lastOwnHostOperation = Date.distantPast
     /// 自分の操作の結果とみなす猶予（秒）
@@ -169,6 +174,9 @@ final class KeyboardModel: ObservableObject {
         session?.onCandidatesUpdate = { [weak self] update in self?.applyCandidatesUpdate(update) }
         session?.startNotifications()
         reportEnvironment(reason: "attach")
+        // 新しいセッションは幾何を知らないので、送り直す
+        lastSentGeometry = nil
+        sendLayoutGeometry()
         if let session = session, !KanaKeyTable.fetchAttempted {
             let table = session.getKeyTable()
             KanaKeyTable.install(table)
@@ -375,10 +383,11 @@ final class KeyboardModel: ObservableObject {
     // MARK: - キー操作（レイアウトのキー）
 
     /// `text` キー: 文字を送る。かなモードはコアのローマ字変換に、それ以外はホストへそのまま入れる
-    func inputText(_ text: String, shift: String?) {
+    /// - touch: QWERTY の押下位置（キーの矩形内の相対位置）。曖昧入力の手がかりで、かなモードのローマ字入力にだけ使う
+    func inputText(_ text: String, shift: String?, touch: TouchPoint? = nil) {
         toggleState = nil
         if layoutDef.mode == .kana {
-            insertReading(text)
+            insertReading(text, touch: touch)
             return
         }
         let output: String
@@ -391,10 +400,18 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// かなモードの文字入力: かな直接 / ASCII（ローマ字）はコアが解決する。コアが無い・消費しないときはそのまま入れる
-    private func insertReading(_ text: String) {
-        if !send("text \(logText(text))", { $0.insert(.text(text)) }) {
+    private func insertReading(_ text: String, touch: TouchPoint? = nil) {
+        // 座標は英字 1 文字の押下にだけ意味がある。パスワード欄などでは送らない（ログにも出さない）
+        let sentTouch = isSingleLetter(text) && !(host?.hostIsSecure() ?? false) ? touch : nil
+        if !send("text \(logText(text))", { $0.insert(.text(text), touch: sentTouch) }) {
             hostInsert(text)
         }
+    }
+
+    private func isSingleLetter(_ text: String) -> Bool {
+        let scalars = text.unicodeScalars
+        guard scalars.count == 1, let scalar = scalars.first else { return false }
+        return (0x41...0x5A).contains(scalar.value) || (0x61...0x7A).contains(scalar.value)
     }
 
     /// `toggle` キー（ガラケー式）: 押すたびに `cycle` の次の文字に切り替わる。
@@ -402,7 +419,7 @@ final class KeyboardModel: ObservableObject {
     /// かなモードは、直前の文字をコアの backspace で消してから `insert_reading(text)` を送る
     /// （`ReadingInput.key12` のトグルはコアが 12 キーの行の表で解決するので、任意の cycle には使えない）。
     /// かな以外はホストの deleteBackward + insertText
-    func toggle(_ key: LayoutKey) {
+    func toggle(_ key: LayoutKeyDef) {
         let cycle = key.cycle ?? []
         guard !cycle.isEmpty else { return }
         let now = Date()
@@ -454,11 +471,12 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// `flick` キーの操作。`kana` 指定ならコアに任せ、文字を直接指定したキーはその文字を送る
-    func flick(_ key: LayoutKey, _ gesture: KeyGesture) {
+    /// - detail: フリックの角度・距離（曖昧入力の手がかり。`kana` 指定のキーにだけ使う）
+    func flick(_ key: LayoutKeyDef, _ gesture: KeyGesture, detail: FlickDetail? = nil) {
         toggleState = nil
         if let kana = key.kana {
             guard let entry = KanaKeyTable.entry(forName: kana) else { return }
-            self.key(entry.key, gesture)
+            self.key(entry.key, gesture, flick: detail)
             return
         }
         let char: FlickChar?
@@ -524,12 +542,14 @@ final class KeyboardModel: ObservableObject {
 
     // MARK: - キー操作（コアへ）
 
-    func key(_ key: KanaKey, _ gesture: KeyGesture) {
+    func key(_ key: KanaKey, _ gesture: KeyGesture, flick: FlickDetail? = nil) {
         toggleState = nil
         // フリック入力では、タップは常に先頭の文字。トグル入力では連続タップを置き換えにする
         let effective: KeyGesture = (gesture == .tap && toggleInput) ? .toggle : gesture
+        // フリックの角度は方向のあるフリックにだけ付ける。パスワード欄などでは送らない
+        let sentFlick = (effective == .tap || effective == .toggle || (host?.hostIsSecure() ?? false)) ? nil : flick
         let consumed = send("key12 \(key.rawValue) \(effective.rawValue)") {
-            $0.insert(.key12(ReadingInputKey12Inner(key: key, gesture: effective)))
+            $0.insert(.key12(ReadingInputKey12Inner(key: key, gesture: effective)), flick: sentFlick)
         }
         // コアが使えないときは、押されたキーの文字をそのままホストへ入れる（入力を失わない）
         if !consumed, let char = KanaKeyTable.char(for: key, gesture: effective) {
@@ -701,6 +721,7 @@ final class KeyboardModel: ObservableObject {
         applyLayoutAssignment()
         lastSentContext = nil
         DiagLog.log("focusIn layout=\(layoutDef.id)")
+        sendLayoutGeometry()
         if let result = session?.focusIn() { apply(result, origin: "response(focus_in)") }
         scheduleContextUpdate(delay: 0)
     }
@@ -745,6 +766,25 @@ final class KeyboardModel: ObservableObject {
         toggleState = nil
         DiagLog.log("focusOut")
         if let result = session?.focusOut() { apply(result, origin: "response(focus_out)") }
+    }
+
+    // MARK: - レイアウト幾何（set_layout_geometry）
+
+    /// キー領域の大きさが分かった・変わった（表示後・レイアウト切替・向き・高さの変更）。
+    /// 描画中のレイアウトのキー矩形をコアへ渡す。前回と同じ内容なら送らない
+    func updateLayoutGeometry(size: CGSize) {
+        layoutGeometrySize = size
+        sendLayoutGeometry()
+    }
+
+    private func sendLayoutGeometry() {
+        guard let session = session, let size = layoutGeometrySize else { return }
+        guard let snapshot = LayoutGeometry.snapshot(layout: layoutDef, size: size, spacing: NagiKeyMetrics.keySpacing),
+              snapshot != lastSentGeometry else { return }
+        lastSentGeometry = snapshot
+        let ok = session.setLayoutGeometry(snapshot)
+        // キーの座標は入力内容ではないが、ログには数だけ残す
+        DiagLog.log("set_layout_geometry layout=\(snapshot.layoutId) keys=\(snapshot.keys.count) ok=\(ok)")
     }
 
     // MARK: - 文脈（set_context）
@@ -930,7 +970,10 @@ final class KeyboardModel: ObservableObject {
             candidates = []
         } else {
             candidates = view.items.enumerated().map { index, item in
-                CandidateItem(id: index, surface: item.surface, covers: item.covers.map { Int($0) })
+                CandidateItem(
+                    id: index, surface: item.surface, covers: item.covers.map { Int($0) },
+                    hint: fuzzyHint(sources: item.sources, reading: item.reading)
+                )
             }
         }
         isNextWordCandidates = (kind == .nextWord)

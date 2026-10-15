@@ -119,6 +119,16 @@ private struct LayoutPad: View {
                     .zIndex((pressedKey ?? "").hasPrefix("\(rowIndex):") ? 1 : 0)
             }
         }
+        // キー領域の大きさをコアへ伝える（曖昧入力のキー近接。表示後・レイアウト切替・向き/高さの変更で送り直す。
+        // 内容が同じなら `KeyboardModel` が送らない）
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { model.updateLayoutGeometry(size: geo.size) }
+                    .onChange(of: geo.size) { size in model.updateLayoutGeometry(size: size) }
+                    .onChange(of: model.layoutDef.id) { _ in model.updateLayoutGeometry(size: geo.size) }
+            }
+        )
     }
 }
 
@@ -159,7 +169,7 @@ private struct RowView: View {
         return x
     }
 
-    private func cellWidth(_ key: LayoutKey, total: CGFloat) -> CGFloat {
+    private func cellWidth(_ key: LayoutKeyDef, total: CGFloat) -> CGFloat {
         let weights = row.keys.reduce(0.0) { $0 + $1.width }
         guard weights > 0 else { return 0 }
         let available = total - keySpacing * CGFloat(max(row.keys.count - 1, 0))
@@ -169,7 +179,7 @@ private struct RowView: View {
 
 /// キー 1 つ。種類ごとに描き分ける。`longPress` を持つキー（flick 以外）は長押しでポップアップを出す
 private struct KeyCell: View {
-    let key: LayoutKey
+    let key: LayoutKeyDef
     @ObservedObject var model: KeyboardModel
     let height: CGFloat
     let originX: CGFloat
@@ -186,7 +196,7 @@ private struct KeyCell: View {
                 content: KeyFaceContent(text: key.label ?? key.kana ?? key.center?.text, icon: key.icon),
                 chars: FlickChars(key: key),
                 onPress: onPress,
-                onGesture: { gesture in model.flick(key, gesture) }
+                onGesture: { gesture, detail in model.flick(key, gesture, detail: detail) }
             )
         case .action where key.action == "backspace":
             RepeatKeyView(
@@ -216,7 +226,7 @@ private struct KeyCell: View {
                     originX: originX,
                     rowWidth: rowWidth,
                     onPress: onPress,
-                    activateKey: { activate(key, model) },
+                    activateKey: { touch in activate(key, model, touch: touch) },
                     activateItem: { item in activate(item, model) }
                 )
             } else {
@@ -225,7 +235,7 @@ private struct KeyCell: View {
                     style: key.style,
                     active: key.action == "shift" && model.shiftState == .caps,
                     fontSize: fontSize(key),
-                    action: { activate(key, model) }
+                    action: { touch in activate(key, model, touch: touch) }
                 )
             }
         }
@@ -238,14 +248,14 @@ private struct KeyFaceContent {
     var icon: String?
 }
 
-private func fontSize(_ key: LayoutKey) -> CGFloat {
+private func fontSize(_ key: LayoutKeyDef) -> CGFloat {
     let count = (key.label ?? key.text ?? key.cycle?.first ?? "").count
     if count > 2 { return 16 }
     return (key.kind == .text) ? 20 : 17
 }
 
 /// 状態（変換中か・シフトか）に応じて表示を決める
-private func faceContent(_ key: LayoutKey, _ model: KeyboardModel) -> KeyFaceContent {
+private func faceContent(_ key: LayoutKeyDef, _ model: KeyboardModel) -> KeyFaceContent {
     if key.kind == .action {
         switch key.action ?? "" {
         case "space":
@@ -273,10 +283,10 @@ private func faceContent(_ key: LayoutKey, _ model: KeyboardModel) -> KeyFaceCon
 }
 
 /// タップしたときの動作
-private func activate(_ key: LayoutKey, _ model: KeyboardModel) {
+private func activate(_ key: LayoutKeyDef, _ model: KeyboardModel, touch: TouchPoint? = nil) {
     switch key.kind {
     case .text:
-        model.inputText(key.text ?? key.label ?? "", shift: key.shift)
+        model.inputText(key.text ?? key.label ?? "", shift: key.shift, touch: touch)
     case .action:
         if let action = key.action { model.perform(action: action) }
     case .layout:
@@ -341,31 +351,42 @@ private struct TapKeyView: View {
     let style: KeyStyle
     let active: Bool
     let fontSize: CGFloat
-    let action: () -> Void
+    /// 引数は、指が触れた位置のキー内の相対位置（曖昧入力の手がかり）
+    let action: (TouchPoint?) -> Void
 
     @GestureState private var isPressed = false
 
     var body: some View {
-        KeyFace(content: content, style: style, active: active, pressed: isPressed, fontSize: fontSize)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .updating($isPressed) { _, state, _ in state = true }
-                    .onEnded { value in
-                        // 指を大きく動かして離した場合は、押した扱いにしない
-                        if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
-                            NagiKeyFeedback.keyDown()
-                            action()
+        GeometryReader { geo in
+            KeyFace(content: content, style: style, active: active, pressed: isPressed, fontSize: fontSize)
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .updating($isPressed) { _, state, _ in state = true }
+                        .onEnded { value in
+                            // 指を大きく動かして離した場合は、押した扱いにしない
+                            if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
+                                NagiKeyFeedback.keyDown()
+                                action(touchPoint(value.startLocation, in: geo.size))
+                            }
                         }
-                    }
-            )
+                )
+        }
     }
+}
+
+/// キー内のローカル座標を、キーの矩形に対する相対位置（0..1）にする
+private func touchPoint(_ location: CGPoint, in size: CGSize) -> TouchPoint? {
+    guard let rel = TouchGeometry.relative(
+        x: Double(location.x), y: Double(location.y), width: Double(size.width), height: Double(size.height)
+    ) else { return nil }
+    return TouchPoint(x: rel.x, y: rel.y)
 }
 
 /// 長押しでポップアップを出すキー。`flick.long_press_ms` 押し続けると、キーの上に候補キーを並べる。
 /// 指を滑らせて選び、離すと実行する（text / action / shortcut / toggle / layout）。
 /// 長押しになる前に離したときは通常のタップ。ポップアップが出たあと、キーの下へ大きく外れて離すと取り消し
 private struct LongPressKeyView: View {
-    let popup: [LayoutKey]
+    let popup: [LayoutKeyDef]
     let content: KeyFaceContent
     let style: KeyStyle
     let active: Bool
@@ -374,8 +395,8 @@ private struct LongPressKeyView: View {
     let originX: CGFloat
     let rowWidth: CGFloat
     let onPress: (Bool) -> Void
-    let activateKey: () -> Void
-    let activateItem: (LayoutKey) -> Void
+    let activateKey: (TouchPoint?) -> Void
+    let activateItem: (LayoutKeyDef) -> Void
 
     /// 指が触れている間 true。ジェスチャが `onEnded` なしで取り消された（システムのジェスチャに奪われた等）とき、
     /// 自動で false に戻るので、それを検出して状態をリセットする
@@ -398,7 +419,7 @@ private struct LongPressKeyView: View {
                     DragGesture(minimumDistance: 0)
                         .updating($touching) { _, state, _ in state = true }
                         .onChanged { value in changed(value, keyWidth: geo.size.width) }
-                        .onEnded { value in ended(value) }
+                        .onEnded { value in ended(value, keySize: geo.size) }
                 )
         }
         .onChange(of: touching) { nowTouching in
@@ -440,7 +461,7 @@ private struct LongPressKeyView: View {
         }
     }
 
-    private func ended(_ value: DragGesture.Value) {
+    private func ended(_ value: DragGesture.Value, keySize: CGSize) {
         let wasPopup = popupShown
         let chosen = selected
         reset()
@@ -451,7 +472,7 @@ private struct LongPressKeyView: View {
             }
         } else if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
             NagiKeyFeedback.keyDown()
-            activateKey()
+            activateKey(touchPoint(value.startLocation, in: keySize))
         }
     }
 
@@ -663,7 +684,7 @@ private struct FlickChars {
     }
 
     /// レイアウトが文字を直接指定していればそれを、`kana` だけなら表示用の表（`KanaKeyTable`）を使う
-    init(key: LayoutKey) {
+    init(key: LayoutKeyDef) {
         if key.center != nil || key.left != nil || key.up != nil || key.right != nil || key.down != nil {
             center = key.center?.text
             left = key.left?.text
@@ -683,17 +704,24 @@ private struct FlickChars {
 /// フリックできるキー。タップは `.tap`、一定以上動かして離すと動かした向きのフリック。
 /// 押している間は、上下左右の文字をポップアップで案内する
 private struct FlickKeyView: View {
-    let key: LayoutKey
+    let key: LayoutKeyDef
     let content: KeyFaceContent
     let chars: FlickChars
     let onPress: (Bool) -> Void
-    let onGesture: (KeyGesture) -> Void
+    /// 操作と、方向のあるフリックならその角度・距離（曖昧入力の手がかり）
+    let onGesture: (KeyGesture, FlickDetail?) -> Void
 
     /// 押している間の移動量（押していなければ nil）
     @GestureState private var drag: CGSize? = nil
     @State private var reported = false
 
     var body: some View {
+        GeometryReader { keyGeo in
+            keyBody(keySize: keyGeo.size)
+        }
+    }
+
+    private func keyBody(keySize: CGSize) -> some View {
         KeyFace(
             content: content,
             style: key.style,
@@ -722,7 +750,16 @@ private struct FlickKeyView: View {
                     reported = false
                     onPress(false)
                     NagiKeyFeedback.keyDown()
-                    onGesture(Self.gesture(for: value.translation))
+                    let gesture = Self.gesture(for: value.translation)
+                    var detail: FlickDetail?
+                    if gesture != .tap,
+                       let flick = TouchGeometry.flick(
+                           dx: Double(value.translation.width), dy: Double(value.translation.height),
+                           keyWidth: Double(keySize.width)
+                       ) {
+                        detail = FlickDetail(angle_deg: flick.angleDeg, distance: flick.distance)
+                    }
+                    onGesture(gesture, detail)
                 }
         )
         // `onEnded` なしで取り消された場合（`drag` が nil に戻る）は、押下中の報告を取り消す。
@@ -906,16 +943,29 @@ private struct CandidateButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text(item.surface)
-                .font(.system(size: 17))
-                .foregroundColor(Color(UIColor.label))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(selected ? themeAccent.opacity(0.25)
-                              : Color(UIColor.systemBackground).opacity(nextWord ? 0.55 : 1))
-                )
+            VStack(spacing: 0) {
+                // 曖昧入力の補正候補: 「もしかして: かんじ」（選ぶと補正後の読みで確定する）
+                if let hint = item.hint {
+                    Text(hint)
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                        .lineLimit(1)
+                }
+                Text(item.surface)
+                    .font(.system(size: 17))
+                    .foregroundColor(Color(UIColor.label))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, item.hint == nil ? 6 : 2)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(selected ? themeAccent.opacity(0.25)
+                          : Color(UIColor.systemBackground).opacity(nextWord ? 0.55 : 1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.orange.opacity(item.hint == nil ? 0 : 0.5), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
     }
@@ -930,11 +980,20 @@ private struct ExpandedCandidates: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: keySpacing)], spacing: keySpacing) {
                 ForEach(model.candidates) { item in
                     Button(action: { model.selectCandidate(item.id) }) {
-                        Text(item.surface)
-                            .font(.system(size: 17))
-                            .lineLimit(1)
-                            .foregroundColor(Color(UIColor.label))
-                            .frame(maxWidth: .infinity, minHeight: keyHeight)
+                        VStack(spacing: 0) {
+                            if let hint = item.hint {
+                                Text(hint)
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.orange)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            Text(item.surface)
+                                .font(.system(size: 17))
+                                .lineLimit(1)
+                                .foregroundColor(Color(UIColor.label))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: keyHeight)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
                                     .fill(item.id == model.selectedCandidate

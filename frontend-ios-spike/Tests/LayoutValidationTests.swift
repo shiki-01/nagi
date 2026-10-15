@@ -136,7 +136,7 @@ final class LayoutValidationTests: XCTestCase {
         }
     }
 
-    // web: id は必須（spacer も同じ）。LayoutKey のコメントは「省略可」とあるが、検証は web と同じく必須にしている
+    // web: id は必須（spacer も同じ）。LayoutKeyDef のコメントは「省略可」とあるが、検証は web と同じく必須にしている
     func testKeyIdIsRequired() {
         var key = LB.text()
         key.removeValue(forKey: "id")

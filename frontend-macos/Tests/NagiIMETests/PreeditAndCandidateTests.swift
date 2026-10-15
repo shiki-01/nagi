@@ -46,7 +46,7 @@ final class PreeditAndCandidateTests: XCTestCase {
         -> CandidatesView
     {
         CandidatesView(
-            items: (0..<count).map { CandidateView(surface: "c\($0)", sources: [.llm, .systemDict, .llm], covers: nil) },
+            items: (0..<count).map { CandidateView(surface: "c\($0)", sources: [.llm, .systemDict, .llm], covers: nil, reading: nil) },
             selected: selected, page_size: pageSize, visible: visible)
     }
 

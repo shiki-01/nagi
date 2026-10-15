@@ -137,8 +137,32 @@ final class NagiSession {
 
     // MARK: - メソッド
 
-    func insert(_ input: ReadingInput) -> ProcessKeyResult? {
-        request("insert_reading", InsertReadingParams(session_id: sessionId, input: input))
+    /// 入力を送る。`touch`（QWERTY の 1 文字の押下位置。キーの矩形内の相対位置 0..1）と
+    /// `flick`（12 キーのフリックの角度・距離）は曖昧入力（タイプミス補正）の手がかりで、どちらも任意。
+    /// 両方 nil なら従来の `InsertReadingParams` と同じ内容を送る。座標はログに出さない
+    func insert(_ input: ReadingInput, touch: TouchPoint? = nil, flick: FlickDetail? = nil) -> ProcessKeyResult? {
+        if touch == nil && flick == nil {
+            return request("insert_reading", InsertReadingParams(session_id: sessionId, input: input))
+        }
+        return request(
+            "insert_reading",
+            InsertReadingTouchParams(session_id: sessionId, input: input, touch: touch, flick: flick)
+        )
+    }
+
+    /// 描画中のレイアウトのキー矩形を渡す（曖昧入力が、どのキーが隣かをここから導く）。
+    /// 英字キーが 10 個未満のレイアウトはコアが無視する。成功すれば true
+    @discardableResult
+    func setLayoutGeometry(_ snapshot: LayoutGeometry.Snapshot) -> Bool {
+        let keys = snapshot.keys.map {
+            LayoutKey(id: $0.id, label: $0.label, x: $0.x, y: $0.y, w: $0.w, h: $0.h)
+        }
+        let params = SetLayoutGeometryParams(
+            session_id: nil, layout_id: snapshot.layoutId, mode: snapshot.mode,
+            keys: keys, width: snapshot.width, height: snapshot.height
+        )
+        let result: EmptyResult? = request("set_layout_geometry", params)
+        return result != nil
     }
 
     func perform(_ action: TouchAction) -> ProcessKeyResult? {
