@@ -199,6 +199,12 @@ final class HostCompositionApplier {
         host?.hostSetMarkedText(p.text, cursor: p.cursor)
     }
 
+    /// applier を通らずにホストを操作した（`KeyboardModel` の直接の insertText / deleteBackward）。
+    /// 確定後の照合を、その後の操作で無効になったものとして扱わせる
+    func noteExternalOperation() {
+        operationCount += 1
+    }
+
     // MARK: - 本文の整合の確認
 
     private func scheduleVerify(committed: String) {

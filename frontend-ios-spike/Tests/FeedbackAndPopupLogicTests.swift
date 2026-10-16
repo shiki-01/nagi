@@ -1,6 +1,6 @@
 import XCTest
 
-/// トグルの置き換え判定、長押しの取り消し判定、触覚の互換モードの対応表
+/// トグルの置き換え判定（flick キーの cycle を含む）、長押しの取り消し判定、触覚の互換モードの対応表
 final class FeedbackAndPopupLogicTests: XCTestCase {
     // MARK: ToggleCycle
 
@@ -28,6 +28,24 @@ final class FeedbackAndPopupLogicTests: XCTestCase {
         XCTAssertFalse(ToggleCycle.isContinuation(cycleCount: 0, elapsedMs: 10, timeoutMs: 1000))
         XCTAssertFalse(ToggleCycle.isContinuation(cycleCount: 3, elapsedMs: -1, timeoutMs: 1000))
         XCTAssertFalse(ToggleCycle.isContinuation(cycleCount: 3, elapsedMs: .nan, timeoutMs: 1000))
+    }
+
+    func testFlickCycleOrderIsCenterLeftUpRightDown() {
+        let cycle = ToggleCycle.flickCycle(
+            center: FlickChar(text: "a"), left: FlickChar(text: "b"), up: FlickChar(text: "c"),
+            right: FlickChar(text: "d"), down: FlickChar(text: "e")
+        )
+        XCTAssertEqual(cycle, ["a", "b", "c", "d", "e"])
+    }
+
+    func testFlickCycleSkipsMissingAndEmptyDirections() {
+        let cycle = ToggleCycle.flickCycle(
+            center: FlickChar(text: "a"), left: nil, up: FlickChar(text: ""), right: FlickChar(text: "d"), down: nil
+        )
+        XCTAssertEqual(cycle, ["a", "d"])
+        // center だけなら 1 要素（呼び出し側はトグルにせず center を入れる）
+        XCTAssertEqual(ToggleCycle.flickCycle(center: FlickChar(text: "a"), left: nil, up: nil, right: nil, down: nil), ["a"])
+        XCTAssertEqual(ToggleCycle.flickCycle(center: nil, left: nil, up: nil, right: nil, down: nil), [])
     }
 
     // MARK: LongPressCancel

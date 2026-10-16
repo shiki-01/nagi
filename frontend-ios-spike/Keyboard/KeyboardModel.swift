@@ -490,14 +490,19 @@ final class KeyboardModel: ObservableObject {
     /// （`ReadingInput.key12` のトグルはコアが 12 キーの行の表で解決するので、任意の cycle には使えない）。
     /// かな以外はホストの deleteBackward + insertText
     func toggle(_ key: LayoutKeyDef) {
-        let cycle = key.cycle ?? []
+        toggle(keyId: key.id, cycle: key.cycle ?? [])
+    }
+
+    /// トグル入力の本体（`toggle` キーと、`kana` 指定の無い flick キーのトグル入力で共有する）。
+    /// `keyId` が直前と同じで時間内なら、直前の文字を `cycle` の次の文字に置き換える
+    private func toggle(keyId: String, cycle: [String]) {
         guard !cycle.isEmpty else { return }
         let now = Date()
         var index = 0
         var replaceCount = 0
         var upper = false
         var continued = false
-        if let state = toggleState, state.keyId == key.id, state.layoutId == layoutDef.id,
+        if let state = toggleState, state.keyId == keyId, state.layoutId == layoutDef.id,
            ToggleCycle.isContinuation(
                cycleCount: cycle.count, elapsedMs: now.timeIntervalSince(state.at) * 1000, timeoutMs: ios.toggleTimeoutMs
            ) {
@@ -509,7 +514,7 @@ final class KeyboardModel: ObservableObject {
             upper = shiftState != .off
             if shiftState == .once { shiftState = .off }
         }
-        DiagLog.log("toggle key=\(key.id) index=\(index) continued=\(continued) hadState=\(toggleState != nil) timeout=\(ios.toggleTimeoutMs)")
+        DiagLog.log("toggle key=\(keyId) index=\(index) continued=\(continued) hadState=\(toggleState != nil) timeout=\(ios.toggleTimeoutMs)")
         let base = cycle[index]
         let text = (layoutDef.mode != .kana && upper) ? base.uppercased() : base
         if layoutDef.mode == .kana {
@@ -521,7 +526,7 @@ final class KeyboardModel: ObservableObject {
             hostDeleteBackward(replaceCount)
             hostInsert(text)
         }
-        toggleState = ToggleState(keyId: key.id, layoutId: layoutDef.id, index: index, last: text, upper: upper, at: now)
+        toggleState = ToggleState(keyId: keyId, layoutId: layoutDef.id, index: index, last: text, upper: upper, at: now)
     }
 
     /// 入力中の文字列を確定する（なければ何もしない）
@@ -545,15 +550,28 @@ final class KeyboardModel: ObservableObject {
         ios = latest
     }
 
-    /// `flick` キーの操作。`kana` 指定ならコアに任せ、文字を直接指定したキーはその文字を送る
+    /// `flick` キーの操作。`kana` 指定ならコアに任せ、文字を直接指定したキーはその文字を送る。
+    /// 文字を直接指定したキーも、トグル入力（設定 `input.toggle_input`）ならタップで
+    /// center → left → up → right → down の順に回す（2 文字以上あるときだけ。1 文字なら center を入れる）
     /// - detail: フリックの角度・距離（曖昧入力の手がかり。`kana` 指定のキーにだけ使う）
     func flick(_ key: LayoutKeyDef, _ gesture: KeyGesture, detail: FlickDetail? = nil) {
-        toggleState = nil
         if let kana = key.kana {
+            toggleState = nil
             guard let entry = KanaKeyTable.entry(forName: kana) else { return }
             self.key(entry.key, gesture, flick: detail)
             return
         }
+        if gesture == .tap && toggleInput {
+            let cycle = ToggleCycle.flickCycle(
+                center: key.center, left: key.left, up: key.up, right: key.right, down: key.down
+            )
+            if cycle.count > 1 {
+                // toggleState は共通関数が続きかどうかの判定に使うので、ここでは破棄しない
+                toggle(keyId: key.id, cycle: cycle)
+                return
+            }
+        }
+        toggleState = nil
         let char: FlickChar?
         switch gesture {
         case .tap, .toggle: char = key.center
@@ -1068,6 +1086,8 @@ final class KeyboardModel: ObservableObject {
 
     private func hostInsert(_ text: String) {
         applier.flushPending()
+        // applier を通らない操作なので、古い照合を走らせないよう applier に知らせる
+        applier.noteExternalOperation()
         lastOwnHostOperation = Date()
         DiagLog.log("host insertText \(logText(text))")
         host?.hostInsertText(text)
@@ -1075,6 +1095,7 @@ final class KeyboardModel: ObservableObject {
 
     private func hostDeleteBackward(_ count: Int) {
         applier.flushPending()
+        applier.noteExternalOperation()
         lastOwnHostOperation = Date()
         DiagLog.log("host deleteBackward x\(count)")
         for _ in 0..<count { host?.hostDeleteBackward() }

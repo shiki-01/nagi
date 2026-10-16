@@ -16,6 +16,51 @@ enum NagiKeyMetrics {
     static var totalHeight: Double { 56 + 214 * current.heightScale }
 }
 
+/// 互換モード（システムサウンド）の触覚・クリック音の再生。
+/// `AudioServicesPlaySystemSound` をメインスレッドで呼ぶと、速く打ったときに鳴り終わるまで次の入力が遅れたので、
+/// 専用の直列キューで鳴らす。種類（触覚・音）ごとに再生中なら次の要求は捨てる（重ねない・待たせない）。
+/// 再生中のフラグはキューの上だけで読み書きする
+private enum CompatFeedbackPlayer {
+    enum Kind {
+        case haptic, sound
+    }
+
+    private static let queue = DispatchQueue(label: "com.shiki.nagi.feedback", qos: .userInteractive)
+    /// キューの上だけで読み書きする（Swift の並行性検査を抑制）
+    nonisolated(unsafe) private static var hapticPlaying = false
+    nonisolated(unsafe) private static var soundPlaying = false
+
+    /// `id` を鳴らす（メインスレッドから呼ぶ。すぐ戻る）。
+    /// `onDropped` は再生中で捨てたときにメインスレッドで呼ぶ（ログ用。ログはメインスレッドで出す）
+    static func play(_ id: SystemSoundID, kind: Kind, onDropped: (() -> Void)? = nil) {
+        queue.async {
+            if isPlaying(kind) {
+                if let onDropped = onDropped { DispatchQueue.main.async(execute: onDropped) }
+                return
+            }
+            setPlaying(kind, true)
+            AudioServicesPlaySystemSoundWithCompletion(id) {
+                // 完了ハンドラは任意のスレッドで呼ばれるので、フラグはキューへ戻してから戻す
+                queue.async { setPlaying(kind, false) }
+            }
+        }
+    }
+
+    private static func isPlaying(_ kind: Kind) -> Bool {
+        switch kind {
+        case .haptic: return hapticPlaying
+        case .sound: return soundPlaying
+        }
+    }
+
+    private static func setPlaying(_ kind: Kind, _ value: Bool) {
+        switch kind {
+        case .haptic: hapticPlaying = value
+        case .sound: soundPlaying = value
+        }
+    }
+}
+
 /// キー入力のフィードバック（触覚・クリック音）。いずれも失敗しても何も起きない。
 /// 触覚はフルアクセスが無いと出ない（`fullAccess`。`KeyboardViewController` が画面表示のたびに更新する）。
 /// 診断ログ（DiagLog）に、発火のたびに状況を残す（先頭の数十回のみ。focusIn のたびに数え直す）
@@ -69,11 +114,14 @@ enum NagiKeyFeedback {
         if shouldLog { logCount += 1 }
         if let style = feedbackStyle(for: haptic) {
             if settings.hapticEngine == "compat" {
+                // 鳴らすのは専用のキュー。ここでは要求するだけで、再生中で捨てたかは後からメインスレッドで分かる
                 if let id = HapticMapping.systemSoundID(for: haptic) {
-                    AudioServicesPlaySystemSound(id)
+                    CompatFeedbackPlayer.play(id, kind: .haptic, onDropped: shouldLog ? {
+                        DiagLog.log("haptic fire kind=\(haptic) engine=compat dropped=true")
+                    } : nil)
                 }
                 if shouldLog {
-                    DiagLog.log("haptic fire kind=\(haptic) engine=compat fullAccess=\(fullAccess) generator=none")
+                    DiagLog.log("haptic fire kind=\(haptic) engine=compat fullAccess=\(fullAccess) generator=none requested=true")
                 }
             } else {
                 // 方式を切り替えた・設定が変わった場合はここで作り直す。押下のたびには作らない
@@ -95,8 +143,10 @@ enum NagiKeyFeedback {
             }
             if mode == "compat" {
                 // システムのキーボードのクリック音（1104）を直接鳴らす。端末の「キーボードのクリック」設定には
-                // 従わず、消音スイッチに従う
-                AudioServicesPlaySystemSound(1104)
+                // 従わず、消音スイッチに従う。鳴らすのは専用のキュー（再生中なら捨てる）
+                CompatFeedbackPlayer.play(1104, kind: .sound, onDropped: shouldLog ? {
+                    DiagLog.log("click play mode=compat dropped=true")
+                } : nil)
             } else {
                 // 端末の「キーボードのクリック」がオンのときだけ鳴る。入力ビュー階層に UIInputViewAudioFeedback に
                 // 準拠したビューが要る（下の拡張。`UIInputView` は `UIView` の子孫なので準拠を引き継ぐ。

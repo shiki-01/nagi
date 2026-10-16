@@ -727,7 +727,8 @@ private struct FlickChars {
 
 /// フリックできるキー。タップは `.tap`、一定以上動かして離すと動かした向きのフリック。
 /// 押している間は、上下左右の文字をポップアップで案内する。
-/// キーの幅・高さの 2 倍を超えて動かすと取り消し（ポップアップを半透明にして「取り消し」と出し、離しても入力しない。`FlickCancel`）
+/// キーの幅・高さの 2 倍を超えて動かすと取り消し（離しても入力しない。`FlickCancel`）。
+/// 取り消しは表示を出さずに静かに行い、その範囲にいる間はポップアップのどのセルも選択色にしない
 private struct FlickKeyView: View {
     let key: LayoutKeyDef
     let content: KeyFaceContent
@@ -757,22 +758,11 @@ private struct FlickKeyView: View {
         .overlay(
             GeometryReader { geo in
                 if let drag = drag {
-                    let cancelled = Self.isCancelled(drag, keySize: keySize)
+                    // 取り消しの範囲では選択なし（nil）にする
+                    let selected: KeyGesture? = Self.isCancelled(drag, keySize: keySize) ? nil : Self.gesture(for: drag)
                     ZStack {
                         if chars.hasAny, NagiKeyMetrics.current.flickPopup {
-                            FlickPopup(chars: chars, selected: Self.gesture(for: drag), size: geo.size)
-                                .opacity(cancelled ? 0.4 : 1)
-                        }
-                        if cancelled {
-                            // 長押しの取り消し（LongPressKeyView）と同じ見た目。キーの中央に出す
-                            Text("取り消し")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.red))
-                                .fixedSize()
-                                .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                            FlickPopup(chars: chars, selected: selected, size: geo.size)
                         }
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
@@ -850,7 +840,8 @@ private struct FlickKeyView: View {
 /// フリックの押下ポップアップ: 押したキーの位置に中央の文字、上下左右に各方向の文字を出す
 private struct FlickPopup: View {
     let chars: FlickChars
-    let selected: KeyGesture
+    /// 選択色にするセル。nil はどれも選ばない（フリックの取り消しの範囲）
+    let selected: KeyGesture?
     let size: CGSize
 
     var body: some View {

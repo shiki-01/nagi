@@ -92,6 +92,12 @@ enum ToggleCycle {
         guard cycleCount > 0, let previous = previous else { return 0 }
         return (previous + 1) % cycleCount
     }
+
+    /// `kana` 指定の無い flick キーをトグル入力で回すときの cycle。
+    /// center → left → up → right → down の順に並べる（未指定の方向は除く。空文字も入れない）
+    static func flickCycle(center: FlickChar?, left: FlickChar?, up: FlickChar?, right: FlickChar?, down: FlickChar?) -> [String] {
+        [center, left, up, right, down].compactMap { $0?.text }.filter { !$0.isEmpty }
+    }
 }
 
 /// フリックの取り消し判定
