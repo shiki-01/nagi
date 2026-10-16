@@ -111,7 +111,7 @@ final class KeyboardModel: ObservableObject {
     /// 直前に反映した、かな・英字モードのレイアウトの割り当て（変わったら表示中のレイアウトを切り替える）
     private var appliedAssignment: (kana: String, alpha: String)
     private var lastRevision: UInt32 = 0
-    /// 直近の変換中の文字列の文節数と注目文節（候補を選んだあと次の文節へ進むかの判定に使う）
+    /// 直近の変換中の文字列の文節数と注目文節（候補を選んだあと、その文節までを確定するかの判定に使う）
     private var segmentCount = 0
     private var focusIndex: Int?
     /// キー領域の直近の大きさ（view が報告する）と、コアへ最後に送ったレイアウト幾何（曖昧入力用。同じ内容は送り直さない）
@@ -837,7 +837,7 @@ final class KeyboardModel: ObservableObject {
         host?.hostAdvanceToNextInputMode()
     }
 
-    /// 候補を選ぶ。変換中は選んだあと、後ろに文節が残っていれば次の文節へ進み、最後の文節（または文節が 1 つ）なら確定する。
+    /// 候補を選ぶ。変換中は選んだあと、後ろに文節が残っていればその文節までを確定して残りの変換を続け、最後の文節（または文節が 1 つ）なら確定する。
     /// 入力中（変換前）は選んだ候補が置き換える読みの部分をコアが確定する（部分変換。残りは入力中のまま続く）
     func selectCandidate(_ index: Int) {
         guard let session = session else { return }
@@ -851,7 +851,8 @@ final class KeyboardModel: ObservableObject {
         if let result = session.selectCandidate(index) { apply(result, origin: "response(select_candidate)") }
         guard converting else { return }
         if let focus = focusBefore, focus < countBefore - 1 {
-            send("move_focus right") { $0.perform(.moveFocus(.right)) }
+            // 選んだ文節までを確定し、残りは変換中のまま続ける（iOS 標準の日本語キーボードと同じ。H-34）
+            send("commit_focused") { $0.perform(.commitFocused) }
         } else if let result = session.perform(.commit) {
             apply(result, origin: "response(commit)")
         }
