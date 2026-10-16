@@ -137,27 +137,15 @@ enum NagiKeyFeedback {
             }
         }
         if settings.soundEnabled {
-            let mode = settings.soundMode
             if shouldLog {
-                DiagLog.log("click play mode=\(mode) anchorView=\(anchorView != nil)")
+                DiagLog.log("click play mode=\(settings.soundMode)")
             }
-            if mode == "compat" {
-                // システムのキーボードのクリック音（1104）を直接鳴らす。端末の「キーボードのクリック」設定には
-                // 従わず、消音スイッチに従う。鳴らすのは専用のキュー（再生中なら捨てる）
-                CompatFeedbackPlayer.play(1104, kind: .sound, onDropped: shouldLog ? {
-                    DiagLog.log("click play mode=compat dropped=true")
-                } : nil)
-            } else {
-                // 端末の「キーボードのクリック」がオンのときだけ鳴る。入力ビュー階層に UIInputViewAudioFeedback に
-                // 準拠したビューが要る（下の拡張。`UIInputView` は `UIView` の子孫なので準拠を引き継ぐ。
-                // それでも鳴らない端末では、`loadView` で `UIInputView` のサブクラスを `inputView` に据える案が次の手）
-                UIDevice.current.playInputClick()
-            }
+            // システムのキーボードのクリック音（1104）を直接鳴らす。端末の「キーボードのクリック」設定には
+            // 従わず、消音スイッチに従う。鳴らすのは専用のキュー（再生中なら捨てる）。
+            // 端末の設定に従う `UIDevice.playInputClick()` は実機で鳴らなかったので使わない
+            CompatFeedbackPlayer.play(1104, kind: .sound, onDropped: shouldLog ? {
+                DiagLog.log("click play mode=compat dropped=true")
+            } : nil)
         }
     }
-}
-
-/// `UIDevice.playInputClick()` を有効にするための準拠（キーボード拡張のビューは UIInputView の子孫）
-extension UIView: @retroactive UIInputViewAudioFeedback {
-    public var enableInputClicksWhenVisible: Bool { true }
 }

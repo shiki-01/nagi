@@ -28,6 +28,7 @@ final class IOSSettingsTests: XCTestCase {
         XCTAssertEqual(s.haptic, "light")
         XCTAssertTrue(s.soundEnabled)
         XCTAssertEqual(s.soundMode, "compat")
+        XCTAssertTrue(s.layoutByField)
         XCTAssertEqual(s.commitMethod, "insert")
         XCTAssertEqual(s.hapticEngine, "standard")
         XCTAssertEqual(s.toggleTimeoutMs, 1000)
@@ -116,6 +117,22 @@ final class IOSSettingsTests: XCTestCase {
         XCTAssertEqual(s.string(K.keyboardHeight), "standard")
         s.set(K.keyboardSound, .string("system"))
         XCTAssertTrue(s.soundEnabled)
+        XCTAssertEqual(s.soundMode, "compat")
+    }
+
+    func testLegacySystemSoundIsReadAsCompat() throws {
+        // 以前の版が保存した `system`（廃止）は、読むときに既定の `compat` に丸める
+        let s = try decode(#"{"schema":1,"keyboard.sound":"system"}"#)
+        XCTAssertEqual(s.soundMode, "compat")
+        XCTAssertTrue(s.soundEnabled)
+    }
+
+    func testLayoutByFieldCanBeTurnedOff() {
+        var s = NagiIOSSettings()
+        s.set(K.keyboardLayoutByField, .bool(false))
+        XCTAssertFalse(s.layoutByField)
+        s.set(K.keyboardLayoutByField, .number(1))
+        XCTAssertTrue(s.layoutByField)
     }
 
     func testBoolKeepsBoolValue() {

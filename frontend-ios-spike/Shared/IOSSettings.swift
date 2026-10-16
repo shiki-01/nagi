@@ -209,6 +209,10 @@ struct NagiIOSSettings: Codable, Equatable {
             description: "キーの角の丸さです。",
             kind: .float(min: 0, max: 16, step: 1), isSimple: false, defaultValue: .number(6)),
         NagiIOSSettingDef(
+            key: Key.keyboardLayoutByField, group: "キーボード", label: "入力欄の種類でレイアウトを切り替える",
+            description: "メール・URL の欄では英字、数字の欄では数字の配列で開きます。改行キーの表示も入力欄に合わせます。",
+            kind: .bool, isSimple: false, defaultValue: .bool(true)),
+        NagiIOSSettingDef(
             key: Key.keyboardHaptic, group: "キーボード", label: "キー入力の触覚",
             description: "キーを押したときの振動です。フルアクセスを許可していないと働かない場合があります。",
             kind: NagiIOSSettings.choice([("off", "オフ"), ("light", "弱"), ("medium", "中"), ("heavy", "強")]),
@@ -220,8 +224,8 @@ struct NagiIOSSettings: Codable, Equatable {
             isSimple: false, defaultValue: .string("standard")),
         NagiIOSSettingDef(
             key: Key.keyboardSound, group: "キーボード", label: "キー入力の音",
-            description: "「互換」はシステムのキーボードのクリック音を直接鳴らします（消音スイッチに従います）。「システム」は端末の「キーボードのクリック」設定に従います。",
-            kind: NagiIOSSettings.choice([("off", "オフ"), ("compat", "クリック音（互換）"), ("system", "システムのクリック音")]),
+            description: "システムのキーボードのクリック音を鳴らします（消音スイッチに従います。端末の「キーボードのクリック」設定には従いません）。",
+            kind: NagiIOSSettings.choice([("off", "オフ"), ("compat", "クリック音")]),
             isSimple: true, defaultValue: .string("compat")),
         NagiIOSSettingDef(
             key: Key.keyboardTheme, group: "キーボード", label: "テーマ",
@@ -278,6 +282,7 @@ struct NagiIOSSettings: Codable, Equatable {
         static let keyboardOneHandedWidth = "keyboard.one_handed_width"
         static let keyboardKeySpacingPt = "keyboard.key_spacing_pt"
         static let keyboardKeyCornerPt = "keyboard.key_corner_pt"
+        static let keyboardLayoutByField = "keyboard.layout_by_field"
         static let keyboardHaptic = "keyboard.haptic"
         static let keyboardHapticEngine = "keyboard.haptic_engine"
         static let keyboardSound = "keyboard.sound"
@@ -352,8 +357,11 @@ struct NagiIOSSettings: Codable, Equatable {
     /// 触覚の方式（`standard` / `compat`）
     var hapticEngine: String { string(Key.keyboardHapticEngine) }
     var soundEnabled: Bool { string(Key.keyboardSound) != "off" }
-    /// キー入力の音の方式（`off` / `compat` / `system`）
+    /// キー入力の音の方式（`off` / `compat`）。以前の版が保存した `system`（`UIDevice.playInputClick`。実機で鳴らなかったので
+    /// 廃止）は選択肢に無いので、読むときに既定の `compat` に丸められる
     var soundMode: String { string(Key.keyboardSound) }
+    /// 入力欄の種類（`keyboardType` / `returnKeyType`）でレイアウトと改行キーの表示を切り替えるか
+    var layoutByField: Bool { bool(Key.keyboardLayoutByField) }
     /// 確定の方式（`insert` / `mark` / `delete`。`HostCompositionApplier.CommitMethod`）
     var commitMethod: String { string(Key.keyboardCommitMethod) }
     var spaceSwipe: Bool { bool(Key.spaceSwipe) }

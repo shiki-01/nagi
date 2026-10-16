@@ -135,7 +135,7 @@
 | `keyboard.layout_number` | 数字モードのレイアウト | choice: `numbers` / ユーザー定義 | `numbers` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_symbol` | 記号モードのレイアウト | choice: `symbols` / ユーザー定義 | `symbols` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_emoji` | 絵文字モードのレイアウト | choice: `emoji` / ユーザー定義 | `emoji` | D | kbd | 新規(iOS) | |
-| `keyboard.layout_by_field` | 入力欄の種類で自動切替（URL・メール・数字） | bool | true | D | kbd | 新規(iOS) | `keyboardType` に従う。数字パッド欄では数字配列。自動切替の動作は実装済み（`Keyboard/InputTraits.swift`。メール・URL・`asciiCapable` は英字、数字系は `numbers`、指定のない欄に移ると自動で切り替えていた場合だけかなへ戻す）。この設定での OFF は未実装 |
+| `keyboard.layout_by_field` | 入力欄の種類で自動切替（URL・メール・数字） | bool | true | D | kbd | 実装済み(iOS・要実機確認) | `keyboardType` に従う。数字パッド欄では数字配列。自動切替は `Keyboard/InputTraits.swift`（メール・URL・`asciiCapable` は英字、数字系は `numbers`、指定のない欄に移ると自動で切り替えていた場合だけかなへ戻す）。改行キーの表示も `returnKeyType` に合わせる。OFF ではレイアウトを自動で選ばず、改行キーもレイアウトのラベルのまま（OFF にする前に自動で切り替えていた場合は、次の focusIn・入力欄の切替でかなへ戻す。`KeyboardModel.applyInputTraits()`） |
 | `keyboard.remember_last_mode` | 最後に使ったモードで起動 | bool | true | D | kbd | 新規(iOS) | OFF の場合は `input.mode` で起動 |
 | `keyboard.height` | キーボードの高さ | choice: `compact` / `standard` / `tall` | `standard` | S | kbd | 既存(iOS) | 内部的には下記の倍率 |
 | `keyboard.height_scale` | 高さの倍率 | float 0.8–1.3, step 0.05 | 1.0 | D | kbd | 既存(iOS) | 縦・横画面で別々に持つ（`keyboard.height_scale_landscape`） |
@@ -147,10 +147,10 @@
 | `keyboard.key_label_size` | キー文字の大きさ | float 0.8–1.4（倍率） | 1.0 | D | kbd | 新規(iOS) | Dynamic Type との関係は `a11y.*` で整理 |
 | `keyboard.show_globe` | 地球儀キーを出す | bool | 自動（OS の `needsInputModeSwitchKey`） | D | kbd | 新規(iOS) | 他のキーボードへ切り替えられない端末では常に出す |
 | `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS・要実機確認) | **触覚の発生にはフルアクセスが要る**（`UIFeedbackGenerator` は拡張では制限あり。要実機確認） |
-| `keyboard.sound` | キー入力の音 | choice: `off` / `compat` / `system` | `compat` | S | kbd | 既存(iOS・要実機確認) | `compat` はシステムのキーボードのクリック音（`AudioServicesPlaySystemSound(1104)`）を直接鳴らす（端末の「キーボードのクリック」設定には従わず、消音スイッチに従う）。`system` は端末の「キーボードのクリック」設定に従う（`UIDevice.playInputClick`。端末側のクリック設定がオフなら鳴らない）。独自音源は持たない。**既定は `compat`**（実装 `IOSSettings.swift` の `defaultValue`） |
+| `keyboard.sound` | キー入力の音 | choice: `off` / `compat`（表示名「クリック音」） | `compat` | S | kbd | 既存(iOS・要実機確認) | `compat` はシステムのキーボードのクリック音（`AudioServicesPlaySystemSound(1104)`）を直接鳴らす（端末の「キーボードのクリック」設定には従わず、消音スイッチに従う）。以前あった `system`（`UIDevice.playInputClick`。端末の「キーボードのクリック」設定に従う）は実機で鳴らなかったので廃止した。保存済みの `system` は読むときに既定の `compat` に丸める。独自音源は持たない。**既定は `compat`**（実装 `IOSSettings.swift` の `defaultValue`） |
 | `keyboard.haptic_engine` | 触覚の方式（互換モード） | choice: `standard` / `compat` | `standard` | D | kbd | 実装済み(iOS・要実機確認) | `standard` は `UIImpactFeedbackGenerator`、`compat` は「標準」が働かない端末向けで、システムサウンド（Peek など）の振動で知らせる（`AudioServicesPlaySystemSound`）。`keyboard.haptic` が `off` のときは働かない |
 | `keyboard.commit_method` | 確定の方式（診断用） | choice: `insert` / `mark` / `delete` | `insert` | D | kbd | 実装済み(iOS・要実機確認) | 変換中の文字列がある状態での確定の手順（`HostCompositionApplier.CommitMethod`）。`insert` は `insertText` だけで変換中の範囲を置き換える（失敗しても手前の本文を消さない）。`mark` は確定文字列を `setMarkedText` してから `unmarkText`。`delete` は旧方式（`unmarkText` → `deleteBackward`×N → `insertText`。実機で手前の本文を消すことがあった）。不具合の切り分け用 |
-| `keyboard.sound_volume` | 音量 | float 0–1 | 0.5 | - | kbd | 新規(iOS) | `system` では OS が音量を決めるため非表示 |
+| `keyboard.sound_volume` | 音量 | float 0–1 | 0.5 | - | kbd | 新規(iOS) | システムサウンド（`compat`）は OS が音量を決めるため、独自音源を持つまでは不要 |
 | `keyboard.theme` | テーマ | choice: `system` / `light` / `dark`（ユーザー定義は未実装） | `system` | S | kbd | 実装済み(iOS・要実機確認) | 拡張のビューの `overrideUserInterfaceStyle` で上書き |
 | `keyboard.accent` | アクセントカラー | choice: `blue` / `green` / `orange` / `pink` / `gray` | `blue` | S | kbd | 実装済み(iOS・要実機確認) | 確定キー・選択中の候補・シフト等の色。任意色（sRGB 16 進）は未実装。旧 ID `keyboard.accent_color` |
 | `keyboard.key_color_set` | キーの配色 | choice: `standard` / `high_contrast` / `custom` | `standard` | D | kbd | 新規(iOS) | `custom` 時は色ごとの指定を JSON で持つ |

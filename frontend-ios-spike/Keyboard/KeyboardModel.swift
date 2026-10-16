@@ -755,11 +755,24 @@ final class KeyboardModel: ObservableObject {
 
     /// 入力欄の種類（`keyboardType` / `returnKeyType`）を表示に反映する（focusIn・入力欄の切替のたび）。
     /// レイアウトの指定がある欄（メール・URL・数字など）ではそのレイアウトへ自動で切り替え、指定のない欄に移ったら
-    /// 自動で切り替えていた場合だけかなへ戻す（ユーザーが選んだレイアウトは変えない）
+    /// 自動で切り替えていた場合だけかなへ戻す（ユーザーが選んだレイアウトは変えない）。
+    /// 設定 `keyboard.layout_by_field` がオフなら、レイアウトは自動で選ばず、改行キーもレイアウトのラベルのままにする
+    /// （オフにする前に自動で切り替えていた場合は、かなへ戻して印を消す）
     private func applyInputTraits() {
-        returnKeyLabel = host?.hostReturnKeyType().flatMap { InputTraitsMapping.returnLabel(for: $0) }
         let type = host?.hostKeyboardType()
         let typeName = type.map { String($0.rawValue) } ?? "-"
+        guard ios.layoutByField else {
+            returnKeyLabel = nil
+            if autoSelectedLayout {
+                autoSelectedLayout = false
+                if layoutDef.mode != .kana { changeLayout(target: "kana") }
+                DiagLog.log("input traits keyboardType=\(typeName) -> kana (restore, layout_by_field=off)")
+            } else {
+                DiagLog.log("input traits keyboardType=\(typeName) -> none (layout_by_field=off)")
+            }
+            return
+        }
+        returnKeyLabel = host?.hostReturnKeyType().flatMap { InputTraitsMapping.returnLabel(for: $0) }
         if let preferred = type.flatMap({ InputTraitsMapping.preferredLayout(for: $0) }) {
             // 既にそのモードのレイアウトなら何もしない（ユーザーが選んだ同じモードの別レイアウトも含めて変えない）
             guard layoutDef.mode != preferred.mode else {

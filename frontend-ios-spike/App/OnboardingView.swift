@@ -148,6 +148,10 @@ struct NagiOnboardingView: View {
                     Text("追加したら、どこかの入力欄で 🌐 キーを押して Nagi に切り替えると、ここの確認が「OK」になります。キーボードを一度表示するまでは「未検出」のままです。")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    // パスワード欄のあと iOS は標準キーボードに切り替え、戻るときは一覧の上にあるキーボードが選ばれやすい
+                    Text("ほかの他社製キーボードも入れている場合は、設定 > 一般 > キーボード > キーボード で Nagi を上に並べてください。パスワード欄のあと（iOS が標準キーボードに切り替えます）に Nagi へ戻りやすくなります。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
 
                 Section("手順 2  フルアクセスを許可する") {
