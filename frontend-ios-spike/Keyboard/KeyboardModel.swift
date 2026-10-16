@@ -129,6 +129,9 @@ final class KeyboardModel: ObservableObject {
     /// 表示中のレイアウトが入力欄の種類による自動選択か（指定のない欄に移ったら、かなへ戻す）。
     /// ユーザーが自分で切り替えたら false にし、その選択を変えない
     private var autoSelectedLayout = false
+    /// 直近に反映した入力欄の種類（keyboardType・returnKeyType の rawValue）。入力欄が替わっても
+    /// documentIdentifier の変化や viewWillAppear が来ないことがあるため、textDidChange でも見比べて変われば反映し直す
+    private var lastAppliedTraits: (keyboard: Int, returnKey: Int)?
     /// シフトを直前に押した時刻（2 回連続の判定）
     private var lastShiftTap: Date?
     /// 2 回連続とみなす間隔（秒）
@@ -760,6 +763,7 @@ final class KeyboardModel: ObservableObject {
     /// （オフにする前に自動で切り替えていた場合は、かなへ戻して印を消す）
     private func applyInputTraits() {
         let type = host?.hostKeyboardType()
+        lastAppliedTraits = (type?.rawValue ?? -1, host?.hostReturnKeyType()?.rawValue ?? -1)
         let typeName = type.map { String($0.rawValue) } ?? "-"
         guard ios.layoutByField else {
             returnKeyLabel = nil
@@ -950,6 +954,11 @@ final class KeyboardModel: ObservableObject {
 
     /// ホストの入力欄が変わった（外部からの変更・カーソル移動・自分の操作の結果）
     func hostTextChanged() {
+        // 入力欄の種類が変わっていれば（同じ VC のまま別の欄へ移った場合など）、レイアウトと改行キーを反映し直す
+        let traits = (host?.hostKeyboardType()?.rawValue ?? -1, host?.hostReturnKeyType()?.rawValue ?? -1)
+        if let last = lastAppliedTraits, last.keyboard != traits.0 || last.returnKey != traits.1 {
+            applyInputTraits()
+        }
         // 自分の操作の結果ではない変更（カーソル移動・他アプリによる書き換え）が起きたら、
         // 直前のトグル入力の「置き換え」は続けない
         // （ホストからの通知は遅れて届くことがある。本文の末尾が直前に入れた文字のままなら、続きとみなして残す）
