@@ -135,7 +135,7 @@
 | `keyboard.layout_number` | 数字モードのレイアウト | choice: `numbers` / ユーザー定義 | `numbers` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_symbol` | 記号モードのレイアウト | choice: `symbols` / ユーザー定義 | `symbols` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_emoji` | 絵文字モードのレイアウト | choice: `emoji` / ユーザー定義 | `emoji` | D | kbd | 新規(iOS) | |
-| `keyboard.layout_by_field` | 入力欄の種類で自動切替（URL・メール・数字） | bool | true | D | kbd | 新規(iOS) | `keyboardType` に従う。数字パッド欄では数字配列 |
+| `keyboard.layout_by_field` | 入力欄の種類で自動切替（URL・メール・数字） | bool | true | D | kbd | 新規(iOS) | `keyboardType` に従う。数字パッド欄では数字配列。自動切替の動作は実装済み（`Keyboard/InputTraits.swift`。メール・URL・`asciiCapable` は英字、数字系は `numbers`、指定のない欄に移ると自動で切り替えていた場合だけかなへ戻す）。この設定での OFF は未実装 |
 | `keyboard.remember_last_mode` | 最後に使ったモードで起動 | bool | true | D | kbd | 新規(iOS) | OFF の場合は `input.mode` で起動 |
 | `keyboard.height` | キーボードの高さ | choice: `compact` / `standard` / `tall` | `standard` | S | kbd | 既存(iOS) | 内部的には下記の倍率 |
 | `keyboard.height_scale` | 高さの倍率 | float 0.8–1.3, step 0.05 | 1.0 | D | kbd | 既存(iOS) | 縦・横画面で別々に持つ（`keyboard.height_scale_landscape`） |

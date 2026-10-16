@@ -61,6 +61,8 @@ final class KeyboardModel: ObservableObject {
     /// クリップボードに文字列があるか（候補バーの「貼り付け」ボタンの表示判定）。
     /// 判定は `hasStrings` だけで行い、中身は読まない（読むとペーストの許可確認が出るため、タップ時のみ読む）
     @Published private(set) var clipboardHasText = false
+    /// 改行キーに出す文字（入力欄の `returnKeyType` から。既定の改行なら nil でレイアウトのラベルのまま）
+    @Published private(set) var returnKeyLabel: String?
     private var pasteboardObserver: NSObjectProtocol?
 
     weak var host: KeyboardHost? {
@@ -124,6 +126,9 @@ final class KeyboardModel: ObservableObject {
     private var shownCursor: Int { applier.shownCursor }
     /// 読み込み済みレイアウトの控え（id → 定義）。フォーカスが戻るたびに破棄して読み直す
     private var layoutCache: [String: KeyboardLayoutDef] = [:]
+    /// 表示中のレイアウトが入力欄の種類による自動選択か（指定のない欄に移ったら、かなへ戻す）。
+    /// ユーザーが自分で切り替えたら false にし、その選択を変えない
+    private var autoSelectedLayout = false
     /// シフトを直前に押した時刻（2 回連続の判定）
     private var lastShiftTap: Date?
     /// 2 回連続とみなす間隔（秒）
@@ -716,9 +721,16 @@ final class KeyboardModel: ObservableObject {
         switchLayout(target: layoutDef.mode == .kana ? "alpha" : "kana")
     }
 
-    /// 別のレイアウトへ。`target` は `kana` / `alpha`（各モードに割り当てたレイアウト）またはレイアウトの id。
-    /// 入力中の文字列は確定してから切り替える
+    /// ユーザーの操作（レイアウトキー・モード切替）による切替。以後は入力欄の種類による自動選択で戻さない
     func switchLayout(target: String) {
+        autoSelectedLayout = false
+        changeLayout(target: target)
+    }
+
+    /// 別のレイアウトへ。`target` は `kana` / `alpha`（各モードに割り当てたレイアウト）またはレイアウトの id。
+    /// 入力中の文字列は確定してから切り替える。切り替えたら true（自動選択・割り当ての反映からも使う）
+    @discardableResult
+    private func changeLayout(target: String) -> Bool {
         let next: KeyboardLayoutDef?
         switch target {
         case "kana": next = cachedLayout(assigned: .kana)
@@ -727,7 +739,7 @@ final class KeyboardModel: ObservableObject {
         }
         guard let next = next else {
             DiagLog.log("layout target not found: \(target)")
-            return
+            return false
         }
         toggleState = nil
         if hasPreedit, let session = session, let result = session.perform(.commit) {
@@ -738,6 +750,31 @@ final class KeyboardModel: ObservableObject {
         lastShiftTap = nil
         isExpanded = false
         DiagLog.log("layout -> \(next.id) mode=\(next.mode.rawValue)")
+        return true
+    }
+
+    /// 入力欄の種類（`keyboardType` / `returnKeyType`）を表示に反映する（focusIn・入力欄の切替のたび）。
+    /// レイアウトの指定がある欄（メール・URL・数字など）ではそのレイアウトへ自動で切り替え、指定のない欄に移ったら
+    /// 自動で切り替えていた場合だけかなへ戻す（ユーザーが選んだレイアウトは変えない）
+    private func applyInputTraits() {
+        returnKeyLabel = host?.hostReturnKeyType().flatMap { InputTraitsMapping.returnLabel(for: $0) }
+        let type = host?.hostKeyboardType()
+        let typeName = type.map { String($0.rawValue) } ?? "-"
+        if let preferred = type.flatMap({ InputTraitsMapping.preferredLayout(for: $0) }) {
+            // 既にそのモードのレイアウトなら何もしない（ユーザーが選んだ同じモードの別レイアウトも含めて変えない）
+            guard layoutDef.mode != preferred.mode else {
+                DiagLog.log("input traits keyboardType=\(typeName) -> \(preferred.target) (already)")
+                return
+            }
+            if changeLayout(target: preferred.target) { autoSelectedLayout = true }
+            DiagLog.log("input traits keyboardType=\(typeName) -> \(preferred.target)")
+        } else if autoSelectedLayout {
+            autoSelectedLayout = false
+            if layoutDef.mode != .kana { changeLayout(target: "kana") }
+            DiagLog.log("input traits keyboardType=\(typeName) -> kana (restore)")
+        } else {
+            DiagLog.log("input traits keyboardType=\(typeName) -> none (keep \(layoutDef.id))")
+        }
     }
 
     private func cachedLayout(id: String) -> KeyboardLayoutDef? {
@@ -829,6 +866,8 @@ final class KeyboardModel: ObservableObject {
         // 閉じている間に手放した LLM、または起動時に待たせた LLM を、空きメモリを確かめて読み込む
         updateWarning()
         scheduleLLMRestore(after: 0.3)
+        // 入力欄の種類によるレイアウトの自動選択（割り当ての反映 `applyLayoutAssignment` より後）
+        applyInputTraits()
     }
 
     /// ホストアプリでの変更をコアに反映する。`config.toml` の更新時刻が変わっていれば `reload_config`
@@ -859,10 +898,11 @@ final class KeyboardModel: ObservableObject {
         let alphaChanged = alpha != appliedAssignment.alpha
         guard kanaChanged || alphaChanged else { return }
         appliedAssignment = (kana: kana, alpha: alpha)
+        // 割り当ての反映はユーザーの選択ではないので、自動選択の印は残す
         if kanaChanged && layoutDef.mode == .kana {
-            switchLayout(target: "kana")
+            changeLayout(target: "kana")
         } else if alphaChanged && layoutDef.mode == .alpha {
-            switchLayout(target: "alpha")
+            changeLayout(target: "alpha")
         }
     }
 
@@ -930,6 +970,8 @@ final class KeyboardModel: ObservableObject {
         isExpanded = false
         lastSentContext = nil
         scheduleContextUpdate(delay: 0)
+        // 新しい欄の種類に合わせてレイアウトと改行キーの表示を選び直す
+        applyInputTraits()
     }
 
     /// 文脈の送信を予約する。連続した変更は 1 回にまとめる

@@ -263,7 +263,8 @@ private func faceContent(_ key: LayoutKeyDef, _ model: KeyboardModel) -> KeyFace
         case "space":
             return KeyFaceContent(text: model.hasPreedit ? "変換" : (key.label ?? "空白"), icon: nil)
         case "enter":
-            return KeyFaceContent(text: model.hasPreedit ? "確定" : (key.label ?? "改行"), icon: nil)
+            // 入力欄の改行キーの種類（検索・送信など）があればその表示にする
+            return KeyFaceContent(text: model.hasPreedit ? "確定" : (model.returnKeyLabel ?? key.label ?? "改行"), icon: nil)
         case "shift":
             // ラベルが無ければ状態で記号を変える（小文字 / 次の 1 文字だけ大文字 / Caps Lock）
             if let label = key.label { return KeyFaceContent(text: label, icon: nil) }

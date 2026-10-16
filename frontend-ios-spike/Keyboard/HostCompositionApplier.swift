@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// ホストアプリのテキスト入力欄への操作（`UIInputViewController` が実装する）
 protocol KeyboardHost: AnyObject {
@@ -21,11 +22,17 @@ protocol KeyboardHost: AnyObject {
     func hostContextAfterInput() -> String?
     /// パスワード欄など、学習・文脈の送信・ログを止めるべき入力欄か
     func hostIsSecure() -> Bool
+    /// 入力欄のキーボードの種類（`keyboardType`。レイアウトの自動選択に使う。取れなければ nil）
+    func hostKeyboardType() -> UIKeyboardType?
+    /// 入力欄の改行キーの種類（`returnKeyType`。改行キーの表示に使う。取れなければ nil）
+    func hostReturnKeyType() -> UIReturnKeyType?
 }
 
 extension KeyboardHost {
     /// 既定は取れない（テスト用のホストなど）
     func hostContextAfterInput() -> String? { nil }
+    func hostKeyboardType() -> UIKeyboardType? { nil }
+    func hostReturnKeyType() -> UIReturnKeyType? { nil }
 }
 
 /// 変換中の文字列（マーク）と確定の手順をホストへ適用する。

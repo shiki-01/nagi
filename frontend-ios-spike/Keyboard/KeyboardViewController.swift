@@ -194,6 +194,14 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         textDocumentProxy.documentContextAfterInput
     }
 
+    func hostKeyboardType() -> UIKeyboardType? {
+        textDocumentProxy.keyboardType
+    }
+
+    func hostReturnKeyType() -> UIReturnKeyType? {
+        textDocumentProxy.returnKeyType
+    }
+
     func hostIsSecure() -> Bool {
         let proxy = textDocumentProxy
         if proxy.isSecureTextEntry ?? false { return true }
