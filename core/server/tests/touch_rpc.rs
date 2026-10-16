@@ -78,6 +78,40 @@ fn perform_action_drives_conversion_and_commit() {
 }
 
 #[test]
+fn commit_focused_commits_up_to_the_focused_segment() {
+    use nagi_engine::MockBackend;
+
+    let backend = MockBackend::new().with_sentence(
+        "きょうはあめ",
+        vec![
+            ("きょう", vec!["今日", "京"]),
+            ("は", vec!["は"]),
+            ("あめ", vec!["雨", "飴"]),
+        ],
+    );
+    let mut s = Server::new(Arc::new(backend), "balanced", EngineConfig::default());
+    call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocol_version":1,"client_name":"t","client_version":"0","os":"ios"}}),
+    );
+    insert(&mut s, 2, json!({"type":"text","content":"きょうはあめ"}));
+    action(&mut s, 3, json!({"type":"space"}));
+    let r = action(&mut s, 4, json!({"type":"move_focus","content":"right"}));
+    assert_eq!(r["result"]["preedit"]["focus"], 1);
+    let r = action(&mut s, 5, json!({"type":"commit_focused"}));
+    assert_eq!(r["result"]["consumed"], true);
+    assert_eq!(r["result"]["commit"], "今日は");
+    assert_eq!(r["result"]["preedit"]["text"], "雨");
+    assert_eq!(r["result"]["preedit"]["focus"], 0);
+    assert_eq!(r["result"]["candidates"]["visible"], true);
+    // 残りの最後の文節で使うと、すべてを確定して終わる
+    let r = action(&mut s, 6, json!({"type":"commit_focused"}));
+    assert_eq!(r["result"]["commit"], "雨");
+    assert_eq!(r["result"]["preedit"]["text"], "");
+}
+
+#[test]
 fn actions_with_direction_and_mode_payloads_parse() {
     let mut s = server();
     insert(&mut s, 2, json!({"type":"text","content":"あい"}));

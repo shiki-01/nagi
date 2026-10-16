@@ -78,7 +78,7 @@
 - かな入力レイアウト（ローマ字入力のみ）
 - 手書き・音声入力
 - クラウド変換（すべてローカル完結。プライバシー方針でもある）
-- iOS / Android の実装（v1 では対象外。ただし将来の対応を前提とし、コアは `mobile-design.md` §3 の制約を守って開発する）
+- Android の実装（v1 では対象外。ただし将来の対応を前提とし、コアは `mobile-design.md` §3 の制約を守って開発する）。iOS は実装中（TestFlight で実機検証。`mobile-roadmap.md`）
 - 候補ウィンドウのマウス操作（v1では非対応で可）
 
 ## 3. 全体アーキテクチャ
@@ -455,8 +455,9 @@ model = "style"              # style | 専用GGUFパス
 
 - fcitx5 addon。コアがkeysymベースなので追加コストは小さい見込み
 
-### 5.5 iOS / Android（将来）
+### 5.5 iOS（実装中）/ Android（将来）
 
+- iOS は実装中（`frontend-ios-spike/`。TestFlight で実機検証。進捗は `mobile-roadmap.md`）。Android は将来
 - 詳細は `mobile-design.md`。コアは子プロセスではなくライブラリ（FFI）として組み込み、JSON-RPC スキーマは共通のまま使う
 - デスクトップ開発中から守る制約（コアのライブラリ完結・パス注入・メモリを意識した辞書形式・キー以外の入力経路）は同文書 §3
 
@@ -642,7 +643,7 @@ Safari・Chrome・VS Code・ターミナル・メモ・Slack/Discord・Microsoft
 - Linux (fcitx5) / スタイル変換の複数候補提示 / 辞書の半自動拡張 /
   アプリ別プロファイル / 候補ウィンドウのリッチ化（注釈・プレビュー）/
   変換モデルの自前 fine-tune / Laya 等による英日自動判定（評価結果次第で前倒し）
-- モバイル（Android 先行 → iOS）: Phase M0〜M4（`mobile-design.md` §7）
+- モバイル: Phase M0〜M4（`mobile-design.md` §7）。当初計画は Android 先行、実際は iOS を先行（H-15、`mobile-roadmap.md`）
 
 ---
 

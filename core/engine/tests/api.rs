@@ -1315,6 +1315,20 @@ fn sentence_view_shows_multiple_whole_sentence_candidates() {
     assert_eq!(preedit.text, "今日はいい");
 }
 
+/// 文全体表示（メガ文節）は 1 文節に見えるので、注目文節までの確定は全体の確定になる
+/// （内部の文節分割の先頭だけを確定しない）
+#[test]
+fn commit_focused_on_whole_sentence_view_commits_everything() {
+    use nagi_protocol::methods::TouchAction;
+    let mut e = Engine::new(sentence_nbest_backend(), EngineConfig::default());
+    type_str(&mut e, "s", "kyouhaii");
+    press(&mut e, "s", "Space");
+    assert_eq!(e.snapshot("s").unwrap().preedit.segments.len(), 1);
+    let r = e.perform_action("s", &TouchAction::CommitFocused);
+    assert_eq!(r.commit.as_deref(), Some("今日はいい"));
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+}
+
 #[test]
 fn next_candidate_switches_whole_sentence_surface_without_segmenting() {
     let mut e = Engine::new(sentence_nbest_backend(), EngineConfig::default());

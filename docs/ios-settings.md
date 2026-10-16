@@ -146,7 +146,7 @@
 | `keyboard.key_corner_pt` | キーの角丸 | float 0–16 pt, step 1 | 6 | D | kbd | 既存(iOS) | |
 | `keyboard.key_label_size` | キー文字の大きさ | float 0.8–1.4（倍率） | 1.0 | D | kbd | 新規(iOS) | Dynamic Type との関係は `a11y.*` で整理 |
 | `keyboard.show_globe` | 地球儀キーを出す | bool | 自動（OS の `needsInputModeSwitchKey`） | D | kbd | 新規(iOS) | 他のキーボードへ切り替えられない端末では常に出す |
-| `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS・要実機確認) | **触覚の発生にはフルアクセスが要る**（`UIFeedbackGenerator` は拡張では制限あり。要実機確認） |
+| `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS・要実機確認) | 触覚の発生にフルアクセスが要るかは未確認（`UIFeedbackGenerator` は拡張では制限あり。要実機確認。`ios-device-checklist.md` §3） |
 | `keyboard.sound` | キー入力の音 | choice: `off` / `compat`（表示名「クリック音」） | `compat` | S | kbd | 既存(iOS・要実機確認) | `compat` はシステムのキーボードのクリック音（`AudioServicesPlaySystemSound(1104)`）を直接鳴らす（端末の「キーボードのクリック」設定には従わず、消音スイッチに従う）。以前あった `system`（`UIDevice.playInputClick`。端末の「キーボードのクリック」設定に従う）は実機で鳴らなかったので廃止した。保存済みの `system` は読むときに既定の `compat` に丸める。独自音源は持たない。**既定は `compat`**（実装 `IOSSettings.swift` の `defaultValue`） |
 | `keyboard.haptic_engine` | 触覚の方式（互換モード） | choice: `standard` / `compat` | `standard` | D | kbd | 実装済み(iOS・要実機確認) | `standard` は `UIImpactFeedbackGenerator`、`compat` は「標準」が働かない端末向けで、システムサウンド（Peek など）の振動で知らせる（`AudioServicesPlaySystemSound`）。`keyboard.haptic` が `off` のときは働かない |
 | `keyboard.commit_method` | 確定の方式（診断用） | choice: `insert` / `mark` / `delete` | `insert` | D | kbd | 実装済み(iOS・要実機確認) | 変換中の文字列がある状態での確定の手順（`HostCompositionApplier.CommitMethod`）。`insert` は `insertText` だけで変換中の範囲を置き換える（失敗しても手前の本文を消さない）。`mark` は確定文字列を `setMarkedText` してから `unmarkText`。`delete` は旧方式（`unmarkText` → `deleteBackward`×N → `insertText`。実機で手前の本文を消すことがあった）。不具合の切り分け用 |
@@ -192,7 +192,7 @@
 | `data.dict_status` | システム辞書の状態表示（版・サイズ・取得日） | 表示 | - | S | app | 新規(iOS) | 保存先は App Group の `dict/`（`DataPaths`） |
 | `data.dict_fetch` | 辞書の取得・更新 | 操作 | - | S | app | 取り込み（取得は手動） | ホストアプリがバンドル同梱の辞書を App Group にコピーする（取り込み）。取得（ダウンロード）は手動。現状の iOS 側に SHA-256 検証は無い（デスクトップの取得タスクは検証あり） |
 | `data.models` | 取得済みモデルの一覧 | 表示（名前・量子化・サイズ・メモリ目安） | - | D | app | 新規(iOS) | `conversion.model` の選択肢の元 |
-| `data.model_fetch` | モデルの取得・更新 | 操作 | - | S | app | 取り込み（取得は手動） | iOS の現行既定は xsmall（`ProductSession.swift` の `preferredModelPath`）。small は精度で優位（H-17）だが、iOS の既定をどちらにするかは未決（`ios-device-checklist.md` の要判断 (c)）。ライセンス表示を併記 |
+| `data.model_fetch` | モデルの取得・更新 | 操作 | - | S | app | 取り込み（取得は手動） | iOS の既定は small（`DataPaths.swift` の `defaultModelFileName`）。未選択時は端末の予算で自動選択（余裕があれば small）、Picker での明示選択を優先（`ProductSession.swift` の `preferredModelPath`。`decisions.md` H-22(c)）。ライセンス表示を併記 |
 | `data.download_wifi_only` | Wi-Fi のみでダウンロード | bool | true | S | app | 新規(iOS) | 容量が大きいためモバイル回線は既定で使わない |
 | `data.download_confirm_mb` | この容量以上は確認を出す | int 10–2000 | 100 | D | app | 新規(iOS) | |
 | `data.delete_dict` | 辞書の削除 | 操作 | - | D | app | 新規(iOS) | 容量確保用。削除後は読みそのまま返す縮退動作 |
@@ -221,11 +221,11 @@
 | `diag.status` | 状態表示（プロファイル・LLM の有無・メモリ・辞書の有無） | 表示 | - | S | app | 既存(iOS) | 実機計測画面の簡略版。入力内容は含めない |
 | `diag.latency_view` | 応答時間の表示（直近 N 回の p50/p95） | 表示 | - | D | app | 既存(iOS) | 現状はホストアプリの実機計測（H 節）。常用の画面に整理する |
 | `diag.memory_view` | 拡張のメモリ使用量の表示 | 表示 | - | D | app | 既存(iOS) | `MemoryProbe` 相当 |
-| `diag.log_enabled` | 診断ログを記録 | bool | false | D | kbd+core | 既存(iOS) | **入力内容はログに残さない**（CLAUDE.md）。件数・時間・エラーコードのみ。デバッグビルドのみ内容の記録を opt-in で許可 |
+| `diag.log_enabled` | 診断ログを記録 | bool | TestFlight・開発用ビルドは true、App Store 配布は false | D | kbd+core | 既存(iOS) | TestFlight 配布期間中は既定 ON で入力内容を含める（パスワード欄は伏せる）。App Store 配布版は既定 OFF・内容を含めない（`decisions.md` H-22(a)、CLAUDE.md の例外。判定は `DiagLog.isTestBuild`） |
 | `diag.log_level` | ログのレベル | choice: `error` / `warn` / `info` / `debug` | `warn` | D | kbd+core | 新規(iOS) | `debug` はデバッグビルドのみ |
 | `diag.log_export` | ログの書き出し | 操作 | - | D | app | 新規(iOS) | 共有シート。書き出し前に内容の種類を表示 |
 | `diag.log_clear` | ログの削除 | 操作 | - | D | app | 新規(iOS) | |
-| `diag.log_max_kb` | ログの最大サイズ | int 64–4096 | 512 | - | kbd | 新規(iOS) | ローテーション |
+| `diag.log_max_kb` | ログの最大サイズ | int 64–4096 | 64 | - | kbd | 新規(iOS) | 設定項目は未実装。現状は固定で、64KB を超えたら後半 32KB を残して切り詰める（`DiagLog.swift` の `maxBytes` / `keepBytes`） |
 | `diag.report_crash_flag` | 前回の異常終了（メモリ超過など）を検出して案内 | bool | true | D | kbd+app | 新規(iOS) | 拡張が起動中フラグを書き、正常終了で消す方式。検出時は `profile` の降格を提案 |
 
 ### 2.10 実験的機能（`exp`）
@@ -249,7 +249,7 @@
 
 | 種別 | 保存先 | 書く側 | 読む側 |
 | --- | --- | --- | --- |
-| コア設定（`core:` の項目） | App Group コンテナの `config.toml`（`--user-dir` 直下。デスクトップと同じ形式） | ホストアプリ（`update_settings` 相当）。拡張が動作中なら拡張内のコアが書く | コア（拡張プロセス内） |
+| コア設定（`core:` の項目） | App Group コンテナの `user/config.toml`（`<App Group>/user/config.toml`。`--user-dir` 直下。デスクトップと同じ形式。`ProductSession.prepareUserDir`） | ホストアプリ（`update_settings` 相当）。拡張が動作中なら拡張内のコアが書く | コア（拡張プロセス内） |
 | iOS 固有設定（`kbd` / `app` の項目） | App Group コンテナの `ios-settings.json`（`schema` 番号つき。未知のキーは保持） | ホストアプリ | キーボード拡張、ホストアプリ |
 | キーボードレイアウト | App Group の `keyboard/layouts/<id>.json` | ホストアプリ | キーボード拡張 |
 | 学習・ユーザー辞書 | App Group の `learning.tsv` / `user_dict/` | コア（拡張内）、ホストアプリ（登録・削除） | コア |

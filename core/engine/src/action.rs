@@ -31,6 +31,9 @@ pub enum Action {
     SelectCand(usize),
     /// 確定（Enter）
     Commit,
+    /// 変換中は先頭から注目文節（複数文節の選択中は選択範囲の末尾）までを確定し、残りは変換中の
+    /// まま続ける。入力中は `Commit` と同じ。既定のキー割当は無く、キーマップで明示的に割り当てる
+    CommitFocused,
     /// 取消（Escape）
     Cancel,
     /// バックスペース
@@ -81,6 +84,7 @@ impl fmt::Display for Action {
             Action::PrevCand => write!(f, "PrevCand"),
             Action::SelectCand(n) => write!(f, "SelectCand({})", n),
             Action::Commit => write!(f, "Commit"),
+            Action::CommitFocused => write!(f, "CommitFocused"),
             Action::Cancel => write!(f, "Cancel"),
             Action::Backspace => write!(f, "Backspace"),
             Action::DeleteForward => write!(f, "DeleteForward"),

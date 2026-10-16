@@ -328,6 +328,149 @@ fn no_composing_candidates_while_romaji_is_pending_or_for_literals() {
     assert!(e.composing_candidate_reading("s").is_none());
 }
 
+// ---- 注目文節までの確定（`CommitFocused`） ----
+
+use nagi_engine::{CommitContext, CommitObserver, CommittedSegment};
+use std::sync::Mutex;
+
+/// 確定の通知（学習）を記録する
+#[derive(Default)]
+struct Commits(Mutex<Vec<Vec<CommittedSegment>>>);
+
+impl CommitObserver for Commits {
+    fn on_commit(&self, _ctx: &CommitContext<'_>, segments: &[CommittedSegment]) {
+        self.0.lock().unwrap().push(segments.to_vec());
+    }
+
+    fn on_forget(&self, _ctx: &CommitContext<'_>, _reading: &str, _surface: &str) -> bool {
+        false
+    }
+}
+
+impl Commits {
+    /// 各通知の (読み, 表記) の列
+    fn pairs(&self) -> Vec<Vec<(String, String)>> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                c.iter()
+                    .map(|s| (s.reading.clone(), s.surface.clone()))
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+/// 「きょうはあめ」を Space 変換し、文節に分けたうえで注目文節を `focus` にする
+fn converting_with_focus(focus: u32) -> (Engine, Arc<Commits>) {
+    let mut e = mock_engine();
+    let rec = Arc::new(Commits::default());
+    e.set_commit_observer(rec.clone());
+    type_text(&mut e, "きょうはあめ");
+    e.perform_action("s", &TouchAction::Space);
+    // 文全体表示（メガ文節）を、注目文節の移動で文節に分ける
+    e.perform_action("s", &TouchAction::MoveFocus(TouchDirection::Right));
+    e.perform_action("s", &TouchAction::MoveFocus(TouchDirection::Left));
+    for _ in 0..focus {
+        e.perform_action("s", &TouchAction::MoveFocus(TouchDirection::Right));
+    }
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.preedit.segments.len(), 3);
+    assert_eq!(snap.preedit.focus, Some(focus));
+    (e, rec)
+}
+
+fn pair(reading: &str, surface: &str) -> (String, String) {
+    (reading.to_string(), surface.to_string())
+}
+
+#[test]
+fn commit_focused_at_first_segment_keeps_the_rest_converting() {
+    let (mut e, rec) = converting_with_focus(0);
+    let before = e.snapshot("s").unwrap().revision;
+    let r = e.perform_action("s", &TouchAction::CommitFocused);
+    assert!(r.consumed);
+    assert_eq!(r.commit.as_deref(), Some("今日"));
+    assert!(r.revision > before);
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Converting);
+    assert_eq!(snap.preedit.text, "は雨");
+    let readings: Vec<_> = snap
+        .preedit
+        .segments
+        .iter()
+        .map(|s| s.reading.as_str())
+        .collect();
+    assert_eq!(readings, ["は", "あめ"]);
+    assert_eq!(snap.preedit.focus, Some(0));
+    // 注目文節（残りの先頭）の候補を出す（H-13）
+    assert!(snap.candidates.visible);
+    assert!(snap.candidates.items.iter().any(|c| c.surface == "は"));
+    assert_eq!(rec.pairs(), vec![vec![pair("きょう", "今日")]]);
+    // 残りを確定すると、確定済みの文節を左文脈として学習に通知する
+    let r = e.perform_action("s", &TouchAction::Enter);
+    assert_eq!(r.commit.as_deref(), Some("は雨"));
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+    let commits = rec.0.lock().unwrap();
+    assert_eq!(commits.len(), 2);
+    assert!(commits[1][0].left_context.ends_with("今日"));
+    assert_eq!(commits[1][0].prev_word, "今日");
+}
+
+#[test]
+fn commit_focused_at_middle_segment_commits_up_to_it() {
+    let (mut e, rec) = converting_with_focus(1);
+    let r = e.perform_action("s", &TouchAction::CommitFocused);
+    assert_eq!(r.commit.as_deref(), Some("今日は"));
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Converting);
+    assert_eq!(snap.preedit.text, "雨");
+    assert_eq!(snap.preedit.segments.len(), 1);
+    assert_eq!(snap.preedit.focus, Some(0));
+    assert!(snap.candidates.visible);
+    assert!(snap.candidates.items.iter().any(|c| c.surface == "飴"));
+    assert_eq!(
+        rec.pairs(),
+        vec![vec![pair("きょう", "今日"), pair("は", "は")]]
+    );
+}
+
+#[test]
+fn commit_focused_at_last_segment_commits_everything() {
+    let (mut e, rec) = converting_with_focus(2);
+    let r = e.perform_action("s", &TouchAction::CommitFocused);
+    assert_eq!(r.commit.as_deref(), Some("今日は雨"));
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Direct);
+    assert_eq!(snap.preedit.text, "");
+    assert_eq!(
+        rec.pairs(),
+        vec![vec![
+            pair("きょう", "今日"),
+            pair("は", "は"),
+            pair("あめ", "雨")
+        ]]
+    );
+    // 通常の確定と同じく、確定の取消ができる
+    let r = e.perform_action("s", &TouchAction::UndoCommit);
+    assert!(r.consumed);
+    assert_eq!(text(&mut e), "きょうはあめ");
+}
+
+#[test]
+fn commit_focused_while_composing_commits_like_commit() {
+    let mut e = engine();
+    type_text(&mut e, "かな");
+    let r = e.perform_action("s", &TouchAction::CommitFocused);
+    assert!(r.consumed);
+    assert_eq!(r.commit.as_deref(), Some("かな"));
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+    // 未入力では消費しない
+    assert!(!e.perform_action("s", &TouchAction::CommitFocused).consumed);
+}
+
 #[test]
 fn dakuten_order_decides_tsu_and_u_cycles() {
     use nagi_engine::touch::DakutenOrder;

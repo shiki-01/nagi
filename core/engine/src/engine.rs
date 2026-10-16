@@ -569,6 +569,7 @@ impl Engine {
                 State::Converting(_) => Action::NextCand,
             },
             TouchAction::Enter | TouchAction::Commit => Action::Commit,
+            TouchAction::CommitFocused => Action::CommitFocused,
             TouchAction::StartConvert => Action::StartConvert,
             TouchAction::Predict => Action::Predict,
             TouchAction::NextCandidate => Action::NextCand,
@@ -1645,7 +1646,8 @@ impl Engine {
                     sess.state = State::Direct;
                 }
             }
-            Action::Commit => self.commit_all(sess, commit),
+            // 入力中は注目文節が無いので、注目文節までの確定もすべての確定と同じ
+            Action::Commit | Action::CommitFocused => self.commit_all(sess, commit),
             Action::StartConvert | Action::NextCand => self.start_converting(sess, Start::Convert),
             Action::Predict => self.predict(sess),
             Action::ToKatakana => self.start_converting(sess, Start::Katakana),
@@ -1712,6 +1714,12 @@ impl Engine {
     }
 
     fn apply_converting(&self, sess: &mut Session, action: Action, commit: &mut String) {
+        // 文全体N-best（メガ文節）の表示中は、表示上の注目文節が文全体なので、注目文節までの
+        // 確定はすべての確定になる（下の ensure_segmented で文節に分かれる前に判定する）
+        let whole_sentence = matches!(
+            &sess.state,
+            State::Converting(conv) if conv.sentence_alternatives.is_some()
+        );
         if !matches!(
             action,
             Action::NextCand | Action::StartConvert | Action::PrevCand | Action::SelectCand(_)
@@ -1731,6 +1739,8 @@ impl Engine {
             Action::ResizeSegment(dir) => self.resize_segment(sess, dir),
             Action::ExtendSelection(dir) => self.extend_selection(sess, dir),
             Action::Commit => self.commit_all(sess, commit),
+            Action::CommitFocused if whole_sentence => self.commit_all(sess, commit),
+            Action::CommitFocused => self.commit_focused(sess, commit),
             Action::Cancel => self.cancel_converting(sess),
             Action::ToKatakana => self.set_focus_kana(sess, true),
             Action::ToHiragana => self.set_focus_kana(sess, false),
@@ -1896,6 +1906,42 @@ impl Engine {
             pieces,
             committed_len_utf16: utf16::utf16_len(&commit[before_len..]),
         });
+    }
+
+    /// `Action::CommitFocused`: 先頭から注目文節（複数文節の選択中は選択範囲の末尾）までを確定し、
+    /// 残りの文節は変換中のまま続ける（注目は残りの先頭、候補は `perform_action` が出す）。
+    /// 注目文節が最後の文節なら `commit_all` と同じ。確定した表記は左文脈の末尾に足し、残りの
+    /// 文節の候補・学習の文脈にする（フロントの次の `set_context` で上書きされる）
+    fn commit_focused(&self, sess: &mut Session, commit: &mut String) {
+        let State::Converting(conv) = &mut sess.state else {
+            return;
+        };
+        let end = Self::selection_range(conv).map_or(conv.focus + 1, |r| r.end);
+        if end >= conv.segments.len() {
+            self.commit_all(sess, commit);
+            return;
+        }
+        let committed: Vec<Segment> = conv.segments.drain(..end).collect();
+        for (i, s) in conv.segments.iter_mut().enumerate() {
+            s.chunk_id = i as u32;
+        }
+        conv.focus = 0;
+        conv.range_anchor = None;
+        conv.visible = false;
+        // 学習の左文脈は確定前の Surrounding Text（`commit_all` と同じ）
+        self.notify_commit(sess, &committed);
+        let surface: String = committed.iter().map(|s| s.surface.as_str()).collect();
+        commit.push_str(&surface);
+        // secure input 中は文脈を持たない（`set_context` と同じ）
+        if !sess.secure_input {
+            let mut left = std::mem::take(&mut sess.left_context);
+            left.push_str(&surface);
+            sess.left_context = tail_chars(&left, LEFT_CONTEXT_CHARS);
+        }
+        // 非同期の LLM 完了の差し替え対象は文節の位置が変わったので捨てる
+        sess.origins.clear();
+        // 一部だけを確定した。残りは変換中のまま（確定の取消は対象外。`select_composing` と同じ）
+        sess.last_commit = None;
     }
 
     /// `Action::UndoCommit`（Ctrl+Backspace）の処理。確定直後で `last_commit` が残っている

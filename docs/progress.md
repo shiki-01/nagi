@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-10-15（iOS: 設定・レイアウト・ユーザー辞書・次語予測・絵文字候補・堅牢性・レビュー修正。決定は H-16〜H-21）／ 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-17）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-10-16（iOS: 確定方式・注目文節・取り消し・トグル・触覚音・入力欄の種類・キーボード切替の原因、既定モデル small。決定は H-22(c)・H-27〜H-33）／ 2026-10-15（iOS: 設定・レイアウト・ユーザー辞書・次語予測・絵文字候補・堅牢性・レビュー修正。決定は H-16〜H-21）／ 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-17）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -22,7 +22,7 @@
 | 12 | LLM のビームサーチ（infer 単体、Stage 1） | `ConvertRequest::beam_width` を新設し、`llama::LlamaModel::convert` に設計書 B-4 どおりの真のビームサーチ（各ステップで上位 `width` 本に絞りながら進める）を実装。KV キャッシュの分岐・合流は `kv_cache_seq_cp`（要 `kv_unified = true`）。`beam_width <= 1` は既存の貪欲デコードのまま（挙動・レイテンシとも無変更）。実モデルで曖昧性の低い文でも表記ゆれ・別の妥当な変換が上位に出ることを確認。詳細は G-33 |
 | 13 | LLM のビームサーチ（server/engine 統合、Stage 2） | `Effective::beam_width`（プロファイル既定 + `conversion.beam_width` 上書き）、`Pipeline::sentence_candidates`（仮説を強制アライメント + 学習/ユーザー辞書の優先を適用、重複除去、縮退条件）、engine の候補ウィンドウ sentence モード（`Conv::whole`/`sentence`、`conversion.initial_view`、`←/→` 等での恒久的な離脱）。プロトコル・Swift 型の変更は無し。詳細は G-34（辞書ベースの N-best との統合方法は G-30 の追記を参照） |
 
-## iOS 関連の実装（2026-10-14 追記。詳細は `docs/decisions.md` H-6〜H-15）
+## iOS 関連の実装（2026-10-14 追記、2026-10-16 更新。詳細は `docs/decisions.md` H-6〜H-33）
 
 | 項目 | 内容 |
 | --- | --- |
@@ -34,6 +34,14 @@
 | iOS の製品版キーボード | 拡張の UI（`NagiKeyboardView`）、状態（`KeyboardModel`）、型付きセッション（`NagiSession`）、ホストアプリの入力テスト（H-12・H-13） |
 | iOS のビルド・配布 | GitHub Actions `ios-testflight`（署名・アップロード・証明書の掃除）。TestFlight へ配布（H-15） |
 | 実機の実測 | 拡張の上限 約 177MB、xsmall・small とも動作、応答時間は同期待ち 30ms + 非同期差し替え（H-6・H-9・H-10） |
+| 既定モデル | small。未選択時は端末の予算で自動選択（余裕があれば small）、Picker での明示選択を優先（H-22(c)。2026-10-16 ユーザー決定） |
+| 確定方式 | `insertText` のみで変換中の範囲を置き換える `insert` を既定に（`keyboard.commit_method`）。手前の本文が消える不具合と部分変換の重複（U-1）は解消（H-28・H-31） |
+| 注目文節 | 候補を選ぶと次の文節へ進む（最後の文節で全体を確定）。候補バーの読み表示で注目文節を強調（H-29） |
+| 取り消し | フリックは大きく外すと取り消し（表示は出さず選択を消すだけ）、長押しは下 0.3 倍・左右の外で取り消し（H-30・H-31） |
+| トグル | 英字 12 キー（`kana` 指定の無い flick キー）もトグル入力で置き換わる（H-31） |
+| 触覚・音 | クリック音は `off` / `compat`（既定 `compat`、`AudioServicesPlaySystemSound(1104)`）。互換モードは専用キューで鳴らし速打ちで遅れない（H-30・H-31） |
+| 入力欄の種類 | `keyboardType` でレイアウトを自動選択、`returnKeyType` で改行キーの表示を変える。`keyboard.layout_by_field`（既定 true）で切替（H-32） |
+| キーボードの切替 | 他社キーボードと併用時に iOS が別のキーボードを選ぶのが原因で、Nagi 側では直せない（H-33。H-27 の LLM 二重化の仮説は撤回） |
 
 
 ## 未完了の項目と次の一手
@@ -47,7 +55,7 @@
 5. **Phase 0 の比較**: 変換モデル（zenz 系の他サイズ・量子化）とシステム辞書（SudachiDict 等）の比較を `nagi-eval` で行う。基準機での実測。**一次結果（H-17、2026-10-14）**: zenz-v3.1 small と xsmall を固定プロファイルで比較し、small が xsmall より +4〜7pt（75.0% vs 68.1%、balanced）。G-36 の「xsmall が有力」は auto 降格の影響で、撤回。残り: left_context ありの評価、他の量子化・サイズ、SudachiDict、iPhone/M1 相当の実測
 6. ~~辞書形式を mmap 可能な形式へ変更~~ → 実装済み（H-7）。形式（version 2）は変えず、セクションを要素ごとのリトルエンディアン読み出し（アラインメント不要）にして `Dictionary::load` を mmap 化（非 Windows）。実機（iPhone 16e 拡張）で辞書の footprint は +61MB → +0.2MB、xsmall 併用のピークは 124MB → 71MB（H-7）
 7. ~~`insert_reading` / `perform_action` のプロトコル設計を core/protocol に追加~~ → 実装済み（H-11。12 キーのトグル・フリック・濁点循環をコアで解決、Swift 型生成済み）。残るのはレイアウトの設定化・`initialize` の capability 拡張
-8. **iOS 拡張のメモリ上限実測と LLM 可否判定**（M0 最優先）: `nagi-infer` を iOS 環境でビルド・実行し、メモリ上限（Apple 公式ドキュメントの記載値・実測値）と LLM ロードのコストを測定。実測が出るまで iOS の品質基準は `minimal`（辞書+Viterbi）。**一次実測あり**（H-6: 拡張の上限は約 177MB、辞書の全量読み込みで +61MB。zenz small は載らない見込み。xsmall + 辞書は iPhone 16e の拡張内で連続変換 20 回に耐えた（残量最小 52.8MB）。他機種・CPU のみ・mmap 辞書での成立可否は未確認）。メモリ上限による LLM 読み込みの抑止（`--memory-budget-mb`、150MB 未満は辞書のみ）は実装済み（H-8）
+8. ~~**iOS 拡張のメモリ上限実測と LLM 可否判定**（M0 最優先）~~ → 完了（H-6・H-9・H-10）。拡張の上限は約 177MB。mmap 辞書（H-7）で xsmall・small とも拡張内で動作し、iOS の品質基準は `minimal` ではなく LLM あり（`auto` は `light` から開始）。メモリ上限による LLM 読み込みの抑止（`--memory-budget-mb`、150MB 未満は辞書のみ）は実装済み（H-8）。他機種での実測は未確認
 9. ~~**SideStore 検証**~~ → 不要（iOS の配布を TestFlight / App Store に変更。H-15）
 10. **UniFFI 試作**（ネスト構造のコスト・callback・JSON か型かの計測）: FFI 方式を UniFFI で確定（H-4 参照）。実装時に以下を計測して詳細を決める: Preedit 等のネスト構造を毎キー渡すコスト、非同期通知（revision 付き差し替え）の callback 表現、描画差分を JSON 文字列か UniFFI 型で渡すか（p95 < 16ms 目標への影響）。**iOS は C ABI（`core/ffi/`）で実装済み**で、UniFFI は Android（M1）着手時に再検討（H-10）
 11. macOS フロントエンド（IMKit。`frontend-macos/`、CI `macos-frontend.yml`）: **実装あり・実機未確認**。`set_context.app_id` の報告は実装済み（`NagiInputController.swift`）。`set_environment` の送信は、コードに送信箇所が見当たらないため未確認。~~アップデート確認（署名検証）~~ → 検証ロジックは実装済み（G-31。ed25519署名検証。ダウンロード・インストールの実処理はプラットフォーム実装待ち）。インストールスクリプトは、対象の`.app`バンドル（フロントエンド本体）が無いため未着手（フロントエンド着手時に合わせて作る）。`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）は作成済み
@@ -176,18 +184,18 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 - `nagi-server` に feature `update-check`（既定 ON）を追加。`ureq` と更新確認・配布物取得の HTTP を裏に置き、`nagi-ffi` は `default-features = false` で依存する（iOS の XCFramework に TLS 実装を入れない。`docs/ios-release.md` §0.2）。無効時は `update.auto_check` が no-op。検証ロジック（ed25519・SHA-256）は feature 外
 - `cargo xtask gen-licenses`: nagi-ffi の依存閉包のライセンス一覧を `THIRD_PARTY_LICENSES.md` に生成（`docs/ios-release.md` §0.5）
 
-## iOS の未完了項目（2026-10-14）
+## iOS の未完了項目（2026-10-14、2026-10-16 更新）
 
 実装済み・実機未確認の項目（キーボード UI の細部、入力中の候補・部分変換、`set_context`、レイアウト（JSON・toggle・longPress・shortcut）、設定タブ、ホストの案内・データ・About、堅牢性（`set_environment`・メモリ警告）、コア API への追従）は `docs/ios-device-checklist.md` §3 に移した。
 
 残り（詳細は `docs/mobile-roadmap.md` §0 と `docs/ios-device-checklist.md` §0）:
 
-1. 本体アプリ: ユーザー辞書の登録・編集 UI（`userdict.entries`）
+1. ~~本体アプリ: ユーザー辞書の登録・編集 UI（`userdict.entries`）~~ → 実装済み（`App/UserDictionaryView.swift`。実機確認は `docs/ios-device-checklist.md` §3）
 2. 配布の準備: 正式なアイコン、プライバシーポリシー、外部テスト（Beta App Review）、フルアクセスの用途の明記
 3. 堅牢性: 複数プロセスでの学習データの同時アクセス（D-5。コア側の課題を含む）、他機種での上限・応答時間の実測
 4. 設定のコア側新規項目（`docs/ios-settings.md` §4 段階4）
 5. 最後にまとめて: 見た目と操作感の調整（実機のフィードバックを集める）
-6. 要判断（診断ログの既定・iOS の既定モデル。`RequestsOpenAccess` は H-18 で true に決定済み。`docs/ios-device-checklist.md` §0）
+6. ~~要判断（診断ログの既定・iOS の既定モデル）~~ → 決定済み（H-22。診断ログは TestFlight で既定 ON・App Store 版で既定 OFF、既定モデルは small。`RequestsOpenAccess` は H-18 で true。`docs/ios-device-checklist.md` §0）
 
 ## モバイル向けコア API（2026-10-14、決定は decisions.md H-16）
 

@@ -600,6 +600,10 @@ public enum TouchAction: Codable {
 	case prevCandidate
 	/// 確定
 	case commit
+	/// 変換中: 先頭から注目文節（複数文節の選択中は選択範囲の末尾）までを確定し、残りの文節は
+	/// 変換中のまま続ける（注目は残りの先頭へ）。注目文節が最後の文節なら `Commit` と同じ。
+	/// 入力中（変換前）は `Commit` と同じ
+	case commitFocused
 	/// 取消
 	case cancel
 	/// 1 文字削除（未入力なら消費しない）
@@ -641,6 +645,7 @@ public enum TouchAction: Codable {
 			nextCandidate = "next_candidate",
 			prevCandidate = "prev_candidate",
 			commit,
+			commitFocused = "commit_focused",
 			cancel,
 			backspace,
 			deleteForward = "delete_forward",
@@ -687,6 +692,9 @@ public enum TouchAction: Codable {
 				return
 			case .commit:
 				self = .commit
+				return
+			case .commitFocused:
+				self = .commitFocused
 				return
 			case .cancel:
 				self = .cancel
@@ -768,6 +776,8 @@ public enum TouchAction: Codable {
 			try container.encode(CodingKeys.prevCandidate, forKey: .type)
 		case .commit:
 			try container.encode(CodingKeys.commit, forKey: .type)
+		case .commitFocused:
+			try container.encode(CodingKeys.commitFocused, forKey: .type)
 		case .cancel:
 			try container.encode(CodingKeys.cancel, forKey: .type)
 		case .backspace:

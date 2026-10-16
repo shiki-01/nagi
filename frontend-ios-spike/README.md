@@ -4,7 +4,7 @@
 > 配布は SideStore ではなく TestFlight / App Store です（`docs/decisions.md` H-15）。ビルド・署名・アップロードは
 > GitHub Actions `ios-testflight`（`gh workflow run ios-testflight.yml --ref main -f llama=true`）で行います。
 > bundle id は `com.shiki01.nagi`（ホスト）/ `com.shiki01.nagi.keyboard`（拡張）、App Group は `group.com.shiki01.nagi`。
-> 実機の確認結果と実装の経緯は `docs/decisions.md` の H-6〜H-15 を参照してください。
+> 実機の確認結果と実装の経緯は `docs/decisions.md` の H-6〜H-33 を参照してください。
 >
 > ホストアプリのタブは 5 つです: ホーム（セットアップ・データ状況・辞書とモデルの取り込み）、入力テスト（キーボードの動作確認用の入力欄）、設定、レイアウト、About（開発者向けに端末情報・App Group・Probes・結果）。
 > キーボード拡張は、製品版の 12 キー（フリック）と英字（QWERTY）が既定で、候補バー右端の「検証」ボタンで Probe の画面に切り替えられます。
@@ -83,12 +83,12 @@ Xcode の署名設定：
    - small（標準）: `https://huggingface.co/Miwa-Keita/zenz-v3.1-small-gguf/resolve/ddf6e44b2e05ab7ea9a3e31559c5e7948761365c/ggml-model-Q5_K_M.gguf`（約70.4MB）
    - xsmall（軽量。拡張のメモリ上限が厳しい場合の比較用）: `https://huggingface.co/Miwa-Keita/zenz-v3.1-xsmall-gguf/resolve/5c0c4db8c8cc66a6ef01520475bebd56b41f6236/ggml-model-Q5_K_M.gguf`（約20MB）
 2. ダウンロードしたファイルは「ファイル」アプリの「ダウンロード」に入る。**名前が両方 `ggml-model-Q5_K_M.gguf` で同じ**なので、長押し →「名称変更」で `zenz-v3.1-small-Q5_K_M.gguf` / `zenz-v3.1-xsmall-Q5_K_M.gguf` にする（両方置く場合は必須。同名だとインポート時に上書きされる）
-3. NagiSpike のホームタブ「データ」→「モデルをインポート（.gguf を選択）」→「ファイル」アプリで上記ファイルを選ぶ
+3. NagiSpike のホームの「取り込み」→「モデルをインポート（.gguf を選択）」→「ファイル」アプリで上記ファイルを選ぶ
    - iCloud Drive 上のファイルは先にダウンロード済みにしておく
-   - コピー中は進捗表示（数十秒）。完了すると「モデルをインポートしました」と表示され、「データ」欄に配置先パスとサイズが出る
+   - コピー中は進捗表示（数十秒）。完了すると「モデルをインポートしました」と表示され、ホームの「変換モデル」欄に配置先パスとサイズが出る
    - 辞書が App Group に無ければ同時にバンドルからコピーする（コアは辞書が読めないと LLM を読み込まない）
-4. モデルが複数あるときは、「データ」欄のピッカーで llm_load が使うモデルを選ぶ（未選択なら `zenz-v3.1-small-Q5_K_M.gguf`、無ければ最大サイズ）。選択はホストとキーボード拡張で共有される
-5. Probes タブの `llm_load` を実行する。結果の note に実行元（app / keyboard）・使用モデル名とサイズ・変換結果が出る
+4. モデルが複数あるときは、ホームの「変換モデル」欄のピッカーで llm_load が使うモデルを選ぶ（未選択なら端末の予算による推奨（余裕があれば small）。予算が測れなければ `zenz-v3.1-small-Q5_K_M.gguf`、無ければ最大サイズ。`docs/decisions.md` H-22(c)）。選択はホストとキーボード拡張で共有される
+5. About >「端末情報・App Group・Probes・結果」の Probes で `llm_load` を実行する。結果の note に実行元（app / keyboard）・使用モデル名とサイズ・変換結果が出る
 
 `llm_load` が失敗したときの note の見方:
 
@@ -248,7 +248,7 @@ cargo xtask build-ios-xcframework
 
 ### モデルロードが失敗する（LLM Probe）
 
-- ホームタブ「データ」欄でモデルの有無・パス・サイズを確認（(a)〜(c) の原因別に表示）
+- ホームの「変換モデル」欄でモデルの有無・パス・サイズを確認（(a)〜(c) の原因別に表示）
 - 「モデルをインポート」で `data/models/` にインポート（手順は「モデルの入手とインポート（実機）」）
 - LLM フラグ付きでビルドしたか確認（CI を `llama=true` で実行。`NAGI_LLM` 付き xcodegen + `--llama` の XCFramework）
 

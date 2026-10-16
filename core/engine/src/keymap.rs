@@ -293,6 +293,7 @@ pub fn parse_action(spec: &str) -> Result<Action, String> {
         ("NextCand", None) => Ok(Action::NextCand),
         ("PrevCand", None) => Ok(Action::PrevCand),
         ("Commit", None) => Ok(Action::Commit),
+        ("CommitFocused", None) => Ok(Action::CommitFocused),
         ("Cancel", None) => Ok(Action::Cancel),
         ("Backspace", None) => Ok(Action::Backspace),
         ("DeleteForward", None) => Ok(Action::DeleteForward),
@@ -540,6 +541,11 @@ mod tests {
     #[test]
     fn parse_action_to_hankaku() {
         assert_eq!(parse_action("ToHankaku"), Ok(Action::ToHankaku));
+    }
+
+    #[test]
+    fn parse_action_commit_focused() {
+        assert_eq!(parse_action("CommitFocused"), Ok(Action::CommitFocused));
     }
 
     #[test]

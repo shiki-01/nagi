@@ -631,6 +631,7 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 
   xsmall は small よりモデルサイズが1/3以下ながら精度が同等以上、レイテンシは1/4程度。この検証機（4コア）では small の1回の推論が60〜150msかかり `balanced` プロファイル（目標100ms）を維持できず頻繁に降格するのに対し、xsmall は軽量なため常に `balanced` を維持できていることが要因と考えられる。より強力なハードウェア（ターゲット M1/8GB 等）では結果が変わる可能性があるため、この数値はこの検証環境限定の参考値
 - **暫定結論**: 現時点のデータでは xsmall が有力候補。ただし (1) 検証機のハードウェアがターゲット外である点、(2) `nagi-eval` が `left_context=""` で呼ぶため LLM の文脈活用効果を十分に測れていない可能性がある点、(3) 辞書のみとの差が両モデルとも小さく評価セット・評価方法自体の感度が低い可能性がある点、を踏まえ、最終的なモデル確定は Phase 0 の他の検証（ターゲットハードウェアでの実測等）と合わせて判断する
+- **後の決定**: H-17 の固定プロファイル比較で small が xsmall より上と訂正した。iOS の既定モデルは small（H-22(c)）
 - **未実施**: ターゲットハードウェア相当での再計測、`left_context` を使った評価、`docs/decisions.md` の変換モデル最終決定（現時点では暫定）
 
 ### G-37. macOS の bundle id を `com.shiki.inputmethod.Nagi` に変更（2026-09-30）
@@ -704,6 +705,7 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 ### H-2. 暫定判断（要レビュー）
 
 - Android 先行、iOS 後続（理由: 子プロセス制約・メモリ上限・配布障壁がいずれも Android の方が小さい）
+- **後の決定**: H-15（TestFlight / App Store 配布への変更）以降、実際は iOS を先行している（`docs/mobile-roadmap.md` §0）
 - FFI バインディングは UniFFI を第一候補（Swift / Kotlin を同時生成できるため）。代替は手書き C ABI + cbindgen
 - 12キーのトグル・フリック方向の解決はコアで行う（ロジックをフロントに持ち込まない原則）
 
@@ -818,6 +820,7 @@ G-25 の続き。G-24 の非同期通知基盤に乗せて、実際にライブ�
 
 判断（暫定）:
 - 拡張に zenz small は載せられない見込み。xsmall + 辞書は拡張内で動作した（iPhone 16e）。ただし他機種の上限が未測定のため、iOS の品質基準は `minimal` を既定とし、起動時の `os_proc_available_memory` で十分な残量（要閾値決定）がある場合だけ xsmall を有効にする方針を候補とする（環境プロファイルの自動判定、設計書 §4.7 の延長）
+- **後の決定**: mmap 辞書（H-7）で small も拡張内で動作した（H-9）。iOS の `auto` は `light` から開始し、既定モデルは small（H-22(c)）
 - 辞書の mmap 化（progress.md 未完了項目 6）の優先度を上げる。全量読み込み（約 61MB）は上限の約 1/3 を占める
 - **追試（同日）: xsmall（20.0MB）は拡張内で `llm_load` が成功**: footprint_after 119.4MB（増加 106.4MB）、残り 57.6MB（`available_after_mb`）、ロード 110ms、`first_space_ms` 76.1ms。small は拡張で完了記録がなく、載らない見込みは変わらない
 - 一方 `latency` は再び実行中に終了（一括実行時）。多数回の変換で残り約 58MB を超える可能性。単独実行・`llm_load` 後の実行での切り分けが必要
@@ -915,6 +918,7 @@ H-9 の応答時間の謎の原因: `conversion.sync_budget_ms` の既定が 150
 - **C ABI 経由の非同期差し替えは動作した**: small は 30ms の待ちで辞書の結果を返し、約 620ms 後に LLM の結果が `update_preedit` / `update_candidates` として届いた（`nagi_set_waker` → `nagi_poll_notifications` → メインキュー）
 - **xsmall の「不達」は不具合ではない**: 同期応答が 19.8ms で、待ち時間（30ms）に収まって LLM の結果をその場で返したため、差し替える結果がなかった
 - **iOS の暫定既定を訂正**: 先に「small + light」としたが、応答時間を踏まえて **xsmall を既定**とする。xsmall は待ち時間内に LLM の結果が返る（差し替えのちらつきが無い）。small は結果が約 0.6 秒遅れて差し替わる。**変換精度の差（zenz small と xsmall）は未比較**で、small が明確に良い場合に限り、設定で small を選べるようにする（Phase 0 の比較項目。デスクトップで `nagi-eval` により比較できる）
+- **後の決定**: xsmall を既定とする判断は H-22(c) で廃止した。既定は small（未選択時は端末の予算で自動選択、Picker の明示選択を優先）
 
 ### H-11. タッチ入力のプロトコル `insert_reading` / `perform_action`（2026-10-14、要レビュー）
 
@@ -938,6 +942,7 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **構成**: `NagiSession`（型付きの JSON-RPC。非同期通知は C ABI の `nagi_set_waker`、H-10）→ `KeyboardModel`（状態。`KeyboardHost` 経由でホストの入力欄を操作）→ `NagiKeyboardView`（SwiftUI の 12 キーと候補バー）。`ProductSession` が App Group の辞書・モデルからセッションを作る
 - **変換中の表示**: ホストの入力欄に `setMarkedText`（下線付き）で出し、確定は「確定文字列を変換中の表示に置き換えて `unmarkText`」。未入力のとき、コアが消費しない空白・改行・削除（`consumed = false`）はフロントがホストに直接入れる
 - **起動時の設定**: `<App Group>/user/config.toml` を自動生成（先頭の `# nagi:generated` 行があるファイルだけ起動のたびに作り直す）。`sync_budget_ms = 30`、更新確認なし、モデルは xsmall を優先（H-10）。メモリ上限は `nagi_server_new_with_budget` で渡す（H-8）
+  - **後の決定**: 「xsmall を優先」は H-22(c) で廃止した。既定は small（未選択時は端末の予算で自動選択、Picker の明示選択を優先）
 - **未実装（次の段階）**（当時の状態。現状は `ios-device-checklist.md` §3）: BackSpace の長押し連打、トグル入力の切り替え設定（現状はフリック入力固定）、`set_context`（直前のテキストを LLM の文脈に渡す）、ホストの入力欄が外部から変わったときの追従、QWERTY・英数・記号のレイアウト、候補の展開表示、本体アプリ（有効化の案内・設定）。**Swift はローカルでコンパイルできず、確認は CI（Xcode 26.3）のみ**
 
 ### H-13. iOS キーボード段階 1 の実機結果と修正（2026-10-14）
@@ -1147,6 +1152,7 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
   - 旧 VC の遅れた `viewWillDisappear` / `textDidChange` / メモリ警告は、自分が現在のホスト（`model.host === self`）のときだけ処理する（新しい VC の状態を壊さない）。
   - **診断ログ**: `viewDidLoad instance=#n pid= reuseModel= footprint= available=`、`viewWillAppear` / `viewWillDisappear` / `deinit` の instance 番号、`previous keyboard process pid=… ended while visible`（表示中に終わったプロセスの検出。App Group の `keyboardVisiblePid`）。次の実機ログで、強制終了の有無と、VC の入れ替わりの順序を確定させる。
 - **未確認**: 旧 VC がいつ解放されるか（`deinit` のログで確認）、別プロセスへの切替で旧プロセスがいつ終わるか。
+- **後の決定**: 「LLM の二重化による強制終了」の仮説は H-31 で裏付けられず、H-33 で撤回した（原因は iOS のキーボード選択）。プロセス内でコアを共有する変更は作り直しの高速化として残す
 
 ### H-28. 確定の方式を「変換中の範囲を挿入で置き換える」に変更（2026-10-15、要実機確認）
 
@@ -1191,6 +1197,7 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **レイアウト**: `textDocumentProxy.keyboardType` が メール・URL・`asciiCapable` なら英字、数字系（`numberPad` など）なら `numbers` で開く（`InputTraitsMapping`）。指定のない欄へ移ったときは、自動で切り替えていた場合だけかなへ戻す。ユーザーが自分で切り替えたレイアウトは保つ。判定は focusIn と入力欄の切替（`documentIdentifier` の変化）で行う。
 - **改行キー**: `returnKeyType` に合わせて「検索」「開く」「送信」「完了」「次へ」などを出す（入力中は従来どおり「確定」）。
 - 設定 `keyboard.layout_by_field`（docs/ios-settings.md の案）での無効化は未実装。
+  - 後の決定（2026-10-16）: 実装済み（既定 true。false ならレイアウトの自動選択と改行キーの表示をしない）。
 
 ### H-33. 「キーボードが切り替わる」の原因（2026-10-16、ユーザーの観察で判明）
 
@@ -1198,3 +1205,13 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
   - H-27 のログで「VC が作られたが表示されない」例があったのは、iOS が Nagi を起動しつつ別のキーボードを表示した場合と整合する。H-27 の「LLM 二重化による強制終了」の仮説は撤回する（プロセス内でコアを共有する変更は、作り直しの高速化として残す）。
 - **対処（利用者側）**: 設定 > 一般 > キーボード > キーボード で Nagi を他社キーボードより上に並べる。検証中は azooKey を外すと切り分けやすい。
 - **今後**: オンボーディング画面（`App/OnboardingView.swift`）に、一覧の順序についての案内を足すかは、App Store 配布前に判断する。
+
+### H-34. 残り作業の判断（2026-10-16、ユーザーの指示「全部順番に進めて」による）
+
+- **iOS の既定モデルは small**（ユーザー決定）。コードは既に、未選択時は端末の予算で推奨（予算に余裕があれば small）、既定名も small。文書の xsmall の記述を直した。
+- **クリック音の `system` 方式（`UIDevice.playInputClick`）を削除**: 実機で鳴らなかったため。選択肢は `off` / `compat`（既定）。保存済みの `system` は正規化で既定に丸められる。
+- **`keyboard.layout_by_field` を設定画面に追加**（既定 true）。
+- **セットアップ画面に、キーボード一覧の並び順の案内を追加**（H-33）。
+- **注目文節まで確定（`TouchAction::CommitFocused`、キーボード用 `Action::CommitFocused`）をコアに追加**: 変換中に先頭から注目文節（複数文節の選択中は選択の末尾）までを確定し、学習に通知する。残りは変換中のまま focus を先頭にして候補を出す。注目文節が最後なら通常の確定と同じ。入力中は通常の確定と同じ。確定した表記は左文脈の末尾に足す（secure では足さない）。iOS では、変換中に候補を選ぶと、その文節までを確定する（H-29 の「次の文節へ進む」を置き換える。iOS 標準の日本語キーボードと同じ動き）。
+- **LLM の非表示時の解放（H-26）は現状維持**: 解放を遅らせると、別アプリへの切替で旧プロセスがメモリを持ち続け、H-26 の警告が再発しうる。開いた直後の約 0.6 秒は辞書のみになるが、`reload_model` は裏で読み込むので入力は止まらない。実機で不満が出たら、解放までの猶予（数秒）を設ける案を検討する。
+- **App Store 配布前の作業（診断ログ既定 OFF の確認・審査の説明文など）は、ユーザーの指示により今回は扱わない。**
