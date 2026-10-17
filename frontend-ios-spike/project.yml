@@ -146,7 +146,7 @@ targets:
         NSExtension:
           NSExtensionAttributes:
             PrimaryLanguage: ja-JP
-            IsASCIICapable: false
+            IsASCIICapable: true
             RequestsOpenAccess: true
           NSExtensionPointIdentifier: com.apple.keyboard-service
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).KeyboardViewController"

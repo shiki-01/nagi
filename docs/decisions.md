@@ -1218,3 +1218,9 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **実機確認（ビルド 39、2026-10-16）**: 注目文節まで確定・セットアップ画面の案内・クリック音の 2 択は期待どおり。`keyboard.layout_by_field` をオフにすると検索欄の改行キーは「改行」に戻る。**メール欄で英字に切り替わらない**: 入力欄を移っても `documentIdentifier` の変化や `viewWillAppear` が来ない場合に、入力欄の種類を読み直していなかったと推定。`textDidChange` でも keyboardType・returnKeyType を見比べ、変わっていれば反映し直すようにした（要実機確認。診断ログの `input traits keyboardType=…` 行で確認）。
 - **診断ログの保持は 64KB（超えたら後半 32KB を残す）で確定**（ユーザー決定）。
 - **実機確認（ビルド 40、2026-10-17）**: メール欄（keyboardType=7）・URL 欄（3）で英字に切り替わることを確認（`input traits keyboardType=7 -> alpha`）。検索欄の改行キー表示も期待どおり。入力テストタブの 10 欄のうち、SecureField・`.password`・数字（`.numberPad`）の欄は iOS が標準キーボード（数字は標準の数字キーパッド）を出す。これは iOS の仕様で Nagi 側では変えられない。先頭の通常の欄で標準キーボードが出たのは、直前のパスワード欄などからの戻り先を iOS が選ぶ挙動（H-33）。入力テストタブの説明文をこの実態に合わせた。
+
+### H-35. キーボード拡張の IsASCIICapable を true にする（2026-10-17、実機で判明）
+
+- **事象**: 数字の欄（`.numberPad`）で、azooKey は出るのに Nagi は出ず、標準の数字キーパッドになった。
+- **原因**: 拡張の `NSExtensionAttributes.IsASCIICapable` が false だった。iOS は ASCII だけを受け付ける欄（数字キーパッドなど）で、ASCII を入力できると申告していないキーボードを使わない。
+- **対策**: `IsASCIICapable: true`（`frontend-ios-spike/project.yml`）。Nagi は英字・数字のレイアウトを持ち、ASCII を入力できる。数字の欄では H-32 の自動選択で数字のレイアウトが開く想定（要実機確認。診断ログの `input traits keyboardType=4 -> numbers`）。
