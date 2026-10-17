@@ -183,12 +183,12 @@ struct NagiInputKindsSection: View {
                 TextField("通常", text: $plain)
             }
             kind("SecureField（isSecureTextEntry）",
-                 "学習・文脈が止まり、診断ログの入力内容が伏せられる（<secure>(u16=長さ)）。iOS が標準キーボードに切り替える場合もある") {
+                 "iOS の仕様で標準キーボードになる（他社キーボードは使えない）。Nagi が出た場合は学習・文脈が止まり、診断ログの入力内容が伏せられる") {
                 NagiSecureTextField(text: $secure, placeholder: "パスワード（secure）")
                     .frame(height: 32)
             }
             kind("パスワード（.password）",
-                 "secure でなくても学習・文脈が止まり、診断ログの入力内容が伏せられる") {
+                 "iOS が標準キーボードに切り替えることがある（パスワードの自動入力のため）。Nagi が出た場合は学習・文脈が止まり、診断ログの入力内容が伏せられる") {
                 TextField("パスワード", text: $password)
                     .textContentType(.password)
                     .textInputAutocapitalization(.never)
@@ -219,7 +219,7 @@ struct NagiInputKindsSection: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
-            kind("数字（.numberPad）", "数字だけの入力。Nagi が出ない（標準の数字キーパッド）ことがある") {
+            kind("数字（.numberPad）", "iOS の仕様で標準の数字キーパッドになる。Nagi が出た場合は数字の配列で開く") {
                 TextField("数字", text: $number)
                     .keyboardType(.numberPad)
             }
