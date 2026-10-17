@@ -1224,3 +1224,4 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **事象**: 数字の欄（`.numberPad`）で、azooKey は出るのに Nagi は出ず、標準の数字キーパッドになった。
 - **原因**: 拡張の `NSExtensionAttributes.IsASCIICapable` が false だった。iOS は ASCII だけを受け付ける欄（数字キーパッドなど）で、ASCII を入力できると申告していないキーボードを使わない。
 - **対策**: `IsASCIICapable: true`（`frontend-ios-spike/project.yml`）。Nagi は英字・数字のレイアウトを持ち、ASCII を入力できる。数字の欄では H-32 の自動選択で数字のレイアウトが開く想定（要実機確認。診断ログの `input traits keyboardType=4 -> numbers`）。
+- 補足（2026-10-17、ユーザーの観察）: ほかのアプリの通常のテキスト欄では Nagi が普通に出る。入力テストタブの先頭の通常の欄で標準キーボードが出たのは、直前のパスワード欄などのあとに iOS が戻り先を選ぶ挙動（H-33）で、通常の欄そのものの制約ではない。入力テストタブの数字の欄の説明文も H-35 に合わせて直した。

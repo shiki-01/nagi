@@ -219,7 +219,7 @@ struct NagiInputKindsSection: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
-            kind("数字（.numberPad）", "iOS の仕様で標準の数字キーパッドになる。Nagi が出た場合は数字の配列で開く") {
+            kind("数字（.numberPad）", "数字の配列で開く（IsASCIICapable を申告しているため Nagi が使える。H-35）") {
                 TextField("数字", text: $number)
                     .keyboardType(.numberPad)
             }
