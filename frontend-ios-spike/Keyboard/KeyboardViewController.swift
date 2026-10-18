@@ -38,6 +38,12 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         let reuseModel = KeyboardModel.processShared != nil
         let stats = MemoryProbe.getStats()
         DiagLog.log("viewDidLoad instance=#\(instanceNumber) pid=\(getpid()) reuseModel=\(reuseModel) footprint=\(Int(stats.physFootprintMB))MB available=\(Int(stats.availableMemoryMB))MB")
+        if !reuseModel {
+            // 申告した拡張属性が実際のバンドルに入っているかの確認用（H-35）
+            let ext = Bundle.main.object(forInfoDictionaryKey: "NSExtension") as? [String: Any]
+            let attrs = ext?["NSExtensionAttributes"] as? [String: Any] ?? [:]
+            DiagLog.log("extension attributes \(attrs.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))")
+        }
         setupUI()
     }
 
