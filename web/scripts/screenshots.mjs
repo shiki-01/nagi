@@ -15,7 +15,7 @@ for (const scheme of ['light', 'dark']) {
     page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
     for (const [path, label] of [['/', 'top'], ['/privacy', 'privacy'], ['/custom-keyboard', 'editor']]) {
       await page.goto(base + path, { waitUntil: 'networkidle' })
-      if (label === 'editor') await page.locator('.chip').first().click()
+      if (label === 'editor') await page.locator('[data-key-id]').first().click()
       await page.screenshot({ path: `shots/${label}-${name}-${scheme}.png`, fullPage: true })
     }
     console.log(name, scheme, 'errors:', errors.length ? errors : 'none')

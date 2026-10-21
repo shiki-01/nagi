@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import Ajv2020 from 'ajv/dist/2020'
 import schema from '../../../../config/keyboard/layout.schema.json'
 import { History } from './history'
-import { addKey, addRow, changeKind, duplicateLayout, moveKey, removeKey, removeRow, moveRow, sampleLayout, shiftKey, uniqueId } from './ops'
+import { addKey, addKeyInNewRow, addRow, changeKind, duplicateLayout, insertKey, moveKey, moveKeys, moveKeysChecked, navigateKey, nudgeKeys, removeKey, removeKeys, removeRow, moveRow, sampleLayout, shiftKey, uniqueId } from './ops'
+import { clampScale, computeDropTarget, dropIndicator, fitView, zoomAt } from './canvas-geometry'
+import type { RowGeom } from './canvas-geometry'
+import { LIMITS } from './types'
 import { loadPresets } from './presets'
 import { restoreState } from './store.svelte'
 import { ACTION_PATTERN, BUILTIN_LAYOUT_IDS, KEY_KINDS, KEY_STYLES, LAYOUT_MODES } from './types'
@@ -161,5 +164,133 @@ describe('presets / restore', () => {
     expect(restoreState(JSON.stringify({ layouts: [1] }))).toBeUndefined()
     const s = restoreState(JSON.stringify({ layouts: [sampleLayout()], currentId: 'zz' }))
     expect(s?.currentId).toBe('sample')
+  })
+})
+
+describe('canvas ops', () => {
+  it('moveKeys: 複数キーを行をまたいで移動し、空の行は消える', () => {
+    const base = sampleLayout()
+    const m = moveKeys(base, ['q', 'w'], { row: 1, index: 1 })
+    expect(ids(m)).toEqual([['e', 'r', 't', 'y', 'u', 'i', 'o', 'p'], ['shift', 'q', 'w', 'space', 'enter']])
+    expect(validateLayout(m)).toEqual([])
+    // 1 行目の全キーを 2 行目へ移すと 1 行目は消える
+    const all = moveKeys(base, base.rows[0].keys.map((k) => k.id), { row: 1, index: 0 })
+    expect(all.rows).toHaveLength(1)
+    expect(all.rows[0].keys).toHaveLength(13)
+  })
+  it('moveKeys: 同じ行内の並べ替えは index が「移動するキーを除いた位置」', () => {
+    const m = moveKeys(sampleLayout(), ['q'], { row: 0, index: 2 })
+    expect(ids(m)[0].slice(0, 4)).toEqual(['w', 'e', 'q', 'r'])
+    // 入力の並び順に依らずレイアウト上の順序を保つ
+    expect(ids(moveKeys(sampleLayout(), ['w', 'q'], { row: 1, index: 0 }))[1].slice(0, 2)).toEqual(['q', 'w'])
+  })
+  it('moveKeys: 行間（newRow）へ移動して新しい行を作る', () => {
+    const base = sampleLayout()
+    const m = moveKeys(base, ['shift'], { newRow: 0 })
+    expect(ids(m)).toEqual([['shift'], ids(base)[0], ['space', 'enter']])
+    const end = moveKeys(base, ['q'], { newRow: 2 })
+    expect(end.rows).toHaveLength(3)
+    expect(end.rows[2].keys[0].id).toBe('q')
+    // 入力は変更されない
+    expect(base.rows).toHaveLength(2)
+    expect(validateLayout(m)).toEqual([])
+  })
+  it('moveKeys: 単独キーの行を元の位置に戻すだけなら何もしない', () => {
+    const base = moveKeys(sampleLayout(), ['shift'], { newRow: 0 })
+    expect(moveKeys(base, ['shift'], { newRow: 0 })).toBe(base)
+    expect(moveKeys(base, ['nope'], { row: 0, index: 0 })).toBe(base)
+  })
+  it('moveKeysChecked: 上限を超える移動は error を返して変更しない', () => {
+    let l = sampleLayout()
+    l.rows[1].keys = Array.from({ length: LIMITS.keysPerRowMax }, (_, i) => ({ id: `s${i}`, kind: 'spacer' as const }))
+    const r = moveKeysChecked(l, ['q'], { row: 1, index: 0 })
+    expect(r.error).toBeTruthy()
+    expect(r.layout).toBe(l)
+    l = { ...l, rows: Array.from({ length: LIMITS.rowsMax }, (_, i) => ({ keys: [{ id: `k${i}`, kind: 'spacer' as const }] })) }
+    expect(moveKeysChecked(l, ['k0'], { newRow: 3 }).layout.rows).toHaveLength(LIMITS.rowsMax) // 元の行が消えるので上限内
+    const two = { ...l, rows: [{ keys: [{ id: 'a', kind: 'spacer' as const }, { id: 'b', kind: 'spacer' as const }] }, ...l.rows.slice(1)] }
+    expect(moveKeysChecked(two, ['a'], { newRow: 0 }).error).toBeTruthy()
+  })
+  it('removeKeys: 空になった行は消えるが最後の 1 行は残る', () => {
+    const base = sampleLayout()
+    expect(ids(removeKeys(base, ['shift', 'space', 'enter']))).toEqual([ids(base)[0]])
+    const none = removeKeys(removeKeys(base, ids(base)[1]), ids(base)[0])
+    expect(none.rows).toHaveLength(1)
+    expect(removeKeys(base, ['zzz'])).toBe(base)
+  })
+  it('addKeyInNewRow / insertKey', () => {
+    const base = sampleLayout()
+    const a = addKeyInNewRow(base, 1, 'flick')
+    expect(a.layout.rows).toHaveLength(3)
+    expect(a.layout.rows[1].keys[0].id).toBe(a.keyId)
+    expect(validateLayout(a.layout)).toEqual([])
+    const b = insertKey(base, 0, 0, 'toggle')
+    expect(b.layout.rows[0].keys[0].kind).toBe('toggle')
+    expect(insertKey(base, 9, 0, 'text').keyId).toBe('')
+  })
+  it('navigateKey: 左右は行をまたぎ、上下は中心が近いキー', () => {
+    const l = sampleLayout()
+    expect(navigateKey(l, 'q', 'right')).toBe('w')
+    expect(navigateKey(l, 'p', 'right')).toBe('shift')
+    expect(navigateKey(l, 'shift', 'left')).toBe('p')
+    expect(navigateKey(l, 'q', 'left')).toBeUndefined()
+    expect(navigateKey(l, 'q', 'up')).toBeUndefined()
+    expect(navigateKey(l, 'q', 'down')).toBe('shift')
+    expect(navigateKey(l, 'p', 'down')).toBe('enter')
+    expect(navigateKey(l, 'space', 'up')).toBe('t')
+  })
+  it('nudgeKeys: 左右は選択のまとまりごと、上下は隣の行へ', () => {
+    const l = sampleLayout()
+    expect(ids(nudgeKeys(l, ['w', 'e'], 'left'))[0].slice(0, 3)).toEqual(['w', 'e', 'q'])
+    expect(ids(nudgeKeys(l, ['q'], 'left'))).toEqual(ids(l))
+    expect(nudgeKeys(l, ['q'], 'left')).toBe(l)
+    expect(ids(nudgeKeys(l, ['space', 'enter'], 'right'))[1]).toEqual(['shift', 'space', 'enter'])
+    expect(ids(nudgeKeys(l, ['q'], 'down'))[1].slice(0, 2)).toEqual(['q', 'shift'])
+    expect(nudgeKeys(l, ['q'], 'up')).toBe(l)
+  })
+})
+
+describe('canvas geometry', () => {
+  const r = (left: number, top: number, w: number, h: number) => ({ left, top, right: left + w, bottom: top + h })
+  // 2 行（高さ 52、行間 6）。1 行目は 100 幅のキー 3 つ、2 行目は 1 つ。
+  const rows: RowGeom[] = [
+    { rect: r(0, 0, 300, 52), keys: ['a', 'b', 'c'].map((id, i) => ({ id, rect: r(i * 100, 0, 100, 52) })) },
+    { rect: r(0, 58, 300, 52), keys: [{ id: 'd', rect: r(0, 58, 300, 52) }] }
+  ]
+  it('computeDropTarget', () => {
+    expect(computeDropTarget(rows, 150, 26)).toEqual({ kind: 'row', row: 0, index: 1 }) // b の中心より左
+    expect(computeDropTarget(rows, 160, 26)).toEqual({ kind: 'row', row: 0, index: 2 })
+    expect(computeDropTarget(rows, 290, 26)).toEqual({ kind: 'row', row: 0, index: 3 })
+    expect(computeDropTarget(rows, 10, 2)).toEqual({ kind: 'newRow', row: 0 })
+    expect(computeDropTarget(rows, 10, 55)).toEqual({ kind: 'newRow', row: 1 }) // 行間
+    expect(computeDropTarget(rows, 10, 108)).toEqual({ kind: 'newRow', row: 2 })
+    expect(computeDropTarget(rows, 10, 300)).toBeNull()
+    expect(computeDropTarget(rows, -200, 26)).toBeNull()
+    // ドラッグ中のキーは並びから除いて数える
+    expect(computeDropTarget(rows, 290, 26, new Set(['c']))).toEqual({ kind: 'row', row: 0, index: 2 })
+    expect(computeDropTarget([], 0, 0)).toBeNull()
+  })
+  it('dropIndicator', () => {
+    expect(dropIndicator(rows, { kind: 'newRow', row: 1 })).toMatchObject({ left: 0, right: 300 })
+    const v = dropIndicator(rows, { kind: 'row', row: 0, index: 1 })!
+    expect(v.top).toBe(0)
+    expect(v.bottom).toBe(52)
+    expect((v.left + v.right) / 2).toBe(97)
+    expect(dropIndicator(rows, { kind: 'row', row: 5, index: 0 })).toBeNull()
+  })
+  it('zoomAt keeps the anchor fixed and clamps', () => {
+    const v = zoomAt({ x: 10, y: 20, scale: 1 }, 2, 100, 100)
+    expect(v.scale).toBe(2)
+    // ワールド座標 (100-10, 100-20) が同じ画面位置に残る
+    expect(v.x + 90 * 2).toBeCloseTo(100)
+    expect(v.y + 80 * 2).toBeCloseTo(100)
+    expect(zoomAt({ x: 0, y: 0, scale: 1 }, 1000, 0, 0).scale).toBe(clampScale(1000))
+  })
+  it('fitView centers the content', () => {
+    const v = fitView(1000, 800, 400, 200)
+    expect(v.x + 200 * v.scale).toBeCloseTo(500)
+    expect(v.y + 100 * v.scale).toBeCloseTo(400)
+    expect(fitView(0, 0, 10, 10).scale).toBe(1)
+    expect(fitView(200, 200, 2000, 2000).scale).toBeLessThan(0.2 + 1e-9)
   })
 })

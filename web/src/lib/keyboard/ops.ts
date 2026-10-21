@@ -1,5 +1,6 @@
 // レイアウトの編集操作。すべて純粋関数（入力を変更せず新しい値を返す）。
 
+import { LIMITS } from './types'
 import type { Key, KeyKind, KeyboardLayout, LayoutMode, Row } from './types'
 
 export function sampleLayout(): KeyboardLayout {
@@ -204,4 +205,158 @@ export function replaceKey(layout: KeyboardLayout, keyId: string, key: Key): Key
   const next = clone(layout)
   next.rows[found.row].keys[found.index] = key
   return next
+}
+
+// --- キャンバス編集用の操作（複数キーの移動・行間への挿入・矢印キーによる移動など） ---
+
+/** 移動先。`row`/`index` は既存の行への挿入（index は移動するキーを除いた行での位置）、`newRow` は行の挿入位置（0〜行数）。 */
+export type MoveDest = { row: number; index: number } | { newRow: number }
+
+export interface MoveResult {
+  layout: KeyboardLayout
+  /** 上限などで実行できなかった理由。 */
+  error?: string
+}
+
+/** 指定した id のキーを、レイアウト上の並び順（行→列）で返す。存在しない id は無視。 */
+function inDocOrder(layout: KeyboardLayout, keyIds: readonly string[]): string[] {
+  const want = new Set(keyIds)
+  return layout.rows.flatMap((r) => r.keys.filter((k) => want.has(k.id)).map((k) => k.id))
+}
+
+/**
+ * 複数のキーをまとめて移動する（並び順は保つ）。行をまたいでよく、元の行が空になったらその行は削除する。
+ * 行数・1 行のキー数の上限を超える場合は `error` を付けて入力をそのまま返す。
+ */
+export function moveKeysChecked(layout: KeyboardLayout, keyIds: readonly string[], dest: MoveDest): MoveResult {
+  const order = inDocOrder(layout, keyIds)
+  if (order.length === 0) return { layout }
+  if ('row' in dest && (dest.row < 0 || dest.row >= layout.rows.length)) return { layout }
+  const next = clone(layout)
+  const want = new Set(order)
+  const moved: Key[] = []
+  for (const row of next.rows) {
+    const keep: Key[] = []
+    for (const k of row.keys) (want.has(k.id) ? moved : keep).push(k)
+    row.keys = keep
+  }
+  // moved は行→列の順に集めているので、元の並び順になっている。
+  if ('row' in dest) {
+    const target = next.rows[dest.row]
+    target.keys.splice(clamp(dest.index, 0, target.keys.length), 0, ...moved)
+  } else {
+    next.rows.splice(clamp(dest.newRow, 0, next.rows.length), 0, { keys: moved })
+  }
+  next.rows = next.rows.filter((r) => r.keys.length > 0)
+  if (next.rows.length > LIMITS.rowsMax) return { layout, error: `行は最大 ${LIMITS.rowsMax} 行までです` }
+  if (next.rows.some((r) => r.keys.length > LIMITS.keysPerRowMax)) return { layout, error: `1 行に置けるキーは最大 ${LIMITS.keysPerRowMax} 個までです` }
+  if (JSON.stringify(next) === JSON.stringify(layout)) return { layout }
+  return { layout: next }
+}
+
+export function moveKeys(layout: KeyboardLayout, keyIds: readonly string[], dest: MoveDest): KeyboardLayout {
+  return moveKeysChecked(layout, keyIds, dest).layout
+}
+
+/** 複数のキーを削除する。空になった行は（最後の 1 行を除いて）削除する。 */
+export function removeKeys(layout: KeyboardLayout, keyIds: readonly string[]): KeyboardLayout {
+  const want = new Set(keyIds)
+  if (!layout.rows.some((r) => r.keys.some((k) => want.has(k.id)))) return layout
+  const next = clone(layout)
+  for (const row of next.rows) row.keys = row.keys.filter((k) => !want.has(k.id))
+  const kept = next.rows.filter((r) => r.keys.length > 0)
+  next.rows = kept.length > 0 ? kept : [next.rows[0]]
+  return next
+}
+
+/** 新しい行を `rowIndex` に作り、その 1 つ目のキーとして追加する。上限を超えるなら変更しない。 */
+export function addKeyInNewRow(layout: KeyboardLayout, rowIndex: number, kind: KeyKind = 'text'): { layout: KeyboardLayout; keyId: string } {
+  if (layout.rows.length >= LIMITS.rowsMax) return { layout, keyId: '' }
+  const next = clone(layout)
+  const id = uniqueId('key', allKeyIds(next))
+  next.rows.splice(clamp(rowIndex, 0, next.rows.length), 0, { keys: [defaultKey(kind, id)] })
+  return { layout: next, keyId: id }
+}
+
+/** 既存の行の `index` に挿入する。1 行のキー数の上限を超えるなら変更しない。 */
+export function insertKey(layout: KeyboardLayout, rowIndex: number, index: number, kind: KeyKind): { layout: KeyboardLayout; keyId: string } {
+  const row = layout.rows[rowIndex]
+  if (!row || row.keys.length >= LIMITS.keysPerRowMax) return { layout, keyId: '' }
+  return addKey(layout, rowIndex, kind, index)
+}
+
+export type Direction = 'left' | 'right' | 'up' | 'down'
+
+/** 各キーの行内での [左端, 右端] を 0〜1 に正規化した値（行の幅の合計で割る）。 */
+function spans(row: Row): { id: string; lo: number; hi: number }[] {
+  const total = rowWidth(row) || 1
+  let acc = 0
+  return row.keys.map((k) => {
+    const lo = acc / total
+    acc += k.width ?? 1
+    return { id: k.id, lo, hi: acc / total }
+  })
+}
+
+/** 矢印キーで次に選ぶキー。左右は行をまたいで辿り、上下は隣の行で中心が最も近いキー。無ければ undefined。 */
+export function navigateKey(layout: KeyboardLayout, fromId: string, dir: Direction): string | undefined {
+  const found = findKey(layout, fromId)
+  if (!found) return undefined
+  const { row, index } = found
+  if (dir === 'left' || dir === 'right') {
+    const d = dir === 'left' ? -1 : 1
+    const inRow = layout.rows[row].keys[index + d]
+    if (inRow) return inRow.id
+    const nr = layout.rows[row + d]
+    if (!nr || nr.keys.length === 0) return undefined
+    return (d < 0 ? nr.keys[nr.keys.length - 1] : nr.keys[0]).id
+  }
+  const target = layout.rows[row + (dir === 'up' ? -1 : 1)]
+  if (!target || target.keys.length === 0) return undefined
+  const me = spans(layout.rows[row])[index]
+  const center = (me.lo + me.hi) / 2
+  let best: { id: string; dist: number } | undefined
+  for (const s of spans(target)) {
+    const dist = center >= s.lo && center <= s.hi ? 0 : Math.min(Math.abs(center - s.lo), Math.abs(center - s.hi))
+    if (!best || dist < best.dist) best = { id: s.id, dist }
+  }
+  return best?.id
+}
+
+/**
+ * 選択中のキーを矢印キーで動かす。左右は同じ行の中で 1 つずつ、上下は隣の行へ（先頭のキーと同じ位置、または末尾へ）。
+ * 端まで行っている場合や、上下で隣の行が無い場合は何もしない。
+ */
+export function nudgeKeys(layout: KeyboardLayout, keyIds: readonly string[], dir: Direction): KeyboardLayout {
+  const order = inDocOrder(layout, keyIds)
+  if (order.length === 0) return layout
+  if (dir === 'up' || dir === 'down') {
+    const first = findKey(layout, order[0])
+    if (!first) return layout
+    const toRow = first.row + (dir === 'up' ? -1 : 1)
+    if (toRow < 0 || toRow >= layout.rows.length) return layout
+    const want = new Set(order)
+    const remaining = layout.rows[toRow].keys.filter((k) => !want.has(k.id)).length
+    return moveKeys(layout, order, { row: toRow, index: Math.min(first.index, remaining) })
+  }
+  const want = new Set(order)
+  const next = clone(layout)
+  let changed = false
+  for (const row of next.rows) {
+    const ks = row.keys
+    if (dir === 'left') {
+      for (let i = 1; i < ks.length; i++)
+        if (want.has(ks[i].id) && !want.has(ks[i - 1].id)) {
+          ;[ks[i - 1], ks[i]] = [ks[i], ks[i - 1]]
+          changed = true
+        }
+    } else {
+      for (let i = ks.length - 2; i >= 0; i--)
+        if (want.has(ks[i].id) && !want.has(ks[i + 1].id)) {
+          ;[ks[i + 1], ks[i]] = [ks[i], ks[i + 1]]
+          changed = true
+        }
+    }
+  }
+  return changed ? next : layout
 }

@@ -3,15 +3,20 @@
 import { History } from './history'
 import {
   addKey,
+  addKeyInNewRow,
   addRow,
   changeKind,
   duplicateKey,
   duplicateLayout,
   findKey,
+  insertKey,
   moveKey,
+  moveKeysChecked,
+  nudgeKeys,
+  removeKeys,
+  allKeyIds,
   moveRow,
   newLayout,
-  removeKey,
   removeRow,
   replaceKey,
   shiftKey,
@@ -19,7 +24,8 @@ import {
   withUniqueLayoutId,
   clone
 } from './ops'
-import { KEY_KINDS } from './types'
+import { KEY_KINDS, LIMITS } from './types'
+import type { Direction, MoveDest } from './ops'
 import type { Key, KeyKind, KeyboardLayout, Row } from './types'
 import { validateLayout } from './validate'
 import type { ValidationError } from './validate'
@@ -62,7 +68,9 @@ export function restoreState(json: string | null): EditorState | undefined {
 export class EditorStore {
   #history: History<EditorState>
   state = $state.raw<EditorState>({ layouts: [], currentId: '' })
-  selectedKeyId = $state<string | null>(null)
+  #selected = $state.raw<string[]>([])
+  /** 操作できなかった理由など、短く見せる通知。 */
+  notice = $state<string | null>(null)
   saveError = $state<string | null>(null)
   /** 履歴の変化をリアクティブにするためのカウンタ。 */
   #rev = $state(0)
@@ -70,6 +78,21 @@ export class EditorStore {
   constructor(initial: EditorState) {
     this.#history = new History(initial)
     this.state = initial
+  }
+
+  /** 選択中のキー id（複数選択可）。 */
+  get selectedIds(): string[] {
+    return this.#selected
+  }
+  set selectedIds(ids: string[]) {
+    this.#selected = [...new Set(ids)]
+  }
+  /** 選択がちょうど 1 つのときの id（インスペクタで詳細を編集する対象）。 */
+  get selectedKeyId(): string | null {
+    return this.#selected.length === 1 ? this.#selected[0] : null
+  }
+  set selectedKeyId(id: string | null) {
+    this.#selected = id === null ? [] : [id]
   }
 
   get layout(): KeyboardLayout {
@@ -100,7 +123,8 @@ export class EditorStore {
   #sync() {
     this.state = this.#history.value
     this.#rev++
-    if (this.selectedKeyId !== null && !findKey(this.layout, this.selectedKeyId)) this.selectedKeyId = null
+    const alive = new Set(allKeyIds(this.layout))
+    if (this.#selected.some((id) => !alive.has(id))) this.#selected = this.#selected.filter((id) => alive.has(id))
     this.#persist()
   }
   #persist() {
@@ -195,10 +219,46 @@ export class EditorStore {
     this.selectedKeyId = r.keyId
   }
   removeKey(id: string) {
-    this.edit(removeKey(this.layout, id))
+    this.edit(removeKeys(this.layout, [id]))
   }
   moveKey(id: string, toRow: number, toIndex: number) {
     this.edit(moveKey(this.layout, id, toRow, toIndex))
+  }
+  /** 複数のキーを移動する。選択は維持。上限を超えるときは通知を出して何もしない。 */
+  moveKeys(ids: readonly string[], dest: MoveDest): boolean {
+    const r = moveKeysChecked(this.layout, ids, dest)
+    if (r.error) {
+      this.notice = r.error
+      return false
+    }
+    if (r.layout === this.layout) return false
+    this.notice = null
+    this.edit(r.layout)
+    return true
+  }
+  /** キーを追加して選択する。`dest` は moveKeys と同じ指す位置（index は行内の挿入位置）。 */
+  addKeyAt(kind: KeyKind, dest: MoveDest): boolean {
+    const r = 'row' in dest ? insertKey(this.layout, dest.row, dest.index, kind) : addKeyInNewRow(this.layout, dest.newRow, kind)
+    if (!r.keyId) {
+      this.notice = 'row' in dest ? `1 行に置けるキーは最大 ${LIMITS.keysPerRowMax} 個までです` : `行は最大 ${LIMITS.rowsMax} 行までです`
+      return false
+    }
+    this.notice = null
+    this.edit(r.layout)
+    this.selectedIds = [r.keyId]
+    return true
+  }
+  removeSelected() {
+    if (this.#selected.length === 0) return
+    this.notice = null
+    this.edit(removeKeys(this.layout, this.#selected))
+  }
+  nudgeSelected(dir: Direction) {
+    if (this.#selected.length === 0) return
+    this.edit(nudgeKeys(this.layout, this.#selected, dir))
+  }
+  selectAll() {
+    this.#selected = allKeyIds(this.layout)
   }
   shiftKey(id: string, delta: -1 | 1) {
     this.edit(shiftKey(this.layout, id, delta))
@@ -206,7 +266,7 @@ export class EditorStore {
   /** キーを書き換える。`coalesceKey` を渡すと連続した入力を 1 回の undo にまとめる。 */
   updateKey(id: string, key: Key, coalesceKey?: string) {
     this.edit(replaceKey(this.layout, id, key), coalesceKey ? `key:${id}:${coalesceKey}` : undefined)
-    if (key.id !== id && this.selectedKeyId === id) this.selectedKeyId = key.id
+    if (key.id !== id && this.#selected.includes(id)) this.#selected = this.#selected.map((x) => (x === id ? key.id : x))
   }
   changeKind(id: string, kind: KeyKind) {
     const found = findKey(this.layout, id)

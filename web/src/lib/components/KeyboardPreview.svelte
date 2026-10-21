@@ -1,96 +1,67 @@
 <script lang="ts">
-  import type { Key, KeyboardLayout } from '$lib/keyboard/types'
+  // キャンバスに置くキーボード本体。描画だけを担当し、ポインタ操作は親（KeyboardCanvas）が data 属性
+  // （data-row / data-key-id）を手掛かりに処理する。キーはフォーカス可能なボタンで、Enter / Space で選択できる。
+  import { describeKey, mainLabel } from '$lib/keyboard/key-display'
+  import type { KeyboardLayout } from '$lib/keyboard/types'
+
+  const BOARD_WIDTH = 430
 
   interface Props {
     layout: KeyboardLayout
-    selectedKeyId?: string | null
-    onselect?: (id: string) => void
+    selectedIds?: readonly string[]
+    /** ドラッグ中のキー（薄く表示する）。 */
+    dragIds?: readonly string[]
+    /** Tab で入れるキー（roving tabindex）。無ければ先頭。 */
+    focusId?: string | null
+    el?: HTMLElement | null
+    onactivate?: (id: string) => void
   }
-  let { layout, selectedKeyId = null, onselect }: Props = $props()
+  let { layout, selectedIds = [], dragIds = [], focusId = null, el = $bindable(null), onactivate }: Props = $props()
 
-  const KIND_NAMES: Record<Key['kind'], string> = {
-    text: '文字',
-    flick: 'フリック',
-    toggle: 'トグル',
-    action: '操作',
-    shortcut: 'ショートカット',
-    layout: 'レイアウト切替',
-    spacer: '空白'
-  }
-
-  function mainLabel(k: Key): string {
-    if (k.label) return k.label
-    switch (k.kind) {
-      case 'text':
-        return k.text
-      case 'flick':
-        return (k.center?.text ?? k.kana ?? "")
-      case 'toggle':
-        return k.cycle[0] ?? ''
-      case 'action':
-        return k.action
-      case 'shortcut':
-        return 'SC'
-      case 'layout':
-        return k.target
-      default:
-        return ''
-    }
-  }
-
-  function describe(k: Key): string {
-    const base = `${mainLabel(k) || k.id}（${KIND_NAMES[k.kind]}）`
-    if (k.kind === 'flick') {
-      const dirs = (['up', 'down', 'left', 'right'] as const)
-        .filter((d) => k[d])
-        .map((d) => `${{ up: '上', down: '下', left: '左', right: '右' }[d]} ${k[d]?.text}`)
-      return dirs.length ? `${base} ${dirs.join('、')}` : base
-    }
-    return base
-  }
+  const selected = $derived(new Set(selectedIds))
+  const dragging = $derived(new Set(dragIds))
+  const tabId = $derived.by(() => {
+    const ids = layout.rows.flatMap((r) => r.keys.map((k) => k.id))
+    return focusId && ids.includes(focusId) ? focusId : (ids[0] ?? null)
+  })
 </script>
 
-<div class="phone" role="group" aria-label="キーボードのプレビュー（キーを押すと選択）">
+<div class="phone" bind:this={el} style:width="{BOARD_WIDTH}px" role="group" aria-label="キーボード本体。矢印キーでキーを選択、Delete で削除、Alt と矢印キーで移動">
   <div class="candbar" aria-hidden="true">
     <span>候補バー</span><span class="dim">きょう　今日　京</span>
   </div>
   <div class="kb">
     {#each layout.rows as row, ri (ri)}
-      <div class="row" style:height="{52 * (row.height ?? 1)}px">
+      <div class="row" data-row={ri} style:height="{52 * (row.height ?? 1)}px">
         {#each row.keys as key, ki (ki)}
-          {#if key.kind === 'spacer'}
-            <button
-              type="button"
-              class="key spacer"
-              class:selected={key.id === selectedKeyId}
-              style:flex-grow={key.width ?? 1}
-              aria-label={`空白（幅 ${key.width ?? 1}）`}
-              aria-pressed={key.id === selectedKeyId}
-              onclick={() => onselect?.(key.id)}
-            ></button>
-          {:else}
-            <button
-              type="button"
-              class="key {key.style ?? 'normal'}"
-              class:selected={key.id === selectedKeyId}
-              style:flex-grow={key.width ?? 1}
-              aria-label={describe(key)}
-              aria-pressed={key.id === selectedKeyId}
-              onclick={() => onselect?.(key.id)}
-            >
-              {#if key.kind === 'flick'}
-                <span class="fl fl-u" aria-hidden="true">{key.up?.text ?? ''}</span>
-                <span class="fl fl-d" aria-hidden="true">{key.down?.text ?? ''}</span>
-                <span class="fl fl-l" aria-hidden="true">{key.left?.text ?? ''}</span>
-                <span class="fl fl-r" aria-hidden="true">{key.right?.text ?? ''}</span>
-                <span class="main" aria-hidden="true">{key.label ?? (key.center?.text ?? key.kana ?? "")}</span>
-              {:else}
-                <span class="main" class:small={mainLabel(key).length > 3} aria-hidden="true">{mainLabel(key)}</span>
-              {/if}
-              {#if key.longPress?.length}<span class="lp" aria-hidden="true"></span>{/if}
-            </button>
-          {/if}
+          <button
+            type="button"
+            data-key-id={key.id}
+            class="key {key.kind === 'spacer' ? 'spacer' : (key.style ?? 'normal')}"
+            class:selected={selected.has(key.id)}
+            class:dragging={dragging.has(key.id)}
+            style:flex-grow={key.width ?? 1}
+            tabindex={key.id === tabId ? 0 : -1}
+            aria-label={describeKey(key)}
+            aria-pressed={selected.has(key.id)}
+            onclick={(e) => {
+              // マウス / タッチはキャンバス側の pointer イベントで処理済み。キーボード操作（detail = 0）だけここで扱う。
+              if (e.detail === 0) onactivate?.(key.id)
+            }}
+          >
+            {#if key.kind === 'flick'}
+              <span class="fl fl-u" aria-hidden="true">{key.up?.text ?? ''}</span>
+              <span class="fl fl-d" aria-hidden="true">{key.down?.text ?? ''}</span>
+              <span class="fl fl-l" aria-hidden="true">{key.left?.text ?? ''}</span>
+              <span class="fl fl-r" aria-hidden="true">{key.right?.text ?? ''}</span>
+              <span class="main" aria-hidden="true">{mainLabel(key)}</span>
+            {:else if key.kind !== 'spacer'}
+              <span class="main" class:small={mainLabel(key).length > 3} aria-hidden="true">{mainLabel(key)}</span>
+            {/if}
+            {#if key.longPress?.length}<span class="lp" aria-hidden="true"></span>{/if}
+          </button>
         {/each}
+        {#if row.keys.length === 0}<span class="empty" aria-hidden="true">空の行</span>{/if}
       </div>
     {/each}
   </div>
@@ -98,14 +69,13 @@
 
 <style>
   .phone {
-    width: 100%;
-    max-width: 430px;
-    margin: 0 auto;
-    border-radius: 16px;
-    overflow: hidden;
+    border-radius: 18px;
     border: 1px solid var(--line);
     background: var(--kb-bg);
-    container-type: inline-size;
+    box-shadow: var(--panel-shadow);
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
   }
   .candbar {
     display: flex;
@@ -129,6 +99,17 @@
   .row {
     display: flex;
     gap: 6px;
+    min-height: 14px;
+  }
+  .empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8125rem;
+    color: var(--muted);
+    border: 1px dashed var(--muted);
+    border-radius: 7px;
   }
   .key {
     position: relative;
@@ -144,8 +125,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    font: inherit;
     font-size: 1.125rem;
     overflow: hidden;
+    touch-action: none;
   }
   .key.function {
     background: var(--key-fn-bg);
@@ -160,21 +143,25 @@
     outline: 1px dashed var(--muted);
     outline-offset: -1px;
   }
+  .key.dragging {
+    opacity: 0.35;
+  }
+  /* 枠の太さは画面上で一定にする（--zoom は KeyboardCanvas が設定する）。 */
   .key.selected {
-    outline: 3px solid var(--focus);
-    outline-offset: -1px;
+    outline: calc(2.5px / var(--zoom, 1)) solid var(--focus);
+    outline-offset: calc(1px / var(--zoom, 1));
     z-index: 1;
+    overflow: visible;
   }
   .key:focus-visible {
-    outline: 3px solid var(--focus);
-    outline-offset: 1px;
+    outline: calc(3px / var(--zoom, 1)) solid var(--focus);
+    outline-offset: calc(2px / var(--zoom, 1));
     z-index: 2;
   }
   .main {
     max-width: 100%;
     overflow: hidden;
     white-space: nowrap;
-    text-overflow: clip;
   }
   .main.small {
     font-size: 0.8125rem;

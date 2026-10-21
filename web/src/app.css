@@ -21,6 +21,12 @@
   --key-accent-bg: #3552c9;
   --key-accent-fg: #ffffff;
   --kb-bg: #d7dae3;
+  /* キーボード編集キャンバス */
+  --canvas-bg: #eceef4;
+  --canvas-dot: #b4bacb;
+  --select-fill: rgba(11, 107, 203, 0.12);
+  --drop-indicator: #e5484d;
+  --panel-shadow: 0 2px 10px rgba(20, 24, 40, 0.14);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -43,6 +49,11 @@
     --key-accent-bg: #9db0ff;
     --key-accent-fg: #0b0e1c;
     --kb-bg: #1f222b;
+    --canvas-bg: #0b0d12;
+    --canvas-dot: #343a4b;
+    --select-fill: rgba(124, 184, 255, 0.16);
+    --drop-indicator: #ff7a80;
+    --panel-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
   }
 }
 
