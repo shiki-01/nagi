@@ -197,6 +197,23 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 5. 最後にまとめて: 見た目と操作感の調整（実機のフィードバックを集める）
 6. ~~要判断（診断ログの既定・iOS の既定モデル）~~ → 決定済み（H-22。診断ログは TestFlight で既定 ON・App Store 版で既定 OFF、既定モデルは small。`RequestsOpenAccess` は H-18 で true。`docs/ios-device-checklist.md` §0）
 
+## iOS 実機確認待ちの一覧（2026-10-21）
+
+実装済みで、実機（TestFlight）での確認が済んでいないもの。確認手順は各節と `docs/ios-device-checklist.md` を参照。
+
+| 項目 | 節 | 確認方法 |
+| --- | --- | --- |
+| 曖昧入力 M1・M2: 誤補正（固有名詞・俗語の文）、矩形の座標系、タッチ位置、候補バーの「もしかして」の見え方、σ_noise の実測 | H-24・H-25 | 入力テスト、診断ログ。CI での Swift ビルド・テストは 2026-10-21 に成功済み |
+| 絵文字・顔文字候補の見え方と設定 UI の追従 | H-21 | 読み（例: えがお）で候補を確認 |
+| メモリ上限の閾値（150/1024/2048MB）と LLM 再読み込みの待ち時間（30 秒）の見直し | H-16・H-26 | 診断ログ `unload_model (keyboard hidden)` `reload_model ok=` `llm restored` |
+| フルアクセスが要る機能（触覚など）の可否 | H-18 | `docs/ios-device-checklist.md` |
+| 他機種での拡張のメモリ上限・応答時間の実測、small の応答時間の実機再確認 | H-17 | 別機種で計測 |
+| クリック音（互換モード）・触覚の設定値と実際の動作の一致 | H-30 | 診断ログ `feedback prepare` と実際の音・触覚 |
+| 複数プロセスでの学習データの同時アクセス（D-5） | mobile-roadmap D-5 | 本体アプリとキーボードで同時に学習・削除 |
+| iOS の `capabilities` / `get_key_table` / `set_environment` / メモリ警告の連携 | 「モバイル向けコア API」 | 診断ログ |
+
+確認済み: メール・URL 欄の英字切替、検索欄の改行キー、注目文節まで確定、`insert` 確定（H-31・H-34）、数字欄（`.numberPad` ほか。H-35）。欄ごとの標準キーボードの自動選択は iOS の挙動で対応不可（H-33・H-35）。
+
 ## モバイル向けコア API（2026-10-14、決定は decisions.md H-16）
 
 - 実装済み: LLM だけの解放/再読み込み（`unload_model` / `reload_model`、メモリ逼迫 critical・メモリ上限不足での自動解放、normal から 30 秒後の自動再読み込み）、`get_key_table`、D-4（`initialize.capabilities`・`set_environment.memory_budget_mb`・メモリ上限に従うプロファイル判定）
