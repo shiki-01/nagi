@@ -921,7 +921,12 @@ impl ConversionBackend for Pipeline {
             groups.push((CandidateSource::SystemDict, system));
             groups.push((CandidateSource::Kana, kana));
         }
-        let mut rewriter_candidates = self.rewriter.candidates(reading);
+        let excluded: &[&str] = if eff.calculator {
+            &[]
+        } else {
+            &[nagi_rewriter::SIMPLE_CALCULATOR_ID]
+        };
+        let mut rewriter_candidates = self.rewriter.candidates_excluding(reading, excluded);
         // 絵文字・顔文字は Rewriter の末尾（読みが表に完全一致するときだけ）
         rewriter_candidates.extend(
             EmojiRewriter {

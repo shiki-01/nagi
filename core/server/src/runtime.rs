@@ -113,6 +113,8 @@ pub struct Tunables {
     pub emoji_enabled: bool,
     /// `rewriter.kaomoji`
     pub kaomoji_enabled: bool,
+    /// `convert.calculator`
+    pub calculator_enabled: bool,
     /// `input.fuzzy.*`（曖昧入力）
     pub fuzzy: FuzzySettings,
 }
@@ -176,6 +178,7 @@ impl Tunables {
             snippet_enabled: config.snippet.enabled,
             emoji_enabled: config.rewriter.emoji,
             kaomoji_enabled: config.rewriter.kaomoji,
+            calculator_enabled: config.convert.calculator,
             fuzzy: FuzzySettings::from_config(&config.input.fuzzy),
         }
     }
@@ -205,6 +208,8 @@ pub struct Effective {
     pub emoji: bool,
     /// 読みからの顔文字候補（`rewriter.kaomoji`）
     pub kaomoji: bool,
+    /// 電卓候補（`convert.calculator`）
+    pub calculator: bool,
     /// 曖昧入力（`input.fuzzy.*`）
     pub fuzzy: FuzzySettings,
 }
@@ -846,6 +851,7 @@ impl Runtime {
             beam_width,
             emoji: t.emoji_enabled,
             kaomoji: t.kaomoji_enabled,
+            calculator: t.calculator_enabled,
             fuzzy: t.fuzzy,
         }
     }

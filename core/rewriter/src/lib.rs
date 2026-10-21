@@ -222,9 +222,12 @@ fn is_valid_date(year: u32, month: u32, day: u32) -> bool {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SimpleCalculator;
 
+/// [`SimpleCalculator`] の識別子
+pub const SIMPLE_CALCULATOR_ID: &str = "simple_calculator";
+
 impl Rewriter for SimpleCalculator {
     fn id(&self) -> &str {
-        "simple_calculator"
+        SIMPLE_CALCULATOR_ID
     }
 
     fn rewrite(&self, reading: &str) -> Vec<String> {
@@ -478,8 +481,14 @@ impl RewriterChain {
 
     /// 登録された全 Rewriter の候補をまとめて返す（重複除去はしない。呼び出し側の候補統合処理に委ねる）
     pub fn candidates(&self, reading: &str) -> Vec<String> {
+        self.candidates_excluding(reading, &[])
+    }
+
+    /// `excluded` に挙げた識別子（[`Rewriter::id`]）の Rewriter を除いて候補を返す
+    pub fn candidates_excluding(&self, reading: &str, excluded: &[&str]) -> Vec<String> {
         self.rewriters
             .iter()
+            .filter(|r| !excluded.contains(&r.id()))
             .flat_map(|r| r.rewrite(reading))
             .collect()
     }
@@ -494,6 +503,17 @@ impl Default for RewriterChain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chain_candidates_excluding_skips_given_ids() {
+        let chain = RewriterChain::default_chain();
+        assert!(chain.candidates("1+2").contains(&"3".to_string()));
+        assert!(
+            !chain
+                .candidates_excluding("1+2", &[SIMPLE_CALCULATOR_ID])
+                .contains(&"3".to_string())
+        );
+    }
 
     #[test]
     fn zenkaku_alnum_converts_ascii() {

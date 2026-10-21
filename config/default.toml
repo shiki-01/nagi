@@ -226,6 +226,12 @@ emoji = true
 # 既定: true
 kaomoji = true
 
+[convert]
+# 電卓候補を出す（読みが「1+2」のような `数値 演算子 数値` のとき、計算結果「3」を Rewriter の候補に加える）
+# 演算子は + - * /。括弧・複数演算は対象外
+# 既定: false
+calculator = false
+
 [userdict]
 # ユーザー辞書の語を変換・予測に使うかどうか
 # false にしても登録内容は消えない（スニペットは [snippet] で別に切り替える）

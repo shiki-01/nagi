@@ -109,6 +109,19 @@ fn emoji_and_kaomoji_can_be_disabled() {
 }
 
 #[test]
+fn calculator_candidate_only_when_enabled() {
+    let b = pipeline_with(nagi_config::Config::default(), "");
+    let c = b.segment_candidates("1+2", "", 20);
+    assert!(!surfaces(&c).contains(&"3"), "既定では電卓候補は出ない");
+    let mut config = nagi_config::Config::default();
+    config.convert.calculator = true;
+    let b = pipeline_with(config, "");
+    let c = b.segment_candidates("1+2", "", 20);
+    let hit = c.iter().find(|x| x.surface == "3").expect("電卓候補");
+    assert!(hit.sources.contains(&CandidateSource::Rewriter));
+}
+
+#[test]
 fn user_dictionary_wins_over_emoji_for_the_same_reading() {
     let b = pipeline_with(nagi_config::Config::default(), "わらう\t笑顔の人\t名詞\t\n");
     let c = b.segment_candidates("わらう", "", 20);

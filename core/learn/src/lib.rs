@@ -1220,6 +1220,123 @@ mod tests {
         assert_eq!(rows[1].reading, "two");
     }
 
+    /// flush は後勝ちの上書きではなく 3 者マージ: 互いに知らない 2 つの Learner（別々の fd）が
+    /// 交互に flush しても、固有の行も共有行の加算分も失われない
+    #[test]
+    fn test_two_independent_learners_merge_updates() {
+        let temp_dir = test_temp_dir();
+        let path = temp_dir.join("learn.tsv");
+
+        let mut a = Learner::new(LearnConfig::default());
+        let mut b = Learner::new(LearnConfig::default());
+        a.record("きょう", "今日", 0, "learned", 100);
+        a.flush(&path).unwrap();
+        // b は a の flush を知らないまま、同じ行と自分だけの行を記録する
+        b.record("きょう", "今日", 0, "learned", 200);
+        b.record("あす", "明日", 0, "learned", 200);
+        b.flush(&path).unwrap();
+        // a は b の更新を取り込んだうえで、さらに加算して flush する
+        a.record("きょう", "今日", 0, "learned", 300);
+        a.record("きのう", "昨日", 0, "learned", 300);
+        a.flush(&path).unwrap();
+
+        let (loaded, _) = Learner::load(&path, LearnConfig::default()).unwrap();
+        assert_eq!(count_of(&loaded, "きょう", "今日"), 3);
+        assert_eq!(count_of(&loaded, "あす", "明日"), 1);
+        assert_eq!(count_of(&loaded, "きのう", "昨日"), 1);
+        // flush 後の手元の状態にも他方の更新が取り込まれている
+        assert_eq!(count_of(&a, "あす", "明日"), 1);
+    }
+
+    /// ロック競合下（各スレッドが別の fd で flock）で並行に flush しても更新が失われない
+    #[test]
+    fn test_concurrent_thread_flush_keeps_all_updates() {
+        let temp_dir = test_temp_dir();
+        let path = temp_dir.join("learn.tsv");
+        const THREADS: usize = 4;
+        const ITERS: usize = 15;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut l = Learner::new(LearnConfig::default());
+                    for i in 0..ITERS {
+                        l.record("きょう", "共有", 0, "learned", 1000 + i as u64);
+                        l.record(&format!("t{t}"), &format!("i{i}"), 0, "learned", 1000);
+                        assert!(l.flush(&path).unwrap());
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let (loaded, _) = Learner::load(&path, LearnConfig::default()).unwrap();
+        assert_eq!(
+            count_of(&loaded, "きょう", "共有"),
+            (THREADS * ITERS) as u32
+        );
+        assert_eq!(loaded.len(), 1 + THREADS * ITERS);
+    }
+
+    /// 子プロセス側の本体（親テストが環境変数付きで自身のテストバイナリを起動する）。
+    /// 環境変数が無ければ何もしない
+    #[test]
+    fn multiprocess_flush_child() {
+        let (Ok(path), Ok(id)) = (
+            env::var("NAGI_LEARN_CHILD_PATH"),
+            env::var("NAGI_LEARN_CHILD_ID"),
+        ) else {
+            return;
+        };
+        let mut l = Learner::new(LearnConfig::default());
+        for i in 0..MULTIPROCESS_ITERS {
+            l.record("きょう", "共有", 0, "learned", 1000 + i as u64);
+            l.record(&format!("p{id}"), &format!("i{i}"), 0, "learned", 1000);
+            assert!(l.flush(Path::new(&path)).unwrap());
+        }
+    }
+
+    const MULTIPROCESS_ITERS: usize = 15;
+
+    /// 実際に別プロセスを 3 つ同時に走らせて flush しても更新が失われない
+    #[test]
+    fn test_multiprocess_flush_keeps_all_updates() {
+        let temp_dir = test_temp_dir();
+        let path = temp_dir.join("learn.tsv");
+        const PROCS: usize = 3;
+
+        let exe = env::current_exe().unwrap();
+        let children: Vec<_> = (0..PROCS)
+            .map(|id| {
+                std::process::Command::new(&exe)
+                    .args([
+                        "--exact",
+                        "tests::multiprocess_flush_child",
+                        "--test-threads=1",
+                    ])
+                    .env("NAGI_LEARN_CHILD_PATH", &path)
+                    .env("NAGI_LEARN_CHILD_ID", id.to_string())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for mut c in children {
+            assert!(c.wait().unwrap().success(), "子プロセスのテストが失敗");
+        }
+
+        let (loaded, _) = Learner::load(&path, LearnConfig::default()).unwrap();
+        assert_eq!(
+            count_of(&loaded, "きょう", "共有"),
+            (PROCS * MULTIPROCESS_ITERS) as u32
+        );
+        assert_eq!(loaded.len(), 1 + PROCS * MULTIPROCESS_ITERS);
+    }
+
     #[test]
     fn test_load_unsupported_schema() {
         let temp_dir = test_temp_dir();

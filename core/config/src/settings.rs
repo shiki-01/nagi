@@ -507,6 +507,13 @@ pub fn definitions() -> Vec<SettingDef> {
             SettingKind::Bool,
         ),
         def(
+            "convert.calculator",
+            "表記の候補",
+            "電卓候補",
+            "「1+2」のような読みに、計算結果（3）を変換候補として加えます。",
+            SettingKind::Bool,
+        ),
+        def(
             "userdict.enabled",
             "ユーザー辞書",
             "ユーザー辞書を使う",
@@ -571,6 +578,7 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         "input.fuzzy.use_touch_coords" => Some(Bool(config.input.fuzzy.use_touch_coords)),
         "rewriter.emoji" => Some(Bool(config.rewriter.emoji)),
         "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
+        "convert.calculator" => Some(Bool(config.convert.calculator)),
         "userdict.enabled" => Some(Bool(config.userdict.enabled)),
         "snippet.enabled" => Some(Bool(config.snippet.enabled)),
         "learning.enabled" => Some(Bool(config.learning.enabled)),
@@ -1082,6 +1090,20 @@ mod tests {
         let (c, issues) = crate::parse(&r.source).unwrap();
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.rewriter.emoji && !c.rewriter.kaomoji);
+    }
+
+    #[test]
+    fn convert_calculator_definition() {
+        let defs = definitions();
+        let d = defs.iter().find(|d| d.key == "convert.calculator").unwrap();
+        assert_eq!(d.level, SettingLevel::Detail);
+        assert_eq!(d.platforms, SettingPlatforms::Both);
+        assert!(!crate::Config::default().convert.calculator);
+        let r =
+            apply_changes(None, &[set("convert.calculator", SettingValue::Bool(true))]).unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(c.convert.calculator);
     }
 
     #[test]

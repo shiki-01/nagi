@@ -548,6 +548,14 @@ impl Default for RewriterSection {
     }
 }
 
+/// 変換結果の表記に関するセクション（`docs/ios-settings.md` §2 の `convert.*`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConvertSection {
+    /// 電卓候補（`1+2` → `3`）を出すかどうか。既定: false。
+    pub calculator: bool,
+}
+
 /// キーマップセクション。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -610,6 +618,8 @@ pub struct Config {
     pub predict: PredictSection,
     /// Rewriter セクション。
     pub rewriter: RewriterSection,
+    /// 変換結果の表記セクション。
+    pub convert: ConvertSection,
     /// ユーザー辞書セクション。
     pub userdict: UserdictSection,
     /// スニペットセクション。
@@ -828,6 +838,7 @@ const KNOWN_KEYS: &[&str] = &[
     "learning",
     "predict",
     "rewriter",
+    "convert",
     "userdict",
     "snippet",
     "keymap",
@@ -880,6 +891,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         ],
         "predict" => &["enabled", "min_chars", "next_word", "next_word_count"],
         "rewriter" => &["emoji", "kaomoji"],
+        "convert" => &["calculator"],
         "userdict" | "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],

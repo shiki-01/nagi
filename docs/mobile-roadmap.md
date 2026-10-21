@@ -12,7 +12,7 @@ v0.1 draft（2026-09-30）。`docs/mobile-design.md`（設計）と `docs/decisi
 | D-2 `insert_reading` / `perform_action` | **完了**（12 キーのトグル・フリック・濁点循環をコアで解決。H-11） |
 | D-3 クロスビルド CI | **完了**（`ci.yml` の `mobile` ジョブで `aarch64-linux-android` / `aarch64-apple-ios` の `cargo check`（llama 無し）。iOS は `ios-testflight` で毎回ビルドも行う） |
 | D-4 `initialize` の capability | コア側は実装済み（2026-10-14、H-16）: `initialize.params.capabilities`（`input_method` / `environment`）と `set_environment.memory_budget_mb` でメモリ上限・電源・熱・メモリ逼迫を受け取りプロファイル判定に反映。LLM だけの解放・再読み込み（`unload_model` / `reload_model`、メモリ逼迫 critical で自動解放）も実装済み。iOS 側の追従は済み（`NagiSession.swift`・`NagiEnvironment.swift`・`KeyboardModel.swift` で capabilities・`set_environment`・`get_key_table` を使う。実機確認待ち。複製表 `KanaKeyTable.swift` はフォールバックとして残る） |
-| D-5 複数プロセスの同時アクセス | 一部（ホストが学習ファイルを直接消す経路は、コアと同じ `learning.lock` の flock を取るようにした。コアの flush が他プロセスの更新を取り込まず後勝ちで上書きする点、ロックファイルの削除の競合は未対応でコア側の課題。実機未確認） |
+| D-5 複数プロセスの同時アクセス | 一部（ホストが学習ファイルを直接消す経路は、コアと同じ `learning.lock` の flock を取るようにした。コアの flush は flock 下で 3 者マージして他プロセスの更新を取り込む（2026-10-21 に 2 スレッド・3 プロセス同時 flush のテストで確認。後勝ちではない）。ロックファイルの削除の競合は未対応。実機未確認） |
 | D-6 予測変換の要件 | 未着手（入力中の候補・部分変換で一部を代替。H-14） |
 | M0 実機での技術検証（iOS） | **ほぼ完了**（拡張の上限 約 177MB、xsmall・small とも拡張内で動作、応答時間は同期待ち 30ms + 非同期の差し替えで目標内、C ABI の非同期通知を確認。H-6〜H-10）。SideStore 検証は不要。Android は未着手 |
 | M1 Android MVP | 未着手 |
