@@ -174,6 +174,8 @@ struct NagiInputKindsSection: View {
     @State private var email = ""
     @State private var url = ""
     @State private var number = ""
+    @State private var decimal = ""
+    @State private var asciiNumber = ""
     @State private var search = ""
     @State private var editor = ""
 
@@ -222,6 +224,14 @@ struct NagiInputKindsSection: View {
             kind("数字（.numberPad）", "数字の配列で開く（IsASCIICapable を申告しているため Nagi が使える。H-35）") {
                 TextField("数字", text: $number)
                     .keyboardType(.numberPad)
+            }
+            kind("小数（.decimalPad）", "数字の欄 .numberPad で Nagi が出ない場合の切り分け用。ここで Nagi が出れば .numberPad は iOS の仕様（H-35）") {
+                TextField("小数", text: $decimal)
+                    .keyboardType(.decimalPad)
+            }
+            kind("ASCII 数字（.asciiCapableNumberPad）", "同上の切り分け用。ASCII 対応のキーボードが使える数字欄") {
+                TextField("ASCII 数字", text: $asciiNumber)
+                    .keyboardType(.asciiCapableNumberPad)
             }
             kind("検索（returnKeyType .search）", "改行キーが「検索」表示になり、押すと確定して欄の送信動作が走る") {
                 TextField("検索", text: $search)
