@@ -18,6 +18,10 @@ const MIN_MACOS: &str = "13.0";
 const ICON_FILE: &str = "nagi-icon.tiff";
 /// アイコンの色（RGB。落ち着いた青緑）。
 const ICON_COLOR: [u8; 3] = [0x3A, 0x7C, 0x89];
+/// 英数モードのアイコン画像のファイル名。
+const ROMAN_ICON_FILE: &str = "nagi-icon-roman.tiff";
+/// 英数モードのアイコンの色（RGB。灰色。ひらがなモードと見分けるため）。
+const ROMAN_ICON_COLOR: [u8; 3] = [0x80, 0x80, 0x80];
 
 /// 単色の角丸正方形の RGBA 8bit ピクセル列（四隅は透明）。
 fn icon_rgba(size: u32, rgb: [u8; 3]) -> Vec<u8> {
@@ -123,9 +127,14 @@ pub fn icon_tiff(pages: &[TiffPage], rgb: [u8; 3]) -> Vec<u8> {
     out
 }
 
-/// 入力モード ID（`<bundle-id>.Japanese`）。
+/// 入力モード ID（`<bundle-id>.Japanese`）。コアのひらがなモードに対応する。
 pub fn input_mode_id(bundle_id: &str) -> String {
     format!("{bundle_id}.Japanese")
+}
+
+/// 英数モードの入力モード ID（`<bundle-id>.Roman`）。コアの英数モードに対応する。
+pub fn roman_mode_id(bundle_id: &str) -> String {
+    format!("{bundle_id}.Roman")
 }
 
 /// IMKServer の接続名（`<bundle-id>_Connection`）。
@@ -167,6 +176,7 @@ fn xml_escape(s: &str) -> String {
 pub fn info_plist(executable: &str, version: &str, bundle_id: &str) -> String {
     let e = xml_escape;
     let mode_id = e(&input_mode_id(bundle_id));
+    let roman_id = e(&roman_mode_id(bundle_id));
     let conn = e(&connection_name(bundle_id));
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -210,9 +220,22 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str) -> String {
 				<key>tsInputModeMenuIconFileKey</key><string>{icon}</string>
 				<key>tsInputModePaletteIconFileKey</key><string>{icon}</string>
 			</dict>
+			<key>{roman_id}</key>
+			<dict>
+				<key>TISInputSourceID</key><string>{roman_id}</string>
+				<key>TISIntendedLanguage</key><string>en</string>
+				<key>tsInputModeScriptKey</key><string>smRoman</string>
+				<key>tsInputModeIsVisibleKey</key><true/>
+				<key>tsInputModeDefaultStateKey</key><true/>
+				<key>tsInputModePrimaryInScriptKey</key><true/>
+				<key>tsInputModeJISKeyboardShortcutKey</key><integer>0</integer>
+				<key>tsInputModeDefaultsToTransparentKey</key><false/>
+				<key>tsInputModeMenuIconFileKey</key><string>{roman_icon}</string>
+				<key>tsInputModePaletteIconFileKey</key><string>{roman_icon}</string>
+			</dict>
 		</dict>
 		<key>tsVisibleInputModeOrderedArrayKey</key>
-		<array><string>{mode_id}</string></array>
+		<array><string>{mode_id}</string><string>{roman_id}</string></array>
 	</dict>
 	<key>LSMinimumSystemVersion</key>
 	<string>{min}</string>
@@ -248,6 +271,7 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str) -> String {
         min = MIN_MACOS,
         conn = conn,
         icon = ICON_FILE,
+        roman_icon = ROMAN_ICON_FILE,
     )
 }
 
@@ -359,6 +383,11 @@ pub fn run(opts: Options) -> Result<(), String> {
         icon_tiff(&ICON_PAGES, ICON_COLOR),
     )
     .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
+    fs::write(
+        resources_dir.join(ROMAN_ICON_FILE),
+        icon_tiff(&ICON_PAGES, ROMAN_ICON_COLOR),
+    )
+    .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
 
     // 4. 署名・zip（macOS のみ）
     let zip = out_dir.join("Nagi.app.zip");
@@ -424,6 +453,11 @@ mod tests {
             "<key>tsInputModeJISKeyboardShortcutKey</key><integer>1</integer>",
             "<key>tsInputModeMenuIconFileKey</key><string>nagi-icon.tiff</string>",
             "<key>tsInputModePaletteIconFileKey</key><string>nagi-icon.tiff</string>",
+            "<key>com.shiki.inputmethod.Nagi.Roman</key>",
+            "<key>tsInputModeScriptKey</key><string>smRoman</string>",
+            "<key>tsInputModeJISKeyboardShortcutKey</key><integer>0</integer>",
+            "<key>tsInputModeMenuIconFileKey</key><string>nagi-icon-roman.tiff</string>",
+            "<array><string>com.shiki.inputmethod.Nagi.Japanese</string><string>com.shiki.inputmethod.Nagi.Roman</string></array>",
         ] {
             assert!(p.contains(needle), "missing: {needle}");
         }
@@ -449,6 +483,7 @@ mod tests {
             "<key>CFBundleIdentifier</key>\n\t<string>com.shiki.inputmethod.Nagi</string>",
             "<key>com.shiki.inputmethod.Nagi.Japanese</key>",
             "<key>TISInputSourceID</key><string>com.shiki.inputmethod.Nagi.Japanese</string>",
+            "<key>TISInputSourceID</key><string>com.shiki.inputmethod.Nagi.Roman</string>",
             "<string>com.shiki.inputmethod.Nagi_Connection</string>",
         ] {
             assert!(p.contains(needle), "missing: {needle}");
@@ -542,6 +577,7 @@ mod tests {
     #[test]
     fn derived_ids() {
         assert_eq!(input_mode_id("a.b"), "a.b.Japanese");
+        assert_eq!(roman_mode_id("a.b"), "a.b.Roman");
         assert_eq!(connection_name("a.b"), "a.b_Connection");
     }
 

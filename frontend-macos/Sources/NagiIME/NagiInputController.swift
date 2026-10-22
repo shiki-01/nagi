@@ -13,6 +13,9 @@ final class NagiInputController: IMKInputController {
     private var textClient: (any IMKTextInput)?
     private var hasMarked = false
     private var lastCandidates: CandidatePage?
+    private var isActive = false
+    /// コアのこのセッションの入力モード（応答の `mode` で更新する。nil = 未受信で初期モードのまま）
+    private var coreMode: InputMode?
 
     private static let notFound = NSRange(location: NSNotFound, length: NSNotFound)
 
@@ -82,9 +85,12 @@ final class NagiInputController: IMKInputController {
         {
             apply(result)
         }
+        isActive = true
+        adoptSelectedMode()
     }
 
     override func deactivateServer(_ sender: Any!) {
+        isActive = false
         if let c = sender as? IMKTextInput { textClient = c }
         if let context {
             let supervisor = context.supervisor
@@ -112,6 +118,24 @@ final class NagiInputController: IMKInputController {
         {
             apply(result)
         }
+    }
+
+    /// OS 側で入力モードが選ばれた（入力メニューの「あ / A」、英数/かなキー等）。コアのモードを合わせる
+    override func setValue(_ value: Any!, forTag tag: Int, client sender: Any!) {
+        guard tag == Int(kTextServiceInputModePropertyTag) else {
+            super.setValue(value, forTag: tag, client: sender)
+            return
+        }
+        if let c = sender as? IMKTextInput { textClient = c }
+        guard let identifier = value as? String, let mode = context?.mode(forIdentifier: identifier)
+        else { return }
+        requestMode(mode)
+    }
+
+    /// エンジンの起動・再起動後: コアのセッションは初期モードに戻るため、使用中なら OS のモードに合わせ直す
+    func engineStarted() {
+        coreMode = nil
+        if isActive { adoptSelectedMode() }
     }
 
     // MARK: 入力メニュー
@@ -142,7 +166,10 @@ final class NagiInputController: IMKInputController {
         }
         if let preedit = result.preedit { renderPreedit(preedit) }
         if let candidates = result.candidates { showCandidates(CandidatePaging.page(for: candidates)) }
-        if let mode = result.mode { syncMode(mode) }
+        if let mode = result.mode {
+            coreMode = mode
+            syncMode(mode)
+        }
     }
 
     /// `update_preedit` 通知（ライブ変換等）
@@ -217,6 +244,30 @@ final class NagiInputController: IMKInputController {
             "", replacementRange: NSRange(location: selection.location - length, length: length))
     }
 
+    /// コアの現在のモード（未受信なら新規セッションの初期モード）
+    private var currentMode: InputMode { coreMode ?? context?.initialMode ?? .hiragana }
+
+    /// OS で選ばれている入力モードをコアに反映する（新規セッションは初期モードから始まるため）
+    private func adoptSelectedMode() {
+        guard let identifier = InputSourceRegistrar.currentInputSourceID(),
+            let mode = context?.mode(forIdentifier: identifier)
+        else { return }
+        requestMode(mode)
+    }
+
+    /// コアのモードを切り替える。同じモードなら送らない（SetMode は入力中の文字列を確定するため）
+    private func requestMode(_ mode: InputMode) {
+        guard let context, mode != currentMode else { return }
+        let params = PerformActionParams(session_id: sessionId, action: .setMode(mode))
+        let supervisor = context.supervisor
+        if case .success(let result) = SyncBridge.wait(
+            timeout: context.keyTimeout, { try await supervisor.performAction(params) })
+        {
+            apply(result)
+        }
+    }
+
+    /// コアのモードを OS の入力モード（メニューバーの表示）へ反映する
     private func syncMode(_ mode: InputMode) {
         guard let identifier = context?.modeIdentifiers[mode] else { return }
         textClient?.selectMode(identifier)

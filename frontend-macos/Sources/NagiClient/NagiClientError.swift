@@ -41,6 +41,7 @@ public enum RpcMethod {
     public static let getStatus = "get_status"
     public static let clearLearning = "clear_learning"
     public static let selectCandidate = "select_candidate"
+    public static let performAction = "perform_action"
     public static let reconvert = "reconvert"
     public static let restoreSession = "restore_session"
     public static let reset = "reset"

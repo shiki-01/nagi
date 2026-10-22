@@ -139,6 +139,14 @@ public enum InputSourceRegistrar {
         return Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
     }
 
+    /// 現在選ばれている入力ソース（入力モード）の ID
+    public static func currentInputSourceID() -> String? {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else {
+            return nil
+        }
+        return property(source, keyInputSourceID)
+    }
+
     private static func identifier(of source: TISInputSource) -> String {
         property(source, keyInputSourceID) ?? UUID().uuidString
     }

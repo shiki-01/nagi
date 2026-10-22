@@ -85,6 +85,7 @@ public final class NagiIMEHost {
         let store = SessionStore()
         let context = NagiIMEContext(supervisor: supervisor, store: store)
         self.context = context
+        context.modeIdentifiers = BundleIdentity.modeIdentifiers(bundleID: Self.defaultBundleIdentifier)
         NagiIMEContext.shared = context
         supervisor.restoreProvider = { store.restoreParams() }
         supervisor.onEvent = { [weak context] event in

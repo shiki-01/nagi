@@ -99,4 +99,11 @@ final class SupportTests: XCTestCase {
             BundleIdentity.connectionName(bundleID: "com.shiki.inputmethod.Nagi"),
             "com.shiki.inputmethod.Nagi_Connection")
     }
+
+    func testModeIdentifiersMatchBundlePlist() {
+        let ids = BundleIdentity.modeIdentifiers(bundleID: "com.shiki.inputmethod.Nagi")
+        XCTAssertEqual(ids[.hiragana], "com.shiki.inputmethod.Nagi.Japanese")
+        XCTAssertEqual(ids[.alphanumeric], "com.shiki.inputmethod.Nagi.Roman")
+        XCTAssertEqual(Set(ids.values).count, 2)
+    }
 }

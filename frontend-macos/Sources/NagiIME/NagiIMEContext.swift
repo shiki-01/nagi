@@ -16,6 +16,13 @@ public final class NagiIMEContext {
     /// コアの入力モード → OS の入力モード識別子（Info.plist の ComponentInputModeDict のキー）。
     /// 空なら OS 側のモード同期は行わない
     public var modeIdentifiers: [InputMode: String] = [:]
+    /// コアの新規セッションの入力モード（`initialize` の応答で更新する）
+    var initialMode: InputMode = .hiragana
+
+    /// OS の入力モード識別子 → コアの入力モード
+    func mode(forIdentifier identifier: String) -> InputMode? {
+        modeIdentifiers.first { $0.value == identifier }?.key
+    }
 
     /// 設定ウィンドウ（初回表示時に生成）。メインスレッドからのみ触る
     private var settingsWindow: SettingsWindowController?
@@ -70,7 +77,11 @@ public final class NagiIMEContext {
             NSLog("nagi: engine restarted \(restarts) times; running in minimal mode")
         case .launchFailed(let error):
             NSLog("nagi: engine launch failed: \(error)")
-        case .started, .crashed:
+        case .started(let result, _):
+            // 起動・再起動のたびにコアのセッションは初期モードから始まる
+            initialMode = result.mode
+            for controller in controllers.values { controller.value?.engineStarted() }
+        case .crashed:
             break
         }
     }

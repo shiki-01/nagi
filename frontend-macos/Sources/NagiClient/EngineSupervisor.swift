@@ -373,6 +373,11 @@ public final class EngineSupervisor: @unchecked Sendable {
         try await diff(RpcMethod.selectCandidate, params, sessionId: params.session_id)
     }
 
+    /// キーを介さない操作（入力メニューからのモード切替等）
+    public func performAction(_ params: PerformActionParams) async throws -> ProcessKeyResult {
+        try await diff(RpcMethod.performAction, params, sessionId: params.session_id)
+    }
+
     public func reconvert(_ params: ReconvertParams) async throws -> ProcessKeyResult {
         try await diff(RpcMethod.reconvert, params, sessionId: params.session_id)
     }
