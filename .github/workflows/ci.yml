@@ -34,6 +34,30 @@ jobs:
       - name: test
         run: cargo test --workspace
 
+  # Windows フロント（Phase 5、H-39）。`nagi-windows` / `nagi-windows-tsf` は workspace members なので、
+  # 上の `core` ジョブ（ubuntu / windows / macos の fmt・clippy・build・test）で 3 OS とも検査される。
+  # ここでは Linux 上で Windows ターゲットの型検査と lint を回す（リンクはしない。COM / TSF 部分は
+  # Windows 以外では cfg で除外されるため、通常のジョブでは検査されない）
+  windows-tsf:
+    name: windows tsf (x86_64-pc-windows-gnu)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Add target
+        run: rustup target add x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: cargo check
+        run: cargo check -p nagi-windows -p nagi-windows-tsf --target x86_64-pc-windows-gnu --all-targets
+      - name: clippy
+        run: cargo clippy -p nagi-windows -p nagi-windows-tsf --target x86_64-pc-windows-gnu --all-targets -- -D warnings
+
   types:
     name: protocol types (typeshare)
     runs-on: ubuntu-latest

@@ -144,9 +144,9 @@ fn apply_plan(
         PreeditUpdate::Set {
             text,
             cursor,
-            spans: _,
+            attrs: _,
         } => {
-            // TODO: spans を表示属性（ITfDisplayAttributeProvider + GUID_PROP_ATTRIBUTE）として設定する
+            // TODO: attrs（preedit_style の描画計画）を表示属性（ITfDisplayAttributeProvider + GUID_PROP_ATTRIBUTE）として設定する
             set_preedit(context, ec, composition, sink, text, *cursor)?;
         }
     }

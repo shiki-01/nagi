@@ -5,6 +5,7 @@
 //! COM を触る側（`edit` モジュール）はこの [`EditPlan`] を実行するだけにして、Linux でもテストできるようにする。
 
 use nagi_protocol::{PreeditView, ProcessKeyResult};
+use nagi_windows::preedit_style::{self, AttrRun};
 
 /// 表示中の preedit の更新
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,31 +20,9 @@ pub enum PreeditUpdate {
         text: String,
         /// text 上のカーソル位置（UTF-16 コード単位。text の長さに丸め済み）
         cursor: u32,
-        /// 装飾の範囲（UTF-16）。表示属性（下線など）の割り当てに使う
-        spans: Vec<DisplaySpan>,
+        /// 表示属性の描画計画（全文を覆う UTF-16 の区間列。下線の種類・太さ）
+        attrs: Vec<AttrRun>,
     },
-}
-
-/// 装飾の種別。実際の表示属性（下線の太さ・色）へは TSF 層が割り当てる
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpanStyle {
-    /// 入力中・未変換（細い点線の下線）
-    Input,
-    /// 変換済みの文節（細い実線の下線）
-    Converted,
-    /// 注目文節（太い下線）
-    Focused,
-}
-
-/// 装飾する範囲（UTF-16 コード単位、半開区間）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DisplaySpan {
-    /// 開始
-    pub start: u32,
-    /// 終了
-    pub end: u32,
-    /// 種別
-    pub style: SpanStyle,
 }
 
 /// 1 回の応答で TSF に行う編集。適用順は「直前の確定の削除 → 確定 → preedit の更新」
@@ -69,35 +48,6 @@ impl EditPlan {
 /// 文字列の UTF-16 コード単位列
 pub fn to_utf16(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
-}
-
-fn spans_for(p: &PreeditView) -> Vec<DisplaySpan> {
-    let len = u32::try_from(p.text.encode_utf16().count()).unwrap_or(u32::MAX);
-    let mut spans: Vec<DisplaySpan> = Vec::new();
-    for (i, seg) in p.segments.iter().enumerate() {
-        let style = match p.focus {
-            Some(f) if usize::try_from(f) == Ok(i) => SpanStyle::Focused,
-            Some(_) => SpanStyle::Converted,
-            None => SpanStyle::Input,
-        };
-        let (start, end) = (seg.range.start.min(len), seg.range.end.min(len));
-        if start < end {
-            spans.push(DisplaySpan { start, end, style });
-        }
-    }
-    // 保留ローマ字（segments の隙間）は入力中の装飾にする
-    if let Some(pending) = p.pending {
-        let (start, end) = (pending.start.min(len), pending.end.min(len));
-        if start < end {
-            spans.push(DisplaySpan {
-                start,
-                end,
-                style: SpanStyle::Input,
-            });
-        }
-    }
-    spans.sort_by_key(|s| s.start);
-    spans
 }
 
 /// 応答から編集計画を作る。`candidates` / `mode` / `reconvert_selection` はここでは扱わない
@@ -128,7 +78,7 @@ fn preedit_update(preedit: Option<&PreeditView>) -> PreeditUpdate {
             PreeditUpdate::Set {
                 text: p.text.clone(),
                 cursor: p.cursor.min(len),
-                spans: spans_for(p),
+                attrs: preedit_style::plan(p),
             }
         }
     }
@@ -184,6 +134,7 @@ pub fn key_id(vk: u16, lparam: isize) -> u64 {
 mod tests {
     use super::*;
     use nagi_protocol::{RangeU16, SegmentKind, SegmentView};
+    use nagi_windows::preedit_style::MarkStyle;
 
     fn seg(surface: &str, start: u32) -> SegmentView {
         let end = start + surface.encode_utf16().count() as u32;
@@ -273,41 +224,22 @@ mod tests {
     }
 
     #[test]
-    fn spans_follow_focus() {
-        let p = preedit(
-            vec![seg("今日", 0), seg("は", 2), seg("晴れ", 3)],
-            5,
-            Some(1),
-        );
-        let spans = spans_for(&p);
-        let styles: Vec<_> = spans.iter().map(|s| s.style).collect();
+    fn set_carries_attribute_plan_covering_text() {
+        let mut p = preedit(vec![seg("今日", 0), seg("は", 2)], 3, Some(1));
+        p.text.push('k');
+        p.pending = Some(RangeU16::new(3, 4));
+        let PreeditUpdate::Set { attrs, .. } = preedit_update(Some(&p)) else {
+            panic!("Set expected");
+        };
+        let got: Vec<_> = attrs.iter().map(|a| (a.start, a.end, a.style)).collect();
         assert_eq!(
-            styles,
+            got,
             [
-                SpanStyle::Converted,
-                SpanStyle::Focused,
-                SpanStyle::Converted
+                (0, 2, MarkStyle::Normal),
+                (2, 3, MarkStyle::Focused),
+                (3, 4, MarkStyle::Pending)
             ]
         );
-        assert_eq!((spans[1].start, spans[1].end), (2, 3));
-    }
-
-    #[test]
-    fn spans_without_focus_are_input_and_pending_is_included() {
-        let mut p = preedit(vec![seg("あ", 0)], 2, None);
-        p.text = "あk".into();
-        p.pending = Some(RangeU16::new(1, 2));
-        let spans = spans_for(&p);
-        assert_eq!(spans.len(), 2);
-        assert!(spans.iter().all(|s| s.style == SpanStyle::Input));
-    }
-
-    #[test]
-    fn utf16_spans_count_surrogate_pairs() {
-        let p = preedit(vec![seg("𠮷", 0), seg("あ", 2)], 3, Some(1));
-        let spans = spans_for(&p);
-        assert_eq!((spans[0].start, spans[0].end), (0, 2));
-        assert_eq!((spans[1].start, spans[1].end), (2, 3));
     }
 
     #[test]

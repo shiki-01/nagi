@@ -9,16 +9,26 @@
 //! - [`revision`]: revision による古い非同期通知の破棄
 //! - [`supervisor`]: エンジン子プロセスの指数バックオフ再起動と `restore_session`
 //! - [`session`]: セッションごとの最新 preedit の保持（`restore_session` の材料）
+//! - [`candidates`] — 候補ウィンドウのページング・行モデル・寸法・表示位置
+//! - [`environment`] — 電源・メモリ・負荷 → `set_environment` の params
+//! - [`context`] — 周辺テキスト・secure input → `set_context` の params
+//! - [`preedit_style`] — preedit の下線などの表示属性の描画計画
+//! - [`status`] — 通知・メニュー・入力モードの文言
 //! - [`process`]: 子プロセス（imserver）の stdin/stdout を通信路にする実装
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod candidates;
 pub mod client;
+pub mod context;
+pub mod environment;
 pub mod keynorm;
+pub mod preedit_style;
 pub mod process;
 pub mod revision;
 pub mod session;
+pub mod status;
 pub mod supervisor;
 
 #[cfg(test)]
