@@ -31,7 +31,7 @@ enum NagiLayoutStore {
         /// 同梱プリセットと同じ id か（ユーザーのものが優先して使われる）
         let overridesPreset: Bool
         /// Iconify のアイコンを取得できず、label で代替するキーの説明（空なら全て解決済み）
-        var iconFallbacks: [String] = []
+        var iconFallbacks: [IconifyFallback] = []
     }
 
     /// JSON を検証する（保存はしない）。問題があれば日本語の理由つきで投げる。ファイルを読むので
@@ -137,10 +137,8 @@ enum NagiLayoutStore {
     }
 
     /// Iconify のアイコンを取得できなかったキーの案内（無ければ空文字）
-    static func iconFallbackNote(_ fallbacks: [String]) -> String {
-        guard !fallbacks.isEmpty else { return "" }
-        return "\n\n次のキーのアイコンは取得できなかったため、label を表示します。通信できる状態で同じレイアウトを取り込み直すと、アイコンを取得します。\n"
-            + fallbacks.map { "・\($0)" }.joined(separator: "\n")
+    static func iconFallbackNote(_ fallbacks: [IconifyFallback]) -> String {
+        IconifyFallback.note(fallbacks)
     }
 
     /// `nagi://layout?data=<base64url の JSON>` から JSON を取り出す（実装は `Shared/LayoutURL.swift`）

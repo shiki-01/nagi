@@ -129,6 +129,42 @@ enum KeyboardIconStore {
     }
 }
 
+/// アイコンを取得できなかった理由の区分（取り込み結果の文言を分けるため）
+enum IconifyFailure: Equatable {
+    /// HTTP 404（アイコン名またはアイコンセットが存在しない）。取り込み直しても解決しない
+    case notFound
+    /// 通信失敗・429・その他。通信できる状態で取り込み直すと取得できる可能性がある
+    case other
+
+    static func forHTTPStatus(_ status: Int) -> IconifyFailure { status == 404 ? .notFound : .other }
+}
+
+/// 取得できず label で代替するキーの説明（取り込みは続行する）
+struct IconifyFallback: Equatable {
+    let keyIds: [String]
+    let icon: String
+    let reason: String
+    let failure: IconifyFailure
+
+    var line: String { "・キー \(keyIds.joined(separator: "、")): \(icon)（\(reason)）" }
+
+    /// 取り込み結果に添える案内。理由の区分ごとに文言を分ける（無ければ空文字）
+    static func note(_ fallbacks: [IconifyFallback]) -> String {
+        var text = ""
+        let notFound = fallbacks.filter { $0.failure == .notFound }
+        let other = fallbacks.filter { $0.failure == .other }
+        if !notFound.isEmpty {
+            text += "\n\n次のキーのアイコンは、アイコン名が見つかりません。名前を確認してください。それまでは label を表示します。\n"
+                + notFound.map { $0.line }.joined(separator: "\n")
+        }
+        if !other.isEmpty {
+            text += "\n\n次のキーのアイコンは取得できなかったため、label を表示します。通信できる状態で同じレイアウトを取り込み直すと、アイコンを取得します。\n"
+                + other.map { $0.line }.joined(separator: "\n")
+        }
+        return text
+    }
+}
+
 /// Iconify API の URL と応答の解釈（通信そのものは App/IconifyResolver.swift）
 enum IconifyAPI {
     static let host = "api.iconify.design"

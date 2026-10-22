@@ -8,8 +8,14 @@ import WebKit
 
 /// 解決の結果
 struct IconifyResolution {
-    /// 取得できず、label で代替するキーの説明（取り込みは続行する）
-    var fallbacks: [String] = []
+    /// 取得できず、label で代替するキー（取り込みは続行する）
+    var fallbacks: [IconifyFallback] = []
+}
+
+/// HTTP 200 以外の応答（404 は「名前が無い」として文言を分けるため、状態コードを保つ）
+private struct IconifyHTTPError: LocalizedError {
+    let statusCode: Int
+    var errorDescription: String? { "HTTP \(statusCode)" }
 }
 
 enum IconifyResolver {
@@ -57,8 +63,12 @@ enum IconifyResolver {
                     throw NagiLayoutError(message:
                         "キー \(Array(Set(withoutLabel)).sorted().joined(separator: "、")) のアイコン iconify:\(first.prefix):\(first.name) を取得できず、label も無いため取り込めません（\(reason)）")
                 }
-                resolution.fallbacks.append(
-                    "キー \(Array(Set(keys)).sorted().joined(separator: "、")): iconify:\(first.prefix):\(first.name)（\(reason)）")
+                let failure = (error as? IconifyHTTPError).map { IconifyFailure.forHTTPStatus($0.statusCode) } ?? .other
+                resolution.fallbacks.append(IconifyFallback(
+                    keyIds: Array(Set(keys)).sorted(),
+                    icon: "iconify:\(first.prefix):\(first.name)",
+                    reason: reason,
+                    failure: failure))
             }
         }
         return resolution
@@ -94,9 +104,11 @@ enum IconifyResolver {
         do {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse else { throw NagiLayoutError(message: "応答が不正です") }
-            guard http.statusCode == 200 else { throw NagiLayoutError(message: "HTTP \(http.statusCode)") }
+            guard http.statusCode == 200 else { throw IconifyHTTPError(statusCode: http.statusCode) }
             return data
         } catch let error as NagiLayoutError {
+            throw error
+        } catch let error as IconifyHTTPError {
             throw error
         } catch {
             throw NagiLayoutError(message: "通信できません（\(error.localizedDescription)）")

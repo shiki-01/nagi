@@ -101,4 +101,36 @@ final class KeyboardIconTests: XCTestCase {
         XCTAssertEqual(IconifyAPI.collectionURL(prefix: "mdi")?.absoluteString,
                        "https://api.iconify.design/collection?prefix=mdi&info=true")
     }
+
+    func testFailureClassification() {
+        XCTAssertEqual(IconifyFailure.forHTTPStatus(404), .notFound)
+        XCTAssertEqual(IconifyFailure.forHTTPStatus(429), .other)
+        XCTAssertEqual(IconifyFailure.forHTTPStatus(500), .other)
+    }
+
+    func testFallbackNoteWording() {
+        XCTAssertEqual(IconifyFallback.note([]), "")
+        let missing = IconifyFallback(keyIds: ["a", "b"], icon: "iconify:mdi:nope", reason: "HTTP 404", failure: .notFound)
+        let limited = IconifyFallback(keyIds: ["c"], icon: "iconify:mdi:home", reason: "HTTP 429", failure: .other)
+        let offline = IconifyFallback(keyIds: ["d"], icon: "iconify:mdi:cog", reason: "通信できません（x）", failure: .other)
+
+        let notFoundOnly = IconifyFallback.note([missing])
+        XCTAssertTrue(notFoundOnly.contains("アイコン名が見つかりません。名前を確認してください"))
+        XCTAssertFalse(notFoundOnly.contains("取り込み直すと"))
+        XCTAssertTrue(notFoundOnly.contains("・キー a、b: iconify:mdi:nope（HTTP 404）"))
+
+        let otherOnly = IconifyFallback.note([limited, offline])
+        XCTAssertTrue(otherOnly.contains("通信できる状態で同じレイアウトを取り込み直すと、アイコンを取得します"))
+        XCTAssertFalse(otherOnly.contains("名前を確認してください"))
+        XCTAssertTrue(otherOnly.contains("・キー c: iconify:mdi:home（HTTP 429）"))
+
+        // 混在: キーごとに正しい文言の節に入る
+        let mixed = IconifyFallback.note([limited, missing])
+        let parts = mixed.components(separatedBy: "通信できる状態で")
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertTrue(parts[0].contains("iconify:mdi:nope"))
+        XCTAssertFalse(parts[0].contains("iconify:mdi:home"))
+        XCTAssertTrue(parts[1].contains("iconify:mdi:home"))
+        XCTAssertFalse(parts[1].contains("iconify:mdi:nope"))
+    }
 }
