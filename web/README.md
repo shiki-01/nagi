@@ -9,6 +9,13 @@
   （TypeScript 型と検証は `src/lib/keyboard/types.ts` / `validate.ts`。`keyboard.test.ts` が ajv でスキーマと突き合わせる）
 - プリセットは `../config/keyboard/presets/*.json` をビルド時に取り込む（無ければサンプル 1 つ）
 
+## デザイン
+
+- 色・書体のトークンは `src/app.css` の `:root`。色はアプリアイコン（藍・水平線・朝の日）から取り、ライトは生成りの紙、ダークは夜の海。見出しは OS の明朝体（Web フォントは読み込まない）
+- アイコン: `static/icon.svg`（= `favicon.svg`）・`static/icon-dark.svg` は `../frontend-ios-spike/icon-src/` の角丸版、`apple-touch-icon.png` は iOS の `icon-light.png` を 180px に縮小したもの。アイコンを変えたらここも作り直す
+- `og.png` は `static/og.svg` をブラウザで 1200×630 に描画したもの
+- サイト用の部品は `src/lib/components/site/`（`Horizon` = アイコンの線画、`ConversionDemo` = トップの変換デモ。台本の再生のみでエンジンは動かさない）
+
 ## 開発
 
 ```sh

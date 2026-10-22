@@ -1,11 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
   <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b78e8"/><stop offset="1" stop-color="#2b43b0"/></linearGradient></defs>
-  <rect width="1200" height="630" fill="url(#g)"/>
-  <g transform="translate(70 95) scale(.43)">
-  <circle cx="512" cy="392" r="124" fill="#fff3d6"/>
-  <path d="M170 566H854" stroke="#ffffff" stroke-width="44" stroke-linecap="round"/>
-  <path d="M236 692q69-40 138 0t138 0t138 0t138 0" fill="none" stroke="#ffffff" stroke-opacity=".7" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M376 810q68-38 136 0t136 0" fill="none" stroke="#ffffff" stroke-opacity=".42" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/></g>
-  <text x="560" y="330" font-size="150" font-weight="700" fill="#fff" font-family="Helvetica, Arial, sans-serif" letter-spacing="2">Nagi</text>
-  <text x="564" y="420" font-size="44" fill="#dbe4ff" font-family="'Hiragino Sans','Noto Sans CJK JP','WenQuanYi Zen Hei',sans-serif">端末の中で動く日本語入力</text>
+  <rect width="1200" height="630" fill="#f5f2eb"/>
+  <g transform="translate(96 96)">
+    <rect x="10" y="10" width="132" height="132" rx="29" fill="#f3d98f"/>
+    <rect width="132" height="132" rx="29" fill="url(#g)"/>
+    <g transform="scale(.129)">
+      <circle cx="512" cy="392" r="124" fill="#fff3d6"/>
+      <path d="M170 566H854" stroke="#ffffff" stroke-width="44" stroke-linecap="round"/>
+      <path d="M236 692q69-40 138 0t138 0t138 0t138 0" fill="none" stroke="#ffffff" stroke-opacity=".7" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M376 810q68-38 136 0t136 0" fill="none" stroke="#ffffff" stroke-opacity=".42" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+  <text x="270" y="190" font-size="84" font-weight="600" fill="#1c1e26" font-family="'Hiragino Mincho ProN','Noto Serif CJK JP',serif" letter-spacing="3">Nagi</text>
+  <path d="M498 132V196" stroke="#d9d3c5" stroke-width="1.5"/>
+  <text x="518" y="186" font-size="40" fill="#5d5e66" font-family="'Hiragino Mincho ProN','Noto Serif CJK JP',serif">凪</text>
+  <text x="96" y="352" font-size="58" font-weight="600" fill="#1c1e26" font-family="'Hiragino Mincho ProN','Noto Serif CJK JP',serif">端末の中だけで考える、</text>
+  <text x="96" y="432" font-size="58" font-weight="600" fill="#1c1e26" font-family="'Hiragino Mincho ProN','Noto Serif CJK JP',serif">ニューラルかな漢字変換。</text>
+  <circle cx="990" cy="520" r="44" fill="#f3d98f"/>
+  <rect x="930" y="520" width="120" height="50" fill="#f5f2eb"/>
+  <path d="M0 520H1200" stroke="#1c1e26" stroke-width="1.5"/>
+  <path d="M850 556q25-12 50 0t50 0t50 0t50 0t50 0" fill="none" stroke="#2b43b0" stroke-opacity=".75" stroke-width="2" stroke-linecap="round"/>
+  <path d="M920 584q25-12 50 0t50 0t50 0" fill="none" stroke="#2b43b0" stroke-opacity=".4" stroke-width="2" stroke-linecap="round"/>
+  <text x="96" y="582" font-size="24" fill="#5d5e66" font-family="'Hiragino Sans','Noto Sans CJK JP',sans-serif">端末の中で動く日本語入力 ・ nagi.shiki-01.com</text>
 </svg>
