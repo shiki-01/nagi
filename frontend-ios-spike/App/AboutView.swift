@@ -58,6 +58,9 @@ struct NagiAboutView<Developer: View>: View {
                     NavigationLink("辞書・モデルの出典") {
                         NagiThirdPartyNoticeView()
                     }
+                    NavigationLink("レイアウトのアイコンの出典") {
+                        NagiIconLicensesView()
+                    }
                     NavigationLink("ライセンス全文（NOTICE）") {
                         NagiBundledTextView(
                             title: "NOTICE",

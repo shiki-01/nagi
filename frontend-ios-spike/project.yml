@@ -185,6 +185,7 @@ targets:
       # ProductSession / コアに依存しない純粋な処理（Mozc TSV の解析、nagi://layout の URL）
       - path: Shared/MozcTSV.swift
       - path: Shared/LayoutURL.swift
+      - path: Shared/KeyboardIcon.swift
       - path: Shared/TestAids.swift
       - path: Keyboard/KanaKeyTable.swift
       - path: Keyboard/CandidateKind.swift

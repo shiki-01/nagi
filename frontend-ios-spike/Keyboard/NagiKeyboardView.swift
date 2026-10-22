@@ -320,9 +320,8 @@ private struct KeyFace: View {
 
     @ViewBuilder
     private var label: some View {
-        if let icon = content.icon {
-            Image(systemName: icon)
-                .font(.system(size: 17))
+        if let icon = content.icon, KeyIconView.isAvailable(icon) {
+            KeyIconView(raw: icon, size: 17)
                 .foregroundColor(foreground)
         } else {
             Text(content.text ?? "")
@@ -528,8 +527,8 @@ private struct LongPressKeyView: View {
             ForEach(Array(popup.enumerated()), id: \.offset) { offset, item in
                 let isSelected = (selected == offset) && !cancelled
                 Group {
-                    if let icon = item.icon {
-                        Image(systemName: icon).font(.system(size: 18))
+                    if let icon = item.icon, KeyIconView.isAvailable(icon) {
+                        KeyIconView(raw: icon, size: 18)
                     } else {
                         Text(item.label ?? item.text ?? "").font(.system(size: 20)).lineLimit(1).minimumScaleFactor(0.6)
                     }

@@ -30,6 +30,8 @@ enum NagiLayoutStore {
         let replaced: Bool
         /// 同梱プリセットと同じ id か（ユーザーのものが優先して使われる）
         let overridesPreset: Bool
+        /// Iconify のアイコンを取得できず、label で代替するキーの説明（空なら全て解決済み）
+        var iconFallbacks: [String] = []
     }
 
     /// JSON を検証する（保存はしない）。問題があれば日本語の理由つきで投げる。ファイルを読むので
@@ -59,11 +61,13 @@ enum NagiLayoutStore {
         )
     }
 
-    /// 検証済みのレイアウトを App Group に保存する
-    static func save(_ preview: Preview) throws -> Imported {
+    /// 検証済みのレイアウトを App Group に保存する。先に Iconify のアイコンを解決する
+    /// （取得できず label も無いキーがあれば、保存せずに投げる）
+    static func save(_ preview: Preview) async throws -> Imported {
         guard let dir = LayoutLoader.userLayoutsDirectory else {
             throw NagiLayoutError(message: "保存先（App Group）が使えません")
         }
+        let icons = try await IconifyResolver.resolve(preview.def)
         let url = dir.appendingPathComponent("\(preview.def.id).json")
         let replaced = FileManager.default.fileExists(atPath: url.path)
         do {
@@ -72,17 +76,18 @@ enum NagiLayoutStore {
         } catch {
             throw NagiLayoutError(message: "保存できませんでした: \(error.localizedDescription)")
         }
-        return Imported(def: preview.def, replaced: replaced, overridesPreset: preview.overridesPreset)
+        return Imported(def: preview.def, replaced: replaced, overridesPreset: preview.overridesPreset,
+                        iconFallbacks: icons.fallbacks)
     }
 
     /// JSON を検証して App Group に保存する。問題があれば日本語の理由つきで投げる。
     /// - allowPresetId: false なら、同梱プリセットと同じ id のものは拒否する（URL 経由の取り込み）
-    static func importLayout(_ data: Data, allowPresetId: Bool = true) throws -> Imported {
+    static func importLayout(_ data: Data, allowPresetId: Bool = true) async throws -> Imported {
         let checked = try preview(data)
         if !allowPresetId && checked.overridesPreset {
             throw NagiLayoutError(message: "同梱のレイアウトと同じ id（\(checked.def.id)）は、URL からは取り込めません")
         }
-        return try save(checked)
+        return try await save(checked)
     }
 
     /// ファイルを読む。大きさを確認できない・上限を超えるファイルは、読み込む前に拒否する
@@ -129,6 +134,13 @@ enum NagiLayoutStore {
         } catch {
             return nil
         }
+    }
+
+    /// Iconify のアイコンを取得できなかったキーの案内（無ければ空文字）
+    static func iconFallbackNote(_ fallbacks: [String]) -> String {
+        guard !fallbacks.isEmpty else { return "" }
+        return "\n\n次のキーのアイコンは取得できなかったため、label を表示します。通信できる状態で同じレイアウトを取り込み直すと、アイコンを取得します。\n"
+            + fallbacks.map { "・\($0)" }.joined(separator: "\n")
     }
 
     /// `nagi://layout?data=<base64url の JSON>` から JSON を取り出す（実装は `Shared/LayoutURL.swift`）
@@ -195,19 +207,21 @@ final class NagiLayoutURLInbox: ObservableObject {
     func confirmPending() {
         guard let target = pending else { return }
         pending = nil
-        queue.async { [weak self] in
+        // アイコンの取得（通信）を含むので、検証・保存はメインスレッドの外で待つ
+        Task.detached(priority: .userInitiated) { [weak self] in
             var text: String
             var changed = false
             do {
                 // 確認から保存までの間に同梱 id と衝突しないことを、もう一度確かめる
-                let imported = try NagiLayoutStore.importLayout(target.data, allowPresetId: false)
+                let imported = try await NagiLayoutStore.importLayout(target.data, allowPresetId: false)
                 changed = true
                 text = "レイアウト「\(imported.def.name)」を\(imported.replaced ? "更新しました" : "取り込みました")。"
                 text += "「レイアウト」タブで、かな / 英字への割り当てができます。"
+                text += NagiLayoutStore.iconFallbackNote(imported.iconFallbacks)
             } catch {
                 text = "レイアウトを取り込めませんでした。\n\(error.localizedDescription)"
             }
-            DispatchQueue.main.async {
+            await MainActor.run {
                 guard let self = self else { return }
                 if changed { self.changeCount += 1 }
                 self.message = text
@@ -373,6 +387,11 @@ struct LayoutManagerView: View {
                             rowLabel(row)
                         }
                     }
+                }
+                Section {
+                    NavigationLink("アイコンの出典・ライセンス") { NagiIconLicensesView() }
+                } footer: {
+                    Text("レイアウトのアイコンに Iconify（iconify:）を使うと、取り込み時にアイコンを取得します。取得したアイコンセットのライセンスはここで確認できます。")
                 }
                 // 実機での確認用（TestFlight・開発用ビルドのみ。App Store 版には出さない）
                 if DiagLog.isTestBuild {
@@ -633,21 +652,14 @@ struct LayoutManagerView: View {
     }
 
     private func commit(_ preview: NagiLayoutStore.Preview) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result: Result<NagiLayoutStore.Imported, Error>
+        // Iconify のアイコンの取得（通信）を含むので、完了を待ってから結果を出す
+        Task { @MainActor in
             do {
-                result = .success(try NagiLayoutStore.save(preview))
+                let imported = try await NagiLayoutStore.save(preview)
+                reload()
+                notice = importedMessage(imported)
             } catch {
-                result = .failure(error)
-            }
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let imported):
-                    reload()
-                    notice = importedMessage(imported)
-                case .failure(let error):
-                    notice = "取り込めませんでした。\n\(error.localizedDescription)"
-                }
+                notice = "取り込めませんでした。\n\(error.localizedDescription)"
             }
         }
     }
@@ -678,6 +690,7 @@ struct LayoutManagerView: View {
     private func importedMessage(_ imported: NagiLayoutStore.Imported) -> String {
         var text = "「\(imported.def.name)」を\(imported.replaced ? "更新しました" : "取り込みました")。一覧から開いて、かな / 英字に割り当てられます。"
         if imported.overridesPreset { text += "\n同梱の「\(imported.def.id)」と同じ id のため、このレイアウトが優先されます。" }
+        text += NagiLayoutStore.iconFallbackNote(imported.iconFallbacks)
         return text
     }
 }
@@ -948,8 +961,8 @@ private struct NagiLayoutPreview: View {
                 if key.style == .accent {
                     RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.4))
                 }
-                if let icon = key.icon, key.label == nil {
-                    Image(systemName: icon).font(.system(size: 11))
+                if let icon = key.icon, key.label == nil, KeyIconView.isAvailable(icon) {
+                    KeyIconView(raw: icon, size: 11)
                 } else {
                     Text(label(of: key))
                         .font(.system(size: 11))
@@ -976,5 +989,41 @@ private struct NagiLayoutPreview: View {
         if let action = key.action { return action }
         if let target = key.target { return target }
         return key.kind.rawValue
+    }
+}
+
+// MARK: - アイコンの出典・ライセンス
+
+/// 取り込んだ Iconify アイコンのアイコンセットごとの著者・ライセンス（CC BY 系の表示義務のため。docs/ios-keyboard-layout.md「アイコン」）
+struct NagiIconLicensesView: View {
+    @State private var licenses: [IconSetLicense] = []
+
+    var body: some View {
+        List {
+            if licenses.isEmpty {
+                Text("取り込んだ Iconify のアイコンはありません。")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+            ForEach(licenses, id: \.prefix) { license in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(license.name)（\(license.prefix)）").font(.headline)
+                    if let author = license.authorName {
+                        Text("作者: \(author)").font(.callout)
+                    }
+                    Text("ライセンス: \(license.licenseTitle)").font(.callout)
+                    if let urlText = license.licenseUrl, let url = URL(string: urlText) {
+                        Link(urlText, destination: url).font(.caption)
+                    }
+                    if let urlText = license.authorUrl, let url = URL(string: urlText) {
+                        Link(urlText, destination: url).font(.caption)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .navigationTitle("アイコンの出典")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { licenses = KeyboardIconStore.licenses() }
     }
 }

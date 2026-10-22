@@ -101,7 +101,12 @@
         "id": { "$ref": "#/$defs/keyId" },
         "width": { "$ref": "#/$defs/width" },
         "label": { "type": "string", "maxLength": 16, "description": "表示文字列。" },
-        "icon": { "type": "string", "maxLength": 64, "description": "SF Symbols 名または文字列。" },
+        "icon": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^(iconify:[a-z0-9]+(-[a-z0-9]+)*:[a-z0-9]+(-[a-z0-9]+)*|sf:[A-Za-z0-9._-]+|(?!iconify:|sf:)[\\s\\S]*)$",
+          "description": "アイコン。`sf:<SF Symbols 名>`、`iconify:<prefix>:<name>`（例 iconify:mdi:home。ホストアプリが取り込み時に取得する）、接頭辞なしは SF Symbols 名（従来どおり）。"
+        },
         "style": { "$ref": "#/$defs/style" },
         "longPress": {
           "type": "array",

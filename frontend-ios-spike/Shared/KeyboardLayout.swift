@@ -43,7 +43,7 @@ struct LayoutKeyDef: Codable {
     /// 行内の幅の比（既定 1）
     var width: Double
     var label: String?
-    /// SF Symbols 名
+    /// アイコン。`sf:<SF Symbols 名>` / `iconify:<prefix>:<name>` / 接頭辞なし（従来どおり SF Symbols 名）
     var icon: String?
     var style: KeyStyle
     var kind: LayoutKeyKind
@@ -272,7 +272,10 @@ enum LayoutValidation {
         let name = "キー \(key.id)"
         if !(key.width > 0 && key.width <= widthMax) { return "\(name) の幅は 0 より大きく \(Int(widthMax)) 以下にしてください" }
         if let label = key.label, length(label) > labelMax { return "\(name) の label は \(labelMax) 文字以内にしてください" }
-        if let icon = key.icon, length(icon) > iconMax { return "\(name) の icon は \(iconMax) 文字以内にしてください" }
+        if let icon = key.icon {
+            if length(icon) > iconMax { return "\(name) の icon は \(iconMax) 文字以内にしてください" }
+            if let reason = KeyboardIconRef.formatError(icon) { return "\(name) の icon: \(reason)" }
+        }
         switch key.kind {
         case .text:
             if !inRange(key.text, 1, textMax) { return "\(name) の text は 1〜\(textMax) 文字で指定してください" }
@@ -321,6 +324,10 @@ enum LayoutValidation {
         if item.idGiven && !matches(item.id, keyIdPattern) { return "\(owner) の longPress の id が不正です" }
         if !inRange(item.label, 1, labelMax) { return "\(owner) の longPress の label は 1〜\(labelMax) 文字で指定してください" }
         if item.longPress != nil { return "\(owner) の longPress の中に longPress は置けません" }
+        if let icon = item.icon {
+            if length(icon) > iconMax { return "\(owner) の longPress の icon は \(iconMax) 文字以内にしてください" }
+            if let reason = KeyboardIconRef.formatError(icon) { return "\(owner) の longPress の icon: \(reason)" }
+        }
         switch item.kind {
         case .text:
             if !inRange(item.text, 1, textMax) { return "\(owner) の longPress の text は 1〜\(textMax) 文字にしてください" }

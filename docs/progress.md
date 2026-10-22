@@ -197,6 +197,11 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 5. 最後にまとめて: 見た目と操作感の調整（実機のフィードバックを集める）
 6. ~~要判断（診断ログの既定・iOS の既定モデル）~~ → 決定済み（H-22。診断ログは TestFlight で既定 ON・App Store 版で既定 OFF、既定モデルは small。`RequestsOpenAccess` は H-18 で true。`docs/ios-device-checklist.md` §0）
 
+## キーアイコンの Iconify 対応（2026-10-22、決定は decisions.md H-36）
+
+- 実装済み（実機・CI 未確認）: `icon` の `sf:` / `iconify:` 書式（スキーマ + `LayoutLoader.decode`）、ホストアプリの取り込み時の解決（`App/IconifyResolver.swift`。Iconify API → WKWebView で PNG 化 → App Group `keyboard/assets/icons/`）、拡張の描画（`KeyIconView`）、ライセンス一覧（レイアウトタブ・About）
+- 未完了: **サイトエディタ（`web/`、`nagi.shiki-01.com/custom-keyboard`）を `iconify:` 書式に対応させる**（`validate.ts` の書式検査、アイコン入力欄・プレビューの扱い、書き出し JSON に ID のみを入れること）。Iconify API の実応答の確認（開発環境から接続できず未確認）、実機での取り込み・描画の確認
+
 ## iOS 実機確認待ちの一覧（2026-10-21）
 
 実装済みで、実機（TestFlight）での確認が済んでいないもの。確認手順は各節と `docs/ios-device-checklist.md` を参照。

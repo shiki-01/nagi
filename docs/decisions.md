@@ -1230,3 +1230,23 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **結果（2026-10-21、ビルド 43 の実機・診断ログ）**: `extension attributes IsASCIICapable=1 PrimaryLanguage=ja-JP RequestsOpenAccess=1` が毎回出ており、属性は拡張に反映されている。`.numberPad`（keyboardType=4）・`.decimalPad`（8）・`.asciiCapableNumberPad`（11）で Nagi が数字レイアウト（`-> numbers`）で開くことをログで確認した。メール（7）・URL（3）は `-> alpha`。したがって「`.numberPad` では iOS が第三者キーボードを出さない」という仮説は誤りで、`.numberPad` に Nagi が出ない原因は属性の反映（キーボードの追加時点で登録されるため、追加し直しが要る）だった。
 - **自動選択は iOS の挙動で、Nagi 側では直せない**: 入力テストタブで、地球儀キーで切り替えずに Nagi が自動で出たのはワンタイム・URL・小数・検索の欄だけで、通常の 1 行欄や複数行 TextEditor では標準キーボードが出た（一番上の複数行欄は Nagi）。azooKey を外しても、標準の日本語・English を外して Nagi だけにしても変わらなかった。欄の種類（keyboardType）と自動選択に規則性は見えず、iOS が「直前に使ったキーボード」「アプリごとの履歴」「欄の属性」から決めていると見られる（H-33 と同じ種類の問題）。拡張には選択を強制する公開 API が無い。ログの `viewWillAppear` は地球儀キーでの手動切替でも出るため、「Nagi が表示された」ことは自動選択の証拠にならない。拡張が選ばれなかった欄はログに何も残らない。
 - 未解明の点: ログに `viewDidLoad` の直後に `viewWillAppear` が出ない箇所がある（拡張は起動したが表示されなかった）。iOS の先読みか、読み込みが間に合わずに標準へ戻った場合かをログから区別できていない。優先度は低く、対応は見送る。
+
+### H-36. キーのアイコンに Iconify を使えるようにする（2026-10-22、ユーザー指示、要実機確認）
+
+- **目的**: レイアウトの `icon` に SF Symbols 以外（Iconify の約 20 万アイコン）を使えるようにする。
+- **方針（ユーザー確定）**:
+  - **キーボード拡張は通信しない**（既存方針を維持）。取得はホストアプリのレイアウト取り込み時だけで、結果を App Group の `keyboard/assets/icons/`（`<prefix>--<name>.png` と `licenses.json`）に保存し、拡張はローカルファイルを読むだけ。
+  - `icon` の書式: `sf:<symbol 名>`（SF Symbols。明示）、`iconify:<prefix>:<name>`（例 `iconify:mdi:home`）、接頭辞なしは従来どおり SF Symbols 名（後方互換）。prefix / name は小文字英数字とハイフン区切り、全体 64 字以内。検査は `config/keyboard/layout.schema.json` と `LayoutLoader.decode`（`KeyboardIconRef.formatError`）の両方。
+  - 解決は「使うアイコンだけ 1 件ずつ」。`https://api.iconify.design/<prefix>/<name>.svg?height=96`。取得済み（PNG とそのアイコンセットのライセンスが揃っている）なら再取得しない。
+  - 取得失敗時: そのキーに `label` があれば label を表示して取り込み続行（取り込み結果に該当キーを出す）。`label` も無ければ取り込みエラー（キー id とアイコン名を出す）。JSON は書き換えない（ID を保つので、通信できる時に取り込み直せば取得される）。
+  - 共有・書き出す JSON には ID のみ（画像は含めない）。受け取り側が取り込み時に再解決する。URL スキームの 1MB 上限は変更しない。
+- **SVG → 画像の変換手段: WKWebView（画面に載せない）で SVG を `<img>` として読み、canvas に描いて PNG（高さ 96px。@3x で 32pt）にする**（`App/IconifyResolver.swift`）。拡張は SVG を一切扱わず、`UIImage(data:scale:3)` + テンプレート画像（色は前景色）で描くだけ。
+  - 採った理由: (1) Iconify のアイコンセットは path だけでなく stroke・circle / rect / g・transform・円弧を使うものが多く（lucide / tabler は stroke 主体）、自前パーサだと対応範囲の取りこぼしと、Swift をローカルでコンパイルできない中での実装・検証リスクが大きい。WebKit に任せれば SVG の解釈を自作せずに済む。(2) スナップショット API（`takeSnapshot`）は画面階層に載せないと白紙になる既知の癖があるが、canvas へ描いて `toDataURL` で取り出す方式は階層に依存しない。(3) WKWebView の Web コンテンツは別プロセスで、ホストアプリ（取り込み時だけ・1 件ずつ）のメモリへの影響が小さく、拡張のメモリ上限（約 177MB。H-6）には関わらない。(4) `<img>` 経由なので SVG 内のスクリプト・外部参照は実行・読み込みされない。
+  - 採らなかった案: SVG path の自前パーサ + CGContext 描画（PDF 保存）。ベクターのまま持てて任意サイズで綺麗になる利点はあるが、上記のとおり対応範囲とリスクが大きい。後から差し替えられるよう、変換は `IconRasterizer` に閉じ込めてある。PDF で持つ案も同様に見送り（PNG @3x で 17pt 程度のキーの表示には十分）。
+  - 制約: `currentColor` は黒に置き換えて描き、アルファだけを使う（多色のアイコンセットは単色のシルエットになる）。
+- **ライセンス**: `https://api.iconify.design/collection?prefix=<prefix>&info=true` からアイコンセット名・ライセンス名（title / spdx / url）・作者（name / url）を取り、`licenses.json` に保存する。アイコンはライセンス情報を書いた後に保存し、「アイコンがあればライセンスもある」を保つ。ライセンスが読めないアイコンセットは取り込み失敗扱い（表示義務を満たせないため。label があれば上の代替に回る）。一覧はホストアプリの「レイアウト」タブと About > ライセンスの「アイコンの出典」から見られる。意図は CC BY 系の帰属表示義務への対応。
+- **迷った判断**: (1) 1 回の取り込みで新規取得するアイコンは 64 種類までとした（大量通信の防止。ユーザー指示には無い）。(2) `licenses.json` の取得に失敗したときはそのアイコンセットの全アイコンを失敗扱いにした。(3) 使われなくなったアイコンの掃除はしていない（レイアウト削除時も残る。サイズは 1 件数 KB）。(4) `collection` の応答はトップレベルと `info` の両方の形を受ける。
+- **未確認事項**:
+  - 実装時（2026-10-22）、開発環境のプロキシが `api.iconify.design` への接続を拒否した（CONNECT 403）ため、**Iconify API の応答（SVG の形式・`height` パラメータの効き方・`collection` の `info` の形・レート制限）は実際には確認できていない**。上記は公開仕様の記憶に基づく。レート制限は不明で、取り込み時に 1 件ずつ・上限 64 件に抑えている。要確認: 429 等が返った場合の挙動（現状は取得失敗として label に代替）。
+  - Swift をローカルでコンパイルできないため、WKWebView の読み込み完了待ち・`callAsyncJavaScript` + canvas の PNG 化・テンプレート描画は CI（`ios-test` のユニットテスト、`ios-testflight` のビルド）と実機で確認が要る。単体テストの対象は書式・抽出・ライセンス応答の解釈・検証のみ。
+- **未対応（別作業）**: サイトエディタ（`web/`、`nagi.shiki-01.com/custom-keyboard`）の `iconify:` 書式対応（`docs/ios-backlog.md`・`docs/progress.md`）。サイトの検証（`web/src/lib/keyboard/validate.ts`）は icon を長さだけ見るので、`iconify:` の書式エラーはサイトでは検出されず、ホストアプリの取り込みで初めて出る。
