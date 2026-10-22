@@ -15,6 +15,7 @@ members = [
     "ffi",
     "datafetch",
     "xtask",
+    "../frontend-windows",
 ]
 
 [workspace.package]
