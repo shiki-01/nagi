@@ -322,10 +322,10 @@ pub unsafe extern "C" fn nagi_server_free(handle: NagiServerHandle) {
 /// Nagi コアエンジンのバージョン文字列（静的）を返す。
 ///
 /// # Returns
-/// バージョン文字列（例：`0.0.1`）。解放不要。
+/// バージョン文字列（ワークスペースの version。例：`0.1.0`）。解放不要。
 #[unsafe(no_mangle)]
 pub extern "C" fn nagi_version() -> *const c_char {
-    c"0.0.1".as_ptr()
+    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast()
 }
 
 /// サーバー初期化時の診断情報を返す。

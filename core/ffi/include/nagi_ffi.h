@@ -95,7 +95,7 @@ void nagi_server_free(NagiServerHandle handle);
 
 /// Nagi コアエンジンのバージョン文字列（静的）を返す。
 ///
-/// @return バージョン文字列（例：0.0.1）。解放不要。
+/// @return バージョン文字列（ワークスペースの version。例：0.1.0）。解放不要。
 const char *nagi_version(void);
 
 /// サーバー初期化時の診断情報を返す。
