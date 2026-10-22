@@ -160,7 +160,7 @@ jobs:
           gh release create "macos-v$VERSION" "Nagi-macos-$VERSION.zip" latest.json \
             --target "$GITHUB_SHA" \
             --title "Nagi for macOS $VERSION" \
-            --notes "Developer ID で署名・公証済み。インストール: \`curl -fsSL https://nagi.shiki-01.com/install.sh | sh\`（辞書・モデルは別途取得。docs/progress.md の手順を参照）"
+            --notes "Developer ID で署名・公証済み。インストール: \`curl -fsSL https://nagi.shiki-01.com/install.sh | sh\`（辞書とモデルも配布元から自動で取得する。入力メニューの「辞書とモデルをダウンロード…」からも入れられる）"
 
       - name: サイトの latest.json を更新（web ワークフローを起動）
         env:
