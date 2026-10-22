@@ -33,7 +33,8 @@ concurrency:
 jobs:
   release:
     runs-on: macos-latest
-    timeout-minutes: 90
+    # 公証は新しいチームの初回などで数時間かかることがある
+    timeout-minutes: 240
     env:
       VERSION: ${{ inputs.version }}
     steps:
@@ -129,7 +130,7 @@ jobs:
           printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
           xcrun notarytool submit "$bundle_dir/Nagi.app.zip" \
             --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
-            --wait --timeout 30m
+            --wait --timeout 3h
           rm -f "$RUNNER_TEMP/AuthKey.p8"
           xcrun stapler staple "$bundle_dir/Nagi.app"
           xcrun stapler validate "$bundle_dir/Nagi.app"
