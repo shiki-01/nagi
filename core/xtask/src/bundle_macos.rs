@@ -1,6 +1,6 @@
-//! `cargo xtask bundle-macos` — `Nagi.app` を組み立てて ad-hoc 署名し、zip 化する。
+//! `cargo xtask bundle-macos` — `Nagi.app` を組み立てて署名し、zip 化する。
 //!
-//! Apple Developer Program 加入済みだが、現状は ad-hoc 署名（Developer ID 署名 + 公証は検討可。`docs/decisions.md` H-15）。
+//! 既定は ad-hoc 署名。`--sign-identity` を指定すると Developer ID で署名する（公証は呼び出し側で行う。`docs/decisions.md` H-15）。
 //! 署名と zip 化は macOS 上でのみ行い、他の OS では警告してスキップする。
 
 use std::fs;
@@ -154,6 +154,8 @@ pub struct Options {
     pub bundle_id: String,
     /// 出力先ディレクトリ。未指定は `<target>/macos-bundle`。
     pub out_dir: Option<PathBuf>,
+    /// Developer ID の署名 ID。未指定なら ad-hoc 署名。
+    pub sign_identity: Option<String>,
 }
 
 fn repo_root() -> PathBuf {
@@ -173,7 +175,8 @@ fn xml_escape(s: &str) -> String {
 }
 
 /// Info.plist の内容を生成する。
-pub fn info_plist(executable: &str, version: &str, bundle_id: &str) -> String {
+/// `public_key` はアップデート署名検証用の ed25519 公開鍵（16進）で、`NagiUpdatePublicKey` に入る。
+pub fn info_plist(executable: &str, version: &str, bundle_id: &str, public_key: &str) -> String {
     let e = xml_escape;
     let mode_id = e(&input_mode_id(bundle_id));
     let roman_id = e(&roman_mode_id(bundle_id));
@@ -203,6 +206,8 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str) -> String {
 	<string>{ver}</string>
 	<key>CFBundleVersion</key>
 	<string>{ver}</string>
+	<key>NagiUpdatePublicKey</key>
+	<string>{update_key}</string>
 	<key>ComponentInputModeDict</key>
 	<dict>
 		<key>tsInputModeListKey</key>
@@ -267,6 +272,7 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str) -> String {
         exe = e(executable),
         id = e(bundle_id),
         ver = e(version),
+        update_key = e(public_key),
         mode_id = mode_id,
         min = MIN_MACOS,
         conn = conn,
@@ -367,12 +373,19 @@ pub fn run(opts: Options) -> Result<(), String> {
     fs::copy(&executable, macos_dir.join(&exe_file_name))
         .map_err(|e| format!("実行ファイルのコピーに失敗しました: {e}"))?;
     // imserver はメインの実行ファイルと同じ Contents/MacOS に置く
-    // （--deep 署名の対象になり、フロントは実行ファイルの隣として解決できる）
+    // （署名の対象になり、フロントは実行ファイルの隣として解決できる）
     fs::copy(&imserver, macos_dir.join("imserver"))
         .map_err(|e| format!("imserver のコピーに失敗しました: {e}"))?;
+    let public_key = fs::read_to_string(crate::update_sign::public_key_path())
+        .map_err(|e| format!("config/update-public-key.txt の読み込みに失敗しました: {e}"))?;
     fs::write(
         app.join("Contents/Info.plist"),
-        info_plist(&exe_file_name, env!("CARGO_PKG_VERSION"), &opts.bundle_id),
+        info_plist(
+            &exe_file_name,
+            env!("CARGO_PKG_VERSION"),
+            &opts.bundle_id,
+            public_key.trim(),
+        ),
     )
     .map_err(|e| format!("Info.plist の書き込みに失敗しました: {e}"))?;
     let resources_dir = app.join("Contents/Resources");
@@ -392,12 +405,28 @@ pub fn run(opts: Options) -> Result<(), String> {
     // 4. 署名・zip（macOS のみ）
     let zip = out_dir.join("Nagi.app.zip");
     if cfg!(target_os = "macos") {
-        run_cmd(
-            Command::new("codesign")
-                .args(["--force", "--deep", "-s", "-"])
-                .arg(&app),
-            "codesign",
-        )?;
+        match &opts.sign_identity {
+            Some(identity) => {
+                // Developer ID 署名: --deep は使わず、内側（imserver）→ .app 全体の順に署名する
+                let sign = |path: &Path| {
+                    run_cmd(
+                        Command::new("codesign")
+                            .args(["--force", "--options", "runtime", "--timestamp", "-s"])
+                            .arg(identity)
+                            .arg(path),
+                        "codesign",
+                    )
+                };
+                sign(&macos_dir.join("imserver"))?;
+                sign(&app)?;
+            }
+            None => run_cmd(
+                Command::new("codesign")
+                    .args(["--force", "--deep", "-s", "-"])
+                    .arg(&app),
+                "codesign",
+            )?,
+        }
         if zip.exists() {
             let _ = fs::remove_file(&zip);
         }
@@ -410,7 +439,7 @@ pub fn run(opts: Options) -> Result<(), String> {
         )?;
         println!("✓ zip を作成しました: {}", zip.display());
     } else {
-        eprintln!("警告: macOS 以外のため ad-hoc 署名と zip 化をスキップしました");
+        eprintln!("警告: macOS 以外のため署名と zip 化をスキップしました");
     }
 
     println!("✓ .app を作成しました: {}", app.display());
@@ -421,8 +450,10 @@ pub fn run(opts: Options) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const TEST_PUBLIC_KEY: &str = "abcdef0123456789";
+
     fn plist() -> String {
-        info_plist("NagiIMEApp", "0.0.1", DEFAULT_BUNDLE_ID)
+        info_plist("NagiIMEApp", "0.0.1", DEFAULT_BUNDLE_ID, TEST_PUBLIC_KEY)
     }
 
     #[test]
@@ -430,6 +461,7 @@ mod tests {
         let p = plist();
         for needle in [
             "<string>com.shiki.inputmethod.Nagi</string>",
+            "<key>NagiUpdatePublicKey</key>\n\t<string>abcdef0123456789</string>",
             "<key>ComponentInputModeDict</key>",
             "<key>tsInputModeListKey</key>",
             "<key>com.shiki.inputmethod.Nagi.Japanese</key>",
@@ -478,7 +510,7 @@ mod tests {
 
     #[test]
     fn plist_derives_ids_from_bundle_id() {
-        let p = info_plist("X", "1", "com.shiki.inputmethod.Nagi");
+        let p = info_plist("X", "1", "com.shiki.inputmethod.Nagi", TEST_PUBLIC_KEY);
         for needle in [
             "<key>CFBundleIdentifier</key>\n\t<string>com.shiki.inputmethod.Nagi</string>",
             "<key>com.shiki.inputmethod.Nagi.Japanese</key>",
@@ -583,6 +615,6 @@ mod tests {
 
     #[test]
     fn plist_escapes_xml() {
-        assert!(info_plist("A&B", "1<2", "x").contains("A&amp;B"));
+        assert!(info_plist("A&B", "1<2", "x", TEST_PUBLIC_KEY).contains("A&amp;B"));
     }
 }

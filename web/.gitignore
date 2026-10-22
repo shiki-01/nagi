@@ -2,3 +2,5 @@ node_modules
 .svelte-kit
 build
 shots
+# CI が macos-v* リリースから取り込む（.github/workflows/web.yml）
+static/updates

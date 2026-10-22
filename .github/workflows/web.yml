@@ -23,6 +23,21 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+      # macOS のアップデート確認先（/updates/macos/latest.json）は、最新の macos-v* リリースの latest.json を
+      # 取り込んで公開する（macos-release ワークフローが作る。リリースが無ければ飛ばす）
+      - name: macOS の latest.json を取り込む
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft,isPrerelease \
+            --jq '[.[] | select((.tagName | startswith("macos-v")) and (.isDraft | not) and (.isPrerelease | not))][0].tagName // empty')
+          if [ -n "$tag" ]; then
+            mkdir -p static/updates/macos
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir static/updates/macos --clobber
+            echo "取り込んだリリース: $tag"
+          else
+            echo "macos-v* のリリースが無いため飛ばしました"
+          fi
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:

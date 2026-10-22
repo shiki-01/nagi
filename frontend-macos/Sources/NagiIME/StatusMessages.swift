@@ -7,7 +7,11 @@ public enum StatusMessages {
     public static func toast(for event: EngineEvent) -> String? {
         switch event {
         case .notify(let n):
-            // info は頻繁に来うるため出さない（ログのみ）
+            // 起動時のアップデート確認（コアの `update.auto_check`）は info でも知らせる
+            if n.code == "update_available" {
+                return "\(n.message)。入力メニューの「アップデートを確認…」から更新できます"
+            }
+            // ほかの info は頻繁に来うるため出さない（ログのみ）
             return n.level == .info ? nil : n.message
         case .crashed(let attempt, _):
             return attempt == 1 ? "変換エンジンが停止しました。再起動しています" : nil

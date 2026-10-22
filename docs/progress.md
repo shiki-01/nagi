@@ -58,7 +58,7 @@
 8. ~~**iOS 拡張のメモリ上限実測と LLM 可否判定**（M0 最優先）~~ → 完了（H-6・H-9・H-10）。拡張の上限は約 177MB。mmap 辞書（H-7）で xsmall・small とも拡張内で動作し、iOS の品質基準は `minimal` ではなく LLM あり（`auto` は `light` から開始）。メモリ上限による LLM 読み込みの抑止（`--memory-budget-mb`、150MB 未満は辞書のみ）は実装済み（H-8）。他機種での実測は未確認
 9. ~~**SideStore 検証**~~ → 不要（iOS の配布を TestFlight / App Store に変更。H-15）
 10. **UniFFI 試作**（ネスト構造のコスト・callback・JSON か型かの計測）: FFI 方式を UniFFI で確定（H-4 参照）。実装時に以下を計測して詳細を決める: Preedit 等のネスト構造を毎キー渡すコスト、非同期通知（revision 付き差し替え）の callback 表現、描画差分を JSON 文字列か UniFFI 型で渡すか（p95 < 16ms 目標への影響）。**iOS は C ABI（`core/ffi/`）で実装済み**で、UniFFI は Android（M1）着手時に再検討（H-10）
-11. macOS フロントエンド（IMKit。`frontend-macos/`、CI `macos-frontend.yml`）: **実装あり・実機未確認**。2026-10-22 に以下を追加（H-37。Swift は CI でビルド・テスト済み）: 入力モードの同期（英数モード `<bundle-id>.Roman` の登録、コアの mode → メニューバー、メニュー・英数/かなキー → `perform_action(SetMode)`）、`set_environment`（電源・低電力・熱・メモリ逼迫）、`set_context` の直前テキスト（入力開始時。secure input 中は読まない）、状態の通知表示（右上の小パネル）、入力メニューの状態表示・設定の再読み込み・学習データの削除、確定済みテキストの再変換（かなキー / 変換キー）。`set_context.app_id` と確定取消（`delete_before`）は実装済み。誤学習の削除は既存の Ctrl+Delete（コアのキーマップ）で動く。**未着手**: アップデートのダウンロード・差し替え（検証ロジックのみ G-31。鍵はプレースホルダー）、インストールスクリプト、Developer ID 署名・公証、ふりがなのルビ表示。`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）は作成済み
+11. macOS フロントエンド（IMKit。`frontend-macos/`、CI `macos-frontend.yml`）: **実装あり・実機未確認**。2026-10-22 に以下を追加（H-37。Swift は CI でビルド・テスト済み）: 入力モードの同期（英数モード `<bundle-id>.Roman` の登録、コアの mode → メニューバー、メニュー・英数/かなキー → `perform_action(SetMode)`）、`set_environment`（電源・低電力・熱・メモリ逼迫）、`set_context` の直前テキスト（入力開始時。secure input 中は読まない）、状態の通知表示（右上の小パネル）、入力メニューの状態表示・設定の再読み込み・学習データの削除、確定済みテキストの再変換（かなキー / 変換キー）。`set_context.app_id` と確定取消（`delete_before`）は実装済み。誤学習の削除は既存の Ctrl+Delete（コアのキーマップ）で動く。配布（H-37 追記）: Developer ID 署名・公証つきのリリース（`macos-release.yml`）、`latest.json`（ed25519 署名。`cargo xtask sign-update`）、インストールスクリプト（`web/static/install.sh` → `https://nagi.shiki-01.com/install.sh`）、入力メニューの「アップデートを確認…」（取得・検証・差し替え・再起動）を実装済み。**リリースには Secrets の登録と本物の鍵への差し替えが必要**（下の「macOS のリリース手順」）。**未着手**: ふりがなのルビ表示、辞書・モデルのインストール時の取得。`NOTICE`（IPAdic のライセンス全文、zenz の CC-BY-SA-4.0）は作成済み
 7. Phase 3 以降: ~~範囲操作（`RangeSelecting` / `Ctrl+Shift+←/→`）~~ → 選択・再変換・ToHankaku まで実装済み（G-17・G-22）。~~確定取消~~ → エンジン側は実装済み（G-28。`ProcessKeyResult.delete_before` を追加。ホストアプリのテキストを実際に削除するフロント側の対応は別途必要）。スタイル変換は未着手。~~Rewriter~~ → 全角/半角英数記号・半角カナ・漢数字・日付・簡易計算まで実装済み（G-15・G-16・G-20）
 8. `select_candidate`（JSON-RPC）実装済み（G-18）。~~`reconvert`~~ → 実装済み（G-29。辞書の逆引きによる専用Viterbi。ユーザー辞書は対象外。実データでのメモリ増加量は実機（Windows）で実測済み: 約270MB。`minimal`/`light` では使用後に自動解放するよう対応済み）
 9. ~~KV キャッシュ再利用は見送り~~ → 別セッションで実装した（G-32。既存の見送り理由（G-21）にあった自己参照構造の問題を、手書きの `unsafe` で解決した）
@@ -94,7 +94,7 @@
 - G-28 確定取消（Ctrl+Backspace）。`ProcessKeyResult.delete_before` の追加。`typeshare-cli` をこの実行環境にインストールして型生成・差分検査まで検証済み（crates.io は到達可能）
 - G-29 reconvert（確定済みテキストの再変換）。辞書の逆引きによる専用Viterbi（`nagi-dict::reverse_convert`）。ユーザー辞書は対象外、未知語はreading=surfaceのまま通す（LLM補完は今回のスコープ外）
 - G-30 ビームサーチ: 辞書ベースの文全体N-best（`nagi-dict::convert_n_best`。k-best Viterbi）。1件目をLLM再採点済みの1-bestに揃えることで変換品質の後退を防いだ経緯を記載
-- G-31 アップデート配布物のed25519署名検証。`UPDATE_PUBLIC_KEY_HEX` はプレースホルダー（実配布前に鍵の差し替えが必要）
+- G-31 アップデート配布物のed25519署名検証。`config/update-public-key.txt` の公開鍵 はプレースホルダー（実配布前に鍵の差し替えが必要）
 - G-32 LLM コンテキストの再利用（KV キャッシュ。自己参照構造・`unsafe_code` の局所解禁・`unsafe impl Send` の根拠・実測値。G-21 の見送りを覆した）
 - G-33 LLM のビームサーチ（infer 単体、Stage 1。アルゴリズム・`kv_unified` の必要性・実測・未実装の統合作業）
 - G-34 LLM のビームサーチ（server/engine 統合、Stage 2。`Effective::beam_width`・`Pipeline::sentence_candidates`・候補ウィンドウの sentence モード・既知の限界）
@@ -139,7 +139,7 @@
 6. ~~**reconvert の逆引き辞書のメモリ増加量**~~ → 実機（Windows、実データ）で実測済み: 約270MB（見積もりの「数十MB」は誤りだった。G-29 追記）。`minimal`/`light` プロファイルでは `reconvert` 使用後に自動解放するよう対応済み（`Dictionary::release_reverse_index`）。`balanced`/`quality` では常駐させたまま。
 7. **reconvert の推定精度**: 辞書のみでの読み推定（LLM補完なし）が実際の確定済みテキストに対してどの程度使えるか。未知語（辞書に無い表記）の頻度も含めて確認してほしい。
 8. **ビームサーチ（文全体N-best）の実際の見え方**（G-30）: 実データ・実LLMで、Space変換の1回目に候補窓が開く挙動（設計書どおりの `initial_view = sentence`）が実際に使いやすいか。1件目はLLM再採点済みの結果に揃えたが、2件目以降は辞書コスト順（LLM再採点なし）なので、この並びが不自然に感じられないか確認してほしい。
-9. **アップデート署名検証の鍵**（G-31）: `UPDATE_PUBLIC_KEY_HEX` は実装確認用の使い捨て鍵。実際に配布する前に本物の鍵ペアを生成し直し、秘密鍵をビルド・署名環境にオフラインで保管する必要がある。
+9. **アップデート署名検証の鍵**（G-31）: `config/update-public-key.txt` の公開鍵 は実装確認用の使い捨て鍵。実際に配布する前に本物の鍵ペアを生成し直し、秘密鍵をビルド・署名環境にオフラインで保管する必要がある。
 
 ## macOS 実機へのインストール手順（手動）
 
@@ -151,6 +151,13 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 4. `~/Library/Input\ Methods/Nagi.app/Contents/MacOS/NagiIMEApp --register`
 5. `killall TextInputMenuAgent`
 6. システム設定 > キーボード > 入力ソース で Nagi（日本語）を追加する。表示されない場合は再ログインする
+
+### macOS のリリース手順（Developer ID 署名・公証、H-37）
+
+1. 初回のみ: `cd core && cargo xtask gen-update-key` で鍵ペアを作る。秘密鍵を Actions Secrets `NAGI_UPDATE_SIGNING_KEY` に登録し、公開鍵で `config/update-public-key.txt` を置き換えてコミットする（現在の値は実装確認用のプレースホルダー）
+2. 初回のみ: Secrets に `MACOS_DEVELOPER_ID_P12`（「Developer ID Application」証明書と秘密鍵の .p12 を base64 にしたもの）と `MACOS_DEVELOPER_ID_P12_PASSWORD` を登録する。公証には iOS と共通の `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8` を使う
+3. `core/Cargo.toml` の `[workspace.package] version` を上げて main にコミットし、`gh workflow run macos-release.yml --ref main -f version=X.Y.Z` を実行する。リリース `macos-vX.Y.Z`（zip と `latest.json`）が作られ、web ワークフローがサイトの `/updates/macos/latest.json` を更新する
+4. 利用者は `curl -fsSL https://nagi.shiki-01.com/install.sh | sh` で入れ、以降は入力メニューの「アップデートを確認…」で更新する（起動時の自動確認はコアが通知する）
 
 ### 設定ウィンドウの開き方
 

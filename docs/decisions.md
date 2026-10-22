@@ -1268,4 +1268,11 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
   - 誤学習の削除は既存の Ctrl+Delete（変換中、コアのキーマップ）で、フロントの追加は不要
 - **迷った判断**: (1) 英数モードのアイコンを文字アイコンにしなかった。(2) 変換キーは Direct のみ（Composing / Converting の変換キーは既存どおり）。(3) 再変換の待ち時間 2 秒は実測なし
 - **未確認（実機）**: `setValue(_:forTag:client:)` が activate 時・メニュー選択時にどう呼ばれるか、英数/かなキーを OS が先に処理するか（どちらでも同期する作りにした）、`attributedSubstring` の対応アプリ（ブラウザ・ターミナル・Electron）、`setMarkedText` の `replacementRange` で選択範囲が置き換わるか、メモリ逼迫イベントの頻度
+- **(5) 配布（2026-10-22 追記、ユーザー決定: Developer ID + 公証 / zip は GitHub Releases・latest.json とインストールスクリプトはサイト / ed25519 鍵は手元で生成して Secrets に登録）**:
+  - 公開鍵は `config/update-public-key.txt` を単一ソースにした（core は `include_str!`、macOS は xtask が Info.plist の `NagiUpdatePublicKey` に埋める）。確認先は OS ごと（`https://nagi.shiki-01.com/updates/{os}/latest.json`。従来の `/updates/latest.json` は Windows 版と衝突するため変更）。D 節の `shiki-01.com/nagi/...` は、サイトが `nagi.shiki-01.com` になったためそちらに合わせた
+  - `macos-release.yml`（手動実行。入力の version と `core/Cargo.toml` の一致を検査）: 一時キーチェーン → `bundle-macos --llama --sign-identity`（imserver → .app の順、hardened runtime・timestamp、`--deep` なし）→ notarytool → staple → zip → `sign-update` → `gh release create macos-vX.Y.Z` → `web.yml` を起動。`web.yml` は最新の `macos-v*` リリースの `latest.json` を `static/updates/macos/` に取り込む（リポジトリには入れない）
+  - アプリ内の更新はフロントの仕事（CLAUDE.md の分離の原則）として Swift で実装した: SHA-256 と ed25519（CryptoKit。xtask で作った既知の値で互換性をテスト）→ `ditto` で展開 → `codesign -R`（実行中のアプリと同じ Team ID の Developer ID）と `spctl` → `replaceItemAt` で差し替え → 入力中の文字列を確定し `shutdown`（学習を保存）して終了。次に使われたとき OS が新しい版を起動する。ad-hoc 署名のビルドは自動更新を断り、インストールスクリプトを案内する
+  - インストールスクリプトは `plutil` で JSON を読み、SHA-256・`codesign --verify`・`spctl` を確かめてから置き換え、`--register` する。シェルでは ed25519 を検証しない（macOS 標準の LibreSSL に頼れないため。HTTPS の取得元と公証で代える）
+  - **迷った判断**: (1) リリースは LLM 有効版のみ（辞書だけで使う場合も同じバイナリで動くため）。(2) 再起動は「終了して OS に起動し直してもらう」方式で、自前で再起動しない。(3) 辞書・モデルはインストール時に取得しない（辞書は Mozc 由来のデータを再配布せず手元で組む方針（§2.3）で、組むには Rust が要る。別途の検討事項）
+  - **未確認**: hardened runtime で LLM（Metal）と imserver の起動が動くか、公証が通るか（Secrets 未登録のため一度も実行していない）、IMK のプロセス終了後の再起動のされ方
 

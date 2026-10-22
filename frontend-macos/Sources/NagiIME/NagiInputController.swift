@@ -184,6 +184,7 @@ final class NagiInputController: IMKInputController {
             ("設定…", #selector(openSettings(_:))),
             ("設定ファイルを再読み込み", #selector(reloadConfig(_:))),
             ("学習データを削除…", #selector(clearLearning(_:))),
+            ("アップデートを確認…", #selector(checkForUpdates(_:))),
         ]
         for (title, action) in entries {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
@@ -205,6 +206,11 @@ final class NagiInputController: IMKInputController {
 
     @objc func openSettings(_ sender: Any?) {
         context?.showSettings()
+    }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        guard let context else { return }
+        Task { @MainActor in await context.checkForUpdates() }
     }
 
     @objc func reloadConfig(_ sender: Any?) {

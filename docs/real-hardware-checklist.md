@@ -109,7 +109,7 @@ cargo run -p nagi-server --bin imserver -- --data-dir ../data --user-dir /tmp/na
 
 ## 6. アップデート署名検証（G-31）
 
-`UPDATE_PUBLIC_KEY_HEX`（`core/server/src/update_check.rs`）は実装確認用の使い捨て鍵。
+`config/update-public-key.txt` の公開鍵は実装確認用の使い捨て鍵。
 実際の配布フローはまだ無い（`nagi.shiki-01.com` のマニフェスト配信も未整備）ため、実機で
 試せるのは暗号ロジック自体の単体テストのみ:
 
@@ -119,7 +119,7 @@ cargo test -p nagi-server update_check
 
 ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わない純Rustのはずなので、Win/Macでも
 問題なく通るはずだが、実際に確認してほしい。実際の配布を始める際は、新しい鍵ペアを生成し直す
-必要がある（このリポジトリの `UPDATE_PUBLIC_KEY_HEX` は差し替える前提のプレースホルダー）。
+必要がある（このリポジトリの `config/update-public-key.txt` は差し替える前提のプレースホルダー）。
 
 ## 7. その他
 

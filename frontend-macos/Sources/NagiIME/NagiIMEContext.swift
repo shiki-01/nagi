@@ -41,11 +41,11 @@ public final class NagiIMEContext {
         }
     }
 
-    private final class WeakController {
+    final class WeakController {
         weak var value: NagiInputController?
         init(_ v: NagiInputController) { value = v }
     }
-    private var controllers: [String: WeakController] = [:]
+    private(set) var controllers: [String: WeakController] = [:]
 
     public init(supervisor: EngineSupervisor, store: SessionStore) {
         self.supervisor = supervisor

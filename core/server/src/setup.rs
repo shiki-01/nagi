@@ -521,7 +521,7 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
             .update
             .check_url
             .clone()
-            .unwrap_or_else(|| crate::update_check::DEFAULT_CHECK_URL.to_string());
+            .unwrap_or_else(crate::update_check::default_check_url);
         let state_path = user_dir.as_ref().map(|d| d.join("update_check.json"));
         let current_version = env!("CARGO_PKG_VERSION").to_string();
         let _ = std::thread::Builder::new()

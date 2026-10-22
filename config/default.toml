@@ -271,6 +271,6 @@ preset = "default"
 # 既定: true
 auto_check = true
 
-# アップデート確認マニフェストの URL（省略時は既定の URL を使う）
+# アップデート確認マニフェストの URL（省略時は OS ごとの既定の URL を使う）
 # 既定: 未指定
-# check_url = "https://nagi.shiki-01.com/updates/latest.json"
+# check_url = "https://nagi.shiki-01.com/updates/macos/latest.json"

@@ -586,7 +586,7 @@ pub struct UpdateSection {
     /// 自動的にアップデートをチェックするかどうか。既定: true。
     pub auto_check: bool,
     /// アップデート確認マニフェストの URL。未指定なら既定の URL
-    /// （`nagi_server::update_check::DEFAULT_CHECK_URL`）を使う。既定: 未指定。
+    /// （`nagi_server::update_check::default_check_url()`。OS ごと）を使う。既定: 未指定。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check_url: Option<String>,
 }

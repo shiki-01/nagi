@@ -5,8 +5,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// 既定のマニフェスト URL
-pub const DEFAULT_CHECK_URL: &str = "https://nagi.shiki-01.com/updates/latest.json";
+/// 既定のマニフェスト URL（OS ごとに `https://nagi.shiki-01.com/updates/{os}/latest.json`。
+/// `{os}` は `std::env::consts::OS`。macOS なら `macos`）
+pub fn default_check_url() -> String {
+    format!(
+        "https://nagi.shiki-01.com/updates/{}/latest.json",
+        std::env::consts::OS
+    )
+}
 
 /// アップデート配布物の署名検証に使う ed25519 公開鍵（16進数、32バイト）。
 ///
@@ -14,8 +20,12 @@ pub const DEFAULT_CHECK_URL: &str = "https://nagi.shiki-01.com/updates/latest.js
 /// 本物の鍵ペアを新たに生成し、この値を実際の公開鍵に置き換える必要があります**。対応する
 /// 秘密鍵は絶対にこのリポジトリに含めず、リリースの署名を行う環境（ビルドサーバー等）でのみ
 /// オフラインで保管してください（例: `openssl genpkey -algorithm ed25519` で生成できます）。
-pub const UPDATE_PUBLIC_KEY_HEX: &str =
-    "48880411a8c51a1e707022d84b711e9ed883a20143eb1734da57d11877fa3abc";
+///
+/// 鍵の差し替えは `cargo xtask gen-update-key` で鍵ペアを作り、公開鍵を
+/// `config/update-public-key.txt`（Rust と macOS フロントで共通の単一ソース）に書く。
+pub fn update_public_key_hex() -> &'static str {
+    include_str!("../../../config/update-public-key.txt").trim()
+}
 
 /// 確認の最短間隔（24時間）。この間隔より前回確認から経っていなければ確認しない
 const MIN_CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
@@ -156,7 +166,7 @@ fn verify_signature(data: &[u8], signature_hex: &str, public_key_hex: &str) -> R
 /// マニフェストで指定された配布物を取得し、SHA-256・ed25519署名の両方を検証したバイト列を返す。
 /// 検証に失敗した場合（改竄・鍵不一致・チェックサム不一致等）は取得したバイト列を捨ててエラーを返す。
 /// `public_key_hex` は呼び出し側が渡す（このプロジェクトの実際の公開鍵は
-/// [`UPDATE_PUBLIC_KEY_HEX`] を参照。埋め込み鍵を差し替える運用は README 等で管理する）。
+/// [`update_public_key_hex`] を参照。埋め込み鍵を差し替える運用は README 等で管理する）。
 /// **ダウンロードしたバイト列をディスクへ書き込む・インストールする処理は含まない**
 /// （呼び出し側の責任。プラットフォームごとに異なるため）。
 /// feature `update-check` が無効なビルドでは、マニフェストの検査後にエラーを返す（取得しない）
@@ -270,6 +280,21 @@ pub fn check_with_throttle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_public_key_is_64_hex_chars() {
+        let key = update_public_key_hex();
+        assert_eq!(key.len(), 64, "{key}");
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit()), "{key}");
+    }
+
+    #[test]
+    fn default_check_url_is_per_os_manifest() {
+        let url = default_check_url();
+        assert!(url.contains("/updates/"), "{url}");
+        assert!(url.contains(std::env::consts::OS), "{url}");
+        assert!(url.ends_with("/latest.json"), "{url}");
+    }
 
     #[test]
     fn parse_version_orders_correctly() {

@@ -1,0 +1,170 @@
+name: macos-release
+
+# macOS 版（Nagi.app、LLM 有効）を Developer ID で署名・公証し、GitHub Releases に公開する。
+# あわせて ed25519 署名つきの latest.json を作り、サイト（nagi.shiki-01.com/updates/macos/latest.json）に載せる
+# ため web ワークフローを起動する（web が最新の macos-v* リリースから latest.json を取り込む）。
+#
+# 必要な Secrets（Settings → Secrets and variables → Actions）:
+#   MACOS_DEVELOPER_ID_P12           「Developer ID Application」証明書（秘密鍵つき）の .p12 を base64 にしたもの
+#   MACOS_DEVELOPER_ID_P12_PASSWORD  上の .p12 のパスワード
+#   ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8   App Store Connect API キー（ios-testflight と共通。公証に使う）
+#   NAGI_UPDATE_SIGNING_KEY          アップデート署名用 ed25519 秘密鍵（`cargo xtask gen-update-key` の出力。16進）
+#
+# リリース手順:
+#   1. core/Cargo.toml の [workspace.package] version を上げて main にコミットする
+#   2. gh workflow run macos-release.yml --ref main -f version=X.Y.Z
+#      （version が core/Cargo.toml と一致しなければ失敗する。タグ macos-vX.Y.Z はこのワークフローが作る）
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "リリースするバージョン（X.Y.Z。core/Cargo.toml の version と一致させる）"
+        required: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: macos-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: バージョンの確認
+        working-directory: core
+        run: |
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::version は X.Y.Z 形式で指定してください: $VERSION"; exit 1; }
+          crate_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "xtask") | .version')
+          if [ "$crate_version" != "$VERSION" ]; then
+            echo "::error::入力の version ($VERSION) と core/Cargo.toml の version ($crate_version) が一致しません"
+            exit 1
+          fi
+          if gh release view "macos-v$VERSION" >/dev/null 2>&1; then
+            echo "::error::リリース macos-v$VERSION は作成済みです"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Secrets の確認
+        env:
+          P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          SIGNING_KEY: ${{ secrets.NAGI_UPDATE_SIGNING_KEY }}
+        run: |
+          missing=""
+          [ -n "$P12" ] || missing="$missing MACOS_DEVELOPER_ID_P12"
+          [ -n "$ASC_KEY_P8" ] || missing="$missing ASC_KEY_P8"
+          [ -n "$SIGNING_KEY" ] || missing="$missing NAGI_UPDATE_SIGNING_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Secrets が未設定です:$missing"
+            exit 1
+          fi
+
+      - name: Install Rust (rust-toolchain.toml)
+        working-directory: core
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+          key: llama
+      - name: Set up cmake and libclang
+        run: |
+          command -v cmake >/dev/null || brew install cmake
+          for d in "$(xcode-select -p)/usr/lib" \
+                   "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" \
+                   /Library/Developer/CommandLineTools/usr/lib; do
+            if [ -e "$d/libclang.dylib" ]; then
+              echo "LIBCLANG_PATH=$d" >> "$GITHUB_ENV"
+              found=1
+              break
+            fi
+          done
+          [ -n "$found" ] || { echo "libclang.dylib が見つかりません" >&2; exit 1; }
+
+      - name: 署名用キーチェーンの準備
+        env:
+          P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/nagi-signing.keychain-db"
+          keychain_password=$(uuidgen)
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application' | head -n 1 | sed -E 's/.*"(.*)"/\1/')
+          [ -n "$identity" ] || { echo "::error::Developer ID Application の証明書が見つかりません"; exit 1; }
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: bundle (Nagi.app、Developer ID 署名)
+        working-directory: core
+        run: cargo xtask bundle-macos --llama --sign-identity "$SIGN_IDENTITY"
+
+      - name: 公証（notarytool）と staple
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          bundle_dir=core/target/macos-bundle
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool submit "$bundle_dir/Nagi.app.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+          xcrun stapler staple "$bundle_dir/Nagi.app"
+          xcrun stapler validate "$bundle_dir/Nagi.app"
+          codesign --verify --deep --strict --verbose=2 "$bundle_dir/Nagi.app"
+          spctl --assess --type execute --verbose=2 "$bundle_dir/Nagi.app"
+          # staple 後に zip を作り直す（配布物は staple 済みのもの）
+          ditto -c -k --keepParent "$bundle_dir/Nagi.app" "Nagi-macos-$VERSION.zip"
+
+      - name: latest.json（ed25519 署名つき）
+        working-directory: core
+        env:
+          NAGI_UPDATE_SIGNING_KEY: ${{ secrets.NAGI_UPDATE_SIGNING_KEY }}
+        run: |
+          base="https://github.com/${GITHUB_REPOSITORY}/releases"
+          cargo xtask sign-update \
+            --file "../Nagi-macos-$VERSION.zip" \
+            --version "$VERSION" \
+            --download-url "$base/download/macos-v$VERSION/Nagi-macos-$VERSION.zip" \
+            --notes-url "$base/tag/macos-v$VERSION" \
+            --out ../latest.json
+          cat ../latest.json
+
+      - name: GitHub Releases に公開
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "macos-v$VERSION" "Nagi-macos-$VERSION.zip" latest.json \
+            --target "$GITHUB_SHA" \
+            --title "Nagi for macOS $VERSION" \
+            --notes "Developer ID で署名・公証済み。インストール: \`curl -fsSL https://nagi.shiki-01.com/install.sh | sh\`（辞書・モデルは別途取得。docs/progress.md の手順を参照）"
+
+      - name: サイトの latest.json を更新（web ワークフローを起動）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run web.yml --ref main
+
+      - name: 後片付け
+        if: always()
+        run: |
+          [ -n "${KEYCHAIN:-}" ] && security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/developer-id.p12"

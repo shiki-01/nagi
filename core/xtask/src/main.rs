@@ -10,6 +10,7 @@ mod fetch_model;
 mod gen_licenses;
 mod http;
 mod types;
+mod update_sign;
 
 use std::process::ExitCode;
 
@@ -44,7 +45,8 @@ enum Task {
     GenTypes,
     /// gen-types を実行し、生成物に差分がないことを検査する
     CheckTypes,
-    /// Nagi.app を組み立てて ad-hoc 署名し zip 化する（target/macos-bundle/、署名・zip は macOS のみ）
+    /// Nagi.app を組み立てて署名（既定は ad-hoc、`--sign-identity` で Developer ID）し zip 化する
+    /// （target/macos-bundle/、署名・zip は macOS のみ）
     BundleMacos {
         /// swift build するプロダクト（実行ファイル）名
         #[arg(long, default_value = "NagiIMEApp")]
@@ -61,6 +63,29 @@ enum Task {
         /// 出力先ディレクトリ（既定は target/macos-bundle）
         #[arg(long)]
         out_dir: Option<std::path::PathBuf>,
+        /// Developer ID の署名 ID（例: "Developer ID Application: ..."）。未指定なら ad-hoc 署名
+        #[arg(long)]
+        sign_identity: Option<String>,
+    },
+    /// アップデート署名用の ed25519 鍵ペアを生成して標準出力に出す（秘密鍵は保存しない）
+    GenUpdateKey,
+    /// 配布物（zip）に ed25519 署名して latest.json を書き出す（秘密鍵は環境変数 NAGI_UPDATE_SIGNING_KEY）
+    SignUpdate {
+        /// 署名する配布物（Nagi.app の zip）
+        #[arg(long)]
+        file: std::path::PathBuf,
+        /// 配布物のバージョン（x.y.z）
+        #[arg(long)]
+        version: String,
+        /// 配布物のダウンロード URL
+        #[arg(long)]
+        download_url: String,
+        /// リリースノートの URL
+        #[arg(long)]
+        notes_url: Option<String>,
+        /// 書き出す latest.json のパス
+        #[arg(long)]
+        out: std::path::PathBuf,
     },
     /// iOS 向け依存（nagi-ffi の閉包）のライセンス一覧を THIRD_PARTY_LICENSES.md に生成する
     GenLicenses,
@@ -89,12 +114,28 @@ fn main() -> ExitCode {
             llama,
             bundle_id,
             out_dir,
+            sign_identity,
         } => bundle_macos::run(bundle_macos::Options {
             swift_target,
             executable,
             llama,
             bundle_id,
             out_dir,
+            sign_identity,
+        }),
+        Task::GenUpdateKey => update_sign::gen_key(),
+        Task::SignUpdate {
+            file,
+            version,
+            download_url,
+            notes_url,
+            out,
+        } => update_sign::sign_update(update_sign::SignOptions {
+            file,
+            version,
+            download_url,
+            notes_url,
+            out,
         }),
         Task::GenLicenses => gen_licenses::run(),
         Task::BuildIosXcframework { llama, out_dir } => {
