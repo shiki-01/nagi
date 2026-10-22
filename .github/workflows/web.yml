@@ -28,3 +28,56 @@ jobs:
         with:
           name: web-build
           path: web/build
+
+  # Cloudflare Pages へ公開する。main への push と手動実行のときだけ動く（PR では動かない）。
+  # 必要な Secrets: CLOUDFLARE_API_TOKEN（Account > Cloudflare Pages > Edit）/ CLOUDFLARE_ACCOUNT_ID
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: web-deploy
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PAGES_PROJECT: nagi
+      PAGES_DOMAIN: nagi.shiki-01.com
+    steps:
+      - name: Secrets の確認（未設定ならデプロイだけ飛ばす）
+        id: sec
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID が未設定のため、デプロイを飛ばしました（Settings > Secrets and variables > Actions）"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        if: steps.sec.outputs.ok == 'true'
+        with:
+          name: web-build
+          path: web/build
+      - uses: actions/setup-node@v4
+        if: steps.sec.outputs.ok == 'true'
+        with:
+          node-version: 22
+      - name: Pages プロジェクトを用意する（無ければ作成）
+        if: steps.sec.outputs.ok == 'true'
+        run: |
+          npx --yes wrangler@4 pages project create "$PAGES_PROJECT" --production-branch main \
+            || echo "プロジェクトは作成済みとみなして続行します"
+      - name: デプロイ
+        if: steps.sec.outputs.ok == 'true'
+        run: npx --yes wrangler@4 pages deploy web/build --project-name "$PAGES_PROJECT" --branch main --commit-dirty=true
+      - name: カスタムドメインを追加する（追加済みなら何もしない）
+        if: steps.sec.outputs.ok == 'true'
+        run: |
+          code=$(curl -sS -o /tmp/domain.json -w '%{http_code}' -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PAGES_PROJECT/domains" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+            --data "{\"name\":\"$PAGES_DOMAIN\"}")
+          echo "HTTP $code"; cat /tmp/domain.json; echo
+          if [ "$code" != "200" ] && ! grep -q 'already' /tmp/domain.json; then
+            echo "::warning::カスタムドメインの追加に失敗しました。Cloudflare ダッシュボードの Pages > nagi > Custom domains で追加してください"
+          fi

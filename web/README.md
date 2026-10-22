@@ -46,7 +46,22 @@ SvelteKit は 2.x に固定（3.x は設定 API が変わっており未検証�
   フルアクセスを要求する前提で、サポート文面・ポリシーと審査メモの整合を維持する。
 - 公開前に `/privacy` の【要確認】表示（施行日・提供者名・アクセスログ・子どもの年齢区分）を埋めて取り除く。
 
-## デプロイ（Cloudflare Pages。決定: decisions.md H-22）
+## デプロイ（GitHub Actions → Cloudflare Pages）
+
+`.github/workflows/web.yml` の `deploy` ジョブが、`check`（check・test・build）の成功後に `build/` を Cloudflare Pages（プロジェクト名 `nagi`）へ公開する。main への push と手動実行（`gh workflow run web.yml --ref main`）のときだけ動く（PR では動かない）。プロジェクトが無ければ作成し、カスタムドメイン `nagi.shiki-01.com` の追加も試みる。
+
+Secrets が未設定の間は、`deploy` ジョブは警告を出してデプロイだけを飛ばす（CI は赤くならない）。
+
+初回だけ必要な作業（リポジトリの Settings > Secrets and variables > Actions）:
+
+1. `CLOUDFLARE_ACCOUNT_ID`: Cloudflare ダッシュボードの右側（Workers & Pages の概要）にあるアカウント ID
+2. `CLOUDFLARE_API_TOKEN`: My Profile > API Tokens で作成。権限は Account > Cloudflare Pages > Edit（ドメイン追加の API 用に Account Settings > Read も付けると確実）
+3. DNS: `shiki-01.com` が Cloudflare 管理なら、Pages の Custom domains にドメインを追加した時点で CNAME が作られる。他社 DNS なら `nagi` の CNAME を `nagi.pages.dev` に向ける
+4. ワークフローを実行し、`https://nagi.shiki-01.com/`・`/privacy`・`/support`・未存在パスの 404 を確認する（下の【要確認】）
+
+以下は Git 連携（ダッシュボード）で公開する場合の手順。Actions で公開するなら不要。
+
+### ダッシュボードから Git 連携する場合（決定: decisions.md H-22）
 
 `build/` の静的出力を Cloudflare Pages に置く。独自ドメインは `nagi.shiki-01.com`（DNS・カスタムドメインの設定は後で行う）。
 
