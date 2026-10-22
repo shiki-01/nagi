@@ -21,6 +21,12 @@ public final class NagiIMEContext {
     public var modeIdentifiers: [InputMode: String] = [:]
     /// コアの新規セッションの入力モード（`initialize` の応答で更新する）
     var initialMode: InputMode = .hiragana
+    /// 同梱の imserver とデータディレクトリ（辞書とモデルの取得に使う。`NagiIMEHost` が設定する）
+    public var engineURL: URL?
+    public var dataDir: String?
+    /// 辞書とモデルの取得中か・この起動で取得を勧めたか（メインスレッドからのみ触る）
+    var isInstallingData = false
+    var dataInstallOffered = false
 
     /// OS の入力モード識別子 → コアの入力モード
     func mode(forIdentifier identifier: String) -> InputMode? {

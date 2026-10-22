@@ -22,6 +22,9 @@ public final class NagiIMEHost {
     private var context: NagiIMEContext?
     private var wakeObserver: NSObjectProtocol?
     private var environment: EnvironmentReporter?
+    private var resolvedEngineURL: URL?
+
+    private var dataDir: String { options.dataDir ?? Self.defaultDataDir() }
 
     public init(options: HostOptions) {
         self.options = options
@@ -44,6 +47,7 @@ public final class NagiIMEHost {
     /// エンジンの起動設定から EngineSupervisor を組み立てる（IME 本体と `--settings` で共通）
     private func makeSupervisor() throws -> EngineSupervisor {
         let engineURL = try resolveEngineURL()
+        resolvedEngineURL = engineURL
         let launcher = ProcessEngineLauncher(
             configuration: ProcessEngineConfiguration(
                 executable: engineURL,
@@ -87,6 +91,8 @@ public final class NagiIMEHost {
         let context = NagiIMEContext(supervisor: supervisor, store: store)
         self.context = context
         context.modeIdentifiers = BundleIdentity.modeIdentifiers(bundleID: Self.defaultBundleIdentifier)
+        context.engineURL = resolvedEngineURL
+        context.dataDir = dataDir
         NagiIMEContext.shared = context
         supervisor.restoreProvider = { store.restoreParams() }
 

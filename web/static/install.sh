@@ -6,13 +6,18 @@
 # SHA-256 と署名・公証で確かめてから ~/Library/Input Methods に置き、入力ソースに登録する。
 # 管理者権限は使わない。入力内容や個人情報は送らない（取得するのは latest.json と zip だけ）。
 #
+# 続けて、辞書（Mozc）と変換モデル（zenz）を配布元から取得し、この Mac の中で辞書を組み立てる
+# （同梱の imserver --install-data。取得済みで SHA-256 が一致するものは飛ばす）。
+#
 # 環境変数:
 #   NAGI_MANIFEST_URL  latest.json の URL（既定: https://nagi.shiki-01.com/updates/macos/latest.json）
+#   NAGI_SKIP_DATA     1 なら辞書とモデルを取得しない
 set -eu
 
 MANIFEST_URL="${NAGI_MANIFEST_URL:-https://nagi.shiki-01.com/updates/macos/latest.json}"
 DEST_DIR="$HOME/Library/Input Methods"
 APP="$DEST_DIR/Nagi.app"
+DATA_DIR="$HOME/Library/Application Support/com.shiki.nagi/data"
 
 say() { printf '%s\n' "nagi: $*"; }
 fail() { printf '%s\n' "nagi: エラー: $*" >&2; exit 1; }
@@ -64,13 +69,30 @@ say "入力ソースに登録しています"
 killall TextInputMenuAgent >/dev/null 2>&1 || true
 
 say "Nagi $version をインストールしました"
+
+data_ok=0
+if [ "${NAGI_SKIP_DATA:-0}" = "1" ]; then
+  say "辞書とモデルの取得を飛ばしました（NAGI_SKIP_DATA=1）"
+else
+  say "辞書とモデルを取得しています（約 150MB。取得済みのものは飛ばします）"
+  # 標準出力は進捗の JSON（アプリ向け）なので捨て、標準エラーの人向けのログだけを表示する
+  if "$APP/Contents/MacOS/imserver" --install-data --data-dir "$DATA_DIR" --model small >/dev/null; then
+    data_ok=1
+    say "辞書とモデルを入れました: $DATA_DIR"
+    # 辞書なしで起動済みのエンジンに読み込ませるため、動いていれば止める（次に使うとき OS が起動し直す）
+    pkill -x NagiIMEApp >/dev/null 2>&1 || true
+  else
+    say "警告: 辞書とモデルを入れられませんでした。入力メニューの「辞書とモデルをダウンロード…」でやり直せます"
+  fi
+fi
+
 cat <<'EOF'
 
 次の手順:
   1. システム設定 > キーボード > 入力ソース >「編集…」で「Nagi」（日本語）を追加してください。
      一覧に出ない場合は、いったんログアウトしてからもう一度お試しください。
-  2. 変換に使う辞書・モデルは、~/Library/Application Support/com.shiki.nagi/data/ に置いてください
-     （置き方: https://github.com/shiki-01/nagi/blob/main/docs/progress.md の「辞書・モデルと LLM 版の配置」）。
-     辞書が無い間は、読みがそのまま入力されます。
-  3. 以降の更新は、入力メニューの「アップデートを確認…」か、このコマンドの再実行で行えます。
+  2. 以降の更新は、入力メニューの「アップデートを確認…」か、このコマンドの再実行で行えます。
 EOF
+if [ "$data_ok" != "1" ]; then
+  echo "  3. 辞書が無い間は読みがそのまま入力されます。入力メニューの「辞書とモデルをダウンロード…」で入れてください。"
+fi

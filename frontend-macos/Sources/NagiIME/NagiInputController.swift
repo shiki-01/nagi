@@ -94,6 +94,8 @@ final class NagiInputController: IMKInputController {
         }
         isActive = true
         adoptSelectedMode()
+        // 辞書が無ければ取得を勧める（activate の処理を終えてから出す）
+        Task { @MainActor [weak context] in context?.offerDataInstallIfNeeded() }
     }
 
     override func deactivateServer(_ sender: Any!) {
@@ -184,6 +186,7 @@ final class NagiInputController: IMKInputController {
             ("設定…", #selector(openSettings(_:))),
             ("設定ファイルを再読み込み", #selector(reloadConfig(_:))),
             ("学習データを削除…", #selector(clearLearning(_:))),
+            ("辞書とモデルをダウンロード…", #selector(installData(_:))),
             ("アップデートを確認…", #selector(checkForUpdates(_:))),
         ]
         for (title, action) in entries {
@@ -206,6 +209,11 @@ final class NagiInputController: IMKInputController {
 
     @objc func openSettings(_ sender: Any?) {
         context?.showSettings()
+    }
+
+    @objc func installData(_ sender: Any?) {
+        guard let context else { return }
+        Task { @MainActor in await context.installData() }
     }
 
     @objc func checkForUpdates(_ sender: Any?) {
