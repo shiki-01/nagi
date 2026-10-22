@@ -8,6 +8,7 @@ mod bundle_macos;
 mod fetch_dict;
 mod fetch_model;
 mod gen_licenses;
+mod mode_icons;
 mod types;
 mod update_sign;
 

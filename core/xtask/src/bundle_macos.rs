@@ -7,6 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::mode_icons;
+
 /// 既定のバンドル識別子。
 #[cfg(test)]
 // macOS が入力メソッドとして認識する（TIS に登録される）には `.inputmethod.` を含む必要がある。
@@ -18,10 +20,10 @@ const MIN_MACOS: &str = "13.0";
 const ICON_FILE: &str = "nagi-icon.tiff";
 /// アイコンの色（RGB。落ち着いた青緑）。
 const ICON_COLOR: [u8; 3] = [0x3A, 0x7C, 0x89];
-/// 英数モードのアイコン画像のファイル名。
-const ROMAN_ICON_FILE: &str = "nagi-icon-roman.tiff";
-/// 英数モードのアイコンの色（RGB。灰色。ひらがなモードと見分けるため）。
-const ROMAN_ICON_COLOR: [u8; 3] = [0x80, 0x80, 0x80];
+/// ひらがなモードのアイコン画像のファイル名（文字の形のテンプレートアイコン）。
+const HIRAGANA_ICON_FILE: &str = "nagi-mode-hiragana.tiff";
+/// 英字モードのアイコン画像のファイル名（文字の形のテンプレートアイコン）。
+const ROMAN_ICON_FILE: &str = "nagi-mode-roman.tiff";
 
 /// 単色の角丸正方形の RGBA 8bit ピクセル列（四隅は透明）。
 fn icon_rgba(size: u32, rgb: [u8; 3]) -> Vec<u8> {
@@ -69,17 +71,18 @@ const IFD_ENTRIES: u16 = 13;
 ///
 /// ページごとのレイアウト: IFD（13 エントリ）/ BitsPerSample 配列 / XResolution / YResolution / ピクセルデータ。
 /// 各 IFD の NextIFD で次ページに連結する。
-pub fn icon_tiff(pages: &[TiffPage], rgb: [u8; 3]) -> Vec<u8> {
+/// 各ページのピクセルは `size * size * 4` バイトの RGBA 8bit（行優先）。
+pub fn tiff_from_pages(pages: &[(TiffPage, Vec<u8>)]) -> Vec<u8> {
     let mut out = vec![b'I', b'I', 42, 0];
     out.extend_from_slice(&8u32.to_le_bytes()); // 最初の IFD
-    for (i, page) in pages.iter().enumerate() {
+    for (i, (page, pixels)) in pages.iter().enumerate() {
         let ifd_offset = out.len() as u32;
         let ifd_len = 2 + IFD_ENTRIES as u32 * 12 + 4;
         let bps_offset = ifd_offset + ifd_len;
         let xres_offset = bps_offset + 8;
         let yres_offset = xres_offset + 8;
         let data_offset = yres_offset + 8;
-        let pixels = icon_rgba(page.size, rgb);
+        assert_eq!(pixels.len(), (page.size * page.size * 4) as usize);
         let next_ifd = if i + 1 < pages.len() {
             data_offset + pixels.len() as u32
         } else {
@@ -122,9 +125,52 @@ pub fn icon_tiff(pages: &[TiffPage], rgb: [u8; 3]) -> Vec<u8> {
             out.extend_from_slice(&page.dpi.to_le_bytes());
             out.extend_from_slice(&1u32.to_le_bytes());
         }
-        out.extend_from_slice(&pixels);
+        out.extend_from_slice(pixels);
     }
     out
+}
+
+/// 色付き角丸アイコン（アプリ本体用）の TIFF。
+pub fn icon_tiff(pages: &[TiffPage], rgb: [u8; 3]) -> Vec<u8> {
+    let pages: Vec<(TiffPage, Vec<u8>)> =
+        pages.iter().map(|&p| (p, icon_rgba(p.size, rgb))).collect();
+    tiff_from_pages(&pages)
+}
+
+/// 文字の形のテンプレートアイコンの TIFF（黒 RGB（0,0,0）とアルファのみ。16px / 32px の 2 ページ）。
+pub fn mode_icon_tiff(alpha_16: &[u8], alpha_32: &[u8]) -> Vec<u8> {
+    let rgba = |alpha: &[u8]| -> Vec<u8> { alpha.iter().flat_map(|&a| [0, 0, 0, a]).collect() };
+    tiff_from_pages(&[
+        (ICON_PAGES[0], rgba(alpha_16)),
+        (ICON_PAGES[1], rgba(alpha_32)),
+    ])
+}
+
+/// 文字列を `.strings` の文字列リテラル用にエスケープする（`\` と `"`、改行）。
+fn strings_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+/// `InfoPlist.strings`（UTF-8）の内容を生成する。`lang` は `"ja"` または `"en"`。
+/// アプリ名・入力メソッド名・各入力モードの表示名を bundle id から派生したキーで引けるようにする。
+pub fn info_plist_strings(bundle_id: &str, lang: &str) -> String {
+    let (hiragana, roman) = if lang == "ja" {
+        ("ひらがな（Nagi）", "英字（Nagi）")
+    } else {
+        ("Hiragana (Nagi)", "Romaji (Nagi)")
+    };
+    let line =
+        |k: &str, v: &str| format!("\"{}\" = \"{}\";\n", strings_escape(k), strings_escape(v));
+    [
+        line("CFBundleName", "Nagi"),
+        line("CFBundleDisplayName", "Nagi"),
+        line(bundle_id, "Nagi"),
+        line(&input_mode_id(bundle_id), hiragana),
+        line(&roman_mode_id(bundle_id), roman),
+    ]
+    .concat()
 }
 
 /// 入力モード ID（`<bundle-id>.Japanese`）。コアのひらがなモードに対応する。
@@ -222,8 +268,8 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str, public_key: 
 				<key>tsInputModePrimaryInScriptKey</key><true/>
 				<key>tsInputModeJISKeyboardShortcutKey</key><integer>1</integer>
 				<key>tsInputModeDefaultsToTransparentKey</key><false/>
-				<key>tsInputModeMenuIconFileKey</key><string>{icon}</string>
-				<key>tsInputModePaletteIconFileKey</key><string>{icon}</string>
+				<key>tsInputModeMenuIconFileKey</key><string>{hiragana_icon}</string>
+				<key>tsInputModePaletteIconFileKey</key><string>{hiragana_icon}</string>
 			</dict>
 			<key>{roman_id}</key>
 			<dict>
@@ -255,7 +301,7 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str, public_key: 
 	<key>TISIntendedLanguage</key>
 	<string>ja</string>
 	<key>TISIconIsTemplate</key>
-	<false/>
+	<true/>
 	<key>tsInputMethodNameKey</key>
 	<string>Nagi</string>
 	<key>tsInputMethodIconFileKey</key>
@@ -277,6 +323,7 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str, public_key: 
         min = MIN_MACOS,
         conn = conn,
         icon = ICON_FILE,
+        hiragana_icon = HIRAGANA_ICON_FILE,
         roman_icon = ROMAN_ICON_FILE,
     )
 }
@@ -397,10 +444,25 @@ pub fn run(opts: Options) -> Result<(), String> {
     )
     .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
     fs::write(
-        resources_dir.join(ROMAN_ICON_FILE),
-        icon_tiff(&ICON_PAGES, ROMAN_ICON_COLOR),
+        resources_dir.join(HIRAGANA_ICON_FILE),
+        mode_icon_tiff(&mode_icons::HIRAGANA_16, &mode_icons::HIRAGANA_32),
     )
     .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
+    fs::write(
+        resources_dir.join(ROMAN_ICON_FILE),
+        mode_icon_tiff(&mode_icons::ROMAN_16, &mode_icons::ROMAN_32),
+    )
+    .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
+    // 入力メニューの表示名（入力モード名・見出し）は lproj の InfoPlist.strings から引かれる
+    for lang in ["ja", "en"] {
+        let lproj = resources_dir.join(format!("{lang}.lproj"));
+        fs::create_dir_all(&lproj).map_err(|e| format!("ディレクトリの作成に失敗しました: {e}"))?;
+        fs::write(
+            lproj.join("InfoPlist.strings"),
+            info_plist_strings(&opts.bundle_id, lang),
+        )
+        .map_err(|e| format!("InfoPlist.strings の書き込みに失敗しました: {e}"))?;
+    }
 
     // 4. 署名・zip（macOS のみ）
     let zip = out_dir.join("Nagi.app.zip");
@@ -478,17 +540,18 @@ mod tests {
             "<key>CFBundleDisplayName</key>\n\t<string>Nagi</string>",
             "<key>NSPrincipalClass</key>\n\t<string>NSApplication</string>",
             "<key>TISIntendedLanguage</key>\n\t<string>ja</string>",
-            "<key>TISIconIsTemplate</key>\n\t<false/>",
+            "<key>TISIconIsTemplate</key>\n\t<true/>",
             "<key>tsInputMethodIconFileKey</key>\n\t<string>nagi-icon.tiff</string>",
             "<key>tsInputModeDefaultStateKey</key><true/>",
             "<key>tsInputModePrimaryInScriptKey</key><true/>",
             "<key>tsInputModeJISKeyboardShortcutKey</key><integer>1</integer>",
-            "<key>tsInputModeMenuIconFileKey</key><string>nagi-icon.tiff</string>",
-            "<key>tsInputModePaletteIconFileKey</key><string>nagi-icon.tiff</string>",
+            "<key>tsInputModeMenuIconFileKey</key><string>nagi-mode-hiragana.tiff</string>",
+            "<key>tsInputModePaletteIconFileKey</key><string>nagi-mode-hiragana.tiff</string>",
+            "<key>tsInputModePaletteIconFileKey</key><string>nagi-mode-roman.tiff</string>",
             "<key>com.shiki.inputmethod.Nagi.Roman</key>",
             "<key>tsInputModeScriptKey</key><string>smRoman</string>",
             "<key>tsInputModeJISKeyboardShortcutKey</key><integer>0</integer>",
-            "<key>tsInputModeMenuIconFileKey</key><string>nagi-icon-roman.tiff</string>",
+            "<key>tsInputModeMenuIconFileKey</key><string>nagi-mode-roman.tiff</string>",
             "<array><string>com.shiki.inputmethod.Nagi.Japanese</string><string>com.shiki.inputmethod.Nagi.Roman</string></array>",
         ] {
             assert!(p.contains(needle), "missing: {needle}");
@@ -502,6 +565,8 @@ mod tests {
             "tsInputModePrimaryInputModeKey",
             "tsInputModeAlternateMenuIconFileKey",
             "InputMethodServerDelegateClass",
+            // TISIconIsTemplate はルート直下にだけ置く（モード辞書内には書かない）
+            "<key>TISIconIsTemplate</key><true/>",
             "<key>TISIconIsTemplate</key><false/>",
         ] {
             assert!(!p.contains(needle), "unexpected: {needle}");
@@ -604,6 +669,65 @@ mod tests {
                 assert_eq!(off + cnt, t.len());
             }
         }
+    }
+
+    #[test]
+    fn mode_icon_tiff_has_template_pages() {
+        let t = mode_icon_tiff(&mode_icons::HIRAGANA_16, &mode_icons::HIRAGANA_32);
+        let r = Tiff(&t);
+        let mut ifd = r.u32_at(4) as usize;
+        for (page, (size, alpha)) in [
+            (16usize, &mode_icons::HIRAGANA_16[..]),
+            (32, &mode_icons::HIRAGANA_32[..]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let off = r.u32_at(r.entry(ifd, 273) + 8) as usize;
+            let cnt = r.u32_at(r.entry(ifd, 279) + 8) as usize;
+            assert_eq!(cnt, size * size * 4);
+            for (i, &a) in alpha.iter().enumerate() {
+                assert_eq!(&t[off + i * 4..off + i * 4 + 4], &[0, 0, 0, a]);
+            }
+            let next = r.u32_at(ifd + 2 + IFD_ENTRIES as usize * 12) as usize;
+            if page == 0 {
+                ifd = next;
+            } else {
+                assert_eq!(next, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn strings_have_keys_and_values() {
+        let ja = info_plist_strings("com.shiki.inputmethod.Nagi", "ja");
+        for needle in [
+            "\"CFBundleName\" = \"Nagi\";\n",
+            "\"CFBundleDisplayName\" = \"Nagi\";\n",
+            "\"com.shiki.inputmethod.Nagi\" = \"Nagi\";\n",
+            "\"com.shiki.inputmethod.Nagi.Japanese\" = \"ひらがな（Nagi）\";\n",
+            "\"com.shiki.inputmethod.Nagi.Roman\" = \"英字（Nagi）\";\n",
+        ] {
+            assert!(ja.contains(needle), "missing: {needle}");
+        }
+        let en = info_plist_strings("com.shiki.inputmethod.Nagi", "en");
+        assert!(en.contains("\"com.shiki.inputmethod.Nagi.Japanese\" = \"Hiragana (Nagi)\";"));
+        assert!(en.contains("\"com.shiki.inputmethod.Nagi.Roman\" = \"Romaji (Nagi)\";"));
+    }
+
+    #[test]
+    fn strings_follow_bundle_id() {
+        let s = info_plist_strings("x.y", "en");
+        assert!(s.contains("\"x.y.Japanese\""));
+        assert!(s.contains("\"x.y.Roman\""));
+        assert!(!s.contains("com.shiki"));
+    }
+
+    #[test]
+    fn strings_escape_quotes_and_backslashes() {
+        assert_eq!(strings_escape(r#"a"b\c"#), r#"a\"b\\c"#);
+        let s = info_plist_strings(r#"a"b\c"#, "en");
+        assert!(s.contains(r#""a\"b\\c" = "Nagi";"#));
     }
 
     #[test]
