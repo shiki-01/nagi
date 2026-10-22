@@ -10,15 +10,20 @@
 //! - Windows のみ: COM/TSF の実装（`dll` / `register` / `text_service` / `edit` / `keys`）。
 //!   `unsafe` はこれらのモジュールに隔離し、`#![allow(unsafe_code)]` で明示している
 //!
+//! # Win32 / TSF 層（H-41）
+//! - `candidate_window` / `toast_window`: 自前のポップアップ（GDI。フォーカスを奪わない）。寸法・配置・文言は `nagi_windows`
+//! - `message_window`: 隠しメッセージウィンドウ。別スレッドのエンジン通知を `PostMessage` で UI スレッドへ渡して
+//!   即時に反映し、定期タイマー（環境の報告・スリープ復帰の検出）と電源通知も受ける
+//! - `probe`: `EnvironmentProbe` の Win32 実装 / `context_info`: 周辺テキスト・`InputScope`・アプリ ID
+//! - `display_attr`: `ITfDisplayAttributeProvider` と `GUID_PROP_ATTRIBUTE` への書き込み
+//! - `mode_comp`: 入力モードのコンパートメント（タスクトレイの「あ / A」）/ `langbar`: 言語バーのボタン
+//!   （モード表示・クリックで切り替え・メニュー）/ `reconversion`: `ITfFnReconversion`
+//!   （`Reconvert` と `GetReconversion`）
+//!
 //! # 未実装（TODO）
-//! - 候補ウィンドウの描画（`ITfUIElement` / 自前ウィンドウ）。`stubs::CandidateWindow` のスタブのみ
-//! - 再変換（`ITfFnReconversion`）と応答の `reconvert_selection` の処理。`stubs` のスタブのみ
-//! - 表示属性（`ITfDisplayAttributeProvider`。注目文節の太い下線など）。いまは装飾なしで描く
-//! - 入力モード（`mode`）の言語バー・`GUID_COMPARTMENT_KEYBOARD_OPENCLOSE` への反映
-//! - 非同期通知（`update_preedit` 等）の即時反映。いまは次のキー入力のときに反映する
-//!   （隠しウィンドウへの `PostMessage` で UI スレッドを起こす実装が必要）
 //! - 複数のホストプロセスでエンジンを共有する仕組み（現状はホストプロセスごとに imserver を起動する）
-//! - `set_environment`（電源・メモリ）、`set_context`（周辺テキスト）、通知の表示
+//! - 候補ウィンドウのマウス操作（v1 の非目標）
+//! - アプリ内の自動更新（置き換え。通知のみ）、ARM64 / 32bit ホスト用の DLL
 //!
 //! # 検証状況
 //! Linux ホストでの `cargo check/clippy --target x86_64-pc-windows-gnu`（型・シグネチャの確認）と、
@@ -31,6 +36,12 @@ pub mod engine;
 pub mod render;
 
 #[cfg(windows)]
+mod candidate_window;
+#[cfg(windows)]
+mod context_info;
+#[cfg(windows)]
+mod display_attr;
+#[cfg(windows)]
 mod dll;
 #[cfg(windows)]
 mod edit;
@@ -39,8 +50,20 @@ mod guids;
 #[cfg(windows)]
 mod keys;
 #[cfg(windows)]
+mod langbar;
+#[cfg(windows)]
+mod message_window;
+#[cfg(windows)]
+mod mode_comp;
+#[cfg(windows)]
+mod probe;
+#[cfg(windows)]
+mod reconversion;
+#[cfg(windows)]
 mod register;
 #[cfg(windows)]
-mod stubs;
-#[cfg(windows)]
 mod text_service;
+#[cfg(windows)]
+mod toast_window;
+#[cfg(windows)]
+mod win;

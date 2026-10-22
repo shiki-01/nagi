@@ -5,6 +5,7 @@
 mod build_dict;
 mod build_ios_xcframework;
 mod bundle_macos;
+mod bundle_windows;
 mod fetch_dict;
 mod fetch_model;
 mod gen_licenses;
@@ -67,11 +68,38 @@ enum Task {
         #[arg(long)]
         sign_identity: Option<String>,
     },
+    /// Windows 版の配布物（TSF の DLL・imserver.exe・インストーラスクリプト・ライセンス）を収集し、
+    /// チェックサムをつけて zip 化する（target/windows-bundle/Nagi-windows-<version>.zip）。
+    /// ビルドは行わない（MSVC ターゲットでビルド済みの成果物を集める。`windows-release.yml` を参照）
+    BundleWindows {
+        /// nagi_windows_tsf.dll のパス（既定は target[/<triple>]/release/）
+        #[arg(long)]
+        dll: Option<std::path::PathBuf>,
+        /// imserver.exe のパス（既定は target[/<triple>]/release/）
+        #[arg(long)]
+        imserver: Option<std::path::PathBuf>,
+        /// 既定パスを探すターゲットトリプル（例: x86_64-pc-windows-msvc）
+        #[arg(long)]
+        target: Option<String>,
+        /// 出力先ディレクトリ（既定は target/windows-bundle）
+        #[arg(long)]
+        out_dir: Option<std::path::PathBuf>,
+        /// Authenticode 署名に使う PFX。指定すると DLL と exe を signtool で署名する
+        /// （パスワードは環境変数 NAGI_WINDOWS_PFX_PASSWORD）。未指定なら署名しない
+        #[arg(long)]
+        sign_pfx: Option<std::path::PathBuf>,
+        /// signtool.exe のパス（PATH 上に無い場合）
+        #[arg(long, default_value = "signtool")]
+        signtool: String,
+        /// タイムスタンプサーバーの URL（既定は DigiCert）
+        #[arg(long)]
+        timestamp_url: Option<String>,
+    },
     /// アップデート署名用の ed25519 鍵ペアを生成して標準出力に出す（秘密鍵は保存しない）
     GenUpdateKey,
     /// 配布物（zip）に ed25519 署名して latest.json を書き出す（秘密鍵は環境変数 NAGI_UPDATE_SIGNING_KEY）
     SignUpdate {
-        /// 署名する配布物（Nagi.app の zip）
+        /// 署名する配布物（Nagi.app / Nagi-windows の zip）
         #[arg(long)]
         file: std::path::PathBuf,
         /// 配布物のバージョン（x.y.z）
@@ -87,8 +115,12 @@ enum Task {
         #[arg(long)]
         out: std::path::PathBuf,
     },
-    /// iOS 向け依存（nagi-ffi の閉包）のライセンス一覧を THIRD_PARTY_LICENSES.md に生成する
-    GenLicenses,
+    /// 配布物ごとの依存ライセンス一覧を生成する（ios: THIRD_PARTY_LICENSES.md、windows: THIRD_PARTY_LICENSES_WINDOWS.md）
+    GenLicenses {
+        /// 対象（ios / windows / all）
+        #[arg(long, default_value = "all")]
+        platform: String,
+    },
     /// iOS 用 XCFramework を生成する（nagi-ffi を aarch64-apple-ios/sim ターゲット向けにビルド）
     BuildIosXcframework {
         /// feature llama を有効化する
@@ -123,6 +155,23 @@ fn main() -> ExitCode {
             out_dir,
             sign_identity,
         }),
+        Task::BundleWindows {
+            dll,
+            imserver,
+            target,
+            out_dir,
+            sign_pfx,
+            signtool,
+            timestamp_url,
+        } => bundle_windows::run(bundle_windows::Options {
+            dll,
+            imserver,
+            target,
+            out_dir,
+            sign_pfx,
+            signtool,
+            timestamp_url,
+        }),
         Task::GenUpdateKey => update_sign::gen_key(),
         Task::SignUpdate {
             file,
@@ -137,7 +186,7 @@ fn main() -> ExitCode {
             notes_url,
             out,
         }),
-        Task::GenLicenses => gen_licenses::run(),
+        Task::GenLicenses { platform } => gen_licenses::run(&platform),
         Task::BuildIosXcframework { llama, out_dir } => {
             build_ios_xcframework::run(build_ios_xcframework::Options { llama, out_dir })
         }

@@ -1300,3 +1300,155 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **検証方法と未検証**: Linux で `cargo check` / `cargo clippy -D warnings --target x86_64-pc-windows-gnu`（リンクはしていない）と、`nagi-windows` / OS 非依存部のテスト。**Windows 実機では何も確認していない**: `regsvr32` での登録、入力方式としての認識、キー入力、composition の表示・確定、アンロード（`DllCanUnloadNow`）、imserver の起動と stdout の扱い、TSF の `windows` クレートの呼び出し規約（`ShiftEnd` によるキャレット位置、`InsertTextAtSelection` の `QUERYONLY` など）
 - **未実装（TODO、`frontend-windows-tsf/src/lib.rs` にも記載）**: 候補ウィンドウ、`ITfFnReconversion`（スタブのみ）、表示属性、言語バー・開閉コンパートメント、非同期通知の即時反映、`set_environment` / `set_context` / 通知表示、アイコン、インストーラ・署名・SmartScreen 方針（設計書 §5.3）、CI への組み込み
 
+### H-40. Windows フロント: OS 非依存ロジックの追加（候補ウィンドウ・環境・文脈・表示属性・文言）（2026-10-22、ユーザー指示「裁量に任せる、全部終わるまで進める」、実機未確認）
+
+macOS 版（`CandidatePaging` / `CandidatePanel` / `EnvironmentReporter` / `PreeditStyler` / `StatusMessages` / `reportContext`）と挙動を揃えたロジックを `nagi-windows`（`forbid(unsafe_code)`）に追加した。Win32 の描画・COM・OS 問い合わせは次の層で、ここは trait 注入と純関数だけ。コア・プロトコルは変更していない。
+
+- **`candidates`**: ページング（選択を範囲内に丸め、`page_size` は 1 以上）・行モデル（番号・全体インデックス・出所ラベル）・フッター（「2/5」、1 ページなら無し）・寸法（macOS と同じ式・定数。文字幅は `TextMeasure` で注入）・配置。配置は既定でキャレット行の下、作業領域の下端に収まらなければ上へ反転、どちらも収まらなければ作業領域内に押し込む（上端優先）、水平は作業領域内に丸める。キャレットを含むモニターの作業領域を使う（無ければ先頭 = プライマリ）。キャレットが取れない（ゼロ矩形）ときは呼び出し側が渡すマウス位置で代用（macOS と同じ）。数字キー選択は `index_for_number`（ページ内番号 → 全体インデックス）。**キーの解釈そのものはコアのキーマップ**（macOS と同じ分担）なので、これは将来のマウス・タッチや表示検証用の変換
+- **`environment`**: `EnvironmentProbe`（電源・メモリ・プロセッサ周波数）→ `SetEnvironmentParams`。`EnvironmentReporter::poll` は前回送信値から変化したときだけ返し、エンジン起動・再起動のたびに `reset`（新しいエンジンは前回値を知らない）。取得できない項目は省略（コアは前回値を維持）。`memory_budget_mb` は macOS 同様に送らない
+  - Windows には macOS のような OS イベントが無いため、次を**推定**にした。閾値はすべて実測なし（要調整）: (1) メモリ逼迫は利用可能量から（5% 未満または 300MB 未満で critical、10% 未満または 800MB 未満で warning）。(2) サーマルは現在周波数 / 上限の比（85% 以上 nominal、60% 以上 fair、40% 以上 serious、未満 critical）。ただしバッテリー節約が有効または不明のときは周波数が下がるのが正常なので**推定せず省略**（誤って軽いプロファイルに落とさないため）。(3) `low_power_mode` は `SystemStatusFlag`（バッテリー節約）。(4) 電池が無い PC（`BatteryFlag` 128）は AC 扱い
+- **`context`**: `build_context` は macOS 版と同じ規約。secure なら周辺テキストを送らない（`secure_input: true` は常に伝える）、取得不能なら送らない（空文字列とは区別。空はキャレットが先頭）、直前の最大 64 UTF-16（サロゲートペアの途中で切らない）、空のアプリ ID は省略、`should_report_before_key`（入力開始時・ひらがな・flags_changed 以外）。パスワード欄は TSF の `InputScope` の `IS_PASSWORD`（値 31）で判定する前提の `is_secure_input_scope` を置いた（**定数値は記憶に基づく。実機層で `windows` クレートの定数と一致を確認すること**）
+- **`preedit_style`**: `runs`（macOS の `PreeditStyler.runs` と同じ判定: 注目 > 選択 > 種別、保留は別 run）と、`plan`（全文を隙間なく覆い、隣接する同種を結合し、`DisplayAttr` を割り当てる。TSF の `GUID_PROP_ATTRIBUTE` はテキスト全体に必要なため）。属性は macOS と同じ対応（通常 = 細い実線、注目・選択 = 太い実線、確定済み・保留 = 点線、スタイル変換 = 破線）。色は指定しない
+  - **迷った判断**: 以前の `frontend-windows-tsf/src/render.rs` の `SpanStyle`（入力中 = 点線、変換済み = 実線、注目 = 太線という MS-IME 風の 3 種）は削除し、この計画に一本化した（`EditPlan::Set.spans` → `attrs`）。macOS と同じ見た目・同じ種別（確定済み・スタイル変換が区別できる）を優先した。MS-IME 風（未変換 = 点線）にしたい場合は `attr_for` の 1 か所で変えられる
+- **`status`**: `toast_for(&EngineEvent)`（macOS の文言を踏襲。info は出さず `update_available` のみ例外、停止通知は 1 回目のみ）、`menu_lines`、`mode_indicator`（あ / A）、`mode_name`、`ToastThrottle`（同文言 30 秒間引き。時刻は引数で注入）
+- **CI**: `ci.yml` の `on:` は変更していない（workflow_dispatch のみ）。`nagi-windows` / `nagi-windows-tsf` は workspace members なので既存の `core` ジョブ（ubuntu / windows / macos の fmt・clippy・build・test）で 3 OS とも検査される。加えて新ジョブ `windows-tsf`（ubuntu、`rustup target add x86_64-pc-windows-gnu`、`cargo check` と `cargo clippy -D warnings`、`--all-targets`）を追加。COM/TSF 部分は `cfg(windows)` のため通常ジョブでは検査されず、このジョブでだけ型検査される
+
+
+### H-41. Windows フロント: Win32 / TSF 層の実装（候補ウィンドウ・環境・文脈・表示属性・モード・再変換・通知・アイコン）（2026-10-22、ユーザー指示「裁量に任せる、全部終わるまで進める」、実機未確認）
+
+H-39・H-40 で未実装だった OS 層を `frontend-windows-tsf`（`unsafe` は Win32 を触るモジュールに隔離）に実装した。ロジックは `nagi-windows`（`forbid(unsafe_code)`）に置き、コア・プロトコルは変更していない。`windows` クレートの API 名・シグネチャは `cargo clippy --target x86_64-pc-windows-gnu` で確認した（リンクと実行は未確認）。
+
+- **候補ウィンドウ**（`candidate_window.rs`）: 自前の Win32 ポップアップ（`WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`、`HTTRANSPARENT` でクリックは下へ通す）+ GDI 描画（システム色）。`ITfCandidateListUIElement` で OS に描かせる案は、Win11 のホスト依存が大きく見た目をそろえにくいため採らなかった。`TextMeasure` は GDI（`GetTextExtentPoint32W`）、フォントは Yu Gothic UI（文字の大きさは macOS 版と同じ 15/13/11、`CreateFontW` の高さに DPI 倍率を掛ける）。DPI は「基準位置へウィンドウを動かしてから `GetDpiForWindow`」で得る（Per-Monitor 対応ホストで移動先の DPI、DPI 非対応ホストでは 96 = 座標の仮想化と整合）。`Metrics::scaled(dpi)` / `scale_px` を追加（四捨五入）。作業領域は `EnumDisplayMonitors` + `GetMonitorInfoW`、`primary_first` でプライマリを先頭に（純関数・テスト済み）。キャレット矩形は `ITfContextView::GetTextExt`。**編集セッション内で測る**ため、`apply_plan` の最後に composition（無ければ選択）の範囲を測って `Env.caret` に入れ、候補の表示位置に使う（応答を反映してから候補を出す順序にした。従来は `OnTestKeyDown` で先に候補を更新していた）。取れない（ゼロ矩形・失敗）ときはマウス位置（`anchor_rect`）
+- **非同期通知の即時反映**（`message_window.rs`）: スレッドごとの隠しメッセージウィンドウ（`HWND_MESSAGE`）。`EngineHost` はセッションごとに購読（`subscribe(session_id, waker)`）し、イベントを宛先のキューに積んで waker（`PostMessageW`）で UI スレッドを起こす。宛先は `engine::route`（セッション宛て: `update_preedit` / `update_candidates` / `Restored` / `RestoreFailed`。プロセス全体: `Started` / `Crashed` / `Notify` 等は購読中の全セッションへ）。H-39 の「次のキーまで出ない」制限と、従来の共有キューが他セッション宛てのイベントを取り出してしまう問題を解消した。UI スレッドでの反映はキーイベント内なら同期（`TF_ES_SYNC`）、メッセージ経由なら `TF_ES_ASYNCDONTCARE`（文書ロックが空いていれば即時、塞がっていれば後で）。ウィンドウクラスは最後のウィンドウを壊したときに登録解除する（DLL アンロード後に古いプロシージャを指さないため）
+- **環境の報告**: `Win32Probe`（`GetSystemPowerStatus` / `GlobalMemoryStatusEx` / `CallNtPowerInformation(ProcessorInformation)`）。**H-40 からの修正**: サーマルの入力には「現在の周波数」ではなく `MhzLimit`（システムが課している上限。コア間の平均）を `current_mhz` として渡す。現在の周波数はアイドルで下がるのが正常で、サーマル制限と区別できず、誤って軽いプロファイルに落とすため。比の閾値（85/60/40%）は H-40 のまま（実測なし）。`EnvironmentReporter` はプロセスで 1 つ（`Mutex`）。送信契機: 30 秒タイマー、`WM_POWERBROADCAST`（`RegisterPowerSettingNotification` の `GUID_ACDC_POWER_SOURCE` / `GUID_POWER_SAVING_STATUS`）、Activate 時、エンジンの `Started` ごと（`reset` してから）。メッセージ専用ウィンドウが `WM_POWERBROADCAST` を受け取れるかは**実機で未確認**（受けられない場合も 30 秒タイマーで追従する）
+- **スリープ復帰**: `RegisterSuspendResumeNotification`（`PBT_APMRESUMEAUTOMATIC` / `PBT_APMRESUMESUSPEND`）に加え、タイマーの間隔の飛び（壁時計で間隔の 2 倍超）でも検出する `ResumeDetector`（純関数・テスト済み。同じ復帰は 60 秒間 1 回だけ報告）。検出したら `restart_in_background`（学習は `shutdown` で保存。`restore_session` で preedit を復元）
+- **`set_context`**: `context_info.rs`。編集セッション（読み取り・同期）の中で、選択の先頭から手前へ最大 64 UTF-16 を `GetText`、`GUID_PROP_INPUTSCOPE` から `ITfInputScope::GetInputScopes`。`is_secure_input_scope` の定数 31 は **`windows` クレートの `IS_PASSWORD` と一致することをコンパイル時のアサーションで検査**した（一致）。secure なら周辺テキストは読まない。アプリ ID は実行ファイル名（`chrome.exe` 等。プロセスで 1 回取得）。**判断**: 送るのは「文字を生むキー（`text` が空でない）かつ `should_report_before_key`」のときだけにした。毎キーで文書を読むのを避けるため（矢印・ショートカット・修飾キー単独では読まない）。macOS 版は入力開始時に送る点は同じ
+- **表示属性**（`display_attr.rs`）: `TextService` に `ITfDisplayAttributeProvider` を実装し、`GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER` を登録。属性は `preedit_style::DISPLAY_ATTRS`（細い実線 / 太い実線 / 点線 / 破線の 4 種）ごとに固定の GUID を 1 つ。色は指定しない。注目文節（太線）の `bAttr` は `TF_ATTR_TARGET_CONVERTED`、それ以外は `TF_ATTR_INPUT`。Activate で `ITfCategoryMgr::RegisterGUID` した識別子を、`SetText` 後に区間ごと（`range_shifts` で区間の範囲を作る）`GUID_PROP_ATTRIBUTE` へ書く。確定・テキストを残した終了では属性を消す（消さないと確定後も下線が残る）。属性の設定に失敗しても入力は続ける。列挙子の終端は `S_FALSE`。**TextService は Activate までエンジンに触れない**ようにした（表示属性の提供のために、アクティブ化されないプロセスでも COM オブジェクトが作られ、imserver が起動するのを避ける）
+- **入力モード**（`mode_comp.rs` + `nagi_windows::mode`）: 言語バーのボタン（`ITfLangBarItemButton`）は実装せず、コンパートメント（`GUID_COMPARTMENT_KEYBOARD_OPENCLOSE` / `..._INPUTMODE_CONVERSION`）だけにした。Win8 以降のシェル（タスクトレイの「あ / A」）はこれを読み、入力方式は `GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT` で登録済みのため。レガシーの言語バーは非推奨で、実装量が大きい割に得るものが少ない。値の対応: ひらがな = 開・日本語・全角・ローマ字（MS-IME と同じ 0x19）、英数 = **閉**・ローマ字（アプリからは IME オフに見える。MS-IME の半角英数と同様）。逆変換は「閉 → 英数、開 + 日本語ビット → ひらがな、開 + ビット無し → 英数」。コアのモードが正で、応答の `mode` を OS へ書き、OS 側の変更通知（`ITfCompartmentEventSink`）は `perform_action(SetMode)` でコアへ送る。**同じモードなら送らない・書かない**（`ModeSync`。`SetMode` は入力中の文字列を確定するため）。自分で書いている間（2 つの値を順に書く途中）の通知は無視する。Activate 時とエンジン起動・再起動後は、OS が未設定ならひらがなを書き、設定済みで違えばコアへ送る（新しいエンジンはひらがなで始まる前提）
+- **再変換**（`reconversion.rs`、`edit::run_reconvert`）: コアの `reconvert_selection` 要求では、編集セッション（同期）の中で選択範囲のテキストを読み（200 UTF-16 超・空は対象外。`nagi_windows::reconvert`）、`reconvert` を最大 2 秒待ち（macOS の `reconvertTimeout` と同じ）、応答の preedit で選択範囲を置き換えて composition にする。待ちきれなければ `reset` して通知（macOS と同文言）。`ITfFunctionProvider` を `ITfSourceSingle::AdviseSingleSink` で登録し、`GetFunction(_, IID_ITfFnReconversion)` で `ITfFnReconversion` を返す。`QueryRange` は渡された範囲を複製して返し常に変換可能とする（範囲の中身は編集セッション無しでは読めないため。空・長すぎる場合は `Reconvert` で何もしない）、`Reconvert` は文書ロックの空き次第（`Deferred`）で同じ処理、`GetReconversion`（候補一覧の提供）は `E_NOTIMPL`。入力中（composition あり）は再変換しない
+- **通知（トースト）**（`toast_window.rs`）: 自前の最前面ポップアップ（暗色の角丸・白字・4 秒）をプライマリの作業領域の右下に出す（macOS は右上だが、Windows の通知の慣例に合わせた。`toast::place_toast`）。文言と種別は `status::toast_for`、間引きは `ToastThrottle`（プロセスで 1 つ）。出すのは**フォーカス中のセッションだけ**（各ホストプロセスが imserver を持つため、背面のプロセスの停止通知を出さない）
+- **アイコン**（`nagi_windows::icon`）: リソース埋め込み（rc / windres。`embed-resource` 等の追加依存と、クロスビルドでのツール要件）は採らず、**コードで描いた .ico を `DllRegisterServer` が DLL と同じディレクトリに書き出して**、`RegisterProfile` のアイコンパス（番号 0）に渡す。絵柄は藍色の角丸の四角に白い「N」（4×4 超サンプリングのアンチエイリアス。16/24/32/48 px、32bpp DIB）。書き出せなければ DLL のパスを渡す（アイコン無しで登録は続く）。`DllUnregisterServer` で削除する。正式なアイコンに替えるときは `icon.rs` を差し替えるか、インストーラが `nagi.ico` を置く（既存を上書きする）
+- **未検証・要確認（実機）**: 上記すべて。特に (1) 候補ウィンドウの位置・DPI・フォーカスを奪わないこと、(2) メッセージ専用ウィンドウでの `WM_POWERBROADCAST`、(3) `GetTextExt` が取れるアプリの範囲、(4) コンパートメントの書き込み順（変換モード → 開閉）で通知の途中状態がシェルに誤って見えないか、(5) `ITfFnReconversion` を実際に呼ぶアプリ（Office 等）での挙動、(6) 英数 = 閉にしたときのアプリ側の挙動（IME オフ扱いで困るアプリがないか）、(7) 非同期の編集セッションと直後のキー入力の順序
+
+### H-42. Windows の配布・インストーラ・署名・更新と SmartScreen 方針（2026-10-22、ユーザー指示「裁量に任せる、全部終わるまで進める」、実機未確認）
+
+Phase 5 の最後の担当。コア（`core/` の各 crate）は変更していない（Phase 5 DoD の「コア側の変更が原則ゼロ」を維持）。変更は xtask・CI・配布スクリプト・フロントの文言のみ。
+
+**配布物と置き場所**
+- **配置先は `%ProgramFiles%\Nagi`（管理者権限が要る）**。`%LOCALAPPDATA%` は管理者権限が要らないが、TSF の DLL は UWP / AppContainer など保護されたアプリにも読み込まれ、利用者プロファイル配下は `ALL APPLICATION PACKAGES` の読み取り権限が既定で付かないため読み込めない（見込み。実機で要確認）。Program Files は既定で付く。どのみち `regsvr32` による COM 登録（`HKCR\CLSID`）に管理者権限が要るので、UAC の回数は増えない。データ（辞書・モデル・設定・学習）は従来どおり利用者ごとの `%APPDATA%\Nagi`（H-39 の決定どおり）
+- **登録は 64bit の `regsvr32 /s`**（32bit の PowerShell からは `Sysnative` 経由）。x64 のみ。ARM64 Windows と 32bit ホスト用の DLL は作らない（設計書 §7 の対象が x64）。ARM64 は将来、`aarch64-pc-windows-msvc` の DLL を別途用意する必要がある（エミュレーションされた x64 アプリに読ませる `ARM64X`/`ARM64EC` は未検討）
+- **zip**: `cargo xtask bundle-windows` が `Nagi-windows-<version>.zip` を作る（最上位に同名ディレクトリ 1 つ）。中身: `nagi_windows_tsf.dll` / `imserver.exe` / `install.ps1` / `uninstall.ps1` / `README.md`（`docs/windows-install.md`）/ `LICENSE-MIT` / `LICENSE-APACHE` / `NOTICE` / `THIRD_PARTY_LICENSES.md` / `VERSION` / `SHA256SUMS`。macOS（`Nagi-macos-<version>.zip`、タグ `macos-vX.Y.Z`）に名前をそろえ、Windows は `Nagi-windows-<version>.zip`・タグ `windows-vX.Y.Z`。ビルドは行わず成果物の収集・署名・チェックサム・zip だけ（ビルドは CI の windows ランナー。収集と zip は OS 非依存で、単体テストは Linux で動く: PE ヘッダ検査・チェックサム・BOM・再現性）。`.ps1` は zip に入れるとき **UTF-8 BOM 付き**にする（BOM が無いと Windows PowerShell 5.1 は日本語を ANSI として読み文字化けする。リポジトリ上は BOM 無し）。zip の更新時刻は固定で、同じ入力から同じバイト列になる
+- **`SHA256SUMS`**: 同梱ファイルの `<sha256>  <相対パス>`。`install.ps1` が配置の前に突き合わせる（破損・取り違えの検出。zip ごと差し替えられた場合の改ざん検知は latest.json の SHA-256 と ed25519 の役目）。署名（Authenticode）した後のバイト列で計算する
+- `THIRD_PARTY_LICENSES.md` は現状 iOS の依存閉包の一覧（`gen-licenses`）で、Windows の依存（`windows` クレート、`ureq`/`rustls`/`ring`/`webpki-roots` など）は含まない。**Windows 用の一覧の生成は未実装**（`gen_licenses.rs` が `nagi-ffi` と iOS ターゲットに固定。macOS 版は一覧自体を同梱していないので、それよりは進んでいる）
+
+**インストーラ（`frontend-windows/dist/install.ps1` / `uninstall.ps1`。xtask 原則の例外として配布物のスクリプトのみ）**
+- 実行は `powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`。既定の実行ポリシー（Restricted）でも動かすため。ダブルクリック用の `.cmd` は作らない（スクリプトの種類を増やさない。READMEに実行コマンドを書く）
+- **昇格は 2 段**: 管理者でなければ UAC を出して、配置と登録（`-Elevated`）だけを子プロセスで昇格実行し、**辞書・モデルの取得は昇格しない親プロセスで行う**（管理者権限で取得すると、別アカウントで昇格した場合に `%APPDATA%` が管理者のものになるため。`APPDATA` は実行している利用者のものを使う）。ただし昇格に別アカウントの資格情報を使うと、`RegisterProfile`（入力方式の登録）が昇格側のアカウントに掛かる可能性がある（READMEに回避手順を記載。要実機確認）
+- 更新（上書き）: 使用中の DLL・exe はファイル名の変更ならできるため、古いものを `.old` に退避して新しいものを置く。動作中のエンジンは止めない（止めると入力中の学習が失われる。サインアウトか再起動で新しい版にそろう）。`.old` は次回のインストールとアンインストールで片付ける
+- **辞書・モデル**: macOS（H-38）と同じ導線。同梱せず、`imserver.exe --install-data --data-dir %APPDATA%\Nagi\data --model small` が配布元から取得して SHA-256 を検証し、辞書をその場で組み立てる。`-SkipData` / `-Model small|xsmall|none`。失敗しても入力方式の導入自体は成功とし、再実行を案内する。アプリ内の「ダウンロード」ボタンに当たるものは Windows には無い（メニューが無いため。未実装）
+- 「アプリと機能」への登録（`HKLM\...\Uninstall\Nagi`。`UninstallString` は同梱の `uninstall.ps1`）。Visual C++ ランタイム（`vcruntime140.dll` / `msvcp140.dll`）が無ければ警告
+- **アンインストール**: `regsvr32 /u /s`（DLL が `nagi.ico` も消す）→ ファイル削除。使用中で消せないものは `.old` に名前を変えて `MoveFileEx(DELAY_UNTIL_REBOOT)` で再起動時削除を予約。**ユーザーデータ（`%APPDATA%\Nagi`）は既定で残し**、`-RemoveUserData` のときだけ `yes` の入力で確認して削除する（`-Force` で省略。動作中の imserver を止めてから消す）。学習データだけの削除は README で `learning.tsv` の削除を案内（専用のコマンドは作っていない）
+- **ブートストラップ `web/static/install.ps1`**（`irm https://nagi.shiki-01.com/install.ps1 | iex`。macOS の `install.sh` に対応）: `/updates/windows/latest.json` → zip を取得 → SHA-256 検証 → 展開 → 同梱の `install.ps1` を実行。**ASCII のみ**（`irm | iex` は既定のコードページで読むため日本語が文字化けする）。`Invoke-WebRequest` で取得したファイルには Mark of the Web が付かないので SmartScreen に止められない。ed25519 はシェルでは検証しない（macOS と同じ。HTTPS と SHA-256 で代える）。サイトの公開は web.yml の手動実行のときだけ（H-38）
+
+**ビルド・リリース（`.github/workflows/windows-release.yml`、手動実行のみ）**
+- `windows-latest` で `x86_64-pc-windows-msvc` を `--target` 明示でビルド。**DLL は CRT を静的リンク**（`-C target-feature=+crt-static`）: あらゆるホストプロセスに読み込まれる DLL が VC++ 再頒布可能パッケージの有無に左右されないようにする。`--target` を明示するのは RUSTFLAGS をビルドスクリプト・proc-macro に掛けないため。**`imserver.exe` は既定（動的 CRT）**: llama.cpp（C++）が絡み、`llama-cpp-sys-2` の `LLAMA_STATIC_CRT=1` との組み合わせを検証できていないため。再頒布可能パッケージを前提にし、`install.ps1` が不足を警告する
+- **imserver は既定で feature `llama` あり**（macOS のリリースと同じ判断。辞書だけで使う場合も同じバイナリで動く）。入力 `llama: false` で外せる（libclang / cmake のビルドが通らないときの逃げ道）。`LIBCLANG_PATH` は `C:\Program Files\LLVM\bin`（windows-latest にある前提）。**Windows ランナーでの llama ビルドは Actions 上で一度も実行していない**
+- 入力: `version`（`core/Cargo.toml` と一致必須）/ `llama` / `publish`（false なら artifact だけ）/ `prerelease`（既定 true）。**実機で未検証の間は prerelease** とし、`web.yml` は prerelease の `latest.json` を取り込まない（= サイトの更新確認とインストールコマンドに出ない）。実機で確認できたら `-f prerelease=false`。このため、最初のうちは `irm | iex` が 404 になる（意図した挙動。手動の zip は GitHub Releases から取れる）
+- インストーラのスモークテスト（zip を展開 → `install.ps1 -SkipData` → `uninstall.ps1`。regsvr32 の登録と解除を含む）を `continue-on-error` で入れた。ランナー上で TSF の登録が通るかは未確認のため、失敗してもリリースは止めない
+- 署名: `sign-update` による ed25519 署名つき `latest.json`（macOS と同じ鍵 `NAGI_UPDATE_SIGNING_KEY`）。Authenticode は Secrets（`WINDOWS_CODESIGN_PFX` / `_PASSWORD`）があるときだけ `bundle-windows --sign-pfx` が `signtool sign /fd SHA256 /tr <TSA> /td SHA256` で DLL と exe に署名して `signtool verify /pa` で確認する（パスワードは環境変数で渡し、コマンドライン引数には出さない）。無ければ署名なしで進む。署名は zip 化の前（チェックサムも署名後の値）
+- `ci.yml` に PowerShell の構文検査ジョブ（windows-latest）を追加
+
+**更新検査との整合**
+- `update_check::default_check_url()` は `https://nagi.shiki-01.com/updates/{std::env::consts::OS}/latest.json` で、Windows では `/updates/windows/latest.json`。`windows-release.yml` が作る `latest.json`（`download_url` = `.../releases/download/windows-vX.Y.Z/Nagi-windows-X.Y.Z.zip`）と `web.yml` の取り込み先（`static/updates/windows/`）に一致する。**コアの変更は不要**
+- 修正したのは Windows フロントの通知文言だけ: `update_available` のトーストが「入力メニューの『アップデートを確認…』から更新できます」だった（Windows には入力メニューが無い）ので、「PowerShell でインストールコマンドをもう一度実行すると更新できます」に変えた
+- **アプリ内での自動の置き換え（ダウンロード・検証・差し替え・再起動）は Windows では未実装**（macOS は Swift で実装済み）。通知で知らせるだけで、更新は install コマンドの再実行。実装するなら、`download_verified`（コアにある。SHA-256 + ed25519）で取得 → 展開 → 昇格して配置、の流れになるが、DLL の差し替えに管理者権限が要る点（Program Files）が macOS と違う難所
+
+**SmartScreen / コード署名の方針（設計書 §5.3「Phase 5 で決める」の解消）**
+
+| 案 | 費用・条件 | SmartScreen への効き | 評価 |
+| --- | --- | --- | --- |
+| 署名なし + 手順書 + `irm \| iex` | 無料 | zip を手動取得するとブラウザ / Defender が警告（回避手順を書く）。`irm \| iex` は印が付かず警告なし | **現状の最適解**（採用） |
+| OV / EV の Authenticode 証明書（年額有償） | 証明書の購入と本人・組織確認が要る | 署名すれば「発行元不明」は解消するが、評判（reputation）は配布実績で貯まる。EV でも即時に警告が消えるとは限らない（要確認） | 個人開発では費用対効果が低い |
+| Azure Trusted Signing（Artifact Signing 等、クラウド署名） | 月額の低額課金。提供地域・個人 / 組織の本人確認の条件がある（日本からの利用可否は**未調査・要確認**） | 署名の鍵管理が不要で CI から署名できる。評判の扱いは Microsoft が証明書の寿命を短くして管理 | **将来の第一候補**（条件が合えば） |
+| MSIX / Microsoft Store | Store 配布は審査と登録料 | Store 経由ならダウンロード時の警告なし | **不可の見込み**: TIP（`HKCR`/`HKLM` へのグローバルな COM 登録と他プロセスへの DLL の読み込み）は MSIX のコンテナと両立しない見込み（要確認） |
+| winget / MSI | MSI は署名なしでも警告対象。winget は署名不要でハッシュ検証 | winget 経由の取得は警告が出にくい | zip 内の `.ps1` 方式は winget の installer 種別に合わない。EXE / MSI 化が前提で、署名導入後に再検討 |
+
+- **現状**: 署名なしで配布する。主導線は `irm | iex`（警告なし）、手動の zip は README の手順（zip のブロック解除、または「詳細情報」→「実行」）。ワークフローに Secrets があれば署名するオプション（上記）を入れてある
+- **将来**: (1) Azure Trusted Signing が使えれば、`signtool` の `/dlib` 方式でワークフローから署名する。(2) 署名ができたら MSI / EXE インストーラ化と winget への登録。(3) いずれも**一般公開（App Store / 広く配る段階）の前に判断**する。個人利用・テスト配布の間は署名なしを維持する
+
+**迷った判断**
+1. 配置先を Program Files にした（管理者権限が要る代わりに、保護されたアプリで読める）
+2. 辞書・モデルの取得を、昇格しない親プロセスで行う 2 段構成にした（コードは増えるが、`%APPDATA%` の取り違えを避ける）
+3. 動作中の imserver を止めない（更新後の反映はサインアウトか再起動）。macOS は止める。入力中の学習を失わないほうを優先した
+4. 実機で未検証の間は prerelease（既定）。macOS のリリースワークフローには無い入力
+5. DLL だけ CRT を静的リンク。imserver は動的のまま
+6. `.cmd` ラッパー・MSI / EXE は作らない。スクリプトは PowerShell のみ
+7. ブートストラップを ASCII のみにした（日本語の案内は zip 内のインストーラが出す）
+
+**未検証（実機 / Actions）**: すべて。特に (1) `regsvr32` の登録と UAC の流れ、`-Elevated` 子プロセスの終了コード、(2) Program Files の DLL が UWP / 保護されたアプリで読めること、(3) 更新（上書き）時の `.old` 退避と再起動後の切り替え、(4) `uninstall.ps1` の再起動時削除、(5) `irm | iex` の動作（PowerShell 5.1 と 7）、(6) ワークフロー全体（windows-latest での llama ビルド、`signtool` の場所、スモークテスト）。PowerShell の構文は Linux の PowerShell 7.5 の構文解析器と `Test-Payload`（`SHA256SUMS` の検証）の動作で確認した範囲のみ
+
+**Phase 5 で残る未実装**: 複数ホストでのエンジン共有（名前付きパイプ + 常駐ブローカー、H-39）、言語バーのボタン、`ITfFnReconversion::GetReconversion`、アプリ内の自動更新（置き換え）、Windows 用の依存ライセンス一覧、ARM64 / 32bit ホスト対応、辞書・モデルのアプリ内ダウンロード導線、Authenticode 署名の実施、winget / MSI。実機での検証すべて（`docs/real-hardware-checklist.md` §8）
+
+### H-43. Windows フロント: GetReconversion・言語バーのボタン・Windows 用ライセンス一覧、エンジン共有（ブローカー）の設計メモ（2026-10-22、ユーザー指示「裁量に任せる」、実機未確認）
+
+H-41・H-42 の残件のうち、実機なしで作れるものを実装し、作らないものは設計メモにした。コア（`core/` の各 crate）とプロトコルは変更していない（変更は xtask・`nagi-windows`・`nagi-windows-tsf`・文書のみ）。
+
+**1. `ITfFnReconversion::GetReconversion`（H-41 では `E_NOTIMPL`）**
+- 流れ: フォーカス中のコンテキストで**同期の読み取り編集セッション**を要求して範囲の文字列を読む → `eligible_text`（空・200 UTF-16 超は失敗）→ コアの `reconvert`（待ちは `Reconvert` と同じ 2 秒）→ 応答から候補を作る → **すぐ `reset` でコアの変換中状態を戻す**（候補を選ぶかはアプリ次第で、選ばれるまでコアを変換中に残さない）→ `ITfCandidateList`（`EnumCandidates` / `GetCandidate` / `GetCandidateNum` / `SetResult`）を返す。`SetResult` は `CAND_FINALIZED` のときだけ、範囲を候補の文字列に置き換えてキャレットを末尾に置く（`CAND_SELECTED` / `CAND_CANCELED` は何もしない）
+- **候補の作り方（`nagi_windows::reconvert::range_candidates`、テスト済み）**: `ITfFnReconversion` の候補は**範囲全体の代わり**になる文字列だが、コアの候補は注目文節（`preedit.focus`）だけの代わり。そのまま渡すと複数文節の再変換で範囲の残りを失う。そこで先頭に変換結果の全文、続けて「注目文節だけを各候補に替えた全文」を並べる（UTF-16 の区間で差し替え、不正な区間・サロゲートの途中は捨てる。重複と空は除き、最大 30 件）。文節ごとの選び直しは `Reconvert`（composition にする経路）が担当する
+- 入力中（composition あり）は失敗を返す。アプリが文書ロックを持つ最中に呼ぶと同期セッションが取れず失敗する（その場合アプリは `Reconvert` 等にフォールバックするはず。**要実機確認**）。選択した候補はコアの学習には送らない（`select_candidate` の対象はコアの変換中状態に限られ、`reset` 後は無い）。再変換結果の学習は未対応
+- **迷った判断**: (a) 候補一覧に composition を使う案（`Reconvert` と同じ）は、`GetReconversion` が「候補を返す」契約なので採らなかった。(b) 注目文節だけの候補を返す案は上記の理由で採らなかった。(c) 全文候補のみ（文節差し替えなし）にする案は、候補が 1 件になり機能が弱いので採らなかった
+
+**2. 言語バーのボタン（`langbar.rs`、`ITfLangBarItemButton` + `ITfSource`）**
+- 現在のモードを「あ / A」で表示（アイコンは藍色の地に白字を GDI で描いて毎回作る。文字・ツールチップも）。**左クリックでひらがな ⇄ 英数**、右クリック（OS が `InitMenu` を呼ぶ）のメニューは: ひらがな / 英数（現在にチェック）、状態の行（`menu_lines`。選べない）、「設定ファイルを開く…」。スタイルは `TF_LBI_STYLE_BTN_BUTTON | SHOWNINTRAY`
+- **モードの変更は `mode_comp` のコンパートメントへ書く**（他のクライアント・トレイの操作と同じ経路。変更通知から `perform_action(SetMode)` でコアへ）。ボタンからコアへ直接送る経路は作らず、「同じモードなら送らない」の一元化（`ModeSync`）を保つ。コアでモードが変わったとき・Activate・エンジン再起動後に `OnUpdate` で描き直させる
+- 「設定…」は GUI を作らず（Phase 4 の設定 GUI の範囲）、コアが `get_status` で返す `config_path` の `config.toml` を**メモ帳で開く**（`.toml` の関連付けに依存しないため `notepad.exe` を明示。ファイルが無ければメモ帳が作成を尋ねる）。`config_path` が無ければ項目は選べない（灰色）。ラベルは「設定ファイルを開く…」（設定画面ではないので）
+- ロジックは `nagi_windows::status`（`MenuEntry` / `MenuCommand` / `command_id`・`command_from_id` / `menu_entries` / `toggled` / `button_text` / `button_tooltip` / `settings_path`）に置き、COM は ID の変換と描画のみ。H-41 の「言語バーのボタンは実装しない」を覆した。理由: Win8 以降のトレイ表示（コンパートメント）だけでは、メニューから状態の確認・設定の入口が出せず、macOS のメニューバーのメニュー（H-38）に当たるものが無かったため。トレイの「あ / A」は従来どおりコンパートメントで OS が描く（二重に出るかは**要実機確認**）
+- **迷った判断**: (a) `BTN_MENU`（左クリックもメニュー）にする案は、1 クリックでの切り替えができなくなるので採らなかった。(b) `GetIcon` は毎回新しい `HICON` を返す（言語バーが破棄する前提。もしそうでなければリークする。**要実機確認**）。(c) メニューを開くたびに `get_status` を同期で呼ぶ（UI スレッドで最大 250ms。開いたときだけなので許容）
+
+**3. Windows 用の依存ライセンス一覧（`cargo xtask gen-licenses`）**
+- **別ファイルにした**: `gen-licenses [--platform ios|windows|all]`（既定は all）。iOS は従来どおり `THIRD_PARTY_LICENSES.md`（`project.yml` がアプリに同梱するため名前と内容を変えない。Windows 専用の crate を混ぜない）、Windows は **`THIRD_PARTY_LICENSES_WINDOWS.md`**（104 crates）。`bundle-windows` は後者を zip の中の `THIRD_PARTY_LICENSES.md` として同梱する（`install.ps1` の期待する名前は変えない）。1 ファイルに統合する案は、配布物ごとに実際に取り込まれる依存が違い（iOS に `windows` / `ring` / `rustls` は入らず、Windows に iOS 専用 crate は入らない）、各配布物のライセンス表示が過不足になるため採らなかった
+- Windows の依存閉包は `cargo tree -e normal --target x86_64-pc-windows-msvc` を **`nagi-windows-tsf`（DLL）と `nagi-server --features llama`（imserver）の 2 起点の和**として求める（ターゲット未インストールでも `cargo tree` / `cargo metadata` は動くので Linux で生成できる）。proc-macro とローカル crate は除く（従来どおり）。UNKNOWN のライセンスは無かった
+- テスト: `cargo tree` 出力の解析・引数組み立て・プラットフォーム定義・描画、`bundle-windows` が Windows 用を同梱すること。**依存を変えたら再生成してコミットする**（CI での差分検査はまだ無い。`check-types` のような検査を足すかは未決）
+
+**4. 複数ホストでのエンジン共有（名前付きパイプ + 常駐ブローカー）: 実装しない。設計メモ**
+
+現状（H-39）はホストプロセスごとに `imserver` を起動する。**実測が無いまま常駐プロセスと IPC を足すと、障害点（権限・寿命・ACL）が増えるだけで利得が不明**なので今回は作らない。判断に必要な実測を先に取る（下記）。
+
+*判断の前提となる現状の問題*
+- メモリ: 各 imserver が辞書（mmap で共有されうる）とモデルを読む。モデルは small で数百 MB 規模、`reconvert` の逆引き索引は約 270MB（G-29。`minimal`/`light` は使用後に解放）。ホストが 10 個あれば 10 倍になりうる（辞書は mmap でページ共有されるが Windows では非 mmap 経路。`Dictionary::load` の mmap は非 Windows、H-7）
+- 起動時間: ホストを開くたびに `initialize`（モデル読み込み数秒）。その間のキーは素通し（H-39）
+- 学習データの整合: 複数の imserver が同じ `learning.tsv` を書く。原子的 flush のため最後に書いた側が勝ち、他ホストの学習を失いうる（現状の既知の弱点。ブローカー化の最大の利点）
+
+*ブローカーの責務（案）*
+1. 1 利用者・1 セッション（Windows のログオンセッション）につき `imserver` を 1 つ保持する（`nagi-broker.exe`。子プロセスとして起動し、コア・プロトコルは変更しない）
+2. 各ホストの TSF DLL は**名前付きパイプのクライアント**になり、JSON-RPC をそのまま流す。ブローカーは接続ごとに JSON-RPC の `id` を付け替えて（クライアントごとの `id` 空間が衝突するため）imserver へ多重化し、応答を元の接続に返す
+3. 非同期通知（`update_preedit` 等）は `session_id` で宛先の接続を引いて配る。プロセス全体の通知（`notify` 等）は全接続へ。セッション ID は現状 `win-<pid>-<n>` でプロセスをまたいで一意なので、そのまま使える
+4. `initialize` は最初の接続でだけ imserver に送り、以降の接続には保存した結果を返す（クライアントのバージョン差は、ブローカーが自分のバージョンと一致するか確認する）。`shutdown` は全接続が切れて猶予（例: 10 分）が経ってから
+5. `restore_session`: imserver が落ちて再起動したとき、ブローカーが全接続分の最新 preedit を保持して復元する（現在は各ホストの `SessionStore` が保持している。ブローカー側へ移すか、ホストが再接続時に送り直すかを選ぶ）
+6. 環境（`set_environment`）は全ホストが送ってくるので、最後の値の重複排除をブローカーでする（現状はホストごとの `EnvironmentReporter`）。`set_context` はセッション単位なのでそのまま転送
+
+*パイプ名・ACL・寿命*
+- 名前: `\\.\pipe\LOCAL\Nagi-<ユーザー SID>-<バージョン>`（`LOCAL\` でセッション内に閉じる。バージョンを入れるのは、更新の途中で新旧のホストが混在しても互いに接続しないため）
+- ACL: 作成者（その利用者）のみ読み書き（DACL に利用者の SID だけ）。**AppContainer / 保護されたアプリ**から接続させるには `ALL APPLICATION PACKAGES` の許可が別途要る。許可すると任意の UWP アプリが入力内容を受け取れる経路になるため、**保護されたアプリには許可しない**か、許可するなら入力内容が流れることを明記して判断する。`FILE_FLAG_FIRST_PIPE_INSTANCE` と `PIPE_REJECT_REMOTE_CLIENTS` を指定し、サーバーのなりすまし（先に同名パイプを作られる）を防ぐ。クライアント側は接続後に `GetNamedPipeServerProcessId` でブローカーの実行ファイルのパスを検証する
+- 起動: ホストの DLL が接続に失敗したら、`CreateProcess` でブローカーを起動して再接続する（排他は名前付きミューテックス。競合した側は待って再接続）。常駐の自動起動（Run キー / スタートアップ）は使わない（遅延起動のみ）
+- 寿命: 接続が 0 になってから猶予後に自分で終了。ブローカーのクラッシュ時は、各ホストが現行の指数バックオフと同じ方針でブローカーを再起動し、`restore_session` で復元する。imserver のクラッシュはブローカーが担当（現行の `EngineSupervisor` をブローカー側へ移す）
+- 更新: ブローカー実行ファイルが使用中だと置き換えられない（現行の `.old` 退避と同じ運用）。バージョン入りのパイプ名により、新版のホストは新版のブローカーを起動する
+
+*現行方式からの移行手順（段階）*
+1. `nagi-windows` の `EngineSupervisor` が使う `EngineLauncher` / 通信路 trait を流用し、「名前付きパイプの通信路」実装を追加（コア不変。既存のテストの流儀で、Linux ではユニックスソケット等の代替で確認）
+2. ブローカー（`nagi-broker`）を新規 crate として追加。まずは**ホスト 1 つ + ブローカー**で、現行と同じ挙動になることを実機で確認
+3. 設定（レジストリまたは環境変数）で「ブローカーを使う / 使わない」を切り替えられるようにして、既定は使わない。複数ホスト・クラッシュ・スリープ復帰・更新を実機で検証
+4. 実測で利得（下記）が確認できたら既定を切り替える。旧方式は `minimal` 相当のフォールバックとして残す（ブローカーに接続できないときは従来どおりプロセス内で起動）
+
+*判断に必要な実測項目（実機）*
+- ホストを 1 / 5 / 10 個開いたときの imserver の合計の**ワーキングセット・コミットサイズ**（辞書の共有ページを区別する）と、`reconvert` 後のピーク
+- ホスト起動から変換可能になるまでの時間（`initialize` の所要）と、その間に取りこぼすキー数
+- 名前付きパイプ経由の `process_key` の往復時間の増分（目標: p95 で +1ms 以内。目標値 `キー入力→ひらがな反映 p95 < 16ms` への影響）
+- 複数ホストで同時に学習したときの `learning.tsv` の取りこぼし（現状の弱点の大きさ）
+- AppContainer のアプリ（設定アプリ・Store アプリ）からパイプへ接続できるか、ACL の許可の可否
+- ブローカーが落ちたとき・サインアウトしたとき・スリープ復帰のときの再接続の所要
+
+**5. 検証**: `cargo fmt --all --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace`（llama なし）と、`cargo check` / `cargo clippy -p nagi-windows-tsf --target x86_64-pc-windows-gnu --all-targets -- -D warnings`（型・シグネチャのみ。リンクと実行は未確認）。`GetReconversion` と言語バーの COM 部分は**実機で一度も動かしていない**。特に (1) `ITfLangBarItemMgr` を `ITfThreadMgr` への `QueryInterface` で得られるか、(2) `BTN_BUTTON` の右クリックで `InitMenu` が呼ばれるか、(3) `GetIcon` の `HICON` の所有権、(4) `GetReconversion` を呼ぶアプリ（Office 等）が文書ロックの外で呼ぶか、`SetResult` の呼び方、(5) トレイの「あ / A」との二重表示
+
+**Phase 5 で最終的に残る未実装**: 複数ホストでのエンジン共有（上記の実測が先）、アプリ内の自動更新（置き換え）、ARM64 / 32bit ホスト対応、辞書・モデルのアプリ内ダウンロード導線、Authenticode 署名の実施、winget / MSI、設定 GUI（Phase 4）、再変換候補の選択結果の学習、候補ウィンドウのマウス操作（v1 非目標）。実機での検証すべて（`docs/real-hardware-checklist.md` §8）

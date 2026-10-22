@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-10-22（Windows フロント: OS 非依存部 `nagi-windows` に SessionStore・VK_IME_ON/OFF を追加、TSF 層 `nagi-windows-tsf` の骨組み。決定は H-39）／ 2026-10-16（iOS: 確定方式・注目文節・取り消し・トグル・触覚音・入力欄の種類・キーボード切替の原因、既定モデル small。決定は H-22(c)・H-27〜H-33）／ 2026-10-15（iOS: 設定・レイアウト・ユーザー辞書・次語予測・絵文字候補・堅牢性・レビュー修正。決定は H-16〜H-21）／ 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-17）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-10-22（Windows: GetReconversion・言語バーのボタン・Windows 用ライセンス一覧・ブローカーの設計メモ、決定は H-43。その前に Windows 配布: `bundle-windows`・`install.ps1`/`uninstall.ps1`・`windows-release.yml`・更新検査の整合・SmartScreen 方針、決定は H-42。その前に Windows フロント: Win32/TSF 層の実装、決定は H-41）／ 2026-10-22（Windows フロント: 候補ウィンドウ・環境/文脈・表示属性・文言のロジックを追加、決定は H-40。その前に OS 非依存部 `nagi-windows` に SessionStore・VK_IME_ON/OFF を追加、TSF 層 `nagi-windows-tsf` の骨組み。決定は H-39）／ 2026-10-16（iOS: 確定方式・注目文節・取り消し・トグル・触覚音・入力欄の種類・キーボード切替の原因、既定モデル small。決定は H-22(c)・H-27〜H-33）／ 2026-10-15（iOS: 設定・レイアウト・ユーザー辞書・次語予測・絵文字候補・堅牢性・レビュー修正。決定は H-16〜H-21）／ 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-17）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -175,10 +175,13 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 
 | 項目 | 状態 |
 | --- | --- |
-| `frontend-windows/`（`nagi-windows`、unsafe 禁止・OS 非依存） | 実装済み・Linux でテスト済み（59 件）: キー正規化（VK_IME_ON/OFF・VK_OEM_BACKTAB を含む）、JSON-RPC クライアント、子プロセス通信路、EngineSupervisor（指数バックオフ再起動・`restore_session`）、revision ゲート、SessionStore（セッションごとの preedit 保持。`restore_params` を `set_restore_provider` に渡す） |
-| `frontend-windows-tsf/`（`nagi-windows-tsf`、cdylib、unsafe はここに隔離） | **骨組みのみ**。`DllMain` / `DllGetClassObject` / `DllCanUnloadNow` / `DllRegisterServer` / `DllUnregisterServer`、`ITfTextInputProcessorEx` / `ITfKeyEventSink` / `ITfCompositionSink` / `ITfEditSession` の最小実装、キー → エンジン → 確定・preedit 反映。OS 非依存の `render`（応答 → 編集計画）と `engine`（接続のまとめ）は Linux でテスト済み（15 件） |
-| 検証 | Linux で `cargo check` / `cargo clippy -D warnings --target x86_64-pc-windows-gnu` が通る（型・シグネチャのみ）。**Windows 実機では未確認**（登録・キー入力・composition・エンジン起動） |
-| 未実装 | 候補ウィンドウ、`ITfFnReconversion` と `reconvert_selection`、表示属性（下線）、入力モードの言語バー、非同期通知の即時反映（現状は次のキー入力時）、`set_environment` / `set_context` / 通知表示、アイコン、複数ホストプロセスでのエンジン共有、インストーラ・署名・SmartScreen 対応、CI のビルド・配布 |
+| `frontend-windows/`（`nagi-windows`、unsafe 禁止・OS 非依存） | 実装済み・Linux でテスト済み（H-43 で `status` のメニュー・`reconvert` の候補を追加）: キー正規化（VK_IME_ON/OFF・VK_OEM_BACKTAB を含む）、JSON-RPC クライアント、子プロセス通信路、EngineSupervisor（指数バックオフ再起動・`restore_session`）、revision ゲート、SessionStore、H-40: `candidates` / `environment` / `context` / `preedit_style` / `status`、**H-41 で追加**: `mode`（OS のモードとの同期。同じモードなら送らない）、`reconvert`（再変換の対象判定）、`toast`（通知の配置）、`icon`（.ico の生成）、`Metrics::scaled`・`primary_first`・`ResumeDetector`・`DISPLAY_ATTRS`・`range_shifts` |
+| `frontend-windows-tsf/`（`nagi-windows-tsf`、cdylib、unsafe はここに隔離） | **H-41 で OS 層を実装**（実機未確認）: 候補ウィンドウ（GDI・非アクティブ・DPI・モニター作業領域・`GetTextExt`）、通知トースト、隠しメッセージウィンドウ（非同期通知の即時反映・30 秒タイマー・電源/スリープ復帰通知）、`EnvironmentProbe` の Win32 実装、`set_context`（周辺テキスト・`InputScope`・アプリ ID）、表示属性（`ITfDisplayAttributeProvider` + `GUID_PROP_ATTRIBUTE`）、入力モード（コンパートメント。タスクトレイの「あ / A」）、再変換（`ITfFunctionProvider` / `ITfFnReconversion` とコアの `reconvert_selection`）、入力方式アイコン（.ico をコードで生成）。OS 非依存の `render` / `engine`（セッションごとのイベント購読を含む）は Linux でテスト済み（16 件） |
+| 検証 | Linux で `cargo check` / `cargo clippy -D warnings --target x86_64-pc-windows-gnu --all-targets` が通る（型・シグネチャのみ。リンクと実行は未確認）。**Windows 実機では未確認**（登録・キー入力・composition・エンジン起動・上記 OS 層すべて） |
+| H-43 で追加 | 実装済み（実機未確認）: `ITfFnReconversion::GetReconversion`（範囲を読み → コア `reconvert` → 範囲全体を置き換える候補の `ITfCandidateList`。候補の組み立ては `nagi_windows::reconvert::range_candidates`、テスト済み）、言語バーのボタン `langbar.rs`（あ / A の表示・左クリックでひらがな ⇄ 英数・メニューにモード / 状態 / 設定ファイルを開く。ロジックは `nagi_windows::status` の `menu_entries` ほか、テスト済み。モードの変更はコンパートメント経由）、`cargo xtask gen-licenses --platform windows\|ios\|all`（Windows は `THIRD_PARTY_LICENSES_WINDOWS.md` 104 crates。`bundle-windows` が zip に `THIRD_PARTY_LICENSES.md` として同梱）。複数ホストでのエンジン共有は**設計メモのみ**（責務・パイプ名・ACL・寿命・移行手順・実測項目。decisions.md H-43 §4） |
+| 未実装 | 複数ホストプロセスでのエンジン共有（名前付きパイプ + 常駐ブローカー。実測が先、H-43 §4）、候補ウィンドウのマウス操作（v1 非目標）、アプリ内の自動更新（置き換え。通知のみ）、再変換候補の選択結果の学習、ARM64 / 32bit ホスト、辞書・モデルのアプリ内ダウンロード導線、Authenticode 署名の実施、winget / MSI（H-42）、設定 GUI（Phase 4） |
+| 配布（H-42） | 実装済み・Actions と実機では未実行: `cargo xtask bundle-windows`（DLL・imserver・スクリプト・ライセンス・`SHA256SUMS` を zip 化。Linux で単体テスト 10 件）、`frontend-windows/dist/install.ps1` / `uninstall.ps1`（`%ProgramFiles%\Nagi`、`regsvr32`、辞書・モデルは配布元から取得、`-RemoveUserData`）、`web/static/install.ps1`（`irm \| iex`）、`windows-release.yml`（MSVC ビルド・ed25519 署名・prerelease 既定・Authenticode は Secrets があれば）、`ci.yml` の PowerShell 構文検査。SmartScreen は署名なし + 手順書（`docs/windows-install.md`）。PowerShell の構文は Linux の pwsh 7.5 で検査済み |
+| CI | `ci.yml`（手動実行のみ）の `core` ジョブで 3 OS の build/test、`windows-tsf` ジョブ（ubuntu、`x86_64-pc-windows-gnu` の check/clippy）を追加（H-40）。Actions 上では未実行。H-42 で `windows-scripts` ジョブ（PowerShell 構文）を追加 |
 
 ## 既知の問題
 
@@ -198,7 +201,7 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 ## iOS 向けコアの追加対応（2026-10-14）
 
 - `nagi-server` に feature `update-check`（既定 ON）を追加。`ureq` と更新確認・配布物取得の HTTP を裏に置き、`nagi-ffi` は `default-features = false` で依存する（iOS の XCFramework に TLS 実装を入れない。`docs/ios-release.md` §0.2）。無効時は `update.auto_check` が no-op。検証ロジック（ed25519・SHA-256）は feature 外
-- `cargo xtask gen-licenses`: nagi-ffi の依存閉包のライセンス一覧を `THIRD_PARTY_LICENSES.md` に生成（`docs/ios-release.md` §0.5）
+- `cargo xtask gen-licenses [--platform ios|windows|all]`: 配布物ごとの依存ライセンス一覧を生成。iOS（nagi-ffi の閉包）は `THIRD_PARTY_LICENSES.md`（`docs/ios-release.md` §0.5）、Windows（nagi-windows-tsf + nagi-server の閉包）は `THIRD_PARTY_LICENSES_WINDOWS.md`（H-43）
 
 ## iOS の未完了項目（2026-10-14、2026-10-16 更新）
 

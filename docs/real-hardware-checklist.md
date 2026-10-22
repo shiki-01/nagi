@@ -126,7 +126,7 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 - レイテンシベンチ（p95）: 設計書の目標値（キー入力→ひらがな反映 p95 < 16ms 等）を実機で計測できると良い
 - `cargo xtask fetch-model` でモデルを取得した状態で `cargo run --release -p nagi-server --features llama --bin nagi-eval -- --data-dir ../data` を実行すると、精度・レイテンシの計測結果が出る（G-11の数値は評価環境（クラウドサンドボックス）でのもので、実機での再計測が無い）
 
-## 8. Windows フロント（TSF、H-39）— 未検証
+## 8. Windows フロント（TSF、H-39〜H-43）— 未検証
 
 `frontend-windows/`（`nagi-windows`）と `frontend-windows-tsf/`（`nagi-windows-tsf`）は Linux 上で fmt / clippy / test と
 `x86_64-pc-windows-gnu` の `cargo check` / `clippy` が通っただけで、Windows 実機では一度も動かしていない。
@@ -142,7 +142,7 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 - [ ] 管理者権限の `regsvr32 nagi_windows_tsf.dll` が成功し、設定の「言語と地域」に入力方式として出る
 - [ ] `regsvr32 /u` で登録が消える（レジストリに残骸がない）
 - [ ] ホストアプリ（メモ帳・ブラウザ・VS Code・Office）で DLL が読み込まれ、アンロード（`DllCanUnloadNow`）でホストが落ちない
-- [ ] DLL と同じディレクトリの imserver が起動する（配置はインストーラ仕様の決定待ち）。データは `%APPDATA%\Nagi\data`
+- [ ] DLL と同じディレクトリの imserver が起動する（配置は `%ProgramFiles%\Nagi`、H-42）。データは `%APPDATA%\Nagi\data`
 
 ### 8.3 キー入力・composition
 - [ ] ローマ字入力でひらがなが composition として表示され、Enter で確定、Esc で取り消せる
@@ -151,7 +151,7 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 - [ ] 入力 250ms のタイムアウト（実測なしの暫定値）が妥当か。重い変換でもキーを取りこぼさない
 - [ ] エンジン未接続時の素通し（composition 中だけ食う）で入力が壊れない。imserver を強制終了しても自動再起動し、`restore_session` で preedit が復元される
 - [ ] スリープ復帰後の再起動
-- [ ] ライブ変換・LLM 結果の差し替えが「次のキー入力まで画面に出ない」仕様の許容度（隠しウィンドウ + PostMessage の要否）
+- [x] ~~ライブ変換・LLM 結果の差し替えが「次のキー入力まで画面に出ない」~~ → H-41 で隠しウィンドウ + PostMessage により解消（実機の確認は 8.5b）
 - [ ] キャレット位置の設定（`ShiftEnd`）。確定後にカーソルが文末に来る
 
 ### 8.4 キー割り当て
@@ -162,9 +162,53 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 - [ ] JIS / US 配列の両方。AltGr 配列で `@` などの記号が失われない（Ctrl+Alt 併用時に text を残す判断）
 - [ ] 修飾キー単独の押下・離上（`flags_changed`）。押下を食ったキーの離上を食わない挙動
 
-### 8.5 未実装（実装後に確認）
-- 候補ウィンドウ（ページング・位置）、`ITfFnReconversion`（再変換）、下線などの表示属性、言語バーへのモード反映、
-  `set_environment` / `set_context` の送信、アイコン、インストーラ・署名・SmartScreen 対応、CI への組み込み
+### 8.5 OS 非依存ロジック（H-40。Linux の単体テスト済み。実機の値・見た目で確認する）
+- [ ] 候補ウィンドウの位置: キャレット行の下に出る。画面下端（タスクバーの上）では上に反転する。複数モニター・DPI 違い・縦に長い候補で作業領域からはみ出さない
+- [ ] 候補ウィンドウの寸法: 文字幅の計測（`TextMeasure`）と行の高さ・余白が見た目で窮屈でない（DPI 倍率の掛け方）。ページ表示「2/5」の位置
+- [ ] ページング: 候補が `page_size` を超えたとき、選択に追従してページが替わる。数字キーで選べる（キーの解釈はコア）
+- [ ] 出所ラベル（学習・AI・辞書・もしかして等）の表示
+- [ ] キャレット矩形が取れないアプリでマウス位置に出る（`anchor_rect`）
+- [ ] `set_environment`: AC/電池の切替、バッテリー節約の切替で `get_status` のプロファイルが変わる。電池の無いデスクトップ PC で電池駆動と誤判定されない
+- [ ] メモリ逼迫の推定閾値（利用可能 5%/10%・300MB/800MB）が妥当か（実測なし）。メモリを圧迫したときだけ light/minimal に落ちる
+- [ ] サーマルの推定（周波数 / 上限の比 85%/60%/40%）。バッテリー節約中や省電力プランで誤って軽いプロファイルに落ちない（節約が有効または不明なら推定しない仕様）
+- [ ] `set_context`: 入力開始時にキャレット直前のテキストが送られ、次語候補・文脈が効く。取得できないアプリで前回の文脈が維持される。パスワード欄（`InputScope` の `IS_PASSWORD` = 31 が `windows` クレートの定数と一致するか）で周辺テキストを読まず `secure_input: true`、学習・ログが止まる
+- [ ] 表示属性: 通常 = 細い実線、注目文節・選択 = 太い実線、確定済み = 点線、スタイル変換 = 破線、保留ローマ字 = 点線。ホストアプリが属性を無視する場合の見え方（MS-IME 風に未変換 = 点線へ変える要否）
+- [ ] 通知の文言（エンジン停止・minimal 移行・復元失敗・update_available）と 30 秒間引き、モード表示（あ / A）
+
+### 8.5b OS 層（H-41。型検査のみ。実機で一度も動かしていない）
+- [ ] 候補ウィンドウ: Space 変換で表示され、**フォーカスを奪わない**（入力中のアプリのキャレットが消えない・タイトルバーが非アクティブにならない）。選択行のハイライト、番号、出所ラベル、ページ「2/5」が崩れない。DPI 100/150/200% と、DPI の違う複数モニター（Per-Monitor 対応ホストと非対応ホストの両方）で大きさ・位置が合う。タスクバー付近で上に反転する
+- [ ] キャレット矩形（`GetTextExt`）: メモ帳・ブラウザ・VS Code・Office・ターミナル・UWP で候補ウィンドウが composition の直下に出る。取れないアプリでマウス位置に出る
+- [ ] 非同期通知の即時反映: ライブ変換・LLM 結果の差し替えが次のキーを待たずに画面に出る。差し替え直後のキー入力と順序が崩れない（`TF_ES_ASYNCDONTCARE` の編集セッションと同期セッションの順序）。通知が別ウィンドウ（別スレッド）の入力に混ざらない
+- [ ] スリープ復帰: 復帰後にエンジンが再起動し、`restore_session` で preedit が復元される（メッセージ専用ウィンドウの `WM_POWERBROADCAST` が届くか、届かなくてもタイマーの検出が働くか）。二重に再起動しない
+- [ ] 環境の報告: AC/電池・バッテリー節約の切り替えが約 30 秒以内（電源通知が届けば即時）に `get_status` のプロファイルへ反映される。`MhzLimit` を使うサーマル推定がアイドル時に誤って軽いプロファイルへ落とさない
+- [ ] `set_context`: 文字入力の開始時だけ文書を読む（矢印・ショートカット・修飾キーで読まない）。パスワード欄（`InputScope` が `IS_PASSWORD`。定数 31 はコンパイル時に一致を確認済み）で周辺テキストを読まず `secure_input: true` を送る。アプリ ID に実行ファイル名（`chrome.exe` 等）が入る
+- [ ] 表示属性: 通常 = 細い実線、注目文節 = 太い実線、確定済み・保留 = 点線、スタイル変換 = 破線がホストに反映される。確定後に下線が残らない。属性を無視するアプリでも入力は壊れない。`IEnumTfDisplayAttributeInfo` の終端（`S_FALSE`）で列挙するアプリが固まらない。アクティブ化されないプロセスで imserver が起動しない
+- [ ] 入力モード: タスクトレイの表示が「あ / A」で切り替わる。英数キー・半角/全角キー・トレイのクリックの往復でモードが反転し続けない（`SetMode` の送りすぎ。入力中の文字列が意図せず確定されない）。英数 = IME 閉のとき、アプリ側が IME オフ扱いで困らない。Activate 直後・エンジン再起動後に OS とコアのモードが揃う
+- [ ] 再変換: 確定済みテキストを選択して変換キー / かなキーで composition になる（コアの `reconvert_selection`）。Office など `ITfFnReconversion` を呼ぶアプリで動く。待ちきれないとき（初回の辞書の逆引き索引）の通知と取り消し。選択が空・200 文字超のとき何もしない
+- [ ] 通知トースト: エンジン停止・minimal 移行・復元失敗・`update_available` が右下に約 4 秒出てフォーカスを奪わない。同文言は 30 秒間引かれる。背面のプロセスの通知が出ない
+- [ ] アイコン: `regsvr32` で DLL と同じディレクトリに `nagi.ico` が作られ、設定の「言語と地域」とタスクトレイに「N」のアイコンが出る。`regsvr32 /u` で削除される。書き込めないディレクトリ（Program Files 以外の権限）での挙動
+
+### 8.5c H-43 で追加した OS 層（型検査のみ。実機で一度も動かしていない）
+- [ ] 言語バーのボタン: 従来の言語バー（設定の「言語バー」を有効にした環境、またはデスクトップ言語バー）に「あ / A」のボタンが出る。`ITfLangBarItemMgr` を `ITfThreadMgr` の `QueryInterface` で得られる（`LangBar::new` が失敗しない）。ホスト切り替え・Deactivate でボタンが残らない（`RemoveItem`）。トレイの「あ / A」と二重に出ないか
+- [ ] ボタンの操作: 左クリックでひらがな ⇄ 英数が切り替わり、表示（アイコン・文字・ツールチップ）が更新される。右クリックでメニュー（ひらがな / 英数・現在にチェック・状態の行・「設定ファイルを開く…」）が出る（`BTN_BUTTON` で `InitMenu` が呼ばれるか）。メニューの選択でモードが変わる。入力中の文字列が意図せず確定されるのは `SetMode` の仕様どおりか
+- [ ] ボタンの表示とトレイ・英数キー・半角/全角キーでの切り替えの同期（往復して反転し続けない）。エンジン停止中（接続前）のメニュー（「変換エンジンに接続していません」）と、開いたときの待ち（`get_status` の同期呼び出し、最大 250ms）が気にならないか
+- [ ] `GetIcon` の `HICON` を言語バーが破棄するか（長時間・多数回のモード切り替えで GDI オブジェクトが増え続けないか。タスクマネージャーの GDI オブジェクト数）。DPI 150/200% でアイコンが滲まない
+- [ ] 「設定ファイルを開く…」: `config.toml`（`get_status` の `config_path`）がメモ帳で開く。ファイルが無いときの作成の確認。`config_path` が無いとき項目が灰色
+- [ ] `GetReconversion`: `ITfFnReconversion` を呼ぶアプリ（Office 等）で再変換の候補一覧が出て、選ぶと範囲が置き換わりキャレットが末尾に来る。複数文節の範囲で、選んだ候補以外の部分（残りの文節）が失われない。アプリが文書ロックを持つ最中に呼んだ場合に失敗して固まらない。呼んだ後にコアが変換中のまま残らない（直後の入力が通常どおり）。選択が空・200 文字超・入力中は失敗する。待ちきれないとき（初回の逆引き索引）の通知
+- [ ] `THIRD_PARTY_LICENSES_WINDOWS.md`（104 crates）が実際の Windows のビルド（MSVC・`--features llama`）の依存と一致する（`cargo tree --target x86_64-pc-windows-msvc` を Windows 上で実行して比較。llama.cpp のビルド用の crate が漏れていないか）。zip の `THIRD_PARTY_LICENSES.md` が Windows 用になっている
 
 ### 8.6 設計の再検討事項
-- ホストプロセスごとに imserver を起動する方式のメモリ・起動時間。名前付きパイプ + 常駐ブローカーへの変更要否（H-39）
+- ホストプロセスごとに imserver を起動する方式のメモリ・起動時間。名前付きパイプ + 常駐ブローカーへの変更要否（H-39）。**判断に必要な実測項目と設計案は decisions.md H-43 §4**（ホスト 1/5/10 個のメモリ合計、`initialize` の所要、パイプ往復の増分、`learning.tsv` の取りこぼし、AppContainer からの接続可否、再接続の所要）
+
+### 8.7 配布・インストーラ・SmartScreen・更新（H-42。Linux では PowerShell の構文と `SHA256SUMS` の検証までしか確認していない）
+- [ ] `windows-release.yml` を `-f publish=false` で実行して通る（windows-latest での MSVC ビルド、`LIBCLANG_PATH`、llama.cpp のビルド、DLL の CRT 静的リンク、`bundle-windows`、`sign-update`）。インストーラのスモークテスト（regsvr32 の登録と解除）の結果を Actions のログで確認する（失敗は警告扱い）
+- [ ] 展開した zip で `powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`: `SHA256SUMS` の検証、UAC の確認、`C:\Program Files\Nagi` への配置、`regsvr32` の登録、「アプリと機能」の項目、辞書・モデルの取得（`%APPDATA%\Nagi\data`、約 150MB）が通る。標準ユーザー（UAC で別アカウントの資格情報を入力）の場合に、入力方式が使うアカウントに登録されるか
+- [ ] Program Files の DLL が UWP / 保護されたアプリ（設定アプリ・Edge の一部・Microsoft Store アプリ）でも読み込まれる（`ALL APPLICATION PACKAGES` の読み取り権限）
+- [ ] 更新（上書きインストール）: 入力方式の使用中に再実行して `.old` への退避が通り、サインアウト / 再起動後に新しい版にそろう。`.old` が次回に片付く。動作中の imserver（旧版）が混在して問題を起こさない
+- [ ] `uninstall.ps1`: 登録が消え（`regsvr32 /u`）、ファイルが消える。使用中のファイルが再起動後に消える。`-RemoveUserData` の確認（`yes`）と `-Force`。既定ではユーザーデータが残る。「アプリと機能」の項目が消える
+- [ ] `irm https://nagi.shiki-01.com/install.ps1 | iex`（PowerShell 5.1 と 7）: latest.json の取得、SHA-256 検証、SmartScreen が出ないこと。`NAGI_SKIP_DATA=1`。prerelease の間は 404 になる（想定どおり）。公開前に `web.yml` の取り込み（`static/updates/windows/latest.json`）を確認する
+- [ ] ブラウザで取得した zip の SmartScreen / Defender の警告の出方（Edge・Chrome）と、`docs/windows-install.md` の回避手順（zip のブロック解除、「詳細情報」→「実行」）で実際に進める。`.ps1` の MOTW 付きでも `-ExecutionPolicy Bypass` で実行できる
+- [ ] Authenticode 署名（Secrets を登録した場合）: `signtool verify /pa` が通り、署名した DLL / exe が読み込まれる。タイムスタンプの取得
+- [ ] 更新の通知: 旧版の imserver が `/updates/windows/latest.json` を取得し、新版があれば右下のトーストが出る（文言「PowerShell でインストールコマンドを…」）。`update_check.json` による 24 時間の間引き
+- [ ] VC++ 再頒布可能パッケージが無い環境（クリーンな Windows）で、DLL（静的 CRT）は読み込まれ、imserver は警告のうえ起動しない / する（imserver は動的 CRT）
+- [ ] ARM64 Windows（エミュレーション）で x64 の DLL がホストに読み込まれるか（現状は未対応の扱い。`install.ps1` は ARM64 を拒否する）

@@ -15,8 +15,8 @@ use windows::Win32::System::Registry::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
 use windows::Win32::UI::TextServices::{
-    CLSID_TF_CategoryMgr, CLSID_TF_InputProcessorProfiles, GUID_TFCAT_TIP_KEYBOARD,
-    GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    CLSID_TF_CategoryMgr, CLSID_TF_InputProcessorProfiles, GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
+    GUID_TFCAT_TIP_KEYBOARD, GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
     GUID_TFCAT_TIPCAP_UIELEMENTENABLED, ITfCategoryMgr, ITfInputProcessorProfileMgr,
 };
 use windows::core::{PCWSTR, Result};
@@ -80,12 +80,29 @@ fn register_com_server(dll_path: &str) -> Result<()> {
     r
 }
 
+/// アイコンファイル（.ico）の置き場所と名前。DLL と同じディレクトリ
+fn icon_path() -> Option<std::path::PathBuf> {
+    Some(dll::module_directory()?.join("nagi.ico"))
+}
+
+/// 入力方式アイコンを書き出し、`RegisterProfile` に渡すパスを返す。書き出せなければ DLL 自身のパス
+/// （アイコンは無表示になるだけで、登録は続ける）
+fn write_icon(dll_path: &str) -> String {
+    let Some(path) = icon_path() else {
+        return dll_path.to_owned();
+    };
+    match std::fs::write(&path, nagi_windows::icon::encode_ico()) {
+        Ok(()) => path.to_string_lossy().into_owned(),
+        Err(_) => dll_path.to_owned(),
+    }
+}
+
 fn register_tsf(dll_path: &str) -> Result<()> {
     let profiles: ITfInputProcessorProfileMgr =
         unsafe { CoCreateInstance(&CLSID_TF_InputProcessorProfiles, None, CLSCTX_INPROC_SERVER) }?;
     let description: Vec<u16> = PROFILE_DESCRIPTION.encode_utf16().collect();
-    let icon: Vec<u16> = dll_path.encode_utf16().collect();
-    // TODO: アイコン（リソース）を DLL に埋め込み、アイコン番号を指定する。いまは 0 番
+    // アイコンは .ico ファイルをコードで生成して指す（番号 0）。decisions.md H-41
+    let icon: Vec<u16> = write_icon(dll_path).encode_utf16().collect();
     unsafe {
         profiles.RegisterProfile(
             &CLSID_NAGI_TEXT_SERVICE,
@@ -108,6 +125,7 @@ fn register_tsf(dll_path: &str) -> Result<()> {
         GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
         GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
         GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+        GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
     ] {
         unsafe {
             categories.RegisterCategory(
@@ -164,6 +182,7 @@ pub fn unregister() -> Result<()> {
             GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
             GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
             GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+            GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
         ] {
             keep(unsafe {
                 categories.UnregisterCategory(
@@ -173,6 +192,10 @@ pub fn unregister() -> Result<()> {
                 )
             });
         }
+    }
+    if let Some(path) = icon_path() {
+        // 無ければ何もしない（生成できなかった場合）
+        let _ = std::fs::remove_file(path);
     }
     let key_w = wide(&clsid_key());
     let status = unsafe { RegDeleteTreeW(HKEY_CLASSES_ROOT, PCWSTR(key_w.as_ptr())) };
