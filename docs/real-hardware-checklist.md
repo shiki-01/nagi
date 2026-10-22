@@ -125,3 +125,46 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
   標準IMEとの実際の照合はまだ行っていない）
 - レイテンシベンチ（p95）: 設計書の目標値（キー入力→ひらがな反映 p95 < 16ms 等）を実機で計測できると良い
 - `cargo xtask fetch-model` でモデルを取得した状態で `cargo run --release -p nagi-server --features llama --bin nagi-eval -- --data-dir ../data` を実行すると、精度・レイテンシの計測結果が出る（G-11の数値は評価環境（クラウドサンドボックス）でのもので、実機での再計測が無い）
+
+## 8. Windows フロント（TSF、H-39）— 未検証
+
+`frontend-windows/`（`nagi-windows`）と `frontend-windows-tsf/`（`nagi-windows-tsf`）は Linux 上で fmt / clippy / test と
+`x86_64-pc-windows-gnu` の `cargo check` / `clippy` が通っただけで、Windows 実機では一度も動かしていない。
+以下は Windows 10 22H2 以降 / 11 (x64) の実機で確認する項目。確認したら結果と日付を書き込むこと。
+
+### 8.1 ビルド・単体テスト
+- [ ] `cd core && cargo test -p nagi-windows -p nagi-windows-tsf` が Windows ホストで通る
+- [ ] `cargo build --release -p nagi-windows-tsf` で DLL（cdylib）ができる（MSVC ターゲット）
+- [ ] `nagi-windows` の `process.rs`（`ProcessTransport`）のテストが Windows で通る（Linux では `cat` / `true` を使う `cfg(unix)` テスト。Windows 側は未検証）
+- [ ] 子プロセス起動時に `CREATE_NO_WINDOW` でコンソールウィンドウが出ない
+
+### 8.2 登録・読み込み
+- [ ] 管理者権限の `regsvr32 nagi_windows_tsf.dll` が成功し、設定の「言語と地域」に入力方式として出る
+- [ ] `regsvr32 /u` で登録が消える（レジストリに残骸がない）
+- [ ] ホストアプリ（メモ帳・ブラウザ・VS Code・Office）で DLL が読み込まれ、アンロード（`DllCanUnloadNow`）でホストが落ちない
+- [ ] DLL と同じディレクトリの imserver が起動する（配置はインストーラ仕様の決定待ち）。データは `%APPDATA%\Nagi\data`
+
+### 8.3 キー入力・composition
+- [ ] ローマ字入力でひらがなが composition として表示され、Enter で確定、Esc で取り消せる
+- [ ] Space 変換 → 文節移動（←/→）→ 確定が通る
+- [ ] `OnTestKeyDown` だけが呼ばれて `OnKeyDown` が来ない場合の挙動（エンジン状態が先に進む問題）の発生頻度
+- [ ] 入力 250ms のタイムアウト（実測なしの暫定値）が妥当か。重い変換でもキーを取りこぼさない
+- [ ] エンジン未接続時の素通し（composition 中だけ食う）で入力が壊れない。imserver を強制終了しても自動再起動し、`restore_session` で preedit が復元される
+- [ ] スリープ復帰後の再起動
+- [ ] ライブ変換・LLM 結果の差し替えが「次のキー入力まで画面に出ない」仕様の許容度（隠しウィンドウ + PostMessage の要否）
+- [ ] キャレット位置の設定（`ShiftEnd`）。確定後にカーソルが文末に来る
+
+### 8.4 キー割り当て
+- [ ] 半角/全角（`VK_KANJI` / `VK_OEM_AUTO` / `VK_OEM_ENLW`）でモードが切り替わる
+- [ ] 変換（`VK_CONVERT`）・無変換（`VK_NONCONVERT`）・カタカナひらがな（`VK_KANA`）の動作
+- [ ] `VK_IME_ON` → HIRAGANA、`VK_IME_OFF` → EISU_TOGGLE の割り当てが OS 側の IME オン/オフと食い違わない
+- [ ] `VK_OEM_BACKTAB` が実際にどのキーに当たるか（資料が乏しい。HIRAGANA_KATAKANA に割り当てた判断が妥当か）
+- [ ] JIS / US 配列の両方。AltGr 配列で `@` などの記号が失われない（Ctrl+Alt 併用時に text を残す判断）
+- [ ] 修飾キー単独の押下・離上（`flags_changed`）。押下を食ったキーの離上を食わない挙動
+
+### 8.5 未実装（実装後に確認）
+- 候補ウィンドウ（ページング・位置）、`ITfFnReconversion`（再変換）、下線などの表示属性、言語バーへのモード反映、
+  `set_environment` / `set_context` の送信、アイコン、インストーラ・署名・SmartScreen 対応、CI への組み込み
+
+### 8.6 設計の再検討事項
+- ホストプロセスごとに imserver を起動する方式のメモリ・起動時間。名前付きパイプ + 常駐ブローカーへの変更要否（H-39）
