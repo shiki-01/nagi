@@ -16,10 +16,14 @@ final class NagiInputController: IMKInputController {
     private var isActive = false
     /// コアのこのセッションの入力モード（応答の `mode` で更新する。nil = 未受信で初期モードのまま）
     private var coreMode: InputMode?
+    /// 次にマークテキストを置くときに置き換える範囲（再変換の対象として選ばれていたテキスト）
+    private var pendingReplacement: NSRange?
 
     private static let notFound = NSRange(location: NSNotFound, length: NSNotFound)
     /// コアへ送る直前テキストの長さ（UTF-16。コアは末尾 40 文字だけを文脈に使う）
     private static let contextLength = 64
+    /// 再変換できる選択の長さの上限（UTF-16）
+    private static let reconvertMaxLength = 200
 
     private var context: NagiIMEContext? { NagiIMEContext.shared }
 
@@ -262,6 +266,38 @@ final class NagiInputController: IMKInputController {
             coreMode = mode
             syncMode(mode)
         }
+        if result.reconvert_selection == true { reconvertSelection() }
+    }
+
+    /// コアの要求（かなキー・変換キー）で、選択中の確定済みテキストを再変換する。選択が無ければ何もしない
+    private func reconvertSelection() {
+        guard let context, let client = textClient else { return }
+        let selection = client.selectedRange()
+        guard selection.location != NSNotFound, selection.length > 0,
+            selection.length <= Self.reconvertMaxLength,
+            let text = client.attributedSubstring(from: selection)?.string, !text.isEmpty
+        else { return }
+        let params = ReconvertParams(session_id: sessionId, text: text)
+        let supervisor = context.supervisor
+        let id = sessionId
+        // コア側の要求タイムアウトは長めにし、遅れて届いた応答で接続を壊さない
+        let requestTimeout = context.reconvertTimeout + 10
+        switch SyncBridge.wait(
+            timeout: context.reconvertTimeout,
+            { try await supervisor.reconvert(params, timeout: requestTimeout) })
+        {
+        case .success(let result):
+            // 再変換の文字列はマークテキストとして選択範囲を置き換える
+            pendingReplacement = selection
+            apply(result)
+            pendingReplacement = nil
+        case .failure:
+            // 待ちきれなかった場合、コアは遅れて変換中になりうるので取り消す（要求は順に処理される）
+            Task { @MainActor [weak self] in
+                if let result = try? await supervisor.reset(sessionId: id) { self?.apply(result) }
+            }
+            context.toast.show("再変換の準備に時間がかかっています。少し待ってからもう一度お試しください")
+        }
     }
 
     /// `update_preedit` 通知（ライブ変換等）
@@ -310,7 +346,8 @@ final class NagiInputController: IMKInputController {
         let cursor = min(Int(preedit.cursor), attributed.length)
         client.setMarkedText(
             attributed, selectionRange: NSRange(location: cursor, length: 0),
-            replacementRange: Self.notFound)
+            replacementRange: pendingReplacement ?? Self.notFound)
+        pendingReplacement = nil
         hasMarked = true
     }
 

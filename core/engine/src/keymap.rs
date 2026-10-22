@@ -155,6 +155,11 @@ impl KeyMap {
         match key.keysym {
             keysym::EISU_TOGGLE => return Some(Action::SetMode(InputMode::Alphanumeric)),
             keysym::HIRAGANA_KATAKANA | keysym::HIRAGANA => {
+                // ひらがなモードの未入力で押したら再変換（macOS 標準と同じく、英数モードからは
+                // 1 回目でひらがなモードになり、2 回目で選択中のテキストを再変換する）
+                if context == KeyContext::Direct && mode == InputMode::Hiragana {
+                    return Some(Action::Reconvert);
+                }
                 return Some(Action::SetMode(InputMode::Hiragana));
             }
             keysym::ZENKAKU_HANKAKU => return Some(Action::ToggleMode),
@@ -170,6 +175,9 @@ impl KeyMap {
             KeyContext::Direct => {
                 if is_undo_commit(key) {
                     Some(Action::UndoCommit)
+                } else if key.keysym == keysym::HENKAN && !has_command_modifier(key) {
+                    // 変換キー: 選択中のテキストの再変換（MS-IME と同じ）
+                    Some(Action::Reconvert)
                 } else {
                     printable(key)
                         .map(Action::Insert)
@@ -341,10 +349,25 @@ mod tests {
                     resolve(ctx, mode, "Eisu"),
                     Some(Action::SetMode(Alphanumeric))
                 );
-                assert_eq!(resolve(ctx, mode, "Kana"), Some(Action::SetMode(Hiragana)));
+                // ひらがなモードの未入力では再変換（下のテスト）
+                if !(ctx == Direct && mode == Hiragana) {
+                    assert_eq!(resolve(ctx, mode, "Kana"), Some(Action::SetMode(Hiragana)));
+                }
                 assert_eq!(resolve(ctx, mode, "Zenkaku"), Some(Action::ToggleMode));
             }
         }
+    }
+
+    #[test]
+    fn reconvert_keys_in_direct_hiragana() {
+        assert_eq!(resolve(Direct, Hiragana, "Kana"), Some(Action::Reconvert));
+        assert_eq!(resolve(Direct, Hiragana, "Henkan"), Some(Action::Reconvert));
+        // 英数モードからのかなキーはモード切替（2 回目で再変換）
+        assert_eq!(
+            resolve(Direct, Alphanumeric, "Kana"),
+            Some(Action::SetMode(Hiragana))
+        );
+        assert_eq!(resolve(Direct, Alphanumeric, "Henkan"), None);
     }
 
     #[test]

@@ -1603,3 +1603,24 @@ fn converting_backspace_cancels_and_discards_live_view() {
     press(&mut e, "s", "Space");
     assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
 }
+
+#[test]
+fn kana_key_in_direct_requests_reconvert_once() {
+    let mut e = engine();
+    let r = press(&mut e, "s", "Kana");
+    assert!(r.consumed);
+    assert_eq!(r.reconvert_selection, Some(true));
+    assert_eq!(e.snapshot("s").unwrap().mode, InputMode::Hiragana);
+    // 要求は 1 回の応答だけで返す
+    let r = press(&mut e, "s", "a");
+    assert_eq!(r.reconvert_selection, None);
+}
+
+#[test]
+fn kana_key_from_alphanumeric_switches_mode_first() {
+    let mut e = engine();
+    press(&mut e, "s", "Eisu");
+    let r = press(&mut e, "s", "Kana");
+    assert_eq!(r.mode, Some(InputMode::Hiragana));
+    assert_eq!(r.reconvert_selection, None);
+}

@@ -69,6 +69,8 @@ pub enum Action {
     CommitAndPassThrough,
     /// 直前の確定を取り消し、確定前の状態に戻す（Ctrl+Backspace。確定直後のみ有効）
     UndoCommit,
+    /// 選択中の確定済みテキストの再変換をフロントに要求する（未入力のみ。ひらがなモードでのかなキー・変換キー）
+    Reconvert,
     /// キーを消費するだけで何もしない
     NoOp,
 }
@@ -106,6 +108,7 @@ impl fmt::Display for Action {
             Action::ToggleMode => write!(f, "ToggleMode"),
             Action::CommitAndPassThrough => write!(f, "CommitAndPassThrough"),
             Action::UndoCommit => write!(f, "UndoCommit"),
+            Action::Reconvert => write!(f, "Reconvert"),
             Action::NoOp => write!(f, "NoOp"),
         }
     }

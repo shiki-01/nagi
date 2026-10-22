@@ -14,6 +14,8 @@ public final class NagiIMEContext {
     let toast = StatusToast()
     /// 同期要求の待ち上限（EngineSupervisor の要求タイムアウト 0.5s より少し長く）
     public var keyTimeout: TimeInterval = 0.6
+    /// 再変換の待ち上限（初回は辞書の逆引き索引を作るため長め。超えたら中止して次回に回す）
+    public var reconvertTimeout: TimeInterval = 2.0
     /// コアの入力モード → OS の入力モード識別子（Info.plist の ComponentInputModeDict のキー）。
     /// 空なら OS 側のモード同期は行わない
     public var modeIdentifiers: [InputMode: String] = [:]

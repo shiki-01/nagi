@@ -202,6 +202,8 @@ struct Session {
     last_commit: Option<LastCommit>,
     /// このキー処理で確定取消が成功した場合の `delete_before`（`finish` が読んで消費する）
     pending_delete_before: Option<u32>,
+    /// `Action::Reconvert` の要求（次の応答の `reconvert_selection` で返す）
+    pending_reconvert: bool,
     /// 12 キーのトグル入力の途中状態（直前の入力が `Toggle` のタップだったとき）
     touch_toggle: Option<TouchToggle>,
     /// 入力中（変換前）の候補。バックグラウンドで作る（`refresh_composing_candidates`）
@@ -463,6 +465,7 @@ impl Engine {
             live_suppressed: false,
             last_commit: None,
             pending_delete_before: None,
+            pending_reconvert: false,
             touch_toggle: None,
             composing_cands: None,
             last_word: None,
@@ -1566,6 +1569,11 @@ impl Engine {
                 false
             }
             Action::UndoCommit => self.try_undo_commit(sess),
+            Action::Reconvert => {
+                sess.pending_reconvert = true;
+                sess.keep_next_words = true;
+                true
+            }
             Action::NoOp => true,
             Action::Insert(c) => {
                 self.insert_char(sess, c, commit);
@@ -2804,9 +2812,12 @@ impl Engine {
             consumed,
             commit: (!commit.is_empty()).then_some(commit),
             delete_before: sess.pending_delete_before.take(),
+            reconvert_selection: std::mem::take(&mut sess.pending_reconvert).then_some(true),
             ..Default::default()
         };
-        let mut changed = result.commit.is_some() || result.delete_before.is_some();
+        let mut changed = result.commit.is_some()
+            || result.delete_before.is_some()
+            || result.reconvert_selection.is_some();
         if preedit != sess.sent.preedit {
             sess.sent.preedit = preedit.clone();
             result.preedit = Some(preedit);

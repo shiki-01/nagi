@@ -342,11 +342,11 @@ public final class EngineSupervisor: @unchecked Sendable {
         return client
     }
 
-    private func diff<P: Encodable>(_ method: String, _ params: P, sessionId: String) async throws
-        -> ProcessKeyResult
-    {
+    private func diff<P: Encodable>(
+        _ method: String, _ params: P, sessionId: String, timeout: TimeInterval? = nil
+    ) async throws -> ProcessKeyResult {
         let c = try connectedClient()
-        let result: ProcessKeyResult = try await c.request(method, params: params)
+        let result: ProcessKeyResult = try await c.request(method, params: params, timeout: timeout)
         gate.record(sessionId: sessionId, revision: result.revision)
         return result
     }
@@ -378,8 +378,13 @@ public final class EngineSupervisor: @unchecked Sendable {
         try await diff(RpcMethod.performAction, params, sessionId: params.session_id)
     }
 
-    public func reconvert(_ params: ReconvertParams) async throws -> ProcessKeyResult {
-        try await diff(RpcMethod.reconvert, params, sessionId: params.session_id)
+    /// 初回は辞書の逆引き索引を作るため、通常の要求より長く待つ（`timeout`、既定は `initialize` と同じ）
+    public func reconvert(_ params: ReconvertParams, timeout: TimeInterval? = nil) async throws
+        -> ProcessKeyResult
+    {
+        try await diff(
+            RpcMethod.reconvert, params, sessionId: params.session_id,
+            timeout: timeout ?? configuration.initializeTimeout)
     }
 
     public func setContext(_ params: SetContextParams) throws {

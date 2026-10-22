@@ -219,6 +219,12 @@ pub struct ProcessKeyResult {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub delete_before: Option<u32>,
 
+    /// 確定済みテキストの再変換の要求（未入力でのかなキー・変換キー等。キーマップの `Reconvert`）。
+    /// `Some(true)` なら、フロントは選択中のテキストがあれば `reconvert` で再変換する
+    /// （選択が無い・取得できない場合は何もしない）。選択の取得はフロントの仕事なのでコアは要求だけを返す
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reconvert_selection: Option<bool>,
+
     /// リビジョン番号（古い非同期通知を破棄するため）
     pub revision: u32,
 }

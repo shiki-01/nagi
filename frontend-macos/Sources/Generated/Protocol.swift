@@ -942,16 +942,21 @@ public struct ProcessKeyResult: Codable {
 	/// 削除すべき直前の確定文字列の長さ（UTF-16 コード単位）。挿入ではなく削除なので
 	/// `commit` とは意味が異なる（両方が同時に Some になることは無い）
 	public let delete_before: UInt32?
+	/// 確定済みテキストの再変換の要求（未入力でのかなキー・変換キー等。キーマップの `Reconvert`）。
+	/// `Some(true)` なら、フロントは選択中のテキストがあれば `reconvert` で再変換する
+	/// （選択が無い・取得できない場合は何もしない）。選択の取得はフロントの仕事なのでコアは要求だけを返す
+	public let reconvert_selection: Bool?
 	/// リビジョン番号（古い非同期通知を破棄するため）
 	public let revision: UInt32
 
-	public init(consumed: Bool, commit: String?, preedit: PreeditView?, candidates: CandidatesView?, mode: InputMode?, delete_before: UInt32?, revision: UInt32) {
+	public init(consumed: Bool, commit: String?, preedit: PreeditView?, candidates: CandidatesView?, mode: InputMode?, delete_before: UInt32?, reconvert_selection: Bool?, revision: UInt32) {
 		self.consumed = consumed
 		self.commit = commit
 		self.preedit = preedit
 		self.candidates = candidates
 		self.mode = mode
 		self.delete_before = delete_before
+		self.reconvert_selection = reconvert_selection
 		self.revision = revision
 	}
 }
