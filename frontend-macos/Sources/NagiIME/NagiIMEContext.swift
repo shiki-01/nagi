@@ -11,6 +11,7 @@ public final class NagiIMEContext {
     public let supervisor: EngineSupervisor
     public let store: SessionStore
     let panel = CandidatePanel()
+    let toast = StatusToast()
     /// 同期要求の待ち上限（EngineSupervisor の要求タイムアウト 0.5s より少し長く）
     public var keyTimeout: TimeInterval = 0.6
     /// コアの入力モード → OS の入力モード識別子（Info.plist の ComponentInputModeDict のキー）。
@@ -60,6 +61,7 @@ public final class NagiIMEContext {
 
     /// EngineSupervisor のイベント（任意スレッドから来るので呼び出し側でメインへ移すこと）
     func handle(_ event: EngineEvent) {
+        if let message = StatusMessages.toast(for: event) { toast.show(message) }
         switch event {
         case .updatePreedit(let p):
             controllers[p.session_id]?.value?.applyAsyncPreedit(p.preedit)

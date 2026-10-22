@@ -167,18 +167,83 @@ final class NagiInputController: IMKInputController {
 
     // MARK: 入力メニュー
 
-    /// メニューバーの入力メニューに出る項目（「設定…」）
+    /// メニューバーの入力メニューに出る項目（状態の表示・設定・再読み込み・学習データの削除）
     override func menu() -> NSMenu! {
         let menu = NSMenu(title: "Nagi")
-        let item = NSMenuItem(
-            title: "設定…", action: #selector(openSettings(_:)), keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
+        for line in statusLines() {
+            let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let entries: [(String, Selector)] = [
+            ("設定…", #selector(openSettings(_:))),
+            ("設定ファイルを再読み込み", #selector(reloadConfig(_:))),
+            ("学習データを削除…", #selector(clearLearning(_:))),
+        ]
+        for (title, action) in entries {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
         return menu
+    }
+
+    /// メニューを開いた時点の状態（取得できなければ未接続の 1 行）
+    private func statusLines() -> [String] {
+        guard let context else { return [StatusMessages.unavailable] }
+        let supervisor = context.supervisor
+        switch SyncBridge.wait(timeout: context.keyTimeout, { try await supervisor.getStatus() }) {
+        case .success(let status): return StatusMessages.menuLines(for: status)
+        case .failure: return [StatusMessages.unavailable]
+        }
     }
 
     @objc func openSettings(_ sender: Any?) {
         context?.showSettings()
+    }
+
+    @objc func reloadConfig(_ sender: Any?) {
+        guard let context else { return }
+        let supervisor = context.supervisor
+        Task { @MainActor in
+            let message: String
+            do {
+                let result = try await supervisor.reloadConfig()
+                message =
+                    result.ok
+                    ? "設定ファイルを再読み込みしました"
+                    : "設定ファイルの読み込みに失敗しました（以前の設定で動作中）"
+            } catch {
+                message = StatusMessages.unavailable
+            }
+            context.toast.show(message)
+        }
+    }
+
+    /// 学習データの全削除（確認ダイアログを出す）
+    @objc func clearLearning(_ sender: Any?) {
+        guard let context else { return }
+        let alert = NSAlert()
+        alert.messageText = "学習データを削除しますか？"
+        alert.informativeText = "変換の学習結果をすべて削除します。ユーザー辞書と設定は残ります。この操作は取り消せません。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "削除")
+        alert.addButton(withTitle: "キャンセル")
+        // LSUIElement アプリなので明示的にアクティブ化しないと背面に出る
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let supervisor = context.supervisor
+        Task { @MainActor in
+            let message: String
+            do {
+                try await supervisor.clearLearning()
+                message = "学習データを削除しました"
+            } catch {
+                message = "学習データを削除できませんでした"
+            }
+            context.toast.show(message)
+        }
     }
 
     // MARK: 描画差分の適用

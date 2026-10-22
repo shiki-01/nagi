@@ -110,6 +110,36 @@ final class SupportTests: XCTestCase {
         XCTAssertEqual(EnvironmentMapping.memoryPressure([.normal]), .normal)
     }
 
+    func testStatusToastMessages() {
+        let info = NotifyParams(level: .info, message: "i", code: nil)
+        let warn = NotifyParams(level: .warning, message: "w", code: nil)
+        XCTAssertNil(StatusMessages.toast(for: .notify(info)))
+        XCTAssertEqual(StatusMessages.toast(for: .notify(warn)), "w")
+        XCTAssertNotNil(StatusMessages.toast(for: .crashed(attempt: 1, delay: 0.2)))
+        XCTAssertNil(StatusMessages.toast(for: .crashed(attempt: 2, delay: 0.4)))
+        XCTAssertNotNil(StatusMessages.toast(for: .enteredMinimalMode(restarts: 5)))
+    }
+
+    func testStatusMenuLines() {
+        let status = StatusResult(
+            profile: "balanced", profile_reason: "既定", backend: "x", llm: false, learning: true,
+            learned_entries: 3, user_dict_entries: 0, config_path: nil, config_error: true)
+        let lines = StatusMessages.menuLines(for: status)
+        XCTAssertEqual(lines.first, "プロファイル: balanced（既定）")
+        XCTAssertTrue(lines.contains("変換: 辞書のみ"))
+        XCTAssertTrue(lines.contains("学習: 有効（3 件）"))
+        XCTAssertEqual(lines.count, 5)
+    }
+
+    func testToastThrottle() {
+        var t = ToastThrottle(interval: 30)
+        let now = Date()
+        XCTAssertTrue(t.shouldShow("a", now: now))
+        XCTAssertFalse(t.shouldShow("a", now: now.addingTimeInterval(10)))
+        XCTAssertTrue(t.shouldShow("b", now: now.addingTimeInterval(10)))
+        XCTAssertTrue(t.shouldShow("a", now: now.addingTimeInterval(31)))
+    }
+
     func testModeIdentifiersMatchBundlePlist() {
         let ids = BundleIdentity.modeIdentifiers(bundleID: "com.shiki.inputmethod.Nagi")
         XCTAssertEqual(ids[.hiragana], "com.shiki.inputmethod.Nagi.Japanese")
