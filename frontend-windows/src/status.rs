@@ -87,6 +87,112 @@ pub fn mode_name(mode: InputMode) -> &'static str {
     }
 }
 
+/// 言語バーのボタンのメニューで選べる操作
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuCommand {
+    /// 入力モードを切り替える
+    SetMode(InputMode),
+    /// 設定ファイル（`config.toml`）を開く
+    OpenSettings,
+}
+
+/// 言語バーのメニューの 1 行
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MenuEntry {
+    /// 選べる項目。`id` は `ITfMenu::AddMenuItem` の識別子（[`MenuCommand`] と 1 対 1）
+    Command {
+        /// メニュー項目の識別子
+        id: u32,
+        /// 表示文言
+        label: String,
+        /// 現在の選択（チェック）
+        checked: bool,
+        /// 選べるか
+        enabled: bool,
+    },
+    /// 選べない説明の行（状態の表示）
+    Info(String),
+    /// 区切り線
+    Separator,
+}
+
+const ID_HIRAGANA: u32 = 1;
+const ID_ALPHANUMERIC: u32 = 2;
+const ID_SETTINGS: u32 = 3;
+
+/// 操作 → メニュー項目の識別子
+pub fn command_id(command: MenuCommand) -> u32 {
+    match command {
+        MenuCommand::SetMode(InputMode::Hiragana) => ID_HIRAGANA,
+        MenuCommand::SetMode(InputMode::Alphanumeric) => ID_ALPHANUMERIC,
+        MenuCommand::OpenSettings => ID_SETTINGS,
+    }
+}
+
+/// メニュー項目の識別子 → 操作（未知の識別子は `None`）
+pub fn command_from_id(id: u32) -> Option<MenuCommand> {
+    match id {
+        ID_HIRAGANA => Some(MenuCommand::SetMode(InputMode::Hiragana)),
+        ID_ALPHANUMERIC => Some(MenuCommand::SetMode(InputMode::Alphanumeric)),
+        ID_SETTINGS => Some(MenuCommand::OpenSettings),
+        _ => None,
+    }
+}
+
+/// ボタンを押したときの切り替え先（ひらがな ⇄ 英数）
+pub fn toggled(mode: InputMode) -> InputMode {
+    match mode {
+        InputMode::Hiragana => InputMode::Alphanumeric,
+        InputMode::Alphanumeric => InputMode::Hiragana,
+    }
+}
+
+/// ボタンのツールチップ
+pub fn button_tooltip(mode: Option<InputMode>) -> String {
+    match mode {
+        Some(m) => format!("Nagi: {}", mode_name(m)),
+        None => "Nagi".to_owned(),
+    }
+}
+
+/// ボタンに出す短い表示（接続前などモード不明のときは既定のひらがな）
+pub fn button_text(mode: Option<InputMode>) -> &'static str {
+    mode_indicator(mode.unwrap_or(InputMode::Hiragana))
+}
+
+/// 設定ファイルの場所。コアが教える `config_path` が無ければ開けない
+pub fn settings_path(status: Option<&StatusResult>) -> Option<&str> {
+    status?.config_path.as_deref().filter(|p| !p.is_empty())
+}
+
+/// 言語バーのボタンのメニュー。現在のモードにチェックを付け、状態の行（`status` が取れなければ
+/// [`UNAVAILABLE`]）を挟み、設定を開く項目は設定ファイルの場所が分かるときだけ選べる
+pub fn menu_entries(mode: Option<InputMode>, status: Option<&StatusResult>) -> Vec<MenuEntry> {
+    let mode_item = |target: InputMode| MenuEntry::Command {
+        id: command_id(MenuCommand::SetMode(target)),
+        label: mode_name(target).to_owned(),
+        checked: mode == Some(target),
+        enabled: true,
+    };
+    let mut entries = vec![
+        mode_item(InputMode::Hiragana),
+        mode_item(InputMode::Alphanumeric),
+        MenuEntry::Separator,
+    ];
+    match status {
+        Some(s) => entries.extend(menu_lines(s).into_iter().map(MenuEntry::Info)),
+        None => entries.push(MenuEntry::Info(UNAVAILABLE.to_owned())),
+    }
+    entries.push(MenuEntry::Separator);
+    entries.push(MenuEntry::Command {
+        id: command_id(MenuCommand::OpenSettings),
+        label: "設定ファイルを開く…".to_owned(),
+        checked: false,
+        enabled: settings_path(status).is_some(),
+    });
+    entries
+}
+
 /// 同じ文言を短時間に繰り返し出さないための間引き
 #[derive(Debug, Clone)]
 pub struct ToastThrottle {
@@ -196,6 +302,90 @@ mod tests {
         assert_eq!(mode_indicator(InputMode::Hiragana), "あ");
         assert_eq!(mode_indicator(InputMode::Alphanumeric), "A");
         assert_eq!(mode_name(InputMode::Alphanumeric), "英数");
+    }
+
+    fn sample_status(config_path: Option<&str>) -> StatusResult {
+        StatusResult {
+            profile: "balanced".into(),
+            profile_reason: "r".into(),
+            backend: "x".into(),
+            llm: false,
+            learning: true,
+            learned_entries: 1,
+            user_dict_entries: 0,
+            config_path: config_path.map(str::to_owned),
+            config_error: false,
+        }
+    }
+
+    #[test]
+    fn menu_ids_round_trip_and_are_unique() {
+        let commands = [
+            MenuCommand::SetMode(InputMode::Hiragana),
+            MenuCommand::SetMode(InputMode::Alphanumeric),
+            MenuCommand::OpenSettings,
+        ];
+        let mut ids: Vec<u32> = commands.iter().map(|c| command_id(*c)).collect();
+        for c in commands {
+            assert_eq!(command_from_id(command_id(c)), Some(c));
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), commands.len());
+        assert_eq!(command_from_id(0), None);
+        assert_eq!(command_from_id(999), None);
+    }
+
+    #[test]
+    fn toggle_and_button_labels() {
+        assert_eq!(toggled(InputMode::Hiragana), InputMode::Alphanumeric);
+        assert_eq!(toggled(toggled(InputMode::Hiragana)), InputMode::Hiragana);
+        assert_eq!(button_text(Some(InputMode::Alphanumeric)), "A");
+        assert_eq!(button_text(None), "あ");
+        assert_eq!(button_tooltip(Some(InputMode::Hiragana)), "Nagi: ひらがな");
+        assert_eq!(button_tooltip(None), "Nagi");
+    }
+
+    #[test]
+    fn menu_checks_current_mode_and_enables_settings_only_with_a_path() {
+        let status = sample_status(Some("C:/Users/x/AppData/Roaming/Nagi/config.toml"));
+        let entries = menu_entries(Some(InputMode::Alphanumeric), Some(&status));
+        let checked: Vec<_> = entries
+            .iter()
+            .filter_map(|e| match e {
+                MenuEntry::Command { label, checked, .. } if *checked => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(checked, ["英数"]);
+        let Some(MenuEntry::Command { enabled, id, .. }) = entries.last() else {
+            panic!("最後は設定の項目");
+        };
+        assert!(*enabled);
+        assert_eq!(command_from_id(*id), Some(MenuCommand::OpenSettings));
+        // 状態の行（menu_lines）が入る
+        assert!(entries.contains(&MenuEntry::Info("変換: 辞書のみ".into())));
+
+        // 設定ファイルの場所が無い・空・状態が取れないときは選べない
+        for st in [
+            Some(sample_status(None)),
+            Some(sample_status(Some(""))),
+            None,
+        ] {
+            let entries = menu_entries(None, st.as_ref());
+            assert!(matches!(
+                entries.last(),
+                Some(MenuEntry::Command { enabled: false, .. })
+            ));
+            // モード不明ならチェックは付けない
+            assert!(
+                !entries
+                    .iter()
+                    .any(|e| matches!(e, MenuEntry::Command { checked: true, .. }))
+            );
+        }
+        let none = menu_entries(Some(InputMode::Hiragana), None);
+        assert!(none.contains(&MenuEntry::Info(UNAVAILABLE.into())));
     }
 
     #[test]

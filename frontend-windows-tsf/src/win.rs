@@ -185,7 +185,7 @@ pub struct Fonts {
     dpi: u32,
 }
 
-fn make_font(px: i32, dpi: u32) -> HFONT {
+pub fn make_font(px: i32, dpi: u32) -> HFONT {
     let face = wide("Yu Gothic UI");
     unsafe {
         CreateFontW(

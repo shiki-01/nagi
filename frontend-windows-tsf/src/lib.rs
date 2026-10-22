@@ -16,13 +16,14 @@
 //!   即時に反映し、定期タイマー（環境の報告・スリープ復帰の検出）と電源通知も受ける
 //! - `probe`: `EnvironmentProbe` の Win32 実装 / `context_info`: 周辺テキスト・`InputScope`・アプリ ID
 //! - `display_attr`: `ITfDisplayAttributeProvider` と `GUID_PROP_ATTRIBUTE` への書き込み
-//! - `mode_comp`: 入力モードのコンパートメント（タスクトレイの「あ / A」）/ `reconversion`: `ITfFnReconversion`
+//! - `mode_comp`: 入力モードのコンパートメント（タスクトレイの「あ / A」）/ `langbar`: 言語バーのボタン
+//!   （モード表示・クリックで切り替え・メニュー）/ `reconversion`: `ITfFnReconversion`
+//!   （`Reconvert` と `GetReconversion`）
 //!
 //! # 未実装（TODO）
 //! - 複数のホストプロセスでエンジンを共有する仕組み（現状はホストプロセスごとに imserver を起動する）
-//! - 候補ウィンドウのマウス操作（v1 の非目標）、言語バーのボタン（`ITfLangBarItemButton`。コンパートメントで代替）
-//! - `ITfFnReconversion::GetReconversion`（候補一覧の提供。`E_NOTIMPL`）
-//! - インストーラ・署名・SmartScreen 対応（設計書 §5.3）
+//! - 候補ウィンドウのマウス操作（v1 の非目標）
+//! - アプリ内の自動更新（置き換え。通知のみ）、ARM64 / 32bit ホスト用の DLL
 //!
 //! # 検証状況
 //! Linux ホストでの `cargo check/clippy --target x86_64-pc-windows-gnu`（型・シグネチャの確認）と、
@@ -48,6 +49,8 @@ mod edit;
 mod guids;
 #[cfg(windows)]
 mod keys;
+#[cfg(windows)]
+mod langbar;
 #[cfg(windows)]
 mod message_window;
 #[cfg(windows)]

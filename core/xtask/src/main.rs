@@ -115,8 +115,12 @@ enum Task {
         #[arg(long)]
         out: std::path::PathBuf,
     },
-    /// iOS 向け依存（nagi-ffi の閉包）のライセンス一覧を THIRD_PARTY_LICENSES.md に生成する
-    GenLicenses,
+    /// 配布物ごとの依存ライセンス一覧を生成する（ios: THIRD_PARTY_LICENSES.md、windows: THIRD_PARTY_LICENSES_WINDOWS.md）
+    GenLicenses {
+        /// 対象（ios / windows / all）
+        #[arg(long, default_value = "all")]
+        platform: String,
+    },
     /// iOS 用 XCFramework を生成する（nagi-ffi を aarch64-apple-ios/sim ターゲット向けにビルド）
     BuildIosXcframework {
         /// feature llama を有効化する
@@ -182,7 +186,7 @@ fn main() -> ExitCode {
             notes_url,
             out,
         }),
-        Task::GenLicenses => gen_licenses::run(),
+        Task::GenLicenses { platform } => gen_licenses::run(&platform),
         Task::BuildIosXcframework { llama, out_dir } => {
             build_ios_xcframework::run(build_ios_xcframework::Options { llama, out_dir })
         }

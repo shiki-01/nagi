@@ -1387,3 +1387,67 @@ Phase 5 の最後の担当。コア（`core/` の各 crate）は変更してい�
 **未検証（実機 / Actions）**: すべて。特に (1) `regsvr32` の登録と UAC の流れ、`-Elevated` 子プロセスの終了コード、(2) Program Files の DLL が UWP / 保護されたアプリで読めること、(3) 更新（上書き）時の `.old` 退避と再起動後の切り替え、(4) `uninstall.ps1` の再起動時削除、(5) `irm | iex` の動作（PowerShell 5.1 と 7）、(6) ワークフロー全体（windows-latest での llama ビルド、`signtool` の場所、スモークテスト）。PowerShell の構文は Linux の PowerShell 7.5 の構文解析器と `Test-Payload`（`SHA256SUMS` の検証）の動作で確認した範囲のみ
 
 **Phase 5 で残る未実装**: 複数ホストでのエンジン共有（名前付きパイプ + 常駐ブローカー、H-39）、言語バーのボタン、`ITfFnReconversion::GetReconversion`、アプリ内の自動更新（置き換え）、Windows 用の依存ライセンス一覧、ARM64 / 32bit ホスト対応、辞書・モデルのアプリ内ダウンロード導線、Authenticode 署名の実施、winget / MSI。実機での検証すべて（`docs/real-hardware-checklist.md` §8）
+
+### H-43. Windows フロント: GetReconversion・言語バーのボタン・Windows 用ライセンス一覧、エンジン共有（ブローカー）の設計メモ（2026-10-22、ユーザー指示「裁量に任せる」、実機未確認）
+
+H-41・H-42 の残件のうち、実機なしで作れるものを実装し、作らないものは設計メモにした。コア（`core/` の各 crate）とプロトコルは変更していない（変更は xtask・`nagi-windows`・`nagi-windows-tsf`・文書のみ）。
+
+**1. `ITfFnReconversion::GetReconversion`（H-41 では `E_NOTIMPL`）**
+- 流れ: フォーカス中のコンテキストで**同期の読み取り編集セッション**を要求して範囲の文字列を読む → `eligible_text`（空・200 UTF-16 超は失敗）→ コアの `reconvert`（待ちは `Reconvert` と同じ 2 秒）→ 応答から候補を作る → **すぐ `reset` でコアの変換中状態を戻す**（候補を選ぶかはアプリ次第で、選ばれるまでコアを変換中に残さない）→ `ITfCandidateList`（`EnumCandidates` / `GetCandidate` / `GetCandidateNum` / `SetResult`）を返す。`SetResult` は `CAND_FINALIZED` のときだけ、範囲を候補の文字列に置き換えてキャレットを末尾に置く（`CAND_SELECTED` / `CAND_CANCELED` は何もしない）
+- **候補の作り方（`nagi_windows::reconvert::range_candidates`、テスト済み）**: `ITfFnReconversion` の候補は**範囲全体の代わり**になる文字列だが、コアの候補は注目文節（`preedit.focus`）だけの代わり。そのまま渡すと複数文節の再変換で範囲の残りを失う。そこで先頭に変換結果の全文、続けて「注目文節だけを各候補に替えた全文」を並べる（UTF-16 の区間で差し替え、不正な区間・サロゲートの途中は捨てる。重複と空は除き、最大 30 件）。文節ごとの選び直しは `Reconvert`（composition にする経路）が担当する
+- 入力中（composition あり）は失敗を返す。アプリが文書ロックを持つ最中に呼ぶと同期セッションが取れず失敗する（その場合アプリは `Reconvert` 等にフォールバックするはず。**要実機確認**）。選択した候補はコアの学習には送らない（`select_candidate` の対象はコアの変換中状態に限られ、`reset` 後は無い）。再変換結果の学習は未対応
+- **迷った判断**: (a) 候補一覧に composition を使う案（`Reconvert` と同じ）は、`GetReconversion` が「候補を返す」契約なので採らなかった。(b) 注目文節だけの候補を返す案は上記の理由で採らなかった。(c) 全文候補のみ（文節差し替えなし）にする案は、候補が 1 件になり機能が弱いので採らなかった
+
+**2. 言語バーのボタン（`langbar.rs`、`ITfLangBarItemButton` + `ITfSource`）**
+- 現在のモードを「あ / A」で表示（アイコンは藍色の地に白字を GDI で描いて毎回作る。文字・ツールチップも）。**左クリックでひらがな ⇄ 英数**、右クリック（OS が `InitMenu` を呼ぶ）のメニューは: ひらがな / 英数（現在にチェック）、状態の行（`menu_lines`。選べない）、「設定ファイルを開く…」。スタイルは `TF_LBI_STYLE_BTN_BUTTON | SHOWNINTRAY`
+- **モードの変更は `mode_comp` のコンパートメントへ書く**（他のクライアント・トレイの操作と同じ経路。変更通知から `perform_action(SetMode)` でコアへ）。ボタンからコアへ直接送る経路は作らず、「同じモードなら送らない」の一元化（`ModeSync`）を保つ。コアでモードが変わったとき・Activate・エンジン再起動後に `OnUpdate` で描き直させる
+- 「設定…」は GUI を作らず（Phase 4 の設定 GUI の範囲）、コアが `get_status` で返す `config_path` の `config.toml` を**メモ帳で開く**（`.toml` の関連付けに依存しないため `notepad.exe` を明示。ファイルが無ければメモ帳が作成を尋ねる）。`config_path` が無ければ項目は選べない（灰色）。ラベルは「設定ファイルを開く…」（設定画面ではないので）
+- ロジックは `nagi_windows::status`（`MenuEntry` / `MenuCommand` / `command_id`・`command_from_id` / `menu_entries` / `toggled` / `button_text` / `button_tooltip` / `settings_path`）に置き、COM は ID の変換と描画のみ。H-41 の「言語バーのボタンは実装しない」を覆した。理由: Win8 以降のトレイ表示（コンパートメント）だけでは、メニューから状態の確認・設定の入口が出せず、macOS のメニューバーのメニュー（H-38）に当たるものが無かったため。トレイの「あ / A」は従来どおりコンパートメントで OS が描く（二重に出るかは**要実機確認**）
+- **迷った判断**: (a) `BTN_MENU`（左クリックもメニュー）にする案は、1 クリックでの切り替えができなくなるので採らなかった。(b) `GetIcon` は毎回新しい `HICON` を返す（言語バーが破棄する前提。もしそうでなければリークする。**要実機確認**）。(c) メニューを開くたびに `get_status` を同期で呼ぶ（UI スレッドで最大 250ms。開いたときだけなので許容）
+
+**3. Windows 用の依存ライセンス一覧（`cargo xtask gen-licenses`）**
+- **別ファイルにした**: `gen-licenses [--platform ios|windows|all]`（既定は all）。iOS は従来どおり `THIRD_PARTY_LICENSES.md`（`project.yml` がアプリに同梱するため名前と内容を変えない。Windows 専用の crate を混ぜない）、Windows は **`THIRD_PARTY_LICENSES_WINDOWS.md`**（104 crates）。`bundle-windows` は後者を zip の中の `THIRD_PARTY_LICENSES.md` として同梱する（`install.ps1` の期待する名前は変えない）。1 ファイルに統合する案は、配布物ごとに実際に取り込まれる依存が違い（iOS に `windows` / `ring` / `rustls` は入らず、Windows に iOS 専用 crate は入らない）、各配布物のライセンス表示が過不足になるため採らなかった
+- Windows の依存閉包は `cargo tree -e normal --target x86_64-pc-windows-msvc` を **`nagi-windows-tsf`（DLL）と `nagi-server --features llama`（imserver）の 2 起点の和**として求める（ターゲット未インストールでも `cargo tree` / `cargo metadata` は動くので Linux で生成できる）。proc-macro とローカル crate は除く（従来どおり）。UNKNOWN のライセンスは無かった
+- テスト: `cargo tree` 出力の解析・引数組み立て・プラットフォーム定義・描画、`bundle-windows` が Windows 用を同梱すること。**依存を変えたら再生成してコミットする**（CI での差分検査はまだ無い。`check-types` のような検査を足すかは未決）
+
+**4. 複数ホストでのエンジン共有（名前付きパイプ + 常駐ブローカー）: 実装しない。設計メモ**
+
+現状（H-39）はホストプロセスごとに `imserver` を起動する。**実測が無いまま常駐プロセスと IPC を足すと、障害点（権限・寿命・ACL）が増えるだけで利得が不明**なので今回は作らない。判断に必要な実測を先に取る（下記）。
+
+*判断の前提となる現状の問題*
+- メモリ: 各 imserver が辞書（mmap で共有されうる）とモデルを読む。モデルは small で数百 MB 規模、`reconvert` の逆引き索引は約 270MB（G-29。`minimal`/`light` は使用後に解放）。ホストが 10 個あれば 10 倍になりうる（辞書は mmap でページ共有されるが Windows では非 mmap 経路。`Dictionary::load` の mmap は非 Windows、H-7）
+- 起動時間: ホストを開くたびに `initialize`（モデル読み込み数秒）。その間のキーは素通し（H-39）
+- 学習データの整合: 複数の imserver が同じ `learning.tsv` を書く。原子的 flush のため最後に書いた側が勝ち、他ホストの学習を失いうる（現状の既知の弱点。ブローカー化の最大の利点）
+
+*ブローカーの責務（案）*
+1. 1 利用者・1 セッション（Windows のログオンセッション）につき `imserver` を 1 つ保持する（`nagi-broker.exe`。子プロセスとして起動し、コア・プロトコルは変更しない）
+2. 各ホストの TSF DLL は**名前付きパイプのクライアント**になり、JSON-RPC をそのまま流す。ブローカーは接続ごとに JSON-RPC の `id` を付け替えて（クライアントごとの `id` 空間が衝突するため）imserver へ多重化し、応答を元の接続に返す
+3. 非同期通知（`update_preedit` 等）は `session_id` で宛先の接続を引いて配る。プロセス全体の通知（`notify` 等）は全接続へ。セッション ID は現状 `win-<pid>-<n>` でプロセスをまたいで一意なので、そのまま使える
+4. `initialize` は最初の接続でだけ imserver に送り、以降の接続には保存した結果を返す（クライアントのバージョン差は、ブローカーが自分のバージョンと一致するか確認する）。`shutdown` は全接続が切れて猶予（例: 10 分）が経ってから
+5. `restore_session`: imserver が落ちて再起動したとき、ブローカーが全接続分の最新 preedit を保持して復元する（現在は各ホストの `SessionStore` が保持している。ブローカー側へ移すか、ホストが再接続時に送り直すかを選ぶ）
+6. 環境（`set_environment`）は全ホストが送ってくるので、最後の値の重複排除をブローカーでする（現状はホストごとの `EnvironmentReporter`）。`set_context` はセッション単位なのでそのまま転送
+
+*パイプ名・ACL・寿命*
+- 名前: `\\.\pipe\LOCAL\Nagi-<ユーザー SID>-<バージョン>`（`LOCAL\` でセッション内に閉じる。バージョンを入れるのは、更新の途中で新旧のホストが混在しても互いに接続しないため）
+- ACL: 作成者（その利用者）のみ読み書き（DACL に利用者の SID だけ）。**AppContainer / 保護されたアプリ**から接続させるには `ALL APPLICATION PACKAGES` の許可が別途要る。許可すると任意の UWP アプリが入力内容を受け取れる経路になるため、**保護されたアプリには許可しない**か、許可するなら入力内容が流れることを明記して判断する。`FILE_FLAG_FIRST_PIPE_INSTANCE` と `PIPE_REJECT_REMOTE_CLIENTS` を指定し、サーバーのなりすまし（先に同名パイプを作られる）を防ぐ。クライアント側は接続後に `GetNamedPipeServerProcessId` でブローカーの実行ファイルのパスを検証する
+- 起動: ホストの DLL が接続に失敗したら、`CreateProcess` でブローカーを起動して再接続する（排他は名前付きミューテックス。競合した側は待って再接続）。常駐の自動起動（Run キー / スタートアップ）は使わない（遅延起動のみ）
+- 寿命: 接続が 0 になってから猶予後に自分で終了。ブローカーのクラッシュ時は、各ホストが現行の指数バックオフと同じ方針でブローカーを再起動し、`restore_session` で復元する。imserver のクラッシュはブローカーが担当（現行の `EngineSupervisor` をブローカー側へ移す）
+- 更新: ブローカー実行ファイルが使用中だと置き換えられない（現行の `.old` 退避と同じ運用）。バージョン入りのパイプ名により、新版のホストは新版のブローカーを起動する
+
+*現行方式からの移行手順（段階）*
+1. `nagi-windows` の `EngineSupervisor` が使う `EngineLauncher` / 通信路 trait を流用し、「名前付きパイプの通信路」実装を追加（コア不変。既存のテストの流儀で、Linux ではユニックスソケット等の代替で確認）
+2. ブローカー（`nagi-broker`）を新規 crate として追加。まずは**ホスト 1 つ + ブローカー**で、現行と同じ挙動になることを実機で確認
+3. 設定（レジストリまたは環境変数）で「ブローカーを使う / 使わない」を切り替えられるようにして、既定は使わない。複数ホスト・クラッシュ・スリープ復帰・更新を実機で検証
+4. 実測で利得（下記）が確認できたら既定を切り替える。旧方式は `minimal` 相当のフォールバックとして残す（ブローカーに接続できないときは従来どおりプロセス内で起動）
+
+*判断に必要な実測項目（実機）*
+- ホストを 1 / 5 / 10 個開いたときの imserver の合計の**ワーキングセット・コミットサイズ**（辞書の共有ページを区別する）と、`reconvert` 後のピーク
+- ホスト起動から変換可能になるまでの時間（`initialize` の所要）と、その間に取りこぼすキー数
+- 名前付きパイプ経由の `process_key` の往復時間の増分（目標: p95 で +1ms 以内。目標値 `キー入力→ひらがな反映 p95 < 16ms` への影響）
+- 複数ホストで同時に学習したときの `learning.tsv` の取りこぼし（現状の弱点の大きさ）
+- AppContainer のアプリ（設定アプリ・Store アプリ）からパイプへ接続できるか、ACL の許可の可否
+- ブローカーが落ちたとき・サインアウトしたとき・スリープ復帰のときの再接続の所要
+
+**5. 検証**: `cargo fmt --all --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace`（llama なし）と、`cargo check` / `cargo clippy -p nagi-windows-tsf --target x86_64-pc-windows-gnu --all-targets -- -D warnings`（型・シグネチャのみ。リンクと実行は未確認）。`GetReconversion` と言語バーの COM 部分は**実機で一度も動かしていない**。特に (1) `ITfLangBarItemMgr` を `ITfThreadMgr` への `QueryInterface` で得られるか、(2) `BTN_BUTTON` の右クリックで `InitMenu` が呼ばれるか、(3) `GetIcon` の `HICON` の所有権、(4) `GetReconversion` を呼ぶアプリ（Office 等）が文書ロックの外で呼ぶか、`SetResult` の呼び方、(5) トレイの「あ / A」との二重表示
+
+**Phase 5 で最終的に残る未実装**: 複数ホストでのエンジン共有（上記の実測が先）、アプリ内の自動更新（置き換え）、ARM64 / 32bit ホスト対応、辞書・モデルのアプリ内ダウンロード導線、Authenticode 署名の実施、winget / MSI、設定 GUI（Phase 4）、再変換候補の選択結果の学習、候補ウィンドウのマウス操作（v1 非目標）。実機での検証すべて（`docs/real-hardware-checklist.md` §8）

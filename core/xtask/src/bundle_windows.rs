@@ -11,7 +11,7 @@
 //! imserver.exe           変換エンジン
 //! install.ps1 / uninstall.ps1
 //! README.md              docs/windows-install.md（SmartScreen の手順を含む）
-//! LICENSE-MIT / LICENSE-APACHE / NOTICE / THIRD_PARTY_LICENSES.md
+//! LICENSE-MIT / LICENSE-APACHE / NOTICE / THIRD_PARTY_LICENSES.md（元は THIRD_PARTY_LICENSES_WINDOWS.md）
 //! VERSION                バージョン（x.y.z）
 //! SHA256SUMS             上記すべての SHA-256（`<hex>  <相対パス>`。install.ps1 が検証する）
 //! ```
@@ -27,6 +27,9 @@ use sha2::{Digest, Sha256};
 pub const DLL_FILE: &str = "nagi_windows_tsf.dll";
 /// エンジンの実行ファイル名。
 pub const IMSERVER_FILE: &str = "imserver.exe";
+/// リポジトリ上の Windows 用ライセンス一覧（`gen-licenses` の出力。iOS 用の
+/// `THIRD_PARTY_LICENSES.md` とは別。decisions.md H-43）。
+pub const WINDOWS_LICENSES_FILE: &str = "THIRD_PARTY_LICENSES_WINDOWS.md";
 /// チェックサム一覧のファイル名。
 pub const CHECKSUM_FILE: &str = "SHA256SUMS";
 /// 署名用 PFX のパスワードを渡す環境変数名（コマンドラインには載せない）。
@@ -115,10 +118,9 @@ pub fn plan(inputs: &Inputs) -> Result<Vec<Entry>, String> {
         file("LICENSE-MIT", repo.join("LICENSE-MIT")),
         file("LICENSE-APACHE", repo.join("LICENSE-APACHE")),
         file("NOTICE", repo.join("NOTICE")),
-        file(
-            "THIRD_PARTY_LICENSES.md",
-            repo.join("THIRD_PARTY_LICENSES.md"),
-        ),
+        // Windows の依存閉包の一覧（`cargo xtask gen-licenses --platform windows`）。
+        // zip の中の名前は install.ps1 の期待どおり THIRD_PARTY_LICENSES.md
+        file("THIRD_PARTY_LICENSES.md", repo.join(WINDOWS_LICENSES_FILE)),
         Entry {
             name: "VERSION".to_string(),
             source: Source::Bytes(format!("{}\n", inputs.version).into_bytes()),
@@ -405,7 +407,9 @@ mod tests {
             ("LICENSE-MIT", "mit\n"),
             ("LICENSE-APACHE", "apache\n"),
             ("NOTICE", "notice\n"),
-            ("THIRD_PARTY_LICENSES.md", "third\n"),
+            // iOS 用の一覧（同梱しない）と Windows 用の一覧（同梱する）を区別する
+            ("THIRD_PARTY_LICENSES.md", "ios\n"),
+            (WINDOWS_LICENSES_FILE, "third\n"),
         ] {
             let p = repo.join(path);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -507,6 +511,8 @@ mod tests {
         );
         assert_eq!(get("VERSION"), b"1.2.3\n");
         assert_eq!(get("nagi_windows_tsf.dll"), b"MZ-dll");
+        // ライセンス一覧は Windows 用（iOS 用ではない）が THIRD_PARTY_LICENSES.md の名前で入る
+        assert_eq!(get("THIRD_PARTY_LICENSES.md"), b"third\n");
 
         // スクリプトだけ UTF-8 BOM 付き（Windows PowerShell 5.1 の文字化け対策）
         assert!(get("install.ps1").starts_with(UTF8_BOM));

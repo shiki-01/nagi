@@ -22,7 +22,7 @@ use nagi_windows::context::{build_context, should_report_before_key};
 use nagi_windows::environment::{EnvironmentReporter, ResumeDetector};
 use nagi_windows::keynorm;
 use nagi_windows::mode::{ModeSync, compartment_values};
-use nagi_windows::status::{ToastThrottle, toast_for};
+use nagi_windows::status::{MenuCommand, MenuEntry, ToastThrottle, toast_for};
 use nagi_windows::supervisor::EngineEvent;
 use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_POINTER, LPARAM, WPARAM};
 use windows::Win32::UI::TextServices::{
@@ -40,6 +40,7 @@ use crate::display_attr::{self, AttrAtoms};
 use crate::dll;
 use crate::edit::{self, Env, SharedComposition, Timing};
 use crate::engine::{EngineHost, EngineLocation, RECONVERT_TIMEOUT};
+use crate::langbar::{self, LangBar};
 use crate::message_window::{MessageEvent, MessageWindow};
 use crate::mode_comp::{self, ModeCompartments};
 use crate::probe::Win32Probe;
@@ -153,6 +154,8 @@ pub(crate) struct Core {
     message_window: RefCell<Option<MessageWindow>>,
     mode_sync: RefCell<ModeSync>,
     compartments: RefCell<Option<ModeCompartments>>,
+    /// 言語バーのボタン（登録に失敗したら `None`。タスクトレイの表示はコンパートメントなので入力はできる）
+    lang_bar: RefCell<Option<LangBar>>,
     /// 自分でコンパートメントを書いている間（2 つの値を順に書く途中の通知を OS 側の操作と取り違えない）
     writing_mode: Cell<bool>,
     resume: RefCell<ResumeDetector>,
@@ -180,6 +183,7 @@ impl Core {
             message_window: RefCell::new(None),
             mode_sync: RefCell::new(ModeSync::new()),
             compartments: RefCell::new(None),
+            lang_bar: RefCell::new(None),
             writing_mode: Cell::new(false),
             resume: RefCell::new(ResumeDetector::new(
                 interval,
@@ -244,6 +248,10 @@ impl Core {
             ModeCompartments::new(&thread_mgr, client_id, &compartment_sink).ok();
         self.sync_mode_with_os();
 
+        // 言語バーのボタン（モード表示・切り替え・メニュー）
+        *self.lang_bar.borrow_mut() = LangBar::new(&thread_mgr, Rc::downgrade(self)).ok();
+        self.refresh_lang_bar();
+
         // 再変換（ITfFnReconversion）の入口
         if let Ok(single) = thread_mgr.cast::<ITfSourceSingle>() {
             let provider = FunctionProvider::create(Rc::downgrade(self));
@@ -272,6 +280,7 @@ impl Core {
         self.candidate_window.destroy();
         self.toast.destroy();
         *self.message_window.borrow_mut() = None;
+        *self.lang_bar.borrow_mut() = None;
         *self.compartments.borrow_mut() = None;
         *self.composition.borrow_mut() = None;
         *self.composition_sink.borrow_mut() = None;
@@ -340,6 +349,7 @@ impl Core {
             Some(None) => self.write_mode_values(compartment_values(InputMode::Hiragana)),
             Some(Some(v)) => self.request_mode_from_os(v.open, v.conversion),
         }
+        self.refresh_lang_bar();
     }
 
     /// モードの値をコンパートメントへ書く。書き込み中の変更通知は無視する
@@ -357,6 +367,7 @@ impl Core {
         let Some(mode) = requested else {
             return;
         };
+        self.refresh_lang_bar();
         if let Ok(result) = self.engine.set_mode(&self.session_id, mode) {
             // SetMode は入力中の文字列を確定する
             if let Some(ctx) = self.focused_context() {
@@ -386,6 +397,57 @@ impl Core {
         let values = self.mode_sync.borrow_mut().core_changed(mode);
         if let Some(values) = values {
             self.write_mode_values(values);
+        }
+        self.refresh_lang_bar();
+    }
+
+    // ---- 言語バー ----
+
+    /// 言語バーのボタンの表示を描き直させる
+    fn refresh_lang_bar(&self) {
+        if let Some(bar) = self.lang_bar.borrow().as_ref() {
+            bar.update();
+        }
+    }
+
+    /// コアと合意している現在のモード（ボタンの表示用）
+    pub(crate) fn lang_bar_mode(&self) -> Option<InputMode> {
+        self.mode_sync.borrow().known()
+    }
+
+    /// モードを切り替える。他のクライアントやトレイと同じく、コンパートメントへ書き、
+    /// その変更通知（`on_compartment_changed`）経由でコアへ送る
+    fn request_mode(&self, mode: InputMode) {
+        if self.lang_bar_mode() == Some(mode) {
+            return;
+        }
+        if let Some(c) = self.compartments.borrow().as_ref() {
+            let _ = c.write(compartment_values(mode));
+        }
+    }
+
+    /// ボタンの左クリック（ひらがな ⇄ 英数）
+    pub(crate) fn toggle_mode_from_lang_bar(&self) {
+        let current = self.lang_bar_mode().unwrap_or(InputMode::Hiragana);
+        self.request_mode(nagi_windows::status::toggled(current));
+    }
+
+    /// メニューの内容。状態の取得は UI スレッドで最大 250ms 待つ（メニューを開いたときだけ）
+    pub(crate) fn lang_bar_menu(&self) -> Vec<MenuEntry> {
+        let status = self.engine.status().ok();
+        nagi_windows::status::menu_entries(self.lang_bar_mode(), status.as_ref())
+    }
+
+    /// メニューの項目が選ばれた
+    pub(crate) fn run_menu_command(&self, command: MenuCommand) {
+        match command {
+            MenuCommand::SetMode(mode) => self.request_mode(mode),
+            MenuCommand::OpenSettings => {
+                let status = self.engine.status().ok();
+                if let Some(path) = nagi_windows::status::settings_path(status.as_ref()) {
+                    langbar::open_in_notepad(path);
+                }
+            }
         }
     }
 
@@ -466,6 +528,43 @@ impl Core {
                     core.finish(&Followup::from_result(result));
                 }
             },
+        )
+    }
+
+    /// 範囲の再変換候補（`ITfFnReconversion::GetReconversion`）。範囲全体を置き換える文字列の一覧。
+    /// 範囲の文字列は同期の編集セッションで読む（アプリが文書ロックを持つ最中に呼ばれたら失敗する）。
+    /// コアの `reconvert` で変換中になった状態は、候補を作ったらすぐ `reset` で戻す
+    /// （候補を選ぶかどうかはアプリ側で、確定は `replace_range` が行う）
+    pub(crate) fn reconversion_candidates(&self, range: &ITfRange) -> Result<Vec<String>> {
+        let fail = || windows::core::Error::from(E_FAIL);
+        // 入力中は再変換しない（`reconvert` と同じ）
+        if self.is_composing() {
+            return Err(fail());
+        }
+        let context = self.focused_context().ok_or_else(fail)?;
+        let text = edit::read_range_text(&context, self.client_id.get(), range).ok_or_else(fail)?;
+        let text = nagi_windows::reconvert::eligible_text(&text).ok_or_else(fail)?;
+        let result = self.reconvert_text(text).ok_or_else(fail)?;
+        let candidates = nagi_windows::reconvert::range_candidates(&result);
+        let _ = self.engine.reset(&self.session_id);
+        if candidates.is_empty() {
+            Err(fail())
+        } else {
+            Ok(candidates)
+        }
+    }
+
+    /// 再変換の候補が選ばれた。範囲の文字列を置き換える
+    pub(crate) fn replace_range(&self, range: ITfRange, text: String) -> Result<()> {
+        let context = self
+            .focused_context()
+            .ok_or_else(|| windows::core::Error::from(E_FAIL))?;
+        edit::replace_range_text(
+            &context,
+            self.client_id.get(),
+            range,
+            text,
+            Timing::Deferred,
         )
     }
 

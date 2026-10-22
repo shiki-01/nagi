@@ -168,10 +168,7 @@ pub fn run_reconvert(
         if unsafe { target.IsEmpty(ec) }?.as_bool() {
             return Ok(());
         }
-        let mut buf = [0u16; RECONVERT_READ_LIMIT];
-        let mut fetched = 0u32;
-        unsafe { target.GetText(ec, 0, &mut buf, &mut fetched) }?;
-        let text = String::from_utf16_lossy(&buf[..(fetched as usize).min(buf.len())]);
+        let text = range_text(&target, ec)?;
         let Some(text) = eligible_text(&text) else {
             return Ok(());
         };
@@ -181,6 +178,45 @@ pub fn run_reconvert(
         apply_plan(&ctx, ec, &env, &plan_from_result(&result), Some(&target))?;
         applied(&result);
         Ok(())
+    })
+}
+
+/// 範囲の文字列を読む（長すぎる範囲は先頭の `RECONVERT_READ_LIMIT` UTF-16 まで。判定は呼び出し側）
+fn range_text(range: &ITfRange, ec: u32) -> Result<String> {
+    let mut buf = [0u16; RECONVERT_READ_LIMIT];
+    let mut fetched = 0u32;
+    unsafe { range.GetText(ec, 0, &mut buf, &mut fetched) }?;
+    Ok(String::from_utf16_lossy(
+        &buf[..(fetched as usize).min(buf.len())],
+    ))
+}
+
+/// 範囲の文字列を読む（同期・読み取り。`ITfFnReconversion::GetReconversion` 用）。
+/// 文書ロックを他が持っているなどで読めなければ `None`
+pub fn read_range_text(context: &ITfContext, client_id: u32, range: &ITfRange) -> Option<String> {
+    let out: Rc<RefCell<Option<String>>> = Rc::default();
+    let slot = Rc::clone(&out);
+    let range = range.clone();
+    run(context, client_id, Timing::Sync, false, move |ec| {
+        *slot.borrow_mut() = Some(range_text(&range, ec)?);
+        Ok(())
+    })
+    .ok()?;
+    out.borrow_mut().take()
+}
+
+/// 範囲の文字列を `text` に置き換え、キャレットを末尾に置く（再変換の候補の確定）
+pub fn replace_range_text(
+    context: &ITfContext,
+    client_id: u32,
+    range: ITfRange,
+    text: String,
+    timing: Timing,
+) -> Result<()> {
+    let ctx = context.clone();
+    run(context, client_id, timing, true, move |ec| {
+        unsafe { range.SetText(ec, 0, &to_utf16(&text)) }?;
+        set_caret_at_end(&ctx, ec, &range)
     })
 }
 
