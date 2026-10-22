@@ -8,6 +8,7 @@
 //! - [`client`]: 改行区切り JSON-RPC 2.0 クライアントと通信路 trait
 //! - [`revision`]: revision による古い非同期通知の破棄
 //! - [`supervisor`]: エンジン子プロセスの指数バックオフ再起動と `restore_session`
+//! - [`session`]: セッションごとの最新 preedit の保持（`restore_session` の材料）
 //! - [`process`]: 子プロセス（imserver）の stdin/stdout を通信路にする実装
 
 #![warn(missing_docs)]
@@ -17,16 +18,8 @@ pub mod client;
 pub mod keynorm;
 pub mod process;
 pub mod revision;
+pub mod session;
 pub mod supervisor;
-
-/// TSF/COM 層（未実装）。
-///
-/// ITfTextInputProcessorEx / ITfKeyEventSink / ITfComposition / 候補ウィンドウ等は
-/// `windows` クレートが必要で `unsafe` を伴うため、`unsafe_code = "forbid"` のこのクレートには置かず、
-/// 別クレート（または C++ 薄層）に分ける想定。ここにはキー入力を [`keynorm`] へ渡し、
-/// 応答を [`supervisor::EngineSupervisor`] から受ける接続点だけを将来置く。
-#[cfg(windows)]
-pub mod tsf {}
 
 #[cfg(test)]
 mod testing;

@@ -942,6 +942,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nagi-windows-tsf"
+version = "0.1.1"
+dependencies = [
+ "nagi-protocol",
+ "nagi-windows",
+ "windows",
+ "windows-core",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

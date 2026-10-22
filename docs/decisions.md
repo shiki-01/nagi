@@ -1285,3 +1285,17 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **あわせて**: web の公開（Cloudflare Pages）を main への push では行わず、手動実行（`macos-release` からの起動を含む）だけにした（ユーザー指示。未完成の install.sh が push で公開されないように）
 - **未確認（実機）**: アプリから imserver を子プロセスで実行したときの進捗表示、取得中に入力したときの挙動、hardened runtime 下での imserver のネットワーク接続（エンタイトルメントは不要の想定）
 
+### H-39. Windows フロントの構成と TSF 層の言語（2026-10-22、ユーザー判断「悩んだらお任せ」、実機未確認）
+
+- **TSF 層の実装言語は Rust（`windows` クレート 0.62）**。設計書 §5.3 の第一候補どおり。C++ 薄層は採らない。理由: (1) コアが Rust で、キー正規化・エンジン管理（`nagi-windows`）をそのまま使える（FFI の境界とビルド系が増えない）、(2) `cargo xtask`・CI（windows-latest）だけで完結する、(3) Linux からも `--target x86_64-pc-windows-gnu` で型検査ができ、実機が無くても骨組みの誤りを減らせる。難航した場合に C++ 薄層へ戻す余地は残る（`render` / `engine` が OS 非依存なので、薄層から呼ぶ形に変えやすい）
+- **クレート分割と unsafe の隔離**:
+  - `frontend-windows/`（`nagi-windows`）: `#![forbid(unsafe_code)]` のまま純ロジック。今回 `session`（SessionStore。macOS の `SessionStore.swift` + `RestoreSessionParams.make` と同じ責務・同じカーソル換算）を追加
+  - `frontend-windows-tsf/`（`nagi-windows-tsf`、cdylib + rlib）: COM/TSF。`unsafe_code = "deny"` をクレートに掛け、Win32 を触るモジュール（`dll` / `register` / `text_service` / `edit` / `keys`）だけ `#![allow(unsafe_code)]`。`windows` / `windows-core` は `[target.'cfg(windows)'.dependencies]` のみ（Linux/macOS では空に近いクレートとしてビルドされる）。OS 非依存の `render`（応答 → 編集計画 `EditPlan`）と `engine`（EngineSupervisor + SessionStore + 非同期イベントキューのまとめ）は Linux でテストする
+  - core の workspace members に `"../frontend-windows-tsf"` を追加した（コアの crate は変更していない）
+- **キー**: `VK_IME_ON`(0x16) → `HIRAGANA`（ひらがなモードへ。Direct・ひらがな中は keymap が再変換に解決する。macOS の「かな」と同じ）、`VK_IME_OFF`(0x1A) → `EISU_TOGGLE`（英数モードへ）、`VK_OEM_BACKTAB`(0xF5) → `HIRAGANA_KATAKANA`（macOS のかなキー 0x68 と同じ扱い）。`ZENKAKU_HANKAKU` のようなトグルにしなかったのは、OS 側の状態との往復で反転しないよう、明示的なモード指定にするため。`VK_OEM_BACKTAB` の実キー割当は資料が乏しく**実機で確認が要る**
+- **TSF の流れ**: `OnTestKeyDown` でエンジンの `process_key` を呼び、結果を 1 件キャッシュして `OnKeyDown` で同じ結果を使う（`process_key` は状態を進めるので同じキーで 2 回呼べないため）。反映すべき編集があるのに `consumed=false` の場合も「食った」と返す（返さないと `OnKeyDown` が呼ばれず編集が失われる）。反映は同期の読み書き `ITfEditSession`（確定 → `ITfComposition` の範囲を置換して終了、preedit → 範囲を更新しキャレットを設定）
+- **UI スレッドを塞がない対策**: エンジンの起動（`initialize` はモデル読み込みで数秒）は別スレッド。未接続の間のキーは素通し（composition 中は食って文字列を壊さない）。キー処理の要求タイムアウトは 250ms（設計書の通常要求 500ms より短くした。超えたら素通し／エラー扱い。実測なし）。COM のエントリポイントは `catch_unwind` で囲み、パニックでホストアプリを落とさない
+- **迷った判断**: (1) エンジンはホストプロセスごとに imserver を起動する（`OnceLock` でプロセス内共有）。設計書は「別プロセス化は必須」だが共有はしていない。メモリ・起動時間の面で、名前付きパイプ + 常駐ブローカーへの変更を**要再検討**。imserver はホスト終了で stdin が EOF になり終了する想定（コア側の既存テストあり） (2) 非同期通知（ライブ変換の差し替え等）は他スレッドで受けてキューに積み、次のキー入力で反映する。即時反映は隠しウィンドウ + `PostMessage` が必要で見送り (3) セッションはホスト内の TextService インスタンスごとに 1 つ（コンテキストごとではない） (4) データは `%APPDATA%\Nagi\data`、imserver は DLL と同じディレクトリ（`--data-dir` のみ渡す。インストーラの仕様は未決定） (5) 修飾キーの離上は `flags_changed` としてエンジンへ送る。押下を食ったキーの離上は食わない
+- **検証方法と未検証**: Linux で `cargo check` / `cargo clippy -D warnings --target x86_64-pc-windows-gnu`（リンクはしていない）と、`nagi-windows` / OS 非依存部のテスト。**Windows 実機では何も確認していない**: `regsvr32` での登録、入力方式としての認識、キー入力、composition の表示・確定、アンロード（`DllCanUnloadNow`）、imserver の起動と stdout の扱い、TSF の `windows` クレートの呼び出し規約（`ShiftEnd` によるキャレット位置、`InsertTextAtSelection` の `QUERYONLY` など）
+- **未実装（TODO、`frontend-windows-tsf/src/lib.rs` にも記載）**: 候補ウィンドウ、`ITfFnReconversion`（スタブのみ）、表示属性、言語バー・開閉コンパートメント、非同期通知の即時反映、`set_environment` / `set_context` / 通知表示、アイコン、インストーラ・署名・SmartScreen 方針（設計書 §5.3）、CI への組み込み
+

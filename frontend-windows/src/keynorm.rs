@@ -26,6 +26,10 @@ pub mod vk {
     pub const KANA: u16 = 0x15;
     /// VK_KANJI（= VK_HANJA）。半角/全角キー
     pub const KANJI: u16 = 0x19;
+    /// VK_IME_ON。IME をオンにする（Win10 以降、かなキーや IME 切替アプリが送る）
+    pub const IME_ON: u16 = 0x16;
+    /// VK_IME_OFF。IME をオフにする（英数相当）
+    pub const IME_OFF: u16 = 0x1A;
     /// VK_ESCAPE
     pub const ESCAPE: u16 = 0x1B;
     /// VK_CONVERT。変換キー
@@ -82,6 +86,8 @@ pub mod vk {
     pub const OEM_AUTO: u16 = 0xF3;
     /// VK_OEM_ENLW。半角/全角キー（離上側）
     pub const OEM_ENLW: u16 = 0xF4;
+    /// VK_OEM_BACKTAB。ローマ字（ひらがな）キー相当。実機未確認
+    pub const OEM_BACKTAB: u16 = 0xF5;
 }
 
 /// 右 Shift のスキャンコード（VK_SHIFT の左右判別に使う）
@@ -160,6 +166,13 @@ fn special_keysym(raw: &RawKeyInput) -> Option<u32> {
         vk::OEM_ATTN => keysym::EISU_TOGGLE,
         vk::OEM_FINISH => keysym::KATAKANA,
         vk::OEM_COPY => keysym::HIRAGANA,
+        // macOS の eisuToggle / かな に倣う。IME_ON は「ひらがなモードへ」（明示。ToggleMode にしない:
+        // 状態同期の往復で反転しないように）、IME_OFF は英数モードへ。コアの keymap が
+        // EISU_TOGGLE → SetMode(Alphanumeric)、HIRAGANA → SetMode(Hiragana) と解決する
+        vk::IME_ON => keysym::HIRAGANA,
+        vk::IME_OFF => keysym::EISU_TOGGLE,
+        // かなキー（macOS の 0x68 hiraganaKatakana）と同じ扱い
+        vk::OEM_BACKTAB => keysym::HIRAGANA_KATAKANA,
         _ => return None,
     })
 }
@@ -431,6 +444,9 @@ mod tests {
             (vk::OEM_ATTN, 0xff2f),
             (vk::OEM_FINISH, 0xff26),
             (vk::OEM_COPY, 0xff25),
+            (vk::IME_ON, 0xff25),
+            (vk::IME_OFF, 0xff2f),
+            (vk::OEM_BACKTAB, 0xff27),
         ];
         for &(v, sym) in cases {
             let e = normalize(&raw(v, "")).unwrap();
