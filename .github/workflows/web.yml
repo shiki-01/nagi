@@ -44,11 +44,12 @@ jobs:
           name: web-build
           path: web/build
 
-  # Cloudflare Pages へ公開する。main への push と手動実行のときだけ動く（PR では動かない）。
+  # Cloudflare Pages へ公開する。手動実行（workflow_dispatch。macos-release からの起動を含む）で main のときだけ動く。
+  # main への push では公開しない（未完成の install.sh 等が意図せず公開されないように。push では check だけ走る）。
   # 必要な Secrets: CLOUDFLARE_API_TOKEN（Account > Cloudflare Pages > Edit）/ CLOUDFLARE_ACCOUNT_ID
   deploy:
     needs: check
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     concurrency:
       group: web-deploy

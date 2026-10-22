@@ -55,7 +55,7 @@ SvelteKit は 2.x に固定（3.x は設定 API が変わっており未検証�
 
 ## デプロイ（GitHub Actions → Cloudflare Pages）
 
-`.github/workflows/web.yml` の `deploy` ジョブが、`check`（check・test・build）の成功後に `build/` を Cloudflare Pages（プロジェクト名 `nagi`）へ公開する。main への push と手動実行（`gh workflow run web.yml --ref main`）のときだけ動く（PR では動かない）。プロジェクトが無ければ作成し、カスタムドメイン `nagi.shiki-01.com` の追加も試みる。
+`.github/workflows/web.yml` の `deploy` ジョブが、`check`（check・test・build）の成功後に `build/` を Cloudflare Pages（プロジェクト名 `nagi`）へ公開する。手動実行（`gh workflow run web.yml --ref main`。`macos-release` も最後に起動する）のときだけ動く。main への push や PR では公開しない（check だけ走る）。プロジェクトが無ければ作成し、カスタムドメイン `nagi.shiki-01.com` の追加も試みる。
 
 Secrets が未設定の間は、`deploy` ジョブは警告を出してデプロイだけを飛ばす（CI は赤くならない）。
 
