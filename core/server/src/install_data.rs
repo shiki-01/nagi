@@ -105,7 +105,9 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
         nagi_datafetch::fetch_mozc(&mozc_dir, &mut |p| match p {
             Progress::Skipped { file, index, count } => {
                 eprintln!("imserver: スキップ: {file} (SHA-256 一致)");
-                emit(json!({"stage": "dict_fetch", "file": file, "index": index, "count": count}));
+                emit(
+                    json!({"stage": "dict_fetch", "file": file, "index": index, "count": count, "skipped": true}),
+                );
             }
             Progress::Download {
                 file, index, count, ..
@@ -118,7 +120,9 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
         })?;
 
         // 2. 辞書の組み立て（新しく取得した、または nagi-dict.bin が無いとき）
+        let mut changed = downloaded;
         if downloaded || !dict_path.is_file() {
+            changed = true;
             emit(json!({"stage": "dict_build"}));
             nagi_datafetch::build_mozc_dict(&mozc_dir, &dict_path, &mut |p| {
                 if let Progress::BuildDone { bytes, seconds, .. } = p {
@@ -141,12 +145,15 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
                 Progress::Skipped { file, .. } => {
                     eprintln!("imserver: スキップ: {file} (SHA-256 一致)");
                     let total = kind.info().size;
-                    emit(json!({"stage": "model_fetch", "bytes": total, "total": total}));
+                    emit(
+                        json!({"stage": "model_fetch", "bytes": total, "total": total, "skipped": true}),
+                    );
                 }
                 Progress::Mismatched { file } => {
                     eprintln!("imserver: {file} は SHA-256 が不一致のため再取得します");
                 }
                 Progress::Download { file, .. } => {
+                    changed = true;
                     eprintln!("imserver: ダウンロード中: {file}");
                     last_emitted = 0;
                     emit(json!({"stage": "model_fetch", "bytes": 0, "total": kind.info().size}));
@@ -161,12 +168,13 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
                 _ => {}
             })?;
         }
-        Ok::<(), String>(())
+        Ok::<bool, String>(changed)
     })();
 
     match result {
-        Ok(()) => {
-            emit(json!({"stage": "done"}));
+        Ok(changed) => {
+            // changed: 取得・組み立てを 1 つでも行ったか（false ならすべて取得済みだった）
+            emit(json!({"stage": "done", "changed": changed}));
             Ok(())
         }
         Err(message) => {

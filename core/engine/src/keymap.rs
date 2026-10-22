@@ -97,6 +97,12 @@ fn is_undo_commit(key: &KeyEvent) -> bool {
     m.ctrl && !m.alt && !m.meta && key.keysym == keysym::BACKSPACE
 }
 
+/// Ctrl+Shift だけが押されている（Alt / Meta なし）
+fn is_ctrl_shift(key: &KeyEvent) -> bool {
+    let m = key.modifiers;
+    m.ctrl && m.shift && !m.alt && !m.meta
+}
+
 /// Ctrl / Alt / Meta が押されている
 fn has_command_modifier(key: &KeyEvent) -> bool {
     let m = key.modifiers;
@@ -165,6 +171,15 @@ impl KeyMap {
             keysym::ZENKAKU_HANKAKU => return Some(Action::ToggleMode),
             _ => {}
         }
+        // macOS 標準の日本語入力と同じモード切替（かな/英数キーの無い US 配列向け）:
+        // ⌃⇧J = ひらがな、⌃⇧; = 英数（Shift で `:` になる配列も受ける）
+        if is_ctrl_shift(key) {
+            match char::from_u32(key.keysym) {
+                Some('j' | 'J') => return Some(Action::SetMode(InputMode::Hiragana)),
+                Some(';' | ':') => return Some(Action::SetMode(InputMode::Alphanumeric)),
+                _ => {}
+            }
+        }
         if mode == InputMode::Alphanumeric {
             return None;
         }
@@ -177,6 +192,11 @@ impl KeyMap {
                     Some(Action::UndoCommit)
                 } else if key.keysym == keysym::HENKAN && !has_command_modifier(key) {
                     // 変換キー: 選択中のテキストの再変換（MS-IME と同じ）
+                    Some(Action::Reconvert)
+                } else if is_ctrl_shift(key)
+                    && matches!(char::from_u32(key.keysym), Some('r' | 'R'))
+                {
+                    // ⌃⇧R: 選択中のテキストの再変換（かなキーの無い US 配列向け）
                     Some(Action::Reconvert)
                 } else {
                     printable(key)
@@ -356,6 +376,30 @@ mod tests {
                 assert_eq!(resolve(ctx, mode, "Zenkaku"), Some(Action::ToggleMode));
             }
         }
+    }
+
+    #[test]
+    fn ctrl_shift_mode_keys_like_macos() {
+        for ctx in [Direct, Composing, Converting] {
+            for mode in [Hiragana, Alphanumeric] {
+                assert_eq!(
+                    resolve(ctx, mode, "Ctrl+Shift+J"),
+                    Some(Action::SetMode(Hiragana))
+                );
+                assert_eq!(
+                    resolve(ctx, mode, "Ctrl+Shift+;"),
+                    Some(Action::SetMode(Alphanumeric))
+                );
+            }
+        }
+        assert_eq!(
+            resolve(Direct, Hiragana, "Ctrl+Shift+R"),
+            Some(Action::Reconvert)
+        );
+        assert_ne!(
+            resolve(Composing, Hiragana, "Ctrl+Shift+R"),
+            Some(Action::Reconvert)
+        );
     }
 
     #[test]

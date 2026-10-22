@@ -57,10 +57,14 @@ extension NagiIMEContext {
 
         var quarter = -1
         var finished = false
+        var changed = false
         do {
             for try await line in pipe.fileHandleForReading.bytes.lines {
                 guard let progress = DataInstallProgress.parse(line) else { continue }
-                if case .done = progress { finished = true }
+                if case .done(let c) = progress {
+                    finished = true
+                    changed = c
+                }
                 if let message = progress.message(lastModelQuarter: &quarter) { toast.show(message) }
             }
         } catch {
@@ -71,7 +75,8 @@ extension NagiIMEContext {
             if !finished { toast.show("辞書とモデルを入れられませんでした") }
             return
         }
-        await supervisor.restartNow()
+        // 取得済みで何も変わっていなければ、読み込み直す必要はない
+        if changed { await supervisor.restartNow() }
     }
 }
 #endif
