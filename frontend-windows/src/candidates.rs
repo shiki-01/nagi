@@ -226,6 +226,44 @@ impl Default for Metrics {
     }
 }
 
+impl Metrics {
+    /// DPI 倍率を掛けた寸法（96 DPI が等倍。整数に四捨五入する）
+    pub fn scaled(&self, dpi: u32) -> Self {
+        let s = |v: i32| scale_px(v, dpi);
+        Self {
+            row_height: s(self.row_height),
+            padding: s(self.padding),
+            gap: s(self.gap),
+            number_extra: s(self.number_extra),
+            footer_height: s(self.footer_height),
+            top_inset: s(self.top_inset),
+            bottom_inset: s(self.bottom_inset),
+            min_width: s(self.min_width),
+        }
+    }
+}
+
+/// 96 DPI 基準の長さを `dpi` に合わせて拡大する（四捨五入。`dpi` が 0 なら等倍）
+pub fn scale_px(value: i32, dpi: u32) -> i32 {
+    if dpi == 0 {
+        return value;
+    }
+    let scaled = (i64::from(value) * i64::from(dpi) + 48) / 96;
+    i32::try_from(scaled).unwrap_or(value)
+}
+
+/// モニターの作業領域の列を「先頭がプライマリ」の順にする（`place_window` の前提）。
+/// 入力は `(作業領域, プライマリか)`。プライマリが複数・無い場合は元の順を保つ
+pub fn primary_first(monitors: &[(Rect, bool)]) -> Vec<Rect> {
+    let mut out: Vec<Rect> = monitors
+        .iter()
+        .filter(|(_, primary)| *primary)
+        .map(|(r, _)| *r)
+        .collect();
+    out.extend(monitors.iter().filter(|(_, p)| !*p).map(|(r, _)| *r));
+    out
+}
+
 /// 候補ウィンドウの内部レイアウト
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowLayout {
@@ -357,6 +395,35 @@ pub fn place_window(caret: Rect, size: Size, work_areas: &[Rect]) -> Placement {
         origin.x = origin.x.min(w.right - size.width).max(w.left);
     }
     Placement { origin, above }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    #[test]
+    fn scale_rounds_and_identity_at_96() {
+        assert_eq!(scale_px(24, 96), 24);
+        assert_eq!(scale_px(24, 144), 36);
+        assert_eq!(scale_px(2, 120), 3); // 2.5 → 3
+        assert_eq!(scale_px(7, 0), 7);
+        let m = Metrics::default();
+        assert_eq!(m.scaled(96), m);
+        assert_eq!(m.scaled(192).row_height, 48);
+    }
+
+    #[test]
+    fn primary_comes_first_others_keep_order() {
+        let r = |l| Rect {
+            left: l,
+            top: 0,
+            right: l + 10,
+            bottom: 10,
+        };
+        let got = primary_first(&[(r(-10), false), (r(0), true), (r(10), false)]);
+        assert_eq!(got, [r(0), r(-10), r(10)]);
+        assert_eq!(primary_first(&[]), Vec::<Rect>::new());
+    }
 }
 
 #[cfg(test)]

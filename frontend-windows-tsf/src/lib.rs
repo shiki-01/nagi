@@ -10,18 +10,19 @@
 //! - Windows のみ: COM/TSF の実装（`dll` / `register` / `text_service` / `edit` / `keys`）。
 //!   `unsafe` はこれらのモジュールに隔離し、`#![allow(unsafe_code)]` で明示している
 //!
+//! # Win32 / TSF 層（H-41）
+//! - `candidate_window` / `toast_window`: 自前のポップアップ（GDI。フォーカスを奪わない）。寸法・配置・文言は `nagi_windows`
+//! - `message_window`: 隠しメッセージウィンドウ。別スレッドのエンジン通知を `PostMessage` で UI スレッドへ渡して
+//!   即時に反映し、定期タイマー（環境の報告・スリープ復帰の検出）と電源通知も受ける
+//! - `probe`: `EnvironmentProbe` の Win32 実装 / `context_info`: 周辺テキスト・`InputScope`・アプリ ID
+//! - `display_attr`: `ITfDisplayAttributeProvider` と `GUID_PROP_ATTRIBUTE` への書き込み
+//! - `mode_comp`: 入力モードのコンパートメント（タスクトレイの「あ / A」）/ `reconversion`: `ITfFnReconversion`
+//!
 //! # 未実装（TODO）
-//! - 候補ウィンドウの描画（`ITfUIElement` / 自前ウィンドウ）。`stubs::CandidateWindow` のスタブのみ。
-//!   ロジック（ページング・行モデル・寸法・位置）は `nagi_windows::candidates` に実装済み（Linux でテスト済み）
-//! - 再変換（`ITfFnReconversion`）と応答の `reconvert_selection` の処理。`stubs` のスタブのみ
-//! - 表示属性（`ITfDisplayAttributeProvider`）。計画（`EditPlan` の `attrs`＝`nagi_windows::preedit_style::plan`）
-//!   は実装済みで、`edit` が `GUID_PROP_ATTRIBUTE` へ写す部分が未実装。いまは装飾なしで描く
-//! - 入力モード（`mode`）の言語バー・`GUID_COMPARTMENT_KEYBOARD_OPENCLOSE` への反映
-//! - 非同期通知（`update_preedit` 等）の即時反映。いまは次のキー入力のときに反映する
-//!   （隠しウィンドウへの `PostMessage` で UI スレッドを起こす実装が必要）
 //! - 複数のホストプロセスでエンジンを共有する仕組み（現状はホストプロセスごとに imserver を起動する）
-//! - `set_environment` / `set_context` / 通知表示の OS 側（`nagi_windows::environment` の `EnvironmentProbe` の
-//!   Win32 実装、TSF からの周辺テキスト取得、トースト表示）。変換ロジックは `nagi-windows` に実装済み
+//! - 候補ウィンドウのマウス操作（v1 の非目標）、言語バーのボタン（`ITfLangBarItemButton`。コンパートメントで代替）
+//! - `ITfFnReconversion::GetReconversion`（候補一覧の提供。`E_NOTIMPL`）
+//! - インストーラ・署名・SmartScreen 対応（設計書 §5.3）
 //!
 //! # 検証状況
 //! Linux ホストでの `cargo check/clippy --target x86_64-pc-windows-gnu`（型・シグネチャの確認）と、
@@ -34,6 +35,12 @@ pub mod engine;
 pub mod render;
 
 #[cfg(windows)]
+mod candidate_window;
+#[cfg(windows)]
+mod context_info;
+#[cfg(windows)]
+mod display_attr;
+#[cfg(windows)]
 mod dll;
 #[cfg(windows)]
 mod edit;
@@ -42,8 +49,18 @@ mod guids;
 #[cfg(windows)]
 mod keys;
 #[cfg(windows)]
+mod message_window;
+#[cfg(windows)]
+mod mode_comp;
+#[cfg(windows)]
+mod probe;
+#[cfg(windows)]
+mod reconversion;
+#[cfg(windows)]
 mod register;
 #[cfg(windows)]
-mod stubs;
-#[cfg(windows)]
 mod text_service;
+#[cfg(windows)]
+mod toast_window;
+#[cfg(windows)]
+mod win;

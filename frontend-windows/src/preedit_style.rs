@@ -84,6 +84,46 @@ pub fn attr_for(style: MarkStyle) -> DisplayAttr {
     DisplayAttr { underline, bold }
 }
 
+/// 表示属性の取りうる値（`attr_for` の像）。TSF では属性ごとに GUID を 1 つ割り当てて登録する。
+/// 並びが GUID の割り当て順になる（変えると登録済みの属性と対応が変わる）
+pub const DISPLAY_ATTRS: [DisplayAttr; 4] = [
+    DisplayAttr {
+        underline: UnderlineKind::Solid,
+        bold: false,
+    },
+    DisplayAttr {
+        underline: UnderlineKind::Solid,
+        bold: true,
+    },
+    DisplayAttr {
+        underline: UnderlineKind::Dot,
+        bold: false,
+    },
+    DisplayAttr {
+        underline: UnderlineKind::Dash,
+        bold: false,
+    },
+];
+
+/// `DISPLAY_ATTRS` 内の位置
+pub fn attr_index(attr: DisplayAttr) -> usize {
+    DISPLAY_ATTRS
+        .iter()
+        .position(|a| *a == attr)
+        .unwrap_or_default()
+}
+
+/// 範囲 `[0, total)` を覆う composition の範囲から、区間 `[start, end)` の範囲を作るための移動量。
+/// TSF の `ShiftStart(start)` と `ShiftEnd(-(total - end))`
+pub fn range_shifts(total: u32, start: u32, end: u32) -> (i32, i32) {
+    let end = end.min(total);
+    let start = start.min(end);
+    (
+        i32::try_from(start).unwrap_or(i32::MAX),
+        -i32::try_from(total - end).unwrap_or(i32::MAX),
+    )
+}
+
 fn text_len(preedit: &PreeditView) -> u32 {
     u32::try_from(preedit.text.encode_utf16().count()).unwrap_or(u32::MAX)
 }
@@ -189,6 +229,34 @@ mod tests {
 
     fn styles(p: &PreeditView) -> Vec<MarkStyle> {
         runs(p).iter().map(|r| r.style).collect()
+    }
+
+    #[test]
+    fn every_style_maps_into_the_attr_table() {
+        for style in [
+            MarkStyle::Normal,
+            MarkStyle::Focused,
+            MarkStyle::Selected,
+            MarkStyle::Fixed,
+            MarkStyle::Styled,
+            MarkStyle::Pending,
+        ] {
+            let attr = attr_for(style);
+            assert_eq!(DISPLAY_ATTRS[attr_index(attr)], attr, "{style:?}");
+        }
+        // 重複が無い
+        for (i, a) in DISPLAY_ATTRS.iter().enumerate() {
+            assert_eq!(attr_index(*a), i);
+        }
+    }
+
+    #[test]
+    fn range_shifts_cover_the_run() {
+        assert_eq!(range_shifts(10, 0, 10), (0, 0));
+        assert_eq!(range_shifts(10, 2, 5), (2, -5));
+        // 範囲外は丸める
+        assert_eq!(range_shifts(4, 3, 99), (3, 0));
+        assert_eq!(range_shifts(4, 9, 9), (4, 0));
     }
 
     #[test]

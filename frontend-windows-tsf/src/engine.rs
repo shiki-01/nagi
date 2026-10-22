@@ -2,15 +2,21 @@
 //!
 //! OS 非依存（Win32 を触らない）。UI スレッドを塞がないために、起動（`initialize`。モデル読み込みで
 //! 数秒かかりうる）は別スレッドで行い、キー処理は短いタイムアウトで打ち切る。
-//! 非同期通知（`update_preedit` 等）は別スレッドから届くため、キューに積んで UI スレッドが取り出す
-//! （TSF のオブジェクトは UI スレッドからしか触れない）。
+//! 非同期通知（`update_preedit` 等）は別スレッドから届くため、セッションごとのキューに積み、
+//! 購読時に渡された waker（Win32 層では隠しウィンドウへの `PostMessage`）で UI スレッドを起こす。
+//! 取り出し（TSF のオブジェクトを触る処理）は UI スレッドで行う。
+//! セッション宛てのイベント（`update_preedit` / `update_candidates` / `Restored` / `RestoreFailed`）は
+//! そのセッションだけに、プロセス全体のイベント（`Started` / `Crashed` / `Notify` 等）は購読中の全セッションに配る。
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use nagi_protocol::{KeyEvent, ProcessKeyParams, ProcessKeyResult};
+use nagi_protocol::{
+    InputMode, KeyEvent, PerformActionParams, ProcessKeyParams, ProcessKeyResult, ReconvertParams,
+    SetContextParams, SetEnvironmentParams, TouchAction,
+};
 use nagi_windows::client::ClientError;
 use nagi_windows::process::{ProcessEngineConfiguration, ProcessEngineLauncher};
 use nagi_windows::session::SessionStore;
@@ -19,6 +25,10 @@ use nagi_windows::supervisor::{Configuration, EngineEvent, EngineSupervisor};
 /// キー処理（`process_key` 等）の応答待ちの上限。
 /// UI スレッドで同期的に待つため、設計書 §3.3 の通常要求（500ms）より短くする
 pub const KEY_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// 再変換の応答待ちの上限（macOS 版の `reconvertTimeout` と同じ）。
+/// 初回は辞書の逆引き索引を作るため、通常のキー処理より長く待つ
+pub const RECONVERT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 未処理の非同期イベントを溜める上限（超えたら古いものから捨てる。revision で古い通知は無効なので問題ない）
 const MAX_QUEUED_EVENTS: usize = 64;
@@ -44,11 +54,71 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// UI スレッドを起こす関数（任意のスレッドから呼ばれる）
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// イベントの宛先
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Route<'a> {
+    /// このセッションだけ
+    Session(&'a str),
+    /// 購読中の全セッション
+    Broadcast,
+}
+
+/// イベントの宛先を決める
+pub fn route(event: &EngineEvent) -> Route<'_> {
+    match event {
+        EngineEvent::UpdatePreedit(p) => Route::Session(&p.session_id),
+        EngineEvent::UpdateCandidates(c) => Route::Session(&c.session_id),
+        EngineEvent::Restored { session_id, .. }
+        | EngineEvent::RestoreFailed { session_id, .. } => Route::Session(session_id),
+        EngineEvent::Started { .. }
+        | EngineEvent::Crashed { .. }
+        | EngineEvent::EnteredMinimalMode { .. }
+        | EngineEvent::Notify(_)
+        | EngineEvent::LaunchFailed(_) => Route::Broadcast,
+    }
+}
+
+struct Subscriber {
+    queue: VecDeque<EngineEvent>,
+    waker: Waker,
+}
+
+type Subscribers = Arc<Mutex<HashMap<String, Subscriber>>>;
+
+/// イベントを宛先のキューに積み、起こすべき waker を返す（呼び出し側がロックの外で呼ぶ）
+fn deliver(subscribers: &Mutex<HashMap<String, Subscriber>>, event: EngineEvent) -> Vec<Waker> {
+    let mut map = lock(subscribers);
+    let mut wake = Vec::new();
+    let mut push = |sub: &mut Subscriber, event: EngineEvent| {
+        if sub.queue.len() >= MAX_QUEUED_EVENTS {
+            sub.queue.pop_front();
+        }
+        sub.queue.push_back(event);
+        wake.push(Arc::clone(&sub.waker));
+    };
+    match route(&event) {
+        Route::Session(id) => {
+            if let Some(sub) = map.get_mut(id) {
+                push(sub, event);
+            }
+        }
+        Route::Broadcast => {
+            for sub in map.values_mut() {
+                push(sub, event.clone());
+            }
+        }
+    }
+    wake
+}
+
 /// エンジン 1 つ分の接続とセッション状態
 pub struct EngineHost {
     supervisor: Arc<EngineSupervisor>,
     sessions: Arc<SessionStore>,
-    events: Arc<Mutex<VecDeque<EngineEvent>>>,
+    subscribers: Subscribers,
 }
 
 impl EngineHost {
@@ -66,20 +136,18 @@ impl EngineHost {
         let provider = Arc::clone(&sessions);
         supervisor.set_restore_provider(move || provider.restore_params());
 
-        let events: Arc<Mutex<VecDeque<EngineEvent>>> = Arc::default();
-        let queue = Arc::clone(&events);
+        let subscribers: Subscribers = Arc::default();
+        let target = Arc::clone(&subscribers);
         supervisor.set_on_event(move |event| {
-            let mut q = lock(&queue);
-            if q.len() >= MAX_QUEUED_EVENTS {
-                q.pop_front();
+            for waker in deliver(&target, event) {
+                waker();
             }
-            q.push_back(event);
         });
 
         Self {
             supervisor,
             sessions,
-            events,
+            subscribers,
         }
     }
 
@@ -154,14 +222,80 @@ impl EngineHost {
         Ok(result)
     }
 
-    /// セッションを忘れる（`Deactivate` 時）
+    /// セッションを忘れる（`Deactivate` 時）。購読も解除する
     pub fn forget_session(&self, session_id: &str) {
         self.sessions.remove(session_id);
+        self.unsubscribe(session_id);
     }
 
-    /// 溜まっている非同期イベントを取り出す。UI スレッドから呼ぶこと
-    pub fn drain_events(&self) -> Vec<EngineEvent> {
-        lock(&self.events).drain(..).collect()
+    /// セッションのイベントを購読する。イベントが積まれるたびに `waker` が（任意のスレッドから）呼ばれる
+    pub fn subscribe(&self, session_id: &str, waker: Waker) {
+        lock(&self.subscribers).insert(
+            session_id.to_string(),
+            Subscriber {
+                queue: VecDeque::new(),
+                waker,
+            },
+        );
+    }
+
+    /// 購読を解除する（積まれたイベントは捨てる）
+    pub fn unsubscribe(&self, session_id: &str) {
+        lock(&self.subscribers).remove(session_id);
+    }
+
+    /// このセッション宛ての溜まっている非同期イベントを取り出す。UI スレッドから呼ぶこと
+    pub fn drain_events(&self, session_id: &str) -> Vec<EngineEvent> {
+        lock(&self.subscribers)
+            .get_mut(session_id)
+            .map(|s| s.queue.drain(..).collect())
+            .unwrap_or_default()
+    }
+
+    /// 入力モードを切り替える（`perform_action(SetMode)`）。入力中の文字列は確定される
+    pub fn set_mode(
+        &self,
+        session_id: &str,
+        mode: InputMode,
+    ) -> Result<ProcessKeyResult, ClientError> {
+        let params = PerformActionParams {
+            session_id: session_id.to_string(),
+            action: TouchAction::SetMode(mode),
+        };
+        let result = self.supervisor.perform_action(&params)?;
+        self.track(session_id, &result);
+        Ok(result)
+    }
+
+    /// 文脈を通知する
+    pub fn set_context(&self, params: &SetContextParams) -> Result<(), ClientError> {
+        self.supervisor.set_context(params)
+    }
+
+    /// 環境を通知する
+    pub fn set_environment(&self, params: &SetEnvironmentParams) -> Result<(), ClientError> {
+        self.supervisor.set_environment(params)
+    }
+
+    /// 確定済みテキストの再変換。初回は辞書の逆引き索引を作るため `timeout` まで待つ
+    pub fn reconvert(
+        &self,
+        session_id: &str,
+        text: &str,
+        timeout: Duration,
+    ) -> Result<ProcessKeyResult, ClientError> {
+        let params = ReconvertParams {
+            session_id: session_id.to_string(),
+            text: text.to_string(),
+        };
+        let result = self.supervisor.reconvert(&params, Some(timeout))?;
+        self.track(session_id, &result);
+        Ok(result)
+    }
+
+    /// 現在の状態（プロファイル・学習・辞書。メニュー表示用）
+    pub fn status(&self) -> Result<nagi_protocol::StatusResult, ClientError> {
+        self.supervisor.get_status()
     }
 }
 
@@ -200,6 +334,87 @@ mod tests {
         })
         .unwrap();
         assert!(host.process_key("s", &key).is_err());
-        assert!(host.drain_events().is_empty());
+        assert!(host.drain_events("s").is_empty());
+    }
+
+    fn preedit_event(session: &str) -> EngineEvent {
+        EngineEvent::UpdatePreedit(nagi_protocol::UpdatePreeditParams {
+            session_id: session.to_string(),
+            preedit: Default::default(),
+            revision: 1,
+        })
+    }
+
+    fn counting_waker() -> (Waker, Arc<std::sync::atomic::AtomicUsize>) {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = Arc::clone(&n);
+        let w: Waker = Arc::new(move || {
+            c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        (w, n)
+    }
+
+    #[test]
+    fn session_events_reach_only_their_session() {
+        let subs: Subscribers = Arc::default();
+        let (wa, na) = counting_waker();
+        let (wb, nb) = counting_waker();
+        for (id, w) in [("a", wa), ("b", wb)] {
+            lock(&subs).insert(
+                id.into(),
+                Subscriber {
+                    queue: VecDeque::new(),
+                    waker: w,
+                },
+            );
+        }
+        for w in deliver(&subs, preedit_event("a")) {
+            w();
+        }
+        assert_eq!(na.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(nb.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(lock(&subs)["a"].queue.len(), 1);
+        assert!(lock(&subs)["b"].queue.is_empty());
+    }
+
+    #[test]
+    fn process_wide_events_are_broadcast() {
+        let subs: Subscribers = Arc::default();
+        for id in ["a", "b"] {
+            lock(&subs).insert(
+                id.into(),
+                Subscriber {
+                    queue: VecDeque::new(),
+                    waker: Arc::new(|| {}),
+                },
+            );
+        }
+        let wake = deliver(
+            &subs,
+            EngineEvent::Crashed {
+                attempt: 1,
+                delay: Duration::from_secs(1),
+            },
+        );
+        assert_eq!(wake.len(), 2);
+        assert_eq!(lock(&subs)["a"].queue.len(), 1);
+        assert_eq!(lock(&subs)["b"].queue.len(), 1);
+    }
+
+    #[test]
+    fn unknown_session_and_overflow() {
+        let subs: Subscribers = Arc::default();
+        assert!(deliver(&subs, preedit_event("none")).is_empty());
+        lock(&subs).insert(
+            "a".into(),
+            Subscriber {
+                queue: VecDeque::new(),
+                waker: Arc::new(|| {}),
+            },
+        );
+        for _ in 0..(MAX_QUEUED_EVENTS + 10) {
+            deliver(&subs, preedit_event("a"));
+        }
+        assert_eq!(lock(&subs)["a"].queue.len(), MAX_QUEUED_EVENTS);
     }
 }

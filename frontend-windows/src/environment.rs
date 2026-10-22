@@ -166,6 +166,58 @@ impl<P: EnvironmentProbe> EnvironmentReporter<P> {
     }
 }
 
+/// スリープからの復帰の検出（OS の通知の取りこぼしに備えた、定期タイマーの間隔の飛びとの併用）。
+///
+/// タイマーはスリープ中に止まるため、前回の tick からの経過が間隔の 2 倍を超えていれば復帰とみなす。
+/// OS の通知（`PBT_APMRESUMEAUTOMATIC` 等）と両方で検出しても、`cooldown` の間は 1 回だけ報告する。
+/// 時刻は引数で渡す（壁時計。スリープ中も進む `SystemTime` を想定）
+#[derive(Debug, Clone)]
+pub struct ResumeDetector {
+    interval: std::time::Duration,
+    cooldown: std::time::Duration,
+    last_tick: Option<std::time::SystemTime>,
+    last_resume: Option<std::time::SystemTime>,
+}
+
+impl ResumeDetector {
+    /// `interval` は tick の間隔、`cooldown` は同じ復帰を重ねて報告しない時間
+    pub fn new(interval: std::time::Duration, cooldown: std::time::Duration) -> Self {
+        Self {
+            interval,
+            cooldown,
+            last_tick: None,
+            last_resume: None,
+        }
+    }
+
+    fn report(&mut self, now: std::time::SystemTime) -> bool {
+        if let Some(last) = self.last_resume
+            && now.duration_since(last).unwrap_or_default() < self.cooldown
+        {
+            return false;
+        }
+        self.last_resume = Some(now);
+        true
+    }
+
+    /// 定期タイマーの tick。復帰とみなして初めて報告するとき `true`
+    pub fn tick(&mut self, now: std::time::SystemTime) -> bool {
+        let gap = self
+            .last_tick
+            .map(|t| now.duration_since(t).unwrap_or_default());
+        self.last_tick = Some(now);
+        match gap {
+            Some(g) if g > self.interval * 2 => self.report(now),
+            _ => false,
+        }
+    }
+
+    /// OS の復帰通知。初めて報告するとき `true`
+    pub fn notified(&mut self, now: std::time::SystemTime) -> bool {
+        self.report(now)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +399,22 @@ mod tests {
     fn reporter_skips_when_nothing_available() {
         let mut r = EnvironmentReporter::new(FakeProbe::default());
         assert!(r.poll().is_none());
+    }
+
+    #[test]
+    fn resume_detected_once_by_gap_or_notification() {
+        use std::time::{Duration, SystemTime};
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut d = ResumeDetector::new(Duration::from_secs(30), Duration::from_secs(60));
+        assert!(!d.tick(at(0)));
+        assert!(!d.tick(at(30)));
+        // スリープで 10 分飛んだ
+        assert!(d.tick(at(630)));
+        // 直後の OS 通知は重ねて報告しない
+        assert!(!d.notified(at(631)));
+        assert!(!d.tick(at(660)));
+        // 十分あとの通知は新しい復帰
+        assert!(d.notified(at(900)));
     }
 }
