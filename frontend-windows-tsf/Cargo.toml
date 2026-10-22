@@ -1,0 +1,44 @@
+[package]
+name = "nagi-windows-tsf"
+workspace = "../core"
+description = "Nagi Windows フロントエンドの TSF/COM 層（Rust + windows クレート）。unsafe はここに隔離する。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+# IME 本体は COM の InprocServer32 として LoadLibrary される DLL。
+# rlib も出すのは、OS 非依存の render モジュールを Linux のテストで使うため。
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+nagi-protocol = { workspace = true }
+nagi-windows = { path = "../frontend-windows" }
+
+[target.'cfg(windows)'.dependencies]
+# `#[implement]` マクロが `windows_core` を直接参照するため必要
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_TextServices",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# このクレートだけは unsafe を使う（COM / TSF）。`nagi-windows` と `core` は forbid のまま。
+# `deny` にして、必要なモジュールだけ `#![allow(unsafe_code)]` で明示的に許す。
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

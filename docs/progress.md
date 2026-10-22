@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-10-16（iOS: 確定方式・注目文節・取り消し・トグル・触覚音・入力欄の種類・キーボード切替の原因、既定モデル small。決定は H-22(c)・H-27〜H-33）／ 2026-10-15（iOS: 設定・レイアウト・ユーザー辞書・次語予測・絵文字候補・堅牢性・レビュー修正。決定は H-16〜H-21）／ 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-17）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-10-22（Windows フロント: OS 非依存部 `nagi-windows` に SessionStore・VK_IME_ON/OFF を追加、TSF 層 `nagi-windows-tsf` の骨組み。決定は H-39）／ 2026-10-16（iOS: 確定方式・注目文節・取り消し・トグル・触覚音・入力欄の種類・キーボード切替の原因、既定モデル small。決定は H-22(c)・H-27〜H-33）／ 2026-10-15（iOS: 設定・レイアウト・ユーザー辞書・次語予測・絵文字候補・堅牢性・レビュー修正。決定は H-16〜H-21）／ 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-17）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -170,6 +170,15 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 1. artifact `nagi-data`（`nagi-data.zip`、保持 7 日）を展開し、中身（`dict/` と `models/`）を `~/Library/Application Support/com.shiki.nagi/data/` に置く（`data/dict/nagi-dict.bin`、`data/models/zenz-v3.1-small-Q5_K_M.gguf` になる）
 2. 辞書変換だけなら 1 で足りる。LLM 変換を使うには artifact `Nagi-llama.app`（`Nagi-llama.app.zip`）を展開し、`~/Library/Input Methods/` の `Nagi.app` と差し替える（展開物の名前は `Nagi.app`。手順 3〜5 の `xattr -cr` と `--register` をやり直し、`killall TextInputMenuAgent`。すでにプロセスが動いている場合は `killall NagiIMEApp` 相当で再起動する）
 3. 確認: 「きょうはいいてんきですね」等を入力して Space。漢字混じりの候補が出れば辞書が効いている。LLM が効いているかは、辞書のみより文脈に沿った 1 件目になるか（例: 同音語の選び分け）で判断する。読みがそのまま返る場合は data-dir のパスとファイル名を確認する
+
+## Windows フロント（Phase 5、2026-10-22、決定は decisions.md H-39）
+
+| 項目 | 状態 |
+| --- | --- |
+| `frontend-windows/`（`nagi-windows`、unsafe 禁止・OS 非依存） | 実装済み・Linux でテスト済み（59 件）: キー正規化（VK_IME_ON/OFF・VK_OEM_BACKTAB を含む）、JSON-RPC クライアント、子プロセス通信路、EngineSupervisor（指数バックオフ再起動・`restore_session`）、revision ゲート、SessionStore（セッションごとの preedit 保持。`restore_params` を `set_restore_provider` に渡す） |
+| `frontend-windows-tsf/`（`nagi-windows-tsf`、cdylib、unsafe はここに隔離） | **骨組みのみ**。`DllMain` / `DllGetClassObject` / `DllCanUnloadNow` / `DllRegisterServer` / `DllUnregisterServer`、`ITfTextInputProcessorEx` / `ITfKeyEventSink` / `ITfCompositionSink` / `ITfEditSession` の最小実装、キー → エンジン → 確定・preedit 反映。OS 非依存の `render`（応答 → 編集計画）と `engine`（接続のまとめ）は Linux でテスト済み（15 件） |
+| 検証 | Linux で `cargo check` / `cargo clippy -D warnings --target x86_64-pc-windows-gnu` が通る（型・シグネチャのみ）。**Windows 実機では未確認**（登録・キー入力・composition・エンジン起動） |
+| 未実装 | 候補ウィンドウ、`ITfFnReconversion` と `reconvert_selection`、表示属性（下線）、入力モードの言語バー、非同期通知の即時反映（現状は次のキー入力時）、`set_environment` / `set_context` / 通知表示、アイコン、複数ホストプロセスでのエンジン共有、インストーラ・署名・SmartScreen 対応、CI のビルド・配布 |
 
 ## 既知の問題
 
