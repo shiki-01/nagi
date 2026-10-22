@@ -1,49 +1,72 @@
 @import '@master/css';
 
 /* デザイントークン。ライト/ダークは OS 設定に従う。Master CSS からは `bg:$surface` のように参照する。 */
+/* デザイントークン。ライト/ダークは OS 設定に従う。Master CSS からは `bg:$surface` のように参照する。
+   色はアプリアイコン（凪の海: 藍・水平線・朝の日）から取る。ライトは生成りの紙、ダークは夜の海。 */
 :root {
   color-scheme: light dark;
-  --bg: #f7f8fb;
-  --surface: #ffffff;
-  --surface-2: #eef0f6;
-  --fg: #171a21;
-  --muted: #565d6e;
-  --line: #d3d7e2;
-  --accent: #3552c9;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Noto Sans JP',
+    'Noto Sans CJK JP', 'Segoe UI', sans-serif;
+  /* 見出し用。Web フォントは読み込まない（外部への通信を増やさない）ので、OS の明朝体を使う */
+  --font-serif: 'Hiragino Mincho ProN', 'Yu Mincho', 'YuMincho', 'Noto Serif JP', 'Noto Serif CJK JP', 'Source Han Serif JP', serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Noto Sans Mono CJK JP', monospace;
+  --bg: #f5f2eb;
+  --surface: #fdfcf9;
+  --surface-2: #ebe7dd;
+  --fg: #1c1e26;
+  --muted: #5d5e66;
+  --line: #d9d3c5;
+  --line-strong: #1c1e26;
+  --accent: #2b43b0;
   --accent-fg: #ffffff;
-  --accent-soft: #e3e8fc;
+  --accent-soft: #e1e5f6;
+  /* アイコンの日の色。文字色には使わず、塗りと下線に使う */
+  --sun: #f3d98f;
+  --sun-soft: #f8ecc9;
+  /* プライバシーの帯など、暗い面 */
+  --sea: #172041;
+  --sea-fg: #eef0f8;
+  --sea-muted: #b4bad3;
+  --sea-line: #34406b;
   --danger: #b42318;
   --danger-soft: #fde8e6;
   --ok: #17692f;
-  --focus: #0b6bcb;
-  --key-bg: #ffffff;
-  --key-fn-bg: #c9cdd9;
-  --key-accent-bg: #3552c9;
+  --focus: #2b43b0;
+  --key-bg: #fdfcf9;
+  --key-fn-bg: #cbc6ba;
+  --key-accent-bg: #2b43b0;
   --key-accent-fg: #ffffff;
-  --kb-bg: #d7dae3;
+  --kb-bg: #dcd8ce;
   /* キーボード編集キャンバス */
-  --canvas-bg: #eceef4;
-  --canvas-dot: #b4bacb;
-  --select-fill: rgba(11, 107, 203, 0.12);
+  --canvas-bg: #ebe7dd;
+  --canvas-dot: #c2bba9;
+  --select-fill: rgba(43, 67, 176, 0.12);
   --drop-indicator: #e5484d;
-  --panel-shadow: 0 2px 10px rgba(20, 24, 40, 0.14);
+  --panel-shadow: 0 2px 10px rgba(40, 34, 20, 0.14);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e1016;
-    --surface: #171a22;
-    --surface-2: #20242f;
-    --fg: #eceef4;
-    --muted: #a3aabb;
-    --line: #333949;
+    --bg: #0d0f15;
+    --surface: #151821;
+    --surface-2: #1e222d;
+    --fg: #ece8df;
+    --muted: #a6a7b0;
+    --line: #2b303d;
+    --line-strong: #ece8df;
     --accent: #9db0ff;
     --accent-fg: #0b0e1c;
-    --accent-soft: #232b4d;
+    --accent-soft: #1f2645;
+    --sun: #e9cf86;
+    --sun-soft: #3a3322;
+    --sea: #121a36;
+    --sea-fg: #eef0f8;
+    --sea-muted: #a9b1cf;
+    --sea-line: #2c375e;
     --danger: #ff9a8f;
     --danger-soft: #3a1c19;
     --ok: #7bd88f;
-    --focus: #7cb8ff;
+    --focus: #9db0ff;
     --key-bg: #4a4f5e;
     --key-fn-bg: #2f333f;
     --key-accent-bg: #9db0ff;
@@ -51,7 +74,7 @@
     --kb-bg: #1f222b;
     --canvas-bg: #0b0d12;
     --canvas-dot: #343a4b;
-    --select-fill: rgba(124, 184, 255, 0.16);
+    --select-fill: rgba(157, 176, 255, 0.16);
     --drop-indicator: #ff7a80;
     --panel-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
   }
@@ -60,8 +83,8 @@
 html {
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Noto Sans JP', 'Segoe UI', sans-serif;
-  line-height: 1.7;
+  font-family: var(--font-sans);
+  line-height: 1.8;
   -webkit-text-size-adjust: 100%;
 }
 
@@ -81,7 +104,29 @@ body {
 a {
   color: var(--accent);
   text-decoration: underline;
-  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.25em;
+}
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+::selection {
+  background: var(--sun);
+  color: #1c1e26;
+}
+
+/* Master CSS の base レイヤーが ul の記号を消すので戻す（:where で詳細度 0。記号を消したいリストは各所で list-style: none） */
+:where(ul) {
+  list-style: disc;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
 }
 
 .skip-link {
@@ -98,6 +143,7 @@ a {
 }
 
 .btn {
+  font-family: inherit;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -172,4 +218,84 @@ textarea {
 }
 ::placeholder {
   color: var(--muted);
+}
+
+/* Master CSS の base レイヤーは段落の余白も消すので、読み物の部分だけ戻す（:where で詳細度 0） */
+:where(.doc, .wrap) :where(p, ul, ol) {
+  margin-block: 0.9em;
+}
+
+/* ---- 読み物ページ（サポート・プライバシー・404）の共通体裁 ---- */
+
+/* 小見出しの上に置くラベル。英字の略号は使わず、日本語の短い語で書く */
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  letter-spacing: 0.08em;
+}
+.eyebrow::before {
+  content: '';
+  width: 24px;
+  height: 1px;
+  background: currentColor;
+}
+
+.doc {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 20px;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+.doc-head {
+  padding: 56px 0 32px;
+  border-bottom: 1px solid var(--line-strong);
+  margin-bottom: 8px;
+}
+.doc-head h1 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: clamp(2rem, 6vw, 3rem);
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  margin: 14px 0 12px;
+}
+.doc-head .lead {
+  margin: 0;
+  max-width: 40em;
+  color: var(--muted);
+}
+.prose {
+  max-width: 40em;
+}
+.prose h2 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 1.375rem;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  margin: 56px 0 14px;
+  scroll-margin-top: 88px;
+}
+.prose h3 {
+  font-size: 1rem;
+  margin: 28px 0 6px;
+}
+.prose ul,
+.prose ol {
+  padding-left: 1.4em;
+}
+.prose li {
+  margin: 6px 0;
+}
+.prose li::marker {
+  color: var(--muted);
+}
+.prose .note {
+  color: var(--muted);
+  font-size: 0.9375rem;
 }
