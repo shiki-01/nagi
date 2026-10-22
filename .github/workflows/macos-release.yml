@@ -104,6 +104,9 @@ jobs:
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$P12_PASSWORD" \
             -T /usr/bin/codesign -f pkcs12
+          # 中間証明書（Developer ID - G2）。ランナーに無いと証明書が「信頼されていない」扱いになり署名に使えない
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain" || true
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/developer-id.p12"
