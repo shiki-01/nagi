@@ -16,10 +16,9 @@ pub fn default_check_url() -> String {
 
 /// アップデート配布物の署名検証に使う ed25519 公開鍵（16進数、32バイト）。
 ///
-/// **これはこの実装のテスト・動作確認用に生成したプレースホルダーの鍵です。実際に配布する前に、
-/// 本物の鍵ペアを新たに生成し、この値を実際の公開鍵に置き換える必要があります**。対応する
-/// 秘密鍵は絶対にこのリポジトリに含めず、リリースの署名を行う環境（ビルドサーバー等）でのみ
-/// オフラインで保管してください（例: `openssl genpkey -algorithm ed25519` で生成できます）。
+/// 本番用の鍵（2026-10-22 に `cargo xtask gen-update-key` で生成）。対応する秘密鍵はこのリポジトリに
+/// 含めず、Actions Secrets `NAGI_UPDATE_SIGNING_KEY`（リリースの署名を行う `macos-release.yml`）と
+/// 手元のオフライン保管にだけ置く。
 ///
 /// 鍵の差し替えは `cargo xtask gen-update-key` で鍵ペアを作り、公開鍵を
 /// `config/update-public-key.txt`（Rust と macOS フロントで共通の単一ソース）に書く。

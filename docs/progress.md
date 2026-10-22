@@ -94,7 +94,7 @@
 - G-28 確定取消（Ctrl+Backspace）。`ProcessKeyResult.delete_before` の追加。`typeshare-cli` をこの実行環境にインストールして型生成・差分検査まで検証済み（crates.io は到達可能）
 - G-29 reconvert（確定済みテキストの再変換）。辞書の逆引きによる専用Viterbi（`nagi-dict::reverse_convert`）。ユーザー辞書は対象外、未知語はreading=surfaceのまま通す（LLM補完は今回のスコープ外）
 - G-30 ビームサーチ: 辞書ベースの文全体N-best（`nagi-dict::convert_n_best`。k-best Viterbi）。1件目をLLM再採点済みの1-bestに揃えることで変換品質の後退を防いだ経緯を記載
-- G-31 アップデート配布物のed25519署名検証。`config/update-public-key.txt` の公開鍵 はプレースホルダー（実配布前に鍵の差し替えが必要）
+- G-31 アップデート配布物のed25519署名検証。公開鍵は `config/update-public-key.txt`（2026-10-22 に本番用へ差し替え済み）
 - G-32 LLM コンテキストの再利用（KV キャッシュ。自己参照構造・`unsafe_code` の局所解禁・`unsafe impl Send` の根拠・実測値。G-21 の見送りを覆した）
 - G-33 LLM のビームサーチ（infer 単体、Stage 1。アルゴリズム・`kv_unified` の必要性・実測・未実装の統合作業）
 - G-34 LLM のビームサーチ（server/engine 統合、Stage 2。`Effective::beam_width`・`Pipeline::sentence_candidates`・候補ウィンドウの sentence モード・既知の限界）
@@ -139,7 +139,7 @@
 6. ~~**reconvert の逆引き辞書のメモリ増加量**~~ → 実機（Windows、実データ）で実測済み: 約270MB（見積もりの「数十MB」は誤りだった。G-29 追記）。`minimal`/`light` プロファイルでは `reconvert` 使用後に自動解放するよう対応済み（`Dictionary::release_reverse_index`）。`balanced`/`quality` では常駐させたまま。
 7. **reconvert の推定精度**: 辞書のみでの読み推定（LLM補完なし）が実際の確定済みテキストに対してどの程度使えるか。未知語（辞書に無い表記）の頻度も含めて確認してほしい。
 8. **ビームサーチ（文全体N-best）の実際の見え方**（G-30）: 実データ・実LLMで、Space変換の1回目に候補窓が開く挙動（設計書どおりの `initial_view = sentence`）が実際に使いやすいか。1件目はLLM再採点済みの結果に揃えたが、2件目以降は辞書コスト順（LLM再採点なし）なので、この並びが不自然に感じられないか確認してほしい。
-9. **アップデート署名検証の鍵**（G-31）: `config/update-public-key.txt` の公開鍵 は実装確認用の使い捨て鍵。実際に配布する前に本物の鍵ペアを生成し直し、秘密鍵をビルド・署名環境にオフラインで保管する必要がある。
+9. ~~**アップデート署名検証の鍵**（G-31）~~ → 本番用の鍵に差し替え済み（2026-10-22。公開鍵は `config/update-public-key.txt`、秘密鍵は Actions Secrets `NAGI_UPDATE_SIGNING_KEY`）
 
 ## macOS 実機へのインストール手順（手動）
 
@@ -154,7 +154,7 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 
 ### macOS のリリース手順（Developer ID 署名・公証、H-37）
 
-1. 初回のみ: `cd core && cargo xtask gen-update-key` で鍵ペアを作る。秘密鍵を Actions Secrets `NAGI_UPDATE_SIGNING_KEY` に登録し、公開鍵で `config/update-public-key.txt` を置き換えてコミットする（現在の値は実装確認用のプレースホルダー）
+1. 初回のみ: `cd core && cargo xtask gen-update-key` で鍵ペアを作る。秘密鍵を Actions Secrets `NAGI_UPDATE_SIGNING_KEY` に登録し、公開鍵で `config/update-public-key.txt` を置き換えてコミットする（2026-10-22 に実施済み）
 2. 初回のみ: Secrets に `MACOS_DEVELOPER_ID_P12`（「Developer ID Application」証明書と秘密鍵の .p12 を base64 にしたもの）と `MACOS_DEVELOPER_ID_P12_PASSWORD` を登録する。公証には iOS と共通の `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8` を使う
 3. `core/Cargo.toml` の `[workspace.package] version` を上げて main にコミットし、`gh workflow run macos-release.yml --ref main -f version=X.Y.Z` を実行する。リリース `macos-vX.Y.Z`（zip と `latest.json`）が作られ、web ワークフローがサイトの `/updates/macos/latest.json` を更新する
 4. 利用者は `curl -fsSL https://nagi.shiki-01.com/install.sh | sh` で入れ、以降は入力メニューの「アップデートを確認…」で更新する（起動時の自動確認はコアが通知する）
