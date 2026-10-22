@@ -1251,3 +1251,21 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
   - 実装時（2026-10-22）、開発環境のプロキシが `api.iconify.design` への接続を拒否した（CONNECT 403）ため、**Iconify API の応答（SVG の形式・`height` パラメータの効き方・`collection` の `info` の形・レート制限）は実際には確認できていない**。上記は公開仕様の記憶に基づく。レート制限は不明で、取り込み時に 1 件ずつ・上限 64 件に抑えている。要確認: 429 等が返った場合の挙動（現状は取得失敗として label に代替）。
   - Swift をローカルでコンパイルできないため、WKWebView の読み込み完了待ち・`callAsyncJavaScript` + canvas の PNG 化・テンプレート描画は CI（`ios-test` のユニットテスト、`ios-testflight` のビルド）と実機で確認が要る。単体テストの対象は書式・抽出・ライセンス応答の解釈・検証のみ。
 - **サイト側対応（完了、2026-10-22）**: サイトエディタ（`web/`）も `iconify:` / `sf:` の書式検査（`validate.ts`。スキーマ・Swift と同じ規則）とアイコン入力欄に対応した。プレビューはサイトがオンラインなので、ブラウザから `https://api.iconify.design/<prefix>/<name>.svg` を直接読んで表示する（失敗時は label 表示になる旨を出す）。書き出し JSON は ID のみ。
+
+### H-37. macOS フロントの未実装部分の実装（2026-10-22、ユーザー指示「その順番で進めて」、要実機確認）
+
+順序はユーザー承認済み: (1) 入力モード同期 → (2) `set_environment`・直前テキスト → (3) 通知表示・メニュー → (4) 再変換 → (5) 配布。(5) は鍵・配布先・証明書の決定が要るため保留。
+
+- **入力モード**: Info.plist に英数モード `<bundle-id>.Roman`（`smRoman`、`TISIntendedLanguage = en`、JIS ショートカット 0）を追加した。ひらがなモードの ID は既存の `<bundle-id>.Japanese` のまま（インストール済みの入力ソースを壊さない）。アイコンは同じ角丸の灰色版（`nagi-icon-roman.tiff`）で、「あ / A」の文字アイコンではない（グリフの描画を xtask に入れるのは見送り。差し替えは容易）
+  - コアのモードが正（D 節）。応答の `mode` で OS のモードを `selectMode` し、OS 側の選択（`setValue(_:forTag:client:)`）は `perform_action(SetMode)` でコアへ送る。同じモードなら送らない（SetMode は入力中の文字列を確定するため、往復で確定しないように）。activate 時とエンジン起動・再起動後は、OS で選択中の入力ソース（`TISCopyCurrentKeyboardInputSource`）に合わせる
+- **set_environment**: `EnvironmentReporter`（電源は IOKit の `IOPSNotificationCreateRunLoopSource`、低電力・熱は `ProcessInfo` の通知、メモリ逼迫は `DispatchSource.makeMemoryPressureSource`）。変化時と `started` のたびに送る。`memory_budget_mb` は macOS では送らない
+- **直前テキスト**: preedit が無く、ひらがなモードで、flagsChanged 以外のキーが来たとき（= 入力開始時）と activate 時に、キャレット直前の最大 64 UTF-16 を `attributedSubstring` で読んで `set_context` で送る。取得できないアプリでは `surrounding_text` を送らない（コアは前回の文脈を維持。空文字列を送ると次語候補が消えるため）。キャレットが先頭なら空文字列。secure input は毎回読み直し、secure 中は直前テキストを読まない（CLAUDE.md の停止条件）
+- **通知表示**: `notify` の warning / error、エンジン停止（1 回目のみ）、minimal での起動、起動失敗、復元失敗を画面右上の小パネル（`StatusToast`、4 秒、同じ文言は 30 秒間引く）で出す。`info` は出さない。OS の通知センターは許可ダイアログが要るため使わない
+- **メニュー**: 開いた時点の `get_status`（プロファイルと理由・LLM の有無・学習件数・ユーザー辞書の語数・設定エラー）を選択不可の行で出し、「設定…」「設定ファイルを再読み込み」「学習データを削除…」（NSAlert で確認）を並べる
+- **再変換**: プロトコルに `ProcessKeyResult.reconvert_selection: Option<bool>` を追加した（加算的。Swift 型を再生成）。キーの意味はコアが決め（キーマップ）、選択の取得はフロントがする分担にした
+  - 既定の割当: 未入力・ひらがなモードでのかなキー（macOS 標準と同じく、英数モードからは 1 回目でひらがなモード、2 回目で再変換）と変換キー（修飾なし。MS-IME と同じ）。従来、ひらがなモードでのかなキーは何もしない（SetMode の同値）だったので、選択が無ければ挙動は変わらない
+  - macOS は選択（最大 200 UTF-16）を `reconvert` に送り、結果のマークテキストで選択範囲を置き換える（`setMarkedText` の `replacementRange`）。初回は逆引き索引の構築（G-29。実データで約 300MB）で時間がかかるため 2 秒まで待ち、超えたら `reset` で取り消して「少し待ってからもう一度」と通知する（要求は順に処理されるので、遅れて変換中になったセッションも戻る）
+  - 誤学習の削除は既存の Ctrl+Delete（変換中、コアのキーマップ）で、フロントの追加は不要
+- **迷った判断**: (1) 英数モードのアイコンを文字アイコンにしなかった。(2) 変換キーは Direct のみ（Composing / Converting の変換キーは既存どおり）。(3) 再変換の待ち時間 2 秒は実測なし
+- **未確認（実機）**: `setValue(_:forTag:client:)` が activate 時・メニュー選択時にどう呼ばれるか、英数/かなキーを OS が先に処理するか（どちらでも同期する作りにした）、`attributedSubstring` の対応アプリ（ブラウザ・ターミナル・Electron）、`setMarkedText` の `replacementRange` で選択範囲が置き換わるか、メモリ逼迫イベントの頻度
+
