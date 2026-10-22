@@ -1125,6 +1125,7 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **テスト**: romaji の `strokes_*`・`flicks_*`（BS・巻き戻し・引き継ぎ・カーソル・Delete・部分確定・`clear`・`load_pieces`）、fuzzy の座標の単調性（境界に近いほど安い）・座標なしで M1 と同一・打鍵列の不一致時のフォールバック・非 QWERTY の隣接・フリック角度、`server/tests/fuzzy.rs` の `m2`（`reading` つき候補、補正候補の確定と学習（入力中・Space 変換の両方）、`set_layout_geometry` で `q` を `n` の下に置くと `kaqji` が補正される / `m` を遠ざけると補正されない / 12 キーの配置は無視される、境界の座標で補正される・`use_touch_coords=false` で座標を無視、座標なしの `insert_reading` と物理キーが同じ結果、JSON-RPC の受け付け）
 - **デバッグビルドの展開予算**: `EXPANSION_BUDGET_MS` を debug では 50ms にした（release 2ms）。debug は約 10 倍遅く、2ms ではテスト（`kamji` の補正）が不安定に落ちたため。release の挙動は変えていない
 - **未解決・次の段階**: `distance`（フリックの距離）と `mode` は未使用。文節に割れた入力の文節ごとの打鍵列の対応（今は読みからの復元）。M3（LLM 再採点）。Swift 側（geometry の送信、`touch` / `flick` の送信、`reading` の「もしかして: ○○」表示、iOS の config で `enabled = true`）。`CandidateView` の Swift の `init` に `reading:` が増えたので、`frontend-macos/Tests/.../PreeditAndCandidateTests.swift` と `frontend-ios-spike/Tests/CandidateKindTests.swift` の生成呼び出しに `reading: nil` が必要
+  - **後に実装済み（2026-10-22 に実装を確認）**: 上の「Swift 側（geometry の送信、`touch` / `flick` の送信、`reading` の「もしかして: ○○」表示、iOS の config で `enabled = true`）」は `frontend-ios-spike/` に実装されている（`KeyboardModel.updateLayoutGeometry` / `NagiSession.setLayoutGeometry`、`inputText` の touch・`key` の flick を `NagiSession.insert` へ、`CandidateKind.fuzzyHint`、`ProductSession` の `[input.fuzzy] enabled = true`）。コミット d08893f は本リポジトリに存在しない（未確認）。Swift のビルド・テストの CI 確認と実機確認は、この注記の時点では記録がない。
 
 ### H-26. キーボード切替時のメモリ一時倍増への対策（LLM の遅延ロード・非表示時の解放・簡易モード注意の猶予）（2026-10-15、要レビュー）
 
@@ -1196,7 +1197,7 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 
 - **レイアウト**: `textDocumentProxy.keyboardType` が メール・URL・`asciiCapable` なら英字、数字系（`numberPad` など）なら `numbers` で開く（`InputTraitsMapping`）。指定のない欄へ移ったときは、自動で切り替えていた場合だけかなへ戻す。ユーザーが自分で切り替えたレイアウトは保つ。判定は focusIn と入力欄の切替（`documentIdentifier` の変化）で行う。
 - **改行キー**: `returnKeyType` に合わせて「検索」「開く」「送信」「完了」「次へ」などを出す（入力中は従来どおり「確定」）。
-- 設定 `keyboard.layout_by_field`（docs/ios-settings.md の案）での無効化は未実装。
+- 設定 `keyboard.layout_by_field`（docs/ios-settings.md の案）での無効化は未実装（H-34 で追加済み）。
   - 後の決定（2026-10-16）: 実装済み（既定 true。false ならレイアウトの自動選択と改行キーの表示をしない）。
 
 ### H-33. 「キーボードが切り替わる」の原因（2026-10-16、ユーザーの観察で判明）

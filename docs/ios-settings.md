@@ -38,11 +38,11 @@
 | `input.dakuten_key_enabled` | 濁点キーを出す | bool | true | D | kbd | 新規(iOS) | OFF にすると、濁点はフリック・長押しのみ |
 | `input.shift_letter` | Shift + 英字の動作 | choice: `literal_continue` / `single_upper` | `literal_continue` | D | core:input.shift_letter | 既存(GUI) | QWERTY のみ有効 |
 | `input.romaji_carryover` | 消したローマ字を引き継ぐ | bool | true | D | core:input.romaji_carryover | 実装済み(core)（platforms=both） | QWERTY（ローマ字）入力のみ有効。Backspace で残った未変換のローマ字を保留に戻す（H-23） |
-| `input.fuzzy.enabled` | タイプミスの補正候補（曖昧入力） | bool | false | S | core:input.fuzzy.enabled | 実装済み(core)（platforms=both。simple）。iOS は ProductSession の生成 config で `[input.fuzzy] enabled = true` を書く想定（H-25、Swift 未対応） | キー配置から考えられる打ち間違いを「もしかして」候補として変換候補に混ぜる（出所 `fuzzy`）。入力中の読みは打った通りのまま（自動置換しない）。M1 は隣接キー + 辞書のみ（H-24）。QWERTY（ローマ字）は隣接キー・打ち忘れ・余計な打鍵・転置、12 キーは濁点・小書きの付け忘れと同じ行内の隣の文字。Swift 側の追従は設定 UI の汎用フォームのみ（出所 `fuzzy` の候補は既存の候補バーにそのまま並ぶ） |
+| `input.fuzzy.enabled` | タイプミスの補正候補（曖昧入力） | bool | false | S | core:input.fuzzy.enabled | 実装済み(core)（platforms=both。simple）。iOS は ProductSession の生成 config で `[input.fuzzy] enabled = true` を書く（H-25。Swift 側も実装済み: `Shared/ProductSession.swift`） | キー配置から考えられる打ち間違いを「もしかして」候補として変換候補に混ぜる（出所 `fuzzy`）。入力中の読みは打った通りのまま（自動置換しない）。M1 は隣接キー + 辞書のみ（H-24）。QWERTY（ローマ字）は隣接キー・打ち忘れ・余計な打鍵・転置、12 キーは濁点・小書きの付け忘れと同じ行内の隣の文字。Swift 側の追従は設定 UI の汎用フォームのみ（出所 `fuzzy` の候補は既存の候補バーにそのまま並ぶ） |
 | `input.fuzzy.strength` | 補正の強さ | choice: `gentle` / `normal` / `aggressive` | `normal` | S | core:input.fuzzy.strength | 実装済み(core)（platforms=both。simple） | 累積コスト上限 3.0 / 4.5 / 6.5。強めは探索が 2ms で打ち切られやすく、評価では正解率が下がった（H-24） |
 | `input.fuzzy.max_candidates` | 補正候補の最大数 | int 1–5, step 1 | 3 | D | core:input.fuzzy.max_candidates | 実装済み(core)（platforms=both） | 候補に混ぜる補正候補の上限 |
 | `input.fuzzy.kinds` | 補正する打ち間違いの種類 | text（カンマ区切り） | `substitute,delete,insert,transpose,voicing` | D | core:input.fuzzy.kinds | 実装済み(core)（platforms=both） | 隣接キー置換 / 打ち忘れ / 余計な打鍵 / 打ち順の入れ替え / 濁点・小書き。汎用フォームでは自由入力のテキスト |
-| `input.fuzzy.use_touch_coords` | タッチ位置を補正に使う | bool | true | D | core:input.fuzzy.use_touch_coords | 実装済み(core)（platforms=ios）。Swift 側の座標送信は未対応 | QWERTY のキー内のタッチ位置・12 キーのフリック角度を補正コストに使う（H-25）。Swift は `insert_reading` に `touch` / `flick`（`InsertReadingTouchParams`）を足し、`set_layout_geometry` でキー矩形を送る |
+| `input.fuzzy.use_touch_coords` | タッチ位置を補正に使う | bool | true | D | core:input.fuzzy.use_touch_coords | 実装済み(core)（platforms=ios）。Swift 側の座標送信も実装済み（`insert_reading` の touch / flick、`set_layout_geometry`。H-25） | QWERTY のキー内のタッチ位置・12 キーのフリック角度を補正コストに使う（H-25）。Swift は `insert_reading` に `touch` / `flick`（`InsertReadingTouchParams`）を足し、`set_layout_geometry` でキー矩形を送る |
 | `input.punctuation` | 句読点の種類 | choice: `、。` / `，．` / `，。` | `、。` | S | core:input.punctuation | 既存(GUI) | 12 キーの「、。?!」キーの先頭にも反映 |
 | `input.auto_commit_ms` | 一定時間入力が無ければ自動確定 | int 0–10000（0 = 無効）, step 500 | 0 | D | kbd+core | 新規(core) | 入力を失わない原則との兼ね合いで既定は無効 |
 | `input.auto_space_alpha` | 英単語の後に自動でスペース | bool | false | D | core:input.auto_space_alpha | 新規(core) | 英字入力の予測（backlog 3 章）と同時に検討 |
@@ -60,9 +60,9 @@
 | `touch.tap_slop_pt` | タップと判定する許容移動量 | float 2–20 pt | 8 | D | kbd | 新規(iOS) | |
 | `touch.key_repeat_ms` | ⌫・カーソル長押し連打の間隔 | int 30–300, step 10 | 80 | D | kbd | 既存(iOS) | 初回遅延は `touch.key_repeat_delay_ms` |
 | `touch.key_repeat_delay_ms` | 長押し連打を始めるまでの時間 | int 200–1000, step 50 | 400 | D | kbd | 既存(iOS) | |
-| `touch.space_swipe` | スペースキーのスワイプでカーソル移動 | bool | true | D | kbd | 実装済み(iOS・要実機確認) | スペースを押したまま左右に動かすと移動モード（離してもスペースは入らない。タップは通常のスペース）。入力中は文節/カーソル移動の Action、未入力はホストの `adjustTextPosition`。旧 ID `touch.space_swipe_cursor` |
-| `touch.space_swipe_step_pt` | カーソル移動 1 文字あたりの距離 | float 4–40 pt, step 1 | 14 | D | kbd | 実装済み(iOS・要実機確認) | ドラッグ距離に比例。最初の 1 文字もこの距離で入る |
-| `touch.backspace_swipe` | ⌫の左スワイプで単語単位の削除 | bool | false | D | kbd | 実装済み(iOS・要実機確認) | 単語境界は文字種の連なり（漢字/ひらがな/カタカナ/英数）でフロントが判定（コアは関与しない暫定）。入力中は無効。押した瞬間の 1 文字削除は先に済む。旧 ID `touch.backspace_swipe_word` |
+| `touch.space_swipe` | スペースキーのスワイプでカーソル移動 | bool | true | D | kbd | 実装済み(iOS)・確認済み（2026-10-22） | スペースを押したまま左右に動かすと移動モード（離してもスペースは入らない。タップは通常のスペース）。入力中は文節/カーソル移動の Action、未入力はホストの `adjustTextPosition`。旧 ID `touch.space_swipe_cursor` |
+| `touch.space_swipe_step_pt` | カーソル移動 1 文字あたりの距離 | float 4–40 pt, step 1 | 14 | D | kbd | 実装済み(iOS)・確認済み（2026-10-22） | ドラッグ距離に比例。最初の 1 文字もこの距離で入る |
+| `touch.backspace_swipe` | ⌫の左スワイプで単語単位の削除 | bool | false | D | kbd | 実装済み(iOS)・確認済み（2026-10-22） | 単語境界は文字種の連なり（漢字/ひらがな/カタカナ/英数）でフロントが判定（コアは関与しない暫定）。入力中は無効。押した瞬間の 1 文字削除は先に済む。旧 ID `touch.backspace_swipe_word` |
 | `touch.arrow_flick_cursor` | 左右フリックでカーソル移動 | bool | true | D | kbd | 新規(iOS) | 12 キーの「←」「→」キー |
 
 ### 2.2 変換（`conversion` / `profile` / `predict` / `ranking`）
@@ -135,7 +135,7 @@
 | `keyboard.layout_number` | 数字モードのレイアウト | choice: `numbers` / ユーザー定義 | `numbers` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_symbol` | 記号モードのレイアウト | choice: `symbols` / ユーザー定義 | `symbols` | D | kbd | 新規(iOS) | |
 | `keyboard.layout_emoji` | 絵文字モードのレイアウト | choice: `emoji` / ユーザー定義 | `emoji` | D | kbd | 新規(iOS) | |
-| `keyboard.layout_by_field` | 入力欄の種類で自動切替（URL・メール・数字） | bool | true | D | kbd | 実装済み(iOS・要実機確認) | `keyboardType` に従う。数字パッド欄では数字配列。自動切替は `Keyboard/InputTraits.swift`（メール・URL・`asciiCapable` は英字、数字系は `numbers`、指定のない欄に移ると自動で切り替えていた場合だけかなへ戻す）。改行キーの表示も `returnKeyType` に合わせる。OFF ではレイアウトを自動で選ばず、改行キーもレイアウトのラベルのまま（OFF にする前に自動で切り替えていた場合は、次の focusIn・入力欄の切替でかなへ戻す。`KeyboardModel.applyInputTraits()`） |
+| `keyboard.layout_by_field` | 入力欄の種類で自動切替（URL・メール・数字） | bool | true | D | kbd | 実装済み(iOS)・確認済み（ビルド 39・40。2026-10-16〜17、H-34） | `keyboardType` に従う。数字パッド欄では数字配列。自動切替は `Keyboard/InputTraits.swift`（メール・URL・`asciiCapable` は英字、数字系は `numbers`、指定のない欄に移ると自動で切り替えていた場合だけかなへ戻す）。改行キーの表示も `returnKeyType` に合わせる。OFF ではレイアウトを自動で選ばず、改行キーもレイアウトのラベルのまま（OFF にする前に自動で切り替えていた場合は、次の focusIn・入力欄の切替でかなへ戻す。`KeyboardModel.applyInputTraits()`） |
 | `keyboard.remember_last_mode` | 最後に使ったモードで起動 | bool | true | D | kbd | 新規(iOS) | OFF の場合は `input.mode` で起動 |
 | `keyboard.height` | キーボードの高さ | choice: `compact` / `standard` / `tall` | `standard` | S | kbd | 既存(iOS) | 内部的には下記の倍率 |
 | `keyboard.height_scale` | 高さの倍率 | float 0.8–1.3, step 0.05 | 1.0 | D | kbd | 既存(iOS) | 縦・横画面で別々に持つ（`keyboard.height_scale_landscape`） |
@@ -146,13 +146,13 @@
 | `keyboard.key_corner_pt` | キーの角丸 | float 0–16 pt, step 1 | 6 | D | kbd | 既存(iOS) | |
 | `keyboard.key_label_size` | キー文字の大きさ | float 0.8–1.4（倍率） | 1.0 | D | kbd | 新規(iOS) | Dynamic Type との関係は `a11y.*` で整理 |
 | `keyboard.show_globe` | 地球儀キーを出す | bool | 自動（OS の `needsInputModeSwitchKey`） | D | kbd | 新規(iOS) | 他のキーボードへ切り替えられない端末では常に出す |
-| `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS・要実機確認) | 触覚の発生にフルアクセスが要るかは未確認（`UIFeedbackGenerator` は拡張では制限あり。要実機確認。`ios-device-checklist.md` §3） |
-| `keyboard.sound` | キー入力の音 | choice: `off` / `compat`（表示名「クリック音」） | `compat` | S | kbd | 既存(iOS・要実機確認) | `compat` はシステムのキーボードのクリック音（`AudioServicesPlaySystemSound(1104)`）を直接鳴らす（端末の「キーボードのクリック」設定には従わず、消音スイッチに従う）。以前あった `system`（`UIDevice.playInputClick`。端末の「キーボードのクリック」設定に従う）は実機で鳴らなかったので廃止した。保存済みの `system` は読むときに既定の `compat` に丸める。独自音源は持たない。**既定は `compat`**（実装 `IOSSettings.swift` の `defaultValue`） |
+| `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS)・確認済み（2026-10-22） | 触覚の発生にフルアクセスが要るかは、`ios-device-checklist.md` §2 設定タブの確認項目（「フルアクセスなし・ありの両方で振動するか」。2026-10-22 問題なし）。結論（要否）は文書に記録がない（`UIFeedbackGenerator` は拡張では制限あり） |
+| `keyboard.sound` | キー入力の音 | choice: `off` / `compat`（表示名「クリック音」） | `compat` | S | kbd | 既存(iOS)・確認済み（2026-10-22） | `compat` はシステムのキーボードのクリック音（`AudioServicesPlaySystemSound(1104)`）を直接鳴らす（端末の「キーボードのクリック」設定には従わず、消音スイッチに従う）。以前あった `system`（`UIDevice.playInputClick`。端末の「キーボードのクリック」設定に従う）は実機で鳴らなかったので廃止した。保存済みの `system` は読むときに既定の `compat` に丸める。独自音源は持たない。**既定は `compat`**（実装 `IOSSettings.swift` の `defaultValue`） |
 | `keyboard.haptic_engine` | 触覚の方式（互換モード） | choice: `standard` / `compat` | `standard` | D | kbd | 実装済み(iOS・要実機確認) | `standard` は `UIImpactFeedbackGenerator`、`compat` は「標準」が働かない端末向けで、システムサウンド（Peek など）の振動で知らせる（`AudioServicesPlaySystemSound`）。`keyboard.haptic` が `off` のときは働かない |
-| `keyboard.commit_method` | 確定の方式（診断用） | choice: `insert` / `mark` / `delete` | `insert` | D | kbd | 実装済み(iOS・要実機確認) | 変換中の文字列がある状態での確定の手順（`HostCompositionApplier.CommitMethod`）。`insert` は `insertText` だけで変換中の範囲を置き換える（失敗しても手前の本文を消さない）。`mark` は確定文字列を `setMarkedText` してから `unmarkText`。`delete` は旧方式（`unmarkText` → `deleteBackward`×N → `insertText`。実機で手前の本文を消すことがあった）。不具合の切り分け用 |
+| `keyboard.commit_method` | 確定の方式（診断用） | choice: `insert` / `mark` / `delete` | `insert` | D | kbd | 実装済み(iOS)・確認済み（2026-10-22。既定 `insert` は H-31 でも確認。`mark` / `delete` の確認記録は文書にない） | 変換中の文字列がある状態での確定の手順（`HostCompositionApplier.CommitMethod`）。`insert` は `insertText` だけで変換中の範囲を置き換える（失敗しても手前の本文を消さない）。`mark` は確定文字列を `setMarkedText` してから `unmarkText`。`delete` は旧方式（`unmarkText` → `deleteBackward`×N → `insertText`。実機で手前の本文を消すことがあった）。不具合の切り分け用 |
 | `keyboard.sound_volume` | 音量 | float 0–1 | 0.5 | - | kbd | 新規(iOS) | システムサウンド（`compat`）は OS が音量を決めるため、独自音源を持つまでは不要 |
-| `keyboard.theme` | テーマ | choice: `system` / `light` / `dark`（ユーザー定義は未実装） | `system` | S | kbd | 実装済み(iOS・要実機確認) | 拡張のビューの `overrideUserInterfaceStyle` で上書き |
-| `keyboard.accent` | アクセントカラー | choice: `blue` / `green` / `orange` / `pink` / `gray` | `blue` | S | kbd | 実装済み(iOS・要実機確認) | 確定キー・選択中の候補・シフト等の色。任意色（sRGB 16 進）は未実装。旧 ID `keyboard.accent_color` |
+| `keyboard.theme` | テーマ | choice: `system` / `light` / `dark`（ユーザー定義は未実装） | `system` | S | kbd | 実装済み(iOS)・確認済み（2026-10-22） | 拡張のビューの `overrideUserInterfaceStyle` で上書き |
+| `keyboard.accent` | アクセントカラー | choice: `blue` / `green` / `orange` / `pink` / `gray` | `blue` | S | kbd | 実装済み(iOS)・確認済み（2026-10-22） | 確定キー・選択中の候補・シフト等の色。任意色（sRGB 16 進）は未実装。旧 ID `keyboard.accent_color` |
 | `keyboard.key_color_set` | キーの配色 | choice: `standard` / `high_contrast` / `custom` | `standard` | D | kbd | 新規(iOS) | `custom` 時は色ごとの指定を JSON で持つ |
 | `keyboard.background_image` | 背景画像 | 画像（ホストアプリで選択） | なし | D | kbd | 新規(iOS) | **拡張のメモリを消費する**ため縮小して保存（長辺 1024px 以内）し、拡張では必要時のみ読む |
 | `keyboard.show_key_preview` | 押したキーのプレビュー（QWERTY） | bool | true | D | kbd | 新規(iOS) | |
@@ -170,7 +170,7 @@
 | `candbar.show_segments` | 文節列（注目文節の表示）を出す | bool | true | D | kbd | 新規(iOS) | iOS は marked text に属性を付けられないため主手段（`mobile-design.md` §5.1）。OFF は非推奨 |
 | `candbar.auto_hide` | 入力が無いときの候補バーの扱い | choice: `always` / `hide_when_empty` | `always` | D | kbd | 新規(iOS) | 非表示にすると高さが変わるため既定は常時表示 |
 | `candbar.tap_commit` | 候補のタップで即確定 | bool | true | D | kbd | 新規(iOS) | OFF なら 1 回目で選択、2 回目で確定 |
-| `candbar.paste_button` | 「貼り付け」ボタンを候補バーの左端に出す | bool | true | D | kbd | 実装済み(iOS・要実機確認) | 表示判定は `UIPasteboard.hasStrings` のみ（中身は読まない）、入力中は非表示。中身はタップ時だけ読む（iOS 16 の貼り付け許可が出うる）。旧 ID `candbar.clipboard_paste`（既定は旧 false → true）。`privacy.clipboard_access` とは独立 |
+| `candbar.paste_button` | 「貼り付け」ボタンを候補バーの左端に出す | bool | true | D | kbd | 実装済み(iOS)・確認済み（2026-10-22） | 表示判定は `UIPasteboard.hasStrings` のみ（中身は読まない）、入力中は非表示。中身はタップ時だけ読む（iOS 16 の貼り付け許可が出うる）。旧 ID `candbar.clipboard_paste`（既定は旧 false → true）。`privacy.clipboard_access` とは独立 |
 
 ### 2.6 プライバシー・フルアクセス（`privacy`）
 
