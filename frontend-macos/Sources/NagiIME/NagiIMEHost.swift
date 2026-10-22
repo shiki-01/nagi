@@ -21,6 +21,7 @@ public final class NagiIMEHost {
     private var server: IMKServer?
     private var context: NagiIMEContext?
     private var wakeObserver: NSObjectProtocol?
+    private var environment: EnvironmentReporter?
 
     public init(options: HostOptions) {
         self.options = options
@@ -88,9 +89,23 @@ public final class NagiIMEHost {
         context.modeIdentifiers = BundleIdentity.modeIdentifiers(bundleID: Self.defaultBundleIdentifier)
         NagiIMEContext.shared = context
         supervisor.restoreProvider = { store.restoreParams() }
+
+        // 実行環境（電源・熱・メモリ逼迫）は、変化時と起動・再起動のたびにコアへ送る
+        let environment = EnvironmentReporter()
+        self.environment = environment
+        let reportEnvironment = { [weak environment] in
+            guard let environment else { return }
+            try? supervisor.setEnvironment(environment.snapshot())
+        }
+        environment.onChange = reportEnvironment
+        environment.start()
+
         supervisor.onEvent = { [weak context] event in
             // イベントは任意スレッドから来る。IMKit / AppKit の操作はメインで行う
-            DispatchQueue.main.async { context?.handle(event) }
+            DispatchQueue.main.async {
+                if case .started = event { reportEnvironment() }
+                context?.handle(event)
+            }
         }
 
         let connectionName =

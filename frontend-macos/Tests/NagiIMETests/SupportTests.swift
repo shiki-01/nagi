@@ -100,6 +100,16 @@ final class SupportTests: XCTestCase {
             "com.shiki.inputmethod.Nagi_Connection")
     }
 
+    func testEnvironmentMapping() {
+        XCTAssertEqual(EnvironmentMapping.onBattery(providingPowerSourceType: "Battery Power"), true)
+        XCTAssertEqual(EnvironmentMapping.onBattery(providingPowerSourceType: "AC Power"), false)
+        XCTAssertNil(EnvironmentMapping.onBattery(providingPowerSourceType: nil))
+        XCTAssertEqual(EnvironmentMapping.thermal(.serious), .serious)
+        XCTAssertEqual(EnvironmentMapping.memoryPressure([.warning]), .warning)
+        XCTAssertEqual(EnvironmentMapping.memoryPressure([.warning, .critical]), .critical)
+        XCTAssertEqual(EnvironmentMapping.memoryPressure([.normal]), .normal)
+    }
+
     func testModeIdentifiersMatchBundlePlist() {
         let ids = BundleIdentity.modeIdentifiers(bundleID: "com.shiki.inputmethod.Nagi")
         XCTAssertEqual(ids[.hiragana], "com.shiki.inputmethod.Nagi.Japanese")

@@ -18,6 +18,8 @@ final class NagiInputController: IMKInputController {
     private var coreMode: InputMode?
 
     private static let notFound = NSRange(location: NSNotFound, length: NSNotFound)
+    /// コアへ送る直前テキストの長さ（UTF-16。コアは末尾 40 文字だけを文脈に使う）
+    private static let contextLength = 64
 
     private var context: NagiIMEContext? { NagiIMEContext.shared }
 
@@ -54,6 +56,10 @@ final class NagiInputController: IMKInputController {
             charactersIgnoringModifiers: isFlags ? "" : (event.charactersIgnoringModifiers ?? ""),
             modifierFlags: event.modifierFlags.rawValue, isFlagsChanged: isFlags)
         guard let key = KeyNormalizer.normalize(raw) else { return false }
+        // 入力を始める前に、直前のテキスト（変換の文脈）と secure input の状態を伝える
+        if !isFlags, currentMode == .hiragana, context.store.preedit(for: sessionId)?.text.isEmpty ?? true {
+            reportContext()
+        }
 
         let params = ProcessKeyParams(
             session_id: sessionId, keysym: key.keysym, keycode: key.keycode, text: key.text,
@@ -75,11 +81,8 @@ final class NagiInputController: IMKInputController {
         guard let context else { return }
         let supervisor = context.supervisor
         let id = sessionId
-        // secure input / アプリ識別子を先に伝える（学習停止の判断はコア）。Surrounding Text は送らない
-        let ctx = SetContextParams(
-            session_id: id, surrounding_text: nil, app_id: textClient?.bundleIdentifier(),
-            secure_input: IsSecureEventInputEnabled())
-        try? supervisor.setContext(ctx)
+        // secure input / アプリ識別子 / 直前のテキストを先に伝える（学習停止の判断はコア）
+        reportContext()
         if case .success(let result) = SyncBridge.wait(
             timeout: context.keyTimeout, { try await supervisor.focusIn(sessionId: id) })
         {
@@ -136,6 +139,30 @@ final class NagiInputController: IMKInputController {
     func engineStarted() {
         coreMode = nil
         if isActive { adoptSelectedMode() }
+    }
+
+    // MARK: 文脈
+
+    /// アプリ識別子・secure input・直前のテキストをコアへ伝える。secure input 中は直前のテキストを読まない
+    private func reportContext() {
+        guard let context else { return }
+        let secure = IsSecureEventInputEnabled()
+        let ctx = SetContextParams(
+            session_id: sessionId, surrounding_text: secure ? nil : textBeforeCaret(),
+            app_id: textClient?.bundleIdentifier(), secure_input: secure)
+        try? context.supervisor.setContext(ctx)
+    }
+
+    /// キャレット直前のテキスト。アプリが対応していなければ nil（コアは前回の文脈を維持する）
+    private func textBeforeCaret() -> SurroundingText? {
+        guard let client = textClient else { return nil }
+        let selection = client.selectedRange()
+        guard selection.location != NSNotFound else { return nil }
+        let length = min(selection.location, Self.contextLength)
+        if length == 0 { return SurroundingText(text: "", cursor: 0) }
+        let range = NSRange(location: selection.location - length, length: length)
+        guard let text = client.attributedSubstring(from: range)?.string else { return nil }
+        return SurroundingText(text: text, cursor: UInt32(text.utf16.count))
     }
 
     // MARK: 入力メニュー
