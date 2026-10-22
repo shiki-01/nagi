@@ -58,6 +58,24 @@ jobs:
       - name: clippy
         run: cargo clippy -p nagi-windows -p nagi-windows-tsf --target x86_64-pc-windows-gnu --all-targets -- -D warnings
 
+  # Windows の配布スクリプト（H-42）の構文検査。PowerShell の構文エラーは実行するまで分からないため
+  windows-scripts:
+    name: windows scripts (PowerShell syntax)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PowerShell の構文を検査
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in 'frontend-windows/dist/install.ps1', 'frontend-windows/dist/uninstall.ps1', 'web/static/install.ps1') {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors)
+            if ($errors.Count) { $bad++; $errors | ForEach-Object { Write-Host "${f}:$($_.Extent.StartLineNumber): $($_.Message)" } }
+            else { Write-Host "OK $f" }
+          }
+          exit $bad
+
   types:
     name: protocol types (typeshare)
     runs-on: ubuntu-latest

@@ -15,7 +15,7 @@ pub fn toast_for(event: &EngineEvent) -> Option<String> {
             // 起動時のアップデート確認（コアの `update.auto_check`）は info でも知らせる
             if n.code.as_deref() == Some("update_available") {
                 return Some(format!(
-                    "{}。入力メニューの「アップデートを確認…」から更新できます",
+                    "{}。PowerShell でインストールコマンドをもう一度実行すると更新できます（nagi.shiki-01.com）",
                     n.message
                 ));
             }

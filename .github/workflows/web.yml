@@ -23,21 +23,24 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
-      # macOS のアップデート確認先（/updates/macos/latest.json）は、最新の macos-v* リリースの latest.json を
-      # 取り込んで公開する（macos-release ワークフローが作る。リリースが無ければ飛ばす）
-      - name: macOS の latest.json を取り込む
+      # OS ごとのアップデート確認先（/updates/{os}/latest.json）は、最新の {os}-v* リリースの latest.json を
+      # 取り込んで公開する（macos-release / windows-release ワークフローが作る）。
+      # リリースが無い OS は飛ばす。prerelease（実機で未検証の版）は取り込まない
+      - name: latest.json を取り込む（macOS / Windows）
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft,isPrerelease \
-            --jq '[.[] | select((.tagName | startswith("macos-v")) and (.isDraft | not) and (.isPrerelease | not))][0].tagName // empty')
-          if [ -n "$tag" ]; then
-            mkdir -p static/updates/macos
-            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir static/updates/macos --clobber
-            echo "取り込んだリリース: $tag"
-          else
-            echo "macos-v* のリリースが無いため飛ばしました"
-          fi
+          for os in macos windows; do
+            tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft,isPrerelease \
+              --jq "[.[] | select((.tagName | startswith(\"$os-v\")) and (.isDraft | not) and (.isPrerelease | not))][0].tagName // empty")
+            if [ -n "$tag" ]; then
+              mkdir -p "static/updates/$os"
+              gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir "static/updates/$os" --clobber
+              echo "取り込んだリリース($os): $tag"
+            else
+              echo "$os-v* のリリースが無いため飛ばしました"
+            fi
+          done
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:

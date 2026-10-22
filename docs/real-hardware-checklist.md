@@ -142,7 +142,7 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 - [ ] 管理者権限の `regsvr32 nagi_windows_tsf.dll` が成功し、設定の「言語と地域」に入力方式として出る
 - [ ] `regsvr32 /u` で登録が消える（レジストリに残骸がない）
 - [ ] ホストアプリ（メモ帳・ブラウザ・VS Code・Office）で DLL が読み込まれ、アンロード（`DllCanUnloadNow`）でホストが落ちない
-- [ ] DLL と同じディレクトリの imserver が起動する（配置はインストーラ仕様の決定待ち）。データは `%APPDATA%\Nagi\data`
+- [ ] DLL と同じディレクトリの imserver が起動する（配置は `%ProgramFiles%\Nagi`、H-42）。データは `%APPDATA%\Nagi\data`
 
 ### 8.3 キー入力・composition
 - [ ] ローマ字入力でひらがなが composition として表示され、Enter で確定、Esc で取り消せる
@@ -190,3 +190,16 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 
 ### 8.6 設計の再検討事項
 - ホストプロセスごとに imserver を起動する方式のメモリ・起動時間。名前付きパイプ + 常駐ブローカーへの変更要否（H-39）
+
+### 8.7 配布・インストーラ・SmartScreen・更新（H-42。Linux では PowerShell の構文と `SHA256SUMS` の検証までしか確認していない）
+- [ ] `windows-release.yml` を `-f publish=false` で実行して通る（windows-latest での MSVC ビルド、`LIBCLANG_PATH`、llama.cpp のビルド、DLL の CRT 静的リンク、`bundle-windows`、`sign-update`）。インストーラのスモークテスト（regsvr32 の登録と解除）の結果を Actions のログで確認する（失敗は警告扱い）
+- [ ] 展開した zip で `powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`: `SHA256SUMS` の検証、UAC の確認、`C:\Program Files\Nagi` への配置、`regsvr32` の登録、「アプリと機能」の項目、辞書・モデルの取得（`%APPDATA%\Nagi\data`、約 150MB）が通る。標準ユーザー（UAC で別アカウントの資格情報を入力）の場合に、入力方式が使うアカウントに登録されるか
+- [ ] Program Files の DLL が UWP / 保護されたアプリ（設定アプリ・Edge の一部・Microsoft Store アプリ）でも読み込まれる（`ALL APPLICATION PACKAGES` の読み取り権限）
+- [ ] 更新（上書きインストール）: 入力方式の使用中に再実行して `.old` への退避が通り、サインアウト / 再起動後に新しい版にそろう。`.old` が次回に片付く。動作中の imserver（旧版）が混在して問題を起こさない
+- [ ] `uninstall.ps1`: 登録が消え（`regsvr32 /u`）、ファイルが消える。使用中のファイルが再起動後に消える。`-RemoveUserData` の確認（`yes`）と `-Force`。既定ではユーザーデータが残る。「アプリと機能」の項目が消える
+- [ ] `irm https://nagi.shiki-01.com/install.ps1 | iex`（PowerShell 5.1 と 7）: latest.json の取得、SHA-256 検証、SmartScreen が出ないこと。`NAGI_SKIP_DATA=1`。prerelease の間は 404 になる（想定どおり）。公開前に `web.yml` の取り込み（`static/updates/windows/latest.json`）を確認する
+- [ ] ブラウザで取得した zip の SmartScreen / Defender の警告の出方（Edge・Chrome）と、`docs/windows-install.md` の回避手順（zip のブロック解除、「詳細情報」→「実行」）で実際に進める。`.ps1` の MOTW 付きでも `-ExecutionPolicy Bypass` で実行できる
+- [ ] Authenticode 署名（Secrets を登録した場合）: `signtool verify /pa` が通り、署名した DLL / exe が読み込まれる。タイムスタンプの取得
+- [ ] 更新の通知: 旧版の imserver が `/updates/windows/latest.json` を取得し、新版があれば右下のトーストが出る（文言「PowerShell でインストールコマンドを…」）。`update_check.json` による 24 時間の間引き
+- [ ] VC++ 再頒布可能パッケージが無い環境（クリーンな Windows）で、DLL（静的 CRT）は読み込まれ、imserver は警告のうえ起動しない / する（imserver は動的 CRT）
+- [ ] ARM64 Windows（エミュレーション）で x64 の DLL がホストに読み込まれるか（現状は未対応の扱い。`install.ps1` は ARM64 を拒否する）

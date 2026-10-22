@@ -1328,3 +1328,62 @@ H-39・H-40 で未実装だった OS 層を `frontend-windows-tsf`（`unsafe` �
 - **通知（トースト）**（`toast_window.rs`）: 自前の最前面ポップアップ（暗色の角丸・白字・4 秒）をプライマリの作業領域の右下に出す（macOS は右上だが、Windows の通知の慣例に合わせた。`toast::place_toast`）。文言と種別は `status::toast_for`、間引きは `ToastThrottle`（プロセスで 1 つ）。出すのは**フォーカス中のセッションだけ**（各ホストプロセスが imserver を持つため、背面のプロセスの停止通知を出さない）
 - **アイコン**（`nagi_windows::icon`）: リソース埋め込み（rc / windres。`embed-resource` 等の追加依存と、クロスビルドでのツール要件）は採らず、**コードで描いた .ico を `DllRegisterServer` が DLL と同じディレクトリに書き出して**、`RegisterProfile` のアイコンパス（番号 0）に渡す。絵柄は藍色の角丸の四角に白い「N」（4×4 超サンプリングのアンチエイリアス。16/24/32/48 px、32bpp DIB）。書き出せなければ DLL のパスを渡す（アイコン無しで登録は続く）。`DllUnregisterServer` で削除する。正式なアイコンに替えるときは `icon.rs` を差し替えるか、インストーラが `nagi.ico` を置く（既存を上書きする）
 - **未検証・要確認（実機）**: 上記すべて。特に (1) 候補ウィンドウの位置・DPI・フォーカスを奪わないこと、(2) メッセージ専用ウィンドウでの `WM_POWERBROADCAST`、(3) `GetTextExt` が取れるアプリの範囲、(4) コンパートメントの書き込み順（変換モード → 開閉）で通知の途中状態がシェルに誤って見えないか、(5) `ITfFnReconversion` を実際に呼ぶアプリ（Office 等）での挙動、(6) 英数 = 閉にしたときのアプリ側の挙動（IME オフ扱いで困るアプリがないか）、(7) 非同期の編集セッションと直後のキー入力の順序
+
+### H-42. Windows の配布・インストーラ・署名・更新と SmartScreen 方針（2026-10-22、ユーザー指示「裁量に任せる、全部終わるまで進める」、実機未確認）
+
+Phase 5 の最後の担当。コア（`core/` の各 crate）は変更していない（Phase 5 DoD の「コア側の変更が原則ゼロ」を維持）。変更は xtask・CI・配布スクリプト・フロントの文言のみ。
+
+**配布物と置き場所**
+- **配置先は `%ProgramFiles%\Nagi`（管理者権限が要る）**。`%LOCALAPPDATA%` は管理者権限が要らないが、TSF の DLL は UWP / AppContainer など保護されたアプリにも読み込まれ、利用者プロファイル配下は `ALL APPLICATION PACKAGES` の読み取り権限が既定で付かないため読み込めない（見込み。実機で要確認）。Program Files は既定で付く。どのみち `regsvr32` による COM 登録（`HKCR\CLSID`）に管理者権限が要るので、UAC の回数は増えない。データ（辞書・モデル・設定・学習）は従来どおり利用者ごとの `%APPDATA%\Nagi`（H-39 の決定どおり）
+- **登録は 64bit の `regsvr32 /s`**（32bit の PowerShell からは `Sysnative` 経由）。x64 のみ。ARM64 Windows と 32bit ホスト用の DLL は作らない（設計書 §7 の対象が x64）。ARM64 は将来、`aarch64-pc-windows-msvc` の DLL を別途用意する必要がある（エミュレーションされた x64 アプリに読ませる `ARM64X`/`ARM64EC` は未検討）
+- **zip**: `cargo xtask bundle-windows` が `Nagi-windows-<version>.zip` を作る（最上位に同名ディレクトリ 1 つ）。中身: `nagi_windows_tsf.dll` / `imserver.exe` / `install.ps1` / `uninstall.ps1` / `README.md`（`docs/windows-install.md`）/ `LICENSE-MIT` / `LICENSE-APACHE` / `NOTICE` / `THIRD_PARTY_LICENSES.md` / `VERSION` / `SHA256SUMS`。macOS（`Nagi-macos-<version>.zip`、タグ `macos-vX.Y.Z`）に名前をそろえ、Windows は `Nagi-windows-<version>.zip`・タグ `windows-vX.Y.Z`。ビルドは行わず成果物の収集・署名・チェックサム・zip だけ（ビルドは CI の windows ランナー。収集と zip は OS 非依存で、単体テストは Linux で動く: PE ヘッダ検査・チェックサム・BOM・再現性）。`.ps1` は zip に入れるとき **UTF-8 BOM 付き**にする（BOM が無いと Windows PowerShell 5.1 は日本語を ANSI として読み文字化けする。リポジトリ上は BOM 無し）。zip の更新時刻は固定で、同じ入力から同じバイト列になる
+- **`SHA256SUMS`**: 同梱ファイルの `<sha256>  <相対パス>`。`install.ps1` が配置の前に突き合わせる（破損・取り違えの検出。zip ごと差し替えられた場合の改ざん検知は latest.json の SHA-256 と ed25519 の役目）。署名（Authenticode）した後のバイト列で計算する
+- `THIRD_PARTY_LICENSES.md` は現状 iOS の依存閉包の一覧（`gen-licenses`）で、Windows の依存（`windows` クレート、`ureq`/`rustls`/`ring`/`webpki-roots` など）は含まない。**Windows 用の一覧の生成は未実装**（`gen_licenses.rs` が `nagi-ffi` と iOS ターゲットに固定。macOS 版は一覧自体を同梱していないので、それよりは進んでいる）
+
+**インストーラ（`frontend-windows/dist/install.ps1` / `uninstall.ps1`。xtask 原則の例外として配布物のスクリプトのみ）**
+- 実行は `powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`。既定の実行ポリシー（Restricted）でも動かすため。ダブルクリック用の `.cmd` は作らない（スクリプトの種類を増やさない。READMEに実行コマンドを書く）
+- **昇格は 2 段**: 管理者でなければ UAC を出して、配置と登録（`-Elevated`）だけを子プロセスで昇格実行し、**辞書・モデルの取得は昇格しない親プロセスで行う**（管理者権限で取得すると、別アカウントで昇格した場合に `%APPDATA%` が管理者のものになるため。`APPDATA` は実行している利用者のものを使う）。ただし昇格に別アカウントの資格情報を使うと、`RegisterProfile`（入力方式の登録）が昇格側のアカウントに掛かる可能性がある（READMEに回避手順を記載。要実機確認）
+- 更新（上書き）: 使用中の DLL・exe はファイル名の変更ならできるため、古いものを `.old` に退避して新しいものを置く。動作中のエンジンは止めない（止めると入力中の学習が失われる。サインアウトか再起動で新しい版にそろう）。`.old` は次回のインストールとアンインストールで片付ける
+- **辞書・モデル**: macOS（H-38）と同じ導線。同梱せず、`imserver.exe --install-data --data-dir %APPDATA%\Nagi\data --model small` が配布元から取得して SHA-256 を検証し、辞書をその場で組み立てる。`-SkipData` / `-Model small|xsmall|none`。失敗しても入力方式の導入自体は成功とし、再実行を案内する。アプリ内の「ダウンロード」ボタンに当たるものは Windows には無い（メニューが無いため。未実装）
+- 「アプリと機能」への登録（`HKLM\...\Uninstall\Nagi`。`UninstallString` は同梱の `uninstall.ps1`）。Visual C++ ランタイム（`vcruntime140.dll` / `msvcp140.dll`）が無ければ警告
+- **アンインストール**: `regsvr32 /u /s`（DLL が `nagi.ico` も消す）→ ファイル削除。使用中で消せないものは `.old` に名前を変えて `MoveFileEx(DELAY_UNTIL_REBOOT)` で再起動時削除を予約。**ユーザーデータ（`%APPDATA%\Nagi`）は既定で残し**、`-RemoveUserData` のときだけ `yes` の入力で確認して削除する（`-Force` で省略。動作中の imserver を止めてから消す）。学習データだけの削除は README で `learning.tsv` の削除を案内（専用のコマンドは作っていない）
+- **ブートストラップ `web/static/install.ps1`**（`irm https://nagi.shiki-01.com/install.ps1 | iex`。macOS の `install.sh` に対応）: `/updates/windows/latest.json` → zip を取得 → SHA-256 検証 → 展開 → 同梱の `install.ps1` を実行。**ASCII のみ**（`irm | iex` は既定のコードページで読むため日本語が文字化けする）。`Invoke-WebRequest` で取得したファイルには Mark of the Web が付かないので SmartScreen に止められない。ed25519 はシェルでは検証しない（macOS と同じ。HTTPS と SHA-256 で代える）。サイトの公開は web.yml の手動実行のときだけ（H-38）
+
+**ビルド・リリース（`.github/workflows/windows-release.yml`、手動実行のみ）**
+- `windows-latest` で `x86_64-pc-windows-msvc` を `--target` 明示でビルド。**DLL は CRT を静的リンク**（`-C target-feature=+crt-static`）: あらゆるホストプロセスに読み込まれる DLL が VC++ 再頒布可能パッケージの有無に左右されないようにする。`--target` を明示するのは RUSTFLAGS をビルドスクリプト・proc-macro に掛けないため。**`imserver.exe` は既定（動的 CRT）**: llama.cpp（C++）が絡み、`llama-cpp-sys-2` の `LLAMA_STATIC_CRT=1` との組み合わせを検証できていないため。再頒布可能パッケージを前提にし、`install.ps1` が不足を警告する
+- **imserver は既定で feature `llama` あり**（macOS のリリースと同じ判断。辞書だけで使う場合も同じバイナリで動く）。入力 `llama: false` で外せる（libclang / cmake のビルドが通らないときの逃げ道）。`LIBCLANG_PATH` は `C:\Program Files\LLVM\bin`（windows-latest にある前提）。**Windows ランナーでの llama ビルドは Actions 上で一度も実行していない**
+- 入力: `version`（`core/Cargo.toml` と一致必須）/ `llama` / `publish`（false なら artifact だけ）/ `prerelease`（既定 true）。**実機で未検証の間は prerelease** とし、`web.yml` は prerelease の `latest.json` を取り込まない（= サイトの更新確認とインストールコマンドに出ない）。実機で確認できたら `-f prerelease=false`。このため、最初のうちは `irm | iex` が 404 になる（意図した挙動。手動の zip は GitHub Releases から取れる）
+- インストーラのスモークテスト（zip を展開 → `install.ps1 -SkipData` → `uninstall.ps1`。regsvr32 の登録と解除を含む）を `continue-on-error` で入れた。ランナー上で TSF の登録が通るかは未確認のため、失敗してもリリースは止めない
+- 署名: `sign-update` による ed25519 署名つき `latest.json`（macOS と同じ鍵 `NAGI_UPDATE_SIGNING_KEY`）。Authenticode は Secrets（`WINDOWS_CODESIGN_PFX` / `_PASSWORD`）があるときだけ `bundle-windows --sign-pfx` が `signtool sign /fd SHA256 /tr <TSA> /td SHA256` で DLL と exe に署名して `signtool verify /pa` で確認する（パスワードは環境変数で渡し、コマンドライン引数には出さない）。無ければ署名なしで進む。署名は zip 化の前（チェックサムも署名後の値）
+- `ci.yml` に PowerShell の構文検査ジョブ（windows-latest）を追加
+
+**更新検査との整合**
+- `update_check::default_check_url()` は `https://nagi.shiki-01.com/updates/{std::env::consts::OS}/latest.json` で、Windows では `/updates/windows/latest.json`。`windows-release.yml` が作る `latest.json`（`download_url` = `.../releases/download/windows-vX.Y.Z/Nagi-windows-X.Y.Z.zip`）と `web.yml` の取り込み先（`static/updates/windows/`）に一致する。**コアの変更は不要**
+- 修正したのは Windows フロントの通知文言だけ: `update_available` のトーストが「入力メニューの『アップデートを確認…』から更新できます」だった（Windows には入力メニューが無い）ので、「PowerShell でインストールコマンドをもう一度実行すると更新できます」に変えた
+- **アプリ内での自動の置き換え（ダウンロード・検証・差し替え・再起動）は Windows では未実装**（macOS は Swift で実装済み）。通知で知らせるだけで、更新は install コマンドの再実行。実装するなら、`download_verified`（コアにある。SHA-256 + ed25519）で取得 → 展開 → 昇格して配置、の流れになるが、DLL の差し替えに管理者権限が要る点（Program Files）が macOS と違う難所
+
+**SmartScreen / コード署名の方針（設計書 §5.3「Phase 5 で決める」の解消）**
+
+| 案 | 費用・条件 | SmartScreen への効き | 評価 |
+| --- | --- | --- | --- |
+| 署名なし + 手順書 + `irm \| iex` | 無料 | zip を手動取得するとブラウザ / Defender が警告（回避手順を書く）。`irm \| iex` は印が付かず警告なし | **現状の最適解**（採用） |
+| OV / EV の Authenticode 証明書（年額有償） | 証明書の購入と本人・組織確認が要る | 署名すれば「発行元不明」は解消するが、評判（reputation）は配布実績で貯まる。EV でも即時に警告が消えるとは限らない（要確認） | 個人開発では費用対効果が低い |
+| Azure Trusted Signing（Artifact Signing 等、クラウド署名） | 月額の低額課金。提供地域・個人 / 組織の本人確認の条件がある（日本からの利用可否は**未調査・要確認**） | 署名の鍵管理が不要で CI から署名できる。評判の扱いは Microsoft が証明書の寿命を短くして管理 | **将来の第一候補**（条件が合えば） |
+| MSIX / Microsoft Store | Store 配布は審査と登録料 | Store 経由ならダウンロード時の警告なし | **不可の見込み**: TIP（`HKCR`/`HKLM` へのグローバルな COM 登録と他プロセスへの DLL の読み込み）は MSIX のコンテナと両立しない見込み（要確認） |
+| winget / MSI | MSI は署名なしでも警告対象。winget は署名不要でハッシュ検証 | winget 経由の取得は警告が出にくい | zip 内の `.ps1` 方式は winget の installer 種別に合わない。EXE / MSI 化が前提で、署名導入後に再検討 |
+
+- **現状**: 署名なしで配布する。主導線は `irm | iex`（警告なし）、手動の zip は README の手順（zip のブロック解除、または「詳細情報」→「実行」）。ワークフローに Secrets があれば署名するオプション（上記）を入れてある
+- **将来**: (1) Azure Trusted Signing が使えれば、`signtool` の `/dlib` 方式でワークフローから署名する。(2) 署名ができたら MSI / EXE インストーラ化と winget への登録。(3) いずれも**一般公開（App Store / 広く配る段階）の前に判断**する。個人利用・テスト配布の間は署名なしを維持する
+
+**迷った判断**
+1. 配置先を Program Files にした（管理者権限が要る代わりに、保護されたアプリで読める）
+2. 辞書・モデルの取得を、昇格しない親プロセスで行う 2 段構成にした（コードは増えるが、`%APPDATA%` の取り違えを避ける）
+3. 動作中の imserver を止めない（更新後の反映はサインアウトか再起動）。macOS は止める。入力中の学習を失わないほうを優先した
+4. 実機で未検証の間は prerelease（既定）。macOS のリリースワークフローには無い入力
+5. DLL だけ CRT を静的リンク。imserver は動的のまま
+6. `.cmd` ラッパー・MSI / EXE は作らない。スクリプトは PowerShell のみ
+7. ブートストラップを ASCII のみにした（日本語の案内は zip 内のインストーラが出す）
+
+**未検証（実機 / Actions）**: すべて。特に (1) `regsvr32` の登録と UAC の流れ、`-Elevated` 子プロセスの終了コード、(2) Program Files の DLL が UWP / 保護されたアプリで読めること、(3) 更新（上書き）時の `.old` 退避と再起動後の切り替え、(4) `uninstall.ps1` の再起動時削除、(5) `irm | iex` の動作（PowerShell 5.1 と 7）、(6) ワークフロー全体（windows-latest での llama ビルド、`signtool` の場所、スモークテスト）。PowerShell の構文は Linux の PowerShell 7.5 の構文解析器と `Test-Payload`（`SHA256SUMS` の検証）の動作で確認した範囲のみ
+
+**Phase 5 で残る未実装**: 複数ホストでのエンジン共有（名前付きパイプ + 常駐ブローカー、H-39）、言語バーのボタン、`ITfFnReconversion::GetReconversion`、アプリ内の自動更新（置き換え）、Windows 用の依存ライセンス一覧、ARM64 / 32bit ホスト対応、辞書・モデルのアプリ内ダウンロード導線、Authenticode 署名の実施、winget / MSI。実機での検証すべて（`docs/real-hardware-checklist.md` §8）

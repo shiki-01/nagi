@@ -449,7 +449,8 @@ model = "style"              # style | 専用GGUFパス
 - 参考: azooKey-Windows / rakukan のTSF層
 - エンジン別プロセス化は必須（IME DLLはホストアプリ内で動くため、クラッシュ・メモリをホストから隔離）
 - 再変換: `ITfFnReconversion` 実装
-- 署名なし配布時の SmartScreen 警告への対応方針は Phase 5 で決める
+- 配布（`docs/decisions.md` H-42）: `%ProgramFiles%\Nagi` に DLL と `imserver.exe` を置き、`regsvr32` で登録する（`install.ps1` / `uninstall.ps1`。zip は `cargo xtask bundle-windows`、公開は `windows-release.yml`）。辞書・モデルは同梱せず、インストーラが配布元から取得する（macOS と同じ）。更新の確認は `/updates/windows/latest.json`（ed25519 署名つき）
+- SmartScreen 方針（Phase 5 で決定、H-42）: 現状は **Authenticode 署名なし**。主導線は PowerShell の `irm https://nagi.shiki-01.com/install.ps1 | iex`（`Invoke-WebRequest` の取得物には Mark of the Web が付かず警告されない）、手動の zip は手順書（`docs/windows-install.md`: zip のブロック解除、「詳細情報」→「実行」）。証明書があればワークフローが `signtool` で署名する。将来は Azure Trusted Signing 等のクラウド署名（提供条件は要確認）→ MSI / EXE 化 → winget。MSIX / Store は TIP のグローバル登録と両立しない見込みで不採用。一般公開の前に再判断する
 
 ### 5.4 Linux（将来）
 
