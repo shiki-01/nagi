@@ -3,6 +3,8 @@
 
 import {
   ACTION_PATTERN,
+  ICONIFY_ICON_PATTERN,
+  SF_ICON_PATTERN,
   BUILTIN_LAYOUT_IDS,
   FLICK_DIRECTIONS,
   KEY_ID_PATTERN,
@@ -60,6 +62,15 @@ function str(c: Collector, v: unknown, path: string, min: number, max: number, w
   return false
 }
 
+/** icon の書式。`iconify:` / `sf:` で始まるものだけ検査し、それ以外は従来どおり SF Symbols 名として通す。 */
+function validateIcon(c: Collector, v: unknown, path: string) {
+  if (!str(c, v, path, 0, LIMITS.iconMax, 'icon')) return
+  if (v.startsWith('iconify:') && !ICONIFY_ICON_PATTERN.test(v))
+    c.add(path, 'iconify: の書式は iconify:<prefix>:<name>（小文字英数字とハイフン。例 iconify:mdi:home）にしてください')
+  else if (v.startsWith('sf:') && !SF_ICON_PATTERN.test(v))
+    c.add(path, 'sf: の後ろは SF Symbols 名（英数字と . _ -）にしてください')
+}
+
 function validateAction(c: Collector, v: unknown, path: string) {
   if (typeof v !== 'string' || !ACTION_PATTERN.test(v)) {
     c.add(path, 'action は英字で始まる英数字（32 文字以内）で指定してください（例: space, backspace）')
@@ -94,7 +105,7 @@ function validateCommon(c: Collector, k: Obj, path: string, isPopup: boolean) {
   if (k.width !== undefined && !(isNum(k.width) && k.width > 0 && k.width <= LIMITS.widthMax))
     c.add(join(path, 'width'), `width は 0 より大きく ${LIMITS.widthMax} 以下の数にしてください`)
   if (k.label !== undefined) str(c, k.label, join(path, 'label'), 0, LIMITS.labelMax, 'label')
-  if (k.icon !== undefined) str(c, k.icon, join(path, 'icon'), 0, LIMITS.iconMax, 'icon')
+  if (k.icon !== undefined) validateIcon(c, k.icon, join(path, 'icon'))
   if (k.style !== undefined && !(KEY_STYLES as readonly unknown[]).includes(k.style))
     c.add(join(path, 'style'), `style は ${KEY_STYLES.join(' / ')} のいずれかにしてください`)
   if (k.visible !== undefined) {

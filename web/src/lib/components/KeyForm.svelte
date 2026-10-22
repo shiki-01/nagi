@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { EditorStore } from '$lib/keyboard/store.svelte'
   import { findKey } from '$lib/keyboard/ops'
-  import { BUILTIN_LAYOUT_IDS, FLICK_DIRECTIONS, KEY_KINDS, KEY_STYLES, KNOWN_ACTIONS, LIMITS, POPUP_KINDS } from '$lib/keyboard/types'
+  import { BUILTIN_LAYOUT_IDS, ICONIFY_ICON_PATTERN, FLICK_DIRECTIONS, KEY_KINDS, KEY_STYLES, KNOWN_ACTIONS, LIMITS, POPUP_KINDS } from '$lib/keyboard/types'
   import type { FlickDirection, Key, KeyKind, PopupKey, PopupKind, Step } from '$lib/keyboard/types'
   import StepsEditor from './StepsEditor.svelte'
 
@@ -23,6 +23,13 @@
   const key = $derived(store.selectedKey)
   const pos = $derived(key ? findKey(store.layout, key.id) : undefined)
   const layoutTargets = $derived([...new Set([...BUILTIN_LAYOUT_IDS, ...store.state.layouts.map((l) => l.id)])])
+
+  // iconify: のアイコンはブラウザから Iconify API を直接読んでプレビューする（書き出す JSON には ID だけ）
+  const iconify = $derived.by(() => {
+    const m = key?.icon ? ICONIFY_ICON_PATTERN.exec(key.icon) : null
+    return m ? { prefix: m[1], name: m[2], url: `https://api.iconify.design/${m[1]}/${m[2]}.svg` } : null
+  })
+  let iconFailed = $state<string | null>(null)
 
   /** 現在のキーを書き換える。 */
   function update(fn: (k: Key) => Key, coalesce?: string) {
@@ -166,8 +173,20 @@
           <input value={key.label ?? ''} maxlength={LIMITS.labelMax} oninput={(e) => setOpt('label', e.currentTarget.value)} />
         </label>
         <label class="field">
-          <span>アイコン (icon, SF Symbols 名)</span>
-          <input value={key.icon ?? ''} maxlength={LIMITS.iconMax} spellcheck="false" oninput={(e) => setOpt('icon', e.currentTarget.value)} />
+          <span>アイコン (icon: sf:SF Symbols 名 / iconify:prefix:name)</span>
+          <input value={key.icon ?? ''} maxlength={LIMITS.iconMax} spellcheck="false" placeholder="iconify:mdi:home" oninput={(e) => setOpt('icon', e.currentTarget.value)} />
+          {#if iconify}
+            <span class="iconprev">
+              {#if iconFailed === iconify.url}
+                <span>取得できません。アプリでも取得に失敗した場合は label が表示されます</span>
+              {:else}
+                {#key iconify.url}
+                  <img src={iconify.url} alt={key.icon} height="24" onerror={() => (iconFailed = iconify.url)} />
+                {/key}
+                <span>プレビュー（Iconify）。JSON には ID のみ入ります</span>
+              {/if}
+            </span>
+          {/if}
         </label>
         <label class="field">
           <span>スタイル (style)</span>
@@ -316,6 +335,17 @@
 {/if}
 
 <style>
+  .iconprev {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8em;
+    opacity: 0.8;
+  }
+  .iconprev img {
+    height: 24px;
+    width: auto;
+  }
   .form {
     display: grid;
     gap: 12px;

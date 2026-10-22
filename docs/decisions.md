@@ -1249,4 +1249,4 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **未確認事項**:
   - 実装時（2026-10-22）、開発環境のプロキシが `api.iconify.design` への接続を拒否した（CONNECT 403）ため、**Iconify API の応答（SVG の形式・`height` パラメータの効き方・`collection` の `info` の形・レート制限）は実際には確認できていない**。上記は公開仕様の記憶に基づく。レート制限は不明で、取り込み時に 1 件ずつ・上限 64 件に抑えている。要確認: 429 等が返った場合の挙動（現状は取得失敗として label に代替）。
   - Swift をローカルでコンパイルできないため、WKWebView の読み込み完了待ち・`callAsyncJavaScript` + canvas の PNG 化・テンプレート描画は CI（`ios-test` のユニットテスト、`ios-testflight` のビルド）と実機で確認が要る。単体テストの対象は書式・抽出・ライセンス応答の解釈・検証のみ。
-- **未対応（別作業）**: サイトエディタ（`web/`、`nagi.shiki-01.com/custom-keyboard`）の `iconify:` 書式対応（`docs/ios-backlog.md`・`docs/progress.md`）。サイトの検証（`web/src/lib/keyboard/validate.ts`）は icon を長さだけ見るので、`iconify:` の書式エラーはサイトでは検出されず、ホストアプリの取り込みで初めて出る。
+- **サイト側対応（完了、2026-10-22）**: サイトエディタ（`web/`）も `iconify:` / `sf:` の書式検査（`validate.ts`。スキーマ・Swift と同じ規則）とアイコン入力欄に対応した。プレビューはサイトがオンラインなので、ブラウザから `https://api.iconify.design/<prefix>/<name>.svg` を直接読んで表示する（失敗時は label 表示になる旨を出す）。書き出し JSON は ID のみ。

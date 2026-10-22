@@ -200,7 +200,8 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 ## キーアイコンの Iconify 対応（2026-10-22、決定は decisions.md H-36）
 
 - 実装済み（実機・CI 未確認）: `icon` の `sf:` / `iconify:` 書式（スキーマ + `LayoutLoader.decode`）、ホストアプリの取り込み時の解決（`App/IconifyResolver.swift`。Iconify API → WKWebView で PNG 化 → App Group `keyboard/assets/icons/`）、拡張の描画（`KeyIconView`）、ライセンス一覧（レイアウトタブ・About）
-- 未完了: **サイトエディタ（`web/`、`nagi.shiki-01.com/custom-keyboard`）を `iconify:` 書式に対応させる**（`validate.ts` の書式検査、アイコン入力欄・プレビューの扱い、書き出し JSON に ID のみを入れること）。Iconify API の実応答の確認（開発環境から接続できず未確認）、実機での取り込み・描画の確認
+- サイトエディタ（`web/`）の `iconify:` 対応は完了（`validate.ts` の書式検査、アイコン入力欄、ブラウザ直取得のプレビュー、書き出し JSON は ID のみ）。
+- 未完了: Iconify API の実応答の確認（開発環境から接続できず未確認）、実機での取り込み・描画の確認
 
 ## iOS 実機確認待ちの一覧（2026-10-21）
 

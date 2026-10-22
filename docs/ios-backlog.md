@@ -12,7 +12,7 @@
    - キーごとに、種類（文字入力 / フリック / トグル / ショートカット 等）、入力できる文字、サイズを設定できる
    - 仕様は `docs/ios-keyboard-layout.md`
 
-5. **サイトエディタの Iconify 対応（TODO）**: `nagi.shiki-01.com/custom-keyboard`（`web/`）を `icon` の `iconify:<prefix>:<name>` / `sf:<名>` 書式に対応させる。書式検査（`validate.ts` と `layout.schema.json` の `icon` の pattern を揃える）、アイコン入力欄（Iconify のアイコン名の入力・検索）、プレビューでの表示（サイト側は Iconify を直接読んでよい）、書き出す JSON には ID だけを入れる（画像は含めない）。アプリ側の実装・仕様は `docs/decisions.md` H-36、`docs/ios-keyboard-layout.md`「アイコン」
+5. ~~サイトエディタの Iconify 対応~~ → 完了（2026-10-22。`web/` の `validate.ts` の書式検査・アイコン入力欄・ブラウザ直取得のプレビュー。H-36）。アプリ側の仕様は `docs/decisions.md` H-36、`docs/ios-keyboard-layout.md`「アイコン」
 
 ## 2. 設定項目の候補
 

@@ -62,6 +62,10 @@ export const LIMITS = {
 
 export const LAYOUT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/
 export const KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/
+// icon の書式。config/keyboard/layout.schema.json の icon.pattern と Swift の KeyboardIconRef と同じ規則。
+const ICONIFY_PART = '[a-z0-9]+(?:-[a-z0-9]+)*'
+export const ICONIFY_ICON_PATTERN = new RegExp(`^iconify:(${ICONIFY_PART}):(${ICONIFY_PART})$`)
+export const SF_ICON_PATTERN = /^sf:[A-Za-z0-9._-]+$/
 export const ACTION_PATTERN = /^[a-zA-Z][a-zA-Z0-9]{0,31}$/
 
 export type LayoutMode = (typeof LAYOUT_MODES)[number]

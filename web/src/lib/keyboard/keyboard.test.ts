@@ -54,7 +54,12 @@ describe('schema agreement with ajv', () => {
         { id: 'b', kind: 'toggle', cycle: ['a', 'b'] },
         { id: 'c', kind: 'shortcut', steps: [{ action: 'moveLeft' }], visible: { field: 'returnKeyType', in: ['search'] } },
         { id: 'd', kind: 'layout', target: 'numbers', style: 'function' },
-        { id: 'e', kind: 'spacer', width: 0.5 }
+        { id: 'e', kind: 'spacer', width: 0.5 },
+        { id: 'i1', kind: 'action', action: 'space', icon: 'iconify:mdi:home' },
+        { id: 'i2', kind: 'action', action: 'space', icon: 'iconify:material-symbols:arrow-back-2' },
+        { id: 'i3', kind: 'action', action: 'space', icon: 'sf:globe' },
+        { id: 'i4', kind: 'action', action: 'space', icon: 'shift' },
+        { id: 'i5', kind: 'action', action: 'space', icon: 'Weird Name' }
       ] }]
     }
   ]
@@ -74,7 +79,10 @@ describe('schema agreement with ajv', () => {
       mk((l) => (l.rows[0].keys[3].style = 'neon')),
       mk((l) => (l.rows[0].keys[4].width = 0)),
       mk((l) => (l.rows[0].keys[0].longPress = [{ label: 'x', kind: 'layout', target: 'a' }])),
-      mk((l) => (l.rows[0].keys[0].kind = 'bogus'))
+      mk((l) => (l.rows[0].keys[0].kind = 'bogus')),
+      ...['iconify:mdi', 'iconify:mdi:', 'iconify::home', 'iconify:MDI:home', 'iconify:mdi:home:x', 'iconify:mdi:-home', 'iconify:mdi:ho--me', 'iconify:mdi:home\n', 'iconify:mdi:ホーム', 'sf:', 'sf:a b', 'sf:ホーム', 'iconify:' + 'a'.repeat(60) + ':b'].map(
+        (icon) => mk((l) => (l.rows[0].keys[1].icon = icon))
+      )
     ]
   }
   it('good inputs pass both', () => {
