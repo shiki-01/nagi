@@ -811,7 +811,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "nagi-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "nagi-datafetch"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nagi-dict",
  "rustls",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "nagi-dict"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "fst",
  "memmap2",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "nagi-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nagi-protocol",
  "nagi-rewriter",
@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "nagi-ffi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nagi-server",
  "serde_json",
@@ -863,14 +863,14 @@ dependencies = [
 
 [[package]]
 name = "nagi-fuzzy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nagi-romaji",
 ]
 
 [[package]]
 name = "nagi-infer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "llama-cpp-2",
  "serde",
@@ -881,18 +881,18 @@ dependencies = [
 
 [[package]]
 name = "nagi-learn"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "nagi-profile"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sysinfo",
 ]
 
 [[package]]
 name = "nagi-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -901,18 +901,18 @@ dependencies = [
 
 [[package]]
 name = "nagi-rewriter"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "nagi-romaji"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "nagi-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ed25519-dalek",
  "nagi-config",
@@ -1929,7 +1929,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "ed25519-dalek",
