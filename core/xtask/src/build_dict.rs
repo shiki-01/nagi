@@ -94,58 +94,25 @@ pub fn run(source: DictSource) -> Result<(), String> {
     eprintln!();
 
     eprintln!("Nagi バイナリ辞書を構築中...");
-    let start = Instant::now();
 
-    let dictionary = match source {
+    let (build_time, binary_size) = match source {
         DictSource::Mozc => {
             let mozc_dir = mozc_dict_dir()?;
             eprintln!("Mozc 辞書ディレクトリ: {}", mozc_dir.display());
-            // Mozc の連接コストは「前の語の右 ID × 次の語の左 ID」の順（RidMajor。実データの変換結果で検証済み）
-            nagi_dict::build_from_mozc_dir(&mozc_dir, nagi_dict::ConnectionLayout::RidMajor)
-                .map_err(|e| format!("辞書ビルド失敗: {e}"))?
+            let mut result = (0.0, 0);
+            nagi_datafetch::build_mozc_dict(&mozc_dir, &output_file, &mut |p| {
+                if let nagi_datafetch::Progress::BuildDone { bytes, seconds, .. } = p {
+                    result = (seconds, bytes as usize);
+                }
+            })?;
+            result
         }
-        DictSource::Sudachi => {
-            let sudachi_dir = sudachi_dict_dir()?;
-            eprintln!("SudachiDict 辞書ディレクトリ: {}", sudachi_dir.display());
-            let (lex_paths, matrix_def_path) = sudachi_inputs(&sudachi_dir)?;
-            for p in &lex_paths {
-                eprintln!("  語彙CSV: {}", p.display());
-            }
-            eprintln!("  連接コスト表: {}", matrix_def_path.display());
-            nagi_dict::build_from_sudachi_files(&lex_paths, &matrix_def_path)
-                .map_err(|e| format!("辞書ビルド失敗: {e}"))?
-        }
+        DictSource::Sudachi => build_sudachi(&output_file)?,
     };
-    let binary_data = dictionary.to_bytes();
-
-    let build_time = start.elapsed();
-    let binary_size = binary_data.len();
-
-    // バイナリを書き込む
-    fs::create_dir_all(
-        output_file
-            .parent()
-            .ok_or("出力ディレクトリが特定できない")?,
-    )
-    .map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
-    // 同じ inode を上書きしない: 起動中のサーバーが mmap している辞書が SIGBUS しないよう、
-    // 一時ファイルに書いてから rename で置き換える（fetch_dict と同じ）
-    let temp_file = output_file.with_extension("tmp");
-    fs::write(&temp_file, binary_data)
-        .map_err(|e| format!("一時ファイル書き込み失敗 {}: {}", temp_file.display(), e))?;
-    fs::rename(&temp_file, &output_file).map_err(|e| {
-        let _ = fs::remove_file(&temp_file);
-        format!(
-            "ファイルリネーム失敗 {} -> {}: {}",
-            temp_file.display(),
-            output_file.display(),
-            e
-        )
-    })?;
 
     eprintln!();
     eprintln!("完了");
-    eprintln!("  構築時間: {:.2}s", build_time.as_secs_f64());
+    eprintln!("  構築時間: {:.2}s", build_time);
     eprintln!(
         "  バイナリサイズ: {} bytes ({:.2} MB)",
         binary_size,
@@ -154,4 +121,43 @@ pub fn run(source: DictSource) -> Result<(), String> {
     eprintln!("  出力先: {}", output_file.display());
 
     Ok(())
+}
+
+/// SudachiDict から辞書を組み立てて `output_file` へ書く。(構築秒数, サイズ) を返す。
+fn build_sudachi(output_file: &std::path::Path) -> Result<(f64, usize), String> {
+    let start = Instant::now();
+    let sudachi_dir = sudachi_dict_dir()?;
+    eprintln!("SudachiDict 辞書ディレクトリ: {}", sudachi_dir.display());
+    let (lex_paths, matrix_def_path) = sudachi_inputs(&sudachi_dir)?;
+    for p in &lex_paths {
+        eprintln!("  語彙CSV: {}", p.display());
+    }
+    eprintln!("  連接コスト表: {}", matrix_def_path.display());
+    let dictionary = nagi_dict::build_from_sudachi_files(&lex_paths, &matrix_def_path)
+        .map_err(|e| format!("辞書ビルド失敗: {e}"))?;
+    let binary_data = dictionary.to_bytes();
+    let build_time = start.elapsed().as_secs_f64();
+    let binary_size = binary_data.len();
+
+    fs::create_dir_all(
+        output_file
+            .parent()
+            .ok_or("出力ディレクトリが特定できない")?,
+    )
+    .map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
+    // 同じ inode を上書きしない: 起動中のサーバーが mmap している辞書が SIGBUS しないよう、
+    // 一時ファイルに書いてから rename で置き換える
+    let temp_file = output_file.with_extension("tmp");
+    fs::write(&temp_file, binary_data)
+        .map_err(|e| format!("一時ファイル書き込み失敗 {}: {}", temp_file.display(), e))?;
+    fs::rename(&temp_file, output_file).map_err(|e| {
+        let _ = fs::remove_file(&temp_file);
+        format!(
+            "ファイルリネーム失敗 {} -> {}: {}",
+            temp_file.display(),
+            output_file.display(),
+            e
+        )
+    })?;
+    Ok((build_time, binary_size))
 }

@@ -1276,3 +1276,12 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
   - **迷った判断**: (1) リリースは LLM 有効版のみ（辞書だけで使う場合も同じバイナリで動くため）。(2) 再起動は「終了して OS に起動し直してもらう」方式で、自前で再起動しない。(3) 辞書・モデルはインストール時に取得しない（辞書は Mozc 由来のデータを再配布せず手元で組む方針（§2.3）で、組むには Rust が要る。別途の検討事項）
   - **未確認**: hardened runtime で LLM（Metal）と imserver の起動が動くか、公証が通るか（Secrets 未登録のため一度も実行していない）、IMK のプロセス終了後の再起動のされ方
 
+### H-38. macOS: 辞書とモデルをボタン一つ・インストール時に自動で入れる（2026-10-22、ユーザー指示、要実機確認）
+
+- **方針**: データは同梱・再配布しない（NOTICE 冒頭、H-37 の (3)）。利用者の Mac が配布元（Mozc の GitHub raw の固定コミット、Hugging Face の固定リビジョン）から直接取得し、SHA-256 を検証して、辞書はその場で組み立てる（約 2 秒）。iOS は IPA に辞書を同梱しているが（`docs/ios-release.md` §4）、macOS はこの方式にした
+- **実装**: 取得・検証・組み立てを新しい crate `core/datafetch`（`nagi-datafetch`）にまとめ、xtask（`fetch-dict` / `build-dict` / `fetch-model`）もこれを使う（SHA-256 の表は一か所）。`imserver --install-data --data-dir <dir> [--model small|xsmall|none]` は進捗を標準出力に 1 行 1 JSON（`dict_fetch` / `dict_build` / `model_fetch` / `done` / `error`）で出す。server の既定 feature `data-install` で有効（`bundle-macos` のビルドに入る）。`core/ffi`（iOS）は `default-features = false` なので含まない
+- **入口**: (1) `install.sh` がアプリの配置後に自動で実行する（`NAGI_SKIP_DATA=1` で飛ばす。成功したら動作中の NagiIMEApp を止め、次の利用で辞書つきで起動させる）。(2) アプリは辞書（`data/dict/nagi-dict.bin`）が無ければ、起動後の最初の入力時に一度だけダイアログで勧める。(3) 入力メニューの「辞書とモデルをダウンロード…」。アプリからは同梱の imserver をこの引数で起動し、進捗を通知パネルに出し、終わったらエンジンを再起動する
+- **既定のモデル**: small（約 74MB。G 節・H-17 の比較で small が上）。辞書の取得は約 70MB
+- **あわせて**: web の公開（Cloudflare Pages）を main への push では行わず、手動実行（`macos-release` からの起動を含む）だけにした（ユーザー指示。未完成の install.sh が push で公開されないように）
+- **未確認（実機）**: アプリから imserver を子プロセスで実行したときの進捗表示、取得中に入力したときの挙動、hardened runtime 下での imserver のネットワーク接続（エンタイトルメントは不要の想定）
+

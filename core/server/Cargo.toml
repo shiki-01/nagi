@@ -31,6 +31,7 @@ nagi-config.workspace = true
 nagi-learn.workspace = true
 nagi-profile.workspace = true
 nagi-rewriter.workspace = true
+nagi-datafetch = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 ureq = { version = "2.11", features = ["json"], optional = true }
@@ -40,9 +41,11 @@ sha2 = "0.10"
 [features]
 # 既定でデスクトップの挙動（更新確認の HTTP 取得）を維持する。iOS の nagi-ffi は
 # default-features = false で外し、TLS 実装（ureq/rustls/ring）を静的ライブラリに含めない
-default = ["update-check"]
+default = ["update-check", "data-install"]
 # 更新確認・配布物取得の HTTP（ureq + rustls）。無効なら update.auto_check は no-op
 update-check = ["dep:ureq"]
+# 辞書・モデルの取得（`imserver --install-data`。nagi-datafetch = ureq + rustls）。無効なら引数を受けるとエラー終了
+data-install = ["dep:nagi-datafetch"]
 # llama.cpp による zenz 推論（C++ ビルドが必要。リリースビルドでは有効にする）
 llama = ["nagi-infer/llama"]
 

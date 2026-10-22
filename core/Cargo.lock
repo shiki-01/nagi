@@ -820,6 +820,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nagi-datafetch"
+version = "0.1.0"
+dependencies = [
+ "nagi-dict",
+ "rustls",
+ "rustls-pki-types",
+ "sha2",
+ "ureq",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "nagi-dict"
 version = "0.1.0"
 dependencies = [
@@ -904,6 +916,7 @@ version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "nagi-config",
+ "nagi-datafetch",
  "nagi-dict",
  "nagi-engine",
  "nagi-fuzzy",
@@ -1921,13 +1934,10 @@ dependencies = [
  "clap",
  "ed25519-dalek",
  "getrandom 0.2.17",
+ "nagi-datafetch",
  "nagi-dict",
- "rustls",
- "rustls-pki-types",
  "serde_json",
  "sha2",
- "ureq",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]

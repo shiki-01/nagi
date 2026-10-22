@@ -1,0 +1,20 @@
+[package]
+name = "nagi-datafetch"
+description = "Nagi データ取得: Mozc OSS 辞書・zenz モデルの取得（SHA-256 検証）と辞書の組み立て。xtask と imserver --install-data が共有する。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+nagi-dict.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+sha2 = "0.10"
+ureq = "2.11"
+webpki-roots = "0.26"
+
+[lints]
+workspace = true

@@ -2,12 +2,33 @@
 //!
 //! 使い方: `imserver [--data-dir <dir>] [--user-dir <dir>] [--config <file>] [--no-llm]
 //! [--sync-budget-ms <ms>]`（`NAGI_DATA_DIR` でも指定可）。ログは stderr のみ。入力内容は出力しない。
+//!
+//! データ取得: `imserver --install-data --data-dir <dir> [--model small|xsmall|none]`。辞書とモデルを
+//! 取得して終了する（JSON-RPC は起動しない）。進捗は標準出力に 1 行 1 JSON。
 
+use nagi_server::install_data::{self, parse_install_args};
 use nagi_server::{Server, build, parse_args};
 use std::io::{BufReader, BufWriter};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // データ取得モード: 処理して終了する（JSON-RPC サーバーとしては起動しない）
+    match parse_install_args(std::env::args().skip(1)) {
+        Ok(Some(args)) => {
+            return match install_data::run(&args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(message) => {
+                    eprintln!("imserver: {message}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Ok(None) => {}
+        Err(message) => {
+            eprintln!("imserver: {message}");
+            return ExitCode::from(2);
+        }
+    }
     let mut options = match parse_args(std::env::args().skip(1)) {
         Ok(o) => o,
         Err(message) => {

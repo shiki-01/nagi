@@ -4,6 +4,7 @@
 //! - 追加 CA: `SSL_CERT_FILE` / `CURL_CA_BUNDLE` / `REQUESTS_CA_BUNDLE` が指す PEM を
 //!   webpki-roots のルートに加える
 
+use std::io::Read;
 use std::sync::Arc;
 
 use rustls::{ClientConfig, RootCertStore};
@@ -88,15 +89,46 @@ fn redact(url: &str) -> String {
     }
 }
 
-/// プロキシ・追加 CA を反映して GET する。
-pub fn get(url: &str) -> Result<ureq::Response, String> {
-    let mut builder = ureq::AgentBuilder::new().tls_config(tls_config()?);
-    if let Some(proxy) = proxy_from_env(url)? {
-        builder = builder.proxy(proxy);
+/// GET 応答の本文。
+pub struct Body {
+    /// 本文のストリーム
+    pub reader: Box<dyn Read>,
+    /// `Content-Length`（不明なら `None`）
+    pub content_length: Option<u64>,
+}
+
+/// ダウンロードに使う HTTP クライアント。テストでは差し替える。
+pub trait Http {
+    /// `url` を GET する。200 以外はエラーにする。
+    fn get(&self, url: &str) -> Result<Body, String>;
+}
+
+/// ureq + rustls の実装。プロキシ・追加 CA を環境変数から反映する。
+pub struct UreqHttp;
+
+impl Http for UreqHttp {
+    fn get(&self, url: &str) -> Result<Body, String> {
+        let mut builder = ureq::AgentBuilder::new().tls_config(tls_config()?);
+        if let Some(proxy) = proxy_from_env(url)? {
+            builder = builder.proxy(proxy);
+        }
+        let response = builder
+            .build()
+            .get(url)
+            .call()
+            .map_err(|e| format!("HTTP リクエスト失敗 {url}: {e}"))?;
+        if response.status() != 200 {
+            return Err(format!(
+                "ダウンロード失敗 {url} (HTTP {})",
+                response.status()
+            ));
+        }
+        let content_length = response
+            .header("Content-Length")
+            .and_then(|v| v.trim().parse().ok());
+        Ok(Body {
+            reader: Box::new(response.into_reader()),
+            content_length,
+        })
     }
-    builder
-        .build()
-        .get(url)
-        .call()
-        .map_err(|e| format!("HTTP リクエスト失敗 {url}: {e}"))
 }

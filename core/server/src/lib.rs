@@ -11,10 +11,12 @@
 //! - [`server`] — JSON-RPC ループ
 //! - [`settings`] — GUI 設定画面向けの設定 RPC（`get_settings` / `update_settings`）
 //! - [`calibration`] — キャリブレーション推論の実測結果のファイルへの永続化
+//! - [`install_data`] — `imserver --install-data`（辞書・モデルの取得と組み立て。feature `data-install`）
 //! - [`update_check`] — アップデート確認（`config.toml` の `[update] auto_check`）
 
 pub mod calibration;
 pub mod fuzzy;
+pub mod install_data;
 pub mod learning;
 pub mod pipeline;
 pub mod runtime;

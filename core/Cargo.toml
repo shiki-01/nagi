@@ -13,6 +13,7 @@ members = [
     "rewriter",
     "server",
     "ffi",
+    "datafetch",
     "xtask",
 ]
 
@@ -29,6 +30,7 @@ nagi-engine = { path = "engine" }
 nagi-romaji = { path = "romaji" }
 nagi-fuzzy = { path = "fuzzy" }
 nagi-dict = { path = "dict" }
+nagi-datafetch = { path = "datafetch" }
 nagi-infer = { path = "infer" }
 nagi-config = { path = "config" }
 nagi-learn = { path = "learn" }
