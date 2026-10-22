@@ -202,11 +202,11 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 
 ## iOS の未完了項目（2026-10-14、2026-10-16 更新）
 
-実装済み・実機未確認の項目（キーボード UI の細部、入力中の候補・部分変換、`set_context`、レイアウト（JSON・toggle・longPress・shortcut）、設定タブ、ホストの案内・データ・About、堅牢性（`set_environment`・メモリ警告）、コア API への追従）は `docs/ios-device-checklist.md` §3 に移した。
+実機未確認だった項目（キーボード UI の細部、入力中の候補・部分変換、`set_context`、レイアウト（JSON・toggle・longPress・shortcut）、設定タブ、ホストの案内・データ・About、堅牢性（`set_environment`・メモリ警告）、コア API への追従）は 2026-10-22 に実機で確認し、問題なしだった。`docs/ios-device-checklist.md` §2 に移した。
 
 残り（詳細は `docs/mobile-roadmap.md` §0 と `docs/ios-device-checklist.md` §0）:
 
-1. ~~本体アプリ: ユーザー辞書の登録・編集 UI（`userdict.entries`）~~ → 実装済み（`App/UserDictionaryView.swift`。実機確認は `docs/ios-device-checklist.md` §3）
+1. ~~本体アプリ: ユーザー辞書の登録・編集 UI（`userdict.entries`）~~ → 実装済み（`App/UserDictionaryView.swift`。実機確認は `docs/ios-device-checklist.md` §2）
 2. 配布の準備: 正式なアイコン、プライバシーポリシー、外部テスト（Beta App Review）、フルアクセスの用途の明記
 3. 堅牢性: 複数プロセスでの学習データの同時アクセス（D-5。コア側の課題を含む）、他機種での上限・応答時間の実測
 4. 設定のコア側新規項目（`docs/ios-settings.md` §4 段階4）
@@ -230,16 +230,15 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 | メモリ上限の閾値（150/1024/2048MB）と LLM 再読み込みの待ち時間（30 秒）の見直し | H-16・H-26 | 診断ログ `unload_model (keyboard hidden)` `reload_model ok=` `llm restored` |
 | フルアクセスが要る機能（触覚など）の可否 | H-18 | `docs/ios-device-checklist.md` |
 | 他機種での拡張のメモリ上限・応答時間の実測、small の応答時間の実機再確認 | H-17 | 別機種で計測 |
-| クリック音（互換モード）・触覚の設定値と実際の動作の一致 | H-30 | 診断ログ `feedback prepare` と実際の音・触覚 |
 | 複数プロセスでの学習データの同時アクセス（D-5） | mobile-roadmap D-5 | 本体アプリとキーボードで同時に学習・削除 |
-| iOS の `capabilities` / `get_key_table` / `set_environment` / メモリ警告の連携 | 「モバイル向けコア API」 | 診断ログ |
 
 確認済み: メール・URL 欄の英字切替、検索欄の改行キー、注目文節まで確定、`insert` 確定（H-31・H-34）、数字欄（`.numberPad` ほか。H-35）。欄ごとの標準キーボードの自動選択は iOS の挙動で対応不可（H-33・H-35）。
+2026-10-22 の実機確認で問題なし: クリック音（互換モード）・触覚の設定値と実際の動作の一致（H-30）、iOS の `capabilities` / `get_key_table` / `set_environment` / メモリ警告の連携（「モバイル向けコア API」）。詳細は `docs/ios-device-checklist.md` §2。
 
 ## モバイル向けコア API（2026-10-14、決定は decisions.md H-16）
 
 - 実装済み: LLM だけの解放/再読み込み（`unload_model` / `reload_model`、メモリ逼迫 critical・メモリ上限不足での自動解放、normal から 30 秒後の自動再読み込み）、`get_key_table`、D-4（`initialize.capabilities`・`set_environment.memory_budget_mb`・メモリ上限に従うプロファイル判定）
-- iOS（Swift）側の追従は済み（起動時の `capabilities`、`get_key_table`、`set_environment`・メモリ警告による `unload_model` 連携。実機確認待ち。`KanaKeyTable.swift` の複製表はフォールバックとして残る）
+- iOS（Swift）側の追従は済み（起動時の `capabilities`、`get_key_table`、`set_environment`・メモリ警告による `unload_model` 連携。2026-10-22 に実機で問題なし。`KanaKeyTable.swift` の複製表はフォールバックとして残る）
 - 未完了: 実機でのメモリ上限の閾値（150/1024/2048MB）と再読み込みの待ち時間（30 秒）の見直し
 
 ## 絵文字・顔文字の読みからの候補（2026-10-14、決定は decisions.md H-21）
