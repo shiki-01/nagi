@@ -1609,3 +1609,9 @@ H-41・H-42 の残件のうち、実機なしで作れるものを実装し、�
 - **診断ログ**: `%LOCALAPPDATA%\Nagi\logs\tsf.log`。純関数（行の整形・UTC 時刻・ローテーション判断・イベントの文言）は `nagi_windows::diag`、追記だけの I/O は `nagi_windows_tsf::tsf_log`（追記モードで 1 行 1 回の書き込み。256KB 超で `tsf.log.1` へ 1 世代。書けなければ無視）。**入力内容は書かない**: キー・テキスト・preedit は渡さず、`update_preedit` / `update_candidates` は記録しない、`notify` は本文を書かずレベルとコードのみ、サーバーの RPC エラーの本文と不正な応答の本文も書かない。記録するのは DLL の Activate / Deactivate、エンジンの場所（`exe` / `data_dir` の存在）、`EngineEvent`（Started / Crashed / LaunchFailed の種別 = spawn 失敗・initialize タイムアウト・initialize 失敗 / EnteredMinimalMode / Restored / RestoreFailed）、`start()` の失敗（起動直後に通信路が閉じた場合は `LaunchFailed` にならないのでここで拾う）、言語バーの登録・解除の HRESULT。supervisor のロジックは変えていない（`set_on_event` のイベント購読で記録）。エンジン起動失敗の根本原因は別担当が調査中。
 - **迷った判断**: (1) 番号は指示の「H-44（次番号を確認）」が既に使われていたため H-54。 (2) ログの時刻は UTC（ローカル時刻の取得に追加の API を使わないため）。 (3) `LOCALAPPDATA` が無ければログなし（`%TEMP%` 等へは逃がさない）。 (4) `GUID_NAGI_LANGBAR_BUTTON` は削除（同じ DLL で二つの項目を出さない。旧 GUID の項目は Deactivate で外れるので残骸は出ない）。
 - **未確認（実機）**: トレイに「あ / A」が出ること、左クリックの切り替え、右クリックのメニュー、`dwStyle` で足りるか（出ない場合に `TF_LBI_STYLE_TEXTCOLORICON` などを試す）、複数プロセスからの追記。手順は `docs/real-hardware-checklist.md` §8.5d、`docs/windows-verification.md`。
+
+### H-55. 数式・記号の入力中に候補バーへ電卓・全角・記号の候補を出す（2026-10-23、要実機確認）
+
+- 症状: iOS の数字・記号で `1+2` を打つと下線だけで、候補バーが空のまま（TestFlight 64d0f9b）。
+- 原因（コア）: 入力中の候補（composing の suggest）は日本語の読みだけが対象で、Literal だけの preedit は候補が作られなかった。Space / 変換キー（`perform_action` の Space・StartConvert）は、コアのテストでは Literal でも 1 回目から候補ウィンドウが開く（`1+2` → `1+2`・`3`・`１＋２`、`(1+2)*3` → `9`、`1+2=` → 答え）。Swift 側（候補バーの表示・`classifyCandidates`・Space/変換キーの送信）に Literal を弾く処理は見つからなかった。実機で Space 後も出ないなら別原因（下記ログで切り分ける）。
+- 修正: preedit 全体が 1 つの Literal の式（数字と記号を含む。`merge_math_pieces` で全角括弧もまとめる）または記号 1 文字のとき、入力中の候補に `literal_candidates`（Rewriter のみ。電卓 → 記号の装飾 → 全角/半角）を出す。辞書・LLM は通さないので軽い。`1`・`123`・`abc` のような数字だけ・英字だけは打つたびに出ると邪魔なので対象外（既存のゴールデンは変えていない）。入力中の候補の選択は学習に通さない。
