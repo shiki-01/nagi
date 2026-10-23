@@ -103,6 +103,11 @@ pub struct ClientCapabilities {
     /// 電源・サーマル・メモリ逼迫・メモリ上限（`set_environment` と同じ項目）
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub environment: Option<SetEnvironmentParams>,
+    /// `Some(true)` なら、入力中の候補（サジェスト）に「読みの接頭辞だけを置き換える候補」を多数含めてよい
+    /// （`CandidateView.covers` が読み全体より短い候補を選ぶと、その分だけ確定して残りは入力中のまま続く
+    /// ことにフロントが対応している。iOS の候補バー）。省略・`false` は従来どおりの少数の候補
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub partial_suggestions: Option<bool>,
 }
 
 /// サーバーの機能

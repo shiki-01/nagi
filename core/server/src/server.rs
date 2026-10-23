@@ -508,6 +508,9 @@ impl Server {
                     if let Some(env) = &caps.environment {
                         self.runtime.set_environment(env);
                     }
+                    // 接頭辞だけを置き換える候補（H-58）は、フロントが対応を宣言したときだけ出す
+                    self.engine_lock()
+                        .set_partial_suggestions(caps.partial_suggestions == Some(true));
                 }
                 to_value(InitializeResult {
                     protocol_version: PROTOCOL_VERSION,

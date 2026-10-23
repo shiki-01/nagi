@@ -85,6 +85,8 @@ pub struct EngineConfig {
     pub next_word_enabled: bool,
     /// 次語予測の候補数（`predict.next_word_count`）
     pub next_word_count: usize,
+    /// 入力中の候補の最大件数（`convert.suggest_max`。接頭辞の候補を含めた総数の上限。H-58）
+    pub suggest_max: usize,
     /// ライブ変換のチャンク長（`conversion.composing_chunk_len`）。この文字数を超える
     /// Composing 中の1つの日本語入力は、この文字数ごとに分けて変換する
     pub composing_chunk_len: usize,
@@ -118,6 +120,7 @@ impl Default for EngineConfig {
             predict_min_chars: 1,
             next_word_enabled: false,
             next_word_count: 5,
+            suggest_max: 120,
             composing_chunk_len: 30,
             initial_view: InitialView::Sentence,
             beam_width: 3,
@@ -339,6 +342,19 @@ struct ComposingCands {
 /// 入力中の候補の最大件数
 const COMPOSING_CANDIDATES_LIMIT: usize = 12;
 
+/// 読みの接頭辞 1 つあたりの候補の最大件数（長さ 2 以上。H-58）。長い接頭辞は、辞書が文の途中の
+/// 切り方違いの似た候補を並べるので少なく、短いほど語として意味のある候補が増える
+fn prefix_candidates_limit(len: usize) -> usize {
+    match len {
+        0..=2 => 6,
+        3..=4 => 4,
+        _ => 2,
+    }
+}
+
+/// 1 文字の読みの候補（漢字）の最大件数（H-58）
+const PREFIX_TAIL_LIMIT: usize = 20;
+
 /// 12 キーのトグル入力で、直前に入れた文字（同じキーが続けて押されたら置き換える）
 #[derive(Debug, Clone, Copy)]
 struct TouchToggle {
@@ -403,6 +419,9 @@ pub struct Engine {
     geometry: Option<Arc<SetLayoutGeometryParams>>,
     /// アプリごとに覚えたモード（キーは小文字のアプリ識別子。`[apps] remember_mode`。再起動で消える）
     app_modes: HashMap<String, InputMode>,
+    /// フロントが「読みの接頭辞だけを置き換える候補」への対応を宣言したか（`initialize` の
+    /// `capabilities.partial_suggestions`。設定の再読み込みでは変わらない）
+    partial_suggestions: bool,
 }
 
 fn tail_chars(s: &str, n: usize) -> String {
@@ -493,7 +512,14 @@ impl Engine {
             observer: None,
             geometry: None,
             app_modes: HashMap::new(),
+            partial_suggestions: false,
         }
+    }
+
+    /// 接頭辞だけを置き換える候補（入力中のサジェストの拡充。H-58）を出すか。フロントが対応を
+    /// 宣言したとき（`initialize` の `capabilities.partial_suggestions`）だけ有効にする
+    pub fn set_partial_suggestions(&mut self, enabled: bool) {
+        self.partial_suggestions = enabled;
     }
 
     /// `set_layout_geometry` メソッド: キーボードのキー矩形を受け取り、曖昧入力のキー配置に使う。
@@ -1058,6 +1084,9 @@ impl Engine {
             if let Some((raw, japanese)) = &english {
                 self.insert_english_item(&mut items, raw, japanese, reading.chars().count());
             }
+            if self.partial_suggestions {
+                self.append_prefix_items(&mut items, sess, reading);
+            }
             items
         } else {
             // 日本語の読みを作れない（保留中、または曖昧入力が無効）: 英語らしいときだけ、打った通りの文字列と
@@ -1113,6 +1142,71 @@ impl Engine {
             },
         );
         items.truncate(COMPOSING_CANDIDATES_LIMIT);
+    }
+
+    /// 読みの接頭辞だけを置き換える候補を、読み全体の候補の後ろに足す（H-58。フロントが
+    /// `partial_suggestions` を宣言したときだけ）。読みの末尾を 1 文字ずつ削り（長い順 len-1 … 2）、
+    /// それぞれの辞書候補を並べ、最後に 1 文字の読みの候補（漢字）を置く。LLM は使わない
+    /// （`prefix_candidates`）。総数は `suggest_max` まで。1 文字の分は、途中の接頭辞が多くても
+    /// 押し出されないよう先に枠を取る。読みが Composer の入力そのもの（日本語だけ）のときだけ
+    fn append_prefix_items(&self, items: &mut Vec<ComposingItem>, sess: &Session, reading: &str) {
+        if sess.composer.text() != reading {
+            return;
+        }
+        let chars: Vec<char> = reading.chars().collect();
+        let total = chars.len();
+        if total < 2 {
+            return;
+        }
+        let max = self.config.suggest_max.max(items.len());
+        let left = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
+        let candidates_of = |len: usize, limit: usize| -> Vec<(String, Vec<CandidateSource>)> {
+            let prefix: String = chars[..len].iter().collect();
+            self.backend
+                .prefix_candidates(&prefix, &left, limit)
+                .into_iter()
+                // ひらがな・カタカナだけの形式の候補は、読み全体のものだけで足りる
+                .filter(|c| c.surface != prefix && c.sources != [CandidateSource::Kana])
+                .map(|c| (c.surface, c.sources))
+                .collect()
+        };
+        let add = |items: &mut Vec<ComposingItem>,
+                   len: usize,
+                   found: Vec<(String, Vec<CandidateSource>)>,
+                   room: usize| {
+            let mut added = 0;
+            for (surface, sources) in found {
+                if added >= room {
+                    break;
+                }
+                if items
+                    .iter()
+                    .any(|i| i.surface == surface && i.covers == len)
+                {
+                    continue;
+                }
+                items.push(ComposingItem {
+                    surface,
+                    covers: len,
+                    sources,
+                    reading: None,
+                });
+                added += 1;
+            }
+        };
+        let tail = candidates_of(1, PREFIX_TAIL_LIMIT);
+        let reserved = tail.len().min(PREFIX_TAIL_LIMIT);
+        for len in (2..total).rev() {
+            let room = max.saturating_sub(items.len() + reserved);
+            if room == 0 {
+                break;
+            }
+            let limit = prefix_candidates_limit(len);
+            let found = candidates_of(len, limit);
+            add(items, len, found, room.min(limit));
+        }
+        let room = max.saturating_sub(items.len());
+        add(items, 1, tail, room);
     }
 
     /// Literal（式・記号）の入力中の候補: Rewriter だけ（電卓 → 記号の装飾 → 全角/半角）。

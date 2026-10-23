@@ -58,4 +58,28 @@ final class CandidateKindTests: XCTestCase {
         XCTAssertNil(fuzzyHint(sources: [.systemDict], reading: "かんじ"))
         XCTAssertEqual(fuzzyHint(sources: [.llm, .fuzzy], reading: "かんじ"), "もしかして: かんじ")
     }
+
+    // MARK: - 候補バーの作り直しの鍵・initialize の capabilities（H-58）
+
+    func testCandidateBarIdentityChangesWhenTheListIsReplaced() {
+        let a = candidateBarIdentity(["今日は", "今日", "京"])
+        XCTAssertEqual(a, candidateBarIdentity(["今日は", "今日", "京"]))
+        XCTAssertNotEqual(a, candidateBarIdentity(["今日", "京"]))
+        XCTAssertNotEqual(a, candidateBarIdentity(["今日は", "今日", "巨"]))
+        XCTAssertEqual(candidateBarIdentity([]), "0||")
+    }
+
+    func testClientCapabilitiesDeclarePartialSuggestionsAndTouch() {
+        let caps = makeClientCapabilities(environment: nil)
+        XCTAssertEqual(caps.input_method, .touch)
+        XCTAssertEqual(caps.partial_suggestions, true)
+        XCTAssertNil(caps.environment)
+    }
+
+    func testPrefixCandidatesKeepTheirCovers() {
+        // 接頭辞の候補（covers が読み全体より短い）も、入力中は通常の変換候補として扱う
+        let v = view([("今日は良い天気", [.llm], nil), ("今日", [.systemDict], 3), ("木", [.systemDict], 1)])
+        XCTAssertEqual(classifyCandidates(v, hasPreedit: true), .conversion)
+        XCTAssertEqual(v.items.map { $0.covers }, [nil, 3, 1])
+    }
 }

@@ -85,6 +85,19 @@ pub trait ConversionBackend: Send + Sync {
         limit: usize,
     ) -> Vec<BackendCandidate>;
 
+    /// 入力中の候補（サジェスト）で、読みの接頭辞に対して並べる候補（良い順、最大 `limit` 件）。
+    /// 読みの末尾を削った接頭辞を何十回も引くので、`segment_candidates` より軽くすること
+    /// （LLM 推論・曖昧入力の補正は使わない。辞書・学習・ユーザー辞書・Rewriter のみ）。
+    /// 既定実装は `segment_candidates`（辞書だけの軽いバックエンド向け）
+    fn prefix_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendCandidate> {
+        self.segment_candidates(reading, left_context, limit)
+    }
+
     /// 打鍵列 `raw`（小文字のローマ字）が英語である確からしさの段階（英語の自動判定。
     /// `docs/plan-auto-english.md`）。`reading` は同じ打鍵列を日本語として読んだかな（辞書で単語として
     /// 引けるなら日本語を優先するために使う）。既定実装は英語の語彙を持たない特徴量だけの判定

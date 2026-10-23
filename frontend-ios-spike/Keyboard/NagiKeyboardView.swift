@@ -950,8 +950,10 @@ private struct CandidateBar: View {
                         .underline()
                         .lineLimit(1)
                 }
+                // 入力中の候補は読みの接頭辞の分まで 100 件を超えることがある（H-58）ので、遅延して並べる。
+                // 候補が入れ替わったら先頭へ戻す（id を変えて作り直す）
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
+                    LazyHStack(spacing: 6) {
                         ForEach(model.candidates) { item in
                             CandidateButton(item: item,
                                             selected: item.id == model.selectedCandidate && !model.isNextWordCandidates,
@@ -961,6 +963,7 @@ private struct CandidateBar: View {
                         }
                     }
                 }
+                .id(candidateBarIdentity(model.candidates.map { $0.surface }))
                 // 次語予測は展開パネルを使わない（候補数が少なく、選ぶとそのまま挿入される）
                 if !model.candidates.isEmpty && !model.isNextWordCandidates {
                     Button(action: { model.isExpanded.toggle() }) {

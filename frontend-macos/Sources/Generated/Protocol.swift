@@ -156,10 +156,15 @@ public struct ClientCapabilities: Codable {
 	public let input_method: InputMethod?
 	/// 電源・サーマル・メモリ逼迫・メモリ上限（`set_environment` と同じ項目）
 	public let environment: SetEnvironmentParams?
+	/// `Some(true)` なら、入力中の候補（サジェスト）に「読みの接頭辞だけを置き換える候補」を多数含めてよい
+	/// （`CandidateView.covers` が読み全体より短い候補を選ぶと、その分だけ確定して残りは入力中のまま続く
+	/// ことにフロントが対応している。iOS の候補バー）。省略・`false` は従来どおりの少数の候補
+	public let partial_suggestions: Bool?
 
-	public init(input_method: InputMethod?, environment: SetEnvironmentParams?) {
+	public init(input_method: InputMethod?, environment: SetEnvironmentParams?, partial_suggestions: Bool?) {
 		self.input_method = input_method
 		self.environment = environment
+		self.partial_suggestions = partial_suggestions
 	}
 }
 

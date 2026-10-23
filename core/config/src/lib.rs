@@ -611,6 +611,9 @@ pub struct ConvertSection {
     pub calculator: bool,
     /// カタカナ語の原語の候補（`[convert.loanword]`）。
     pub loanword: LoanwordSection,
+    /// 入力中の候補（サジェスト）の最大件数。読みの接頭辞だけを置き換える候補
+    /// （フロントが対応を宣言したときだけ出る。H-58）の総数の上限。既定: 120。
+    pub suggest_max: usize,
 }
 
 impl Default for ConvertSection {
@@ -618,6 +621,7 @@ impl Default for ConvertSection {
         ConvertSection {
             calculator: true,
             loanword: LoanwordSection::default(),
+            suggest_max: 120,
         }
     }
 }
@@ -1011,6 +1015,14 @@ impl Config {
             ));
         }
 
+        // convert.suggest_max: 12 <= suggest_max <= 500
+        if !(12..=500).contains(&self.convert.suggest_max) {
+            errors.push(format!(
+                "convert.suggest_max は 12 から 500 の間である必要があります: {}",
+                self.convert.suggest_max
+            ));
+        }
+
         // ranking.source_order: 既知の名前のみ、重複なし、空でない
         const KNOWN_SOURCES: &[&str] = &[
             "learned",
@@ -1155,7 +1167,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         ],
         "predict" => &["enabled", "min_chars", "next_word", "next_word_count"],
         "rewriter" => &["emoji", "kaomoji"],
-        "convert" => &["calculator", "loanword"],
+        "convert" => &["calculator", "loanword", "suggest_max"],
         "userdict" | "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
@@ -1899,6 +1911,25 @@ min_chars = 3
         let (config, _) = parse(source).expect("should parse predict section");
         assert!(!config.predict.enabled);
         assert_eq!(config.predict.min_chars, 3);
+    }
+
+    #[test]
+    fn test_convert_suggest_max_default_and_range() {
+        let (config, _) = parse("[convert]\nsuggest_max = 200\n").expect("parse");
+        assert_eq!(config.convert.suggest_max, 200);
+        assert_eq!(Config::default().convert.suggest_max, 120);
+        assert!(Config::default().validate().is_empty());
+        for bad in [0, 11, 501] {
+            let mut config = Config::default();
+            config.convert.suggest_max = bad;
+            assert!(
+                config
+                    .validate()
+                    .iter()
+                    .any(|e| e.contains("convert.suggest_max")),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

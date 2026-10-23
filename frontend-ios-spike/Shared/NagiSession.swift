@@ -61,8 +61,7 @@ final class NagiSession {
             client_version: "0.1",
             os: "ios",
             // タッチ入力であることと、その時点の電源・熱・メモリ上限を申告する（コアはこれで最初のプロファイルを決める）
-            capabilities: ClientCapabilities(
-                input_method: .touch,
+            capabilities: makeClientCapabilities(
                 environment: NagiEnvironmentReporter.systemSnapshot(memoryPressure: .normal)
             )
         )

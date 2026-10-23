@@ -355,7 +355,20 @@ mod composing {
     fn typo_input_without_fuzzy_has_no_composing_candidates() {
         let mut e = engine(false);
         type_romaji(&mut e, "kamji");
-        assert_eq!(e.composing_candidate_reading("s"), None);
+        // H-57: 英語らしい打鍵列の候補（打った通り・ASCII）は出うるが、補正の候補（感じ）は出ない
+        if let Some(reading) = e.composing_candidate_reading("s") {
+            let items = e
+                .refresh_composing_candidates("s", &reading)
+                .and_then(|r| r.candidates)
+                .map(|c| c.items)
+                .unwrap_or_default();
+            assert!(
+                items
+                    .iter()
+                    .all(|i| i.surface != "感じ" && !i.sources.contains(&CandidateSource::Fuzzy)),
+                "{items:?}"
+            );
+        }
     }
 
     #[test]

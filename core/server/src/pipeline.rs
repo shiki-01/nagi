@@ -830,67 +830,15 @@ impl ModelControl for Pipeline {
     }
 }
 
-impl ConversionBackend for Pipeline {
-    fn name(&self) -> &str {
-        backend_name(self.dict.is_some(), self.llm.get().is_some())
-    }
-
-    fn take_completions(&self) -> Vec<Completion> {
-        if let Ok(mut q) = self.completions.queue.lock() {
-            let mut out = std::mem::take(&mut *q);
-            // 重複を除く
-            out.sort_by(|a, b| {
-                (a.reading.as_str(), a.left_context.as_str())
-                    .cmp(&(b.reading.as_str(), b.left_context.as_str()))
-            });
-            out.dedup();
-            out
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn set_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
-        if let Ok(mut w) = self.completions.waker.lock() {
-            *w = Some(waker);
-        }
-    }
-
-    fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {
-        self.runtime.tick();
-        self.reconcile_active();
-        let eff = self.runtime.effective();
-        let overlay = self.runtime.overlay();
-        let left_llm = tail(left_context, eff.max_context_chars);
-
-        // 予算超過で LLM の結果を待てなかったとき、完了後に engine へ知らせるためのキー
-        let outer = Completion {
-            reading: reading.to_string(),
-            left_context: left_context.to_string(),
-        };
-
-        let mut segments = match &self.dict {
-            None => vec![BackendSegment {
-                reading: reading.to_string(),
-                surface: reading.to_string(),
-                sources: vec![CandidateSource::Kana],
-            }],
-            Some(dict) if eff.use_llm && self.llm.get().is_some() => {
-                self.convert_with_llm(dict, reading, &left_llm, &eff, &overlay, Some(&outer))
-            }
-            Some(dict) => self.dict_segments(dict, reading, &overlay),
-        };
-        self.apply_preferences(&mut segments, left_context, &eff, &overlay);
-        segments
-    }
-
-    fn segment_candidates(
+impl Pipeline {
+    /// `segment_candidates` の本体。`light` なら LLM 推論と曖昧入力の補正を使わない
+    fn segment_candidates_inner(
         &self,
         reading: &str,
         left_context: &str,
         limit: usize,
+        light: bool,
     ) -> Vec<BackendCandidate> {
-        self.runtime.tick();
         self.reconcile_active();
         let eff = self.runtime.effective();
         let overlay = self.runtime.overlay();
@@ -925,7 +873,7 @@ impl ConversionBackend for Pipeline {
                 .into_iter()
                 .map(|c| c.surface)
                 .collect();
-            let llm_top = if eff.use_llm && reading.chars().count() <= MAX_LLM_CHARS {
+            let llm_top = if !light && eff.use_llm && reading.chars().count() <= MAX_LLM_CHARS {
                 self.llm_convert(reading, &left_llm, &eff, None)
             } else {
                 None
@@ -993,11 +941,14 @@ impl ConversionBackend for Pipeline {
 
         // 曖昧入力: 通常の候補にすでにある表記は重ねない
         // 文節の候補には実際の打鍵列を対応づけられないので、読みからの復元で推定する
-        let fuzzy: Vec<Suggestion> = self
-            .fuzzy_suggestions(reading, &eff, &overlay, known, &TypingHint::default())
-            .into_iter()
-            .filter(|f| !groups.iter().any(|(_, items)| items.contains(&f.surface)))
-            .collect();
+        let fuzzy: Vec<Suggestion> = if light {
+            Vec::new()
+        } else {
+            self.fuzzy_suggestions(reading, &eff, &overlay, known, &TypingHint::default())
+                .into_iter()
+                .filter(|f| !groups.iter().any(|(_, items)| items.contains(&f.surface)))
+                .collect()
+        };
         groups.push((
             CandidateSource::Fuzzy,
             fuzzy.iter().map(|f| f.surface.clone()).collect(),
@@ -1014,6 +965,80 @@ impl ConversionBackend for Pipeline {
         }
         truncate_keeping_fuzzy(&mut out, limit);
         out
+    }
+}
+
+impl ConversionBackend for Pipeline {
+    fn name(&self) -> &str {
+        backend_name(self.dict.is_some(), self.llm.get().is_some())
+    }
+
+    fn take_completions(&self) -> Vec<Completion> {
+        if let Ok(mut q) = self.completions.queue.lock() {
+            let mut out = std::mem::take(&mut *q);
+            // 重複を除く
+            out.sort_by(|a, b| {
+                (a.reading.as_str(), a.left_context.as_str())
+                    .cmp(&(b.reading.as_str(), b.left_context.as_str()))
+            });
+            out.dedup();
+            out
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn set_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut w) = self.completions.waker.lock() {
+            *w = Some(waker);
+        }
+    }
+
+    fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {
+        self.runtime.tick();
+        self.reconcile_active();
+        let eff = self.runtime.effective();
+        let overlay = self.runtime.overlay();
+        let left_llm = tail(left_context, eff.max_context_chars);
+
+        // 予算超過で LLM の結果を待てなかったとき、完了後に engine へ知らせるためのキー
+        let outer = Completion {
+            reading: reading.to_string(),
+            left_context: left_context.to_string(),
+        };
+
+        let mut segments = match &self.dict {
+            None => vec![BackendSegment {
+                reading: reading.to_string(),
+                surface: reading.to_string(),
+                sources: vec![CandidateSource::Kana],
+            }],
+            Some(dict) if eff.use_llm && self.llm.get().is_some() => {
+                self.convert_with_llm(dict, reading, &left_llm, &eff, &overlay, Some(&outer))
+            }
+            Some(dict) => self.dict_segments(dict, reading, &overlay),
+        };
+        self.apply_preferences(&mut segments, left_context, &eff, &overlay);
+        segments
+    }
+
+    fn segment_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendCandidate> {
+        self.segment_candidates_inner(reading, left_context, limit, false)
+    }
+
+    /// 入力中の候補の接頭辞用: LLM 推論と曖昧入力の補正を使わない（辞書・学習・ユーザー辞書・Rewriter のみ）
+    fn prefix_candidates(
+        &self,
+        reading: &str,
+        left_context: &str,
+        limit: usize,
+    ) -> Vec<BackendCandidate> {
+        self.segment_candidates_inner(reading, left_context, limit, true)
     }
 
     fn literal_candidates(&self, text: &str, limit: usize) -> Vec<BackendCandidate> {

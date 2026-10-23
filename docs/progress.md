@@ -31,6 +31,7 @@
 | 非同期通知の C ABI 配信 | `Server::poll_notifications` / `set_wake_callback`、`nagi_set_waker` / `nagi_poll_notifications`（H-10） |
 | タッチ入力 | `insert_reading`（12 キー・フリック・濁点循環）/ `perform_action`（H-11） |
 | 入力中の候補と部分変換 | 入力中に候補を常に出し、候補の選択で先頭部分だけ確定（`CandidateView.covers`、H-14） |
+| 入力中の候補の拡充（iOS） | 読み全体 → 接頭辞（1 文字ずつ短く）→ 1 文字の漢字の順に最大 `convert.suggest_max` 件。`capabilities.partial_suggestions` を宣言したフロントのみ（H-58） |
 | iOS の製品版キーボード | 拡張の UI（`NagiKeyboardView`）、状態（`KeyboardModel`）、型付きセッション（`NagiSession`）、ホストアプリの入力テスト（H-12・H-13） |
 | iOS のビルド・配布 | GitHub Actions `ios-testflight`（署名・アップロード・証明書の掃除）。TestFlight へ配布（H-15） |
 | 実機の実測 | 拡張の上限 約 177MB、xsmall・small とも動作、応答時間は同期待ち 30ms + 非同期差し替え（H-6・H-9・H-10） |

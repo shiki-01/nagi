@@ -31,3 +31,9 @@ func fuzzyHint(sources: [CandidateSource], reading: String?) -> String? {
     guard let reading = reading, !reading.isEmpty else { return "もしかして" }
     return "もしかして: \(reading)"
 }
+
+/// 候補バーの作り直しの鍵（純粋関数）。候補の一覧が入れ替わったら変わる（先頭へスクロールを戻すため）。
+/// 件数と先頭の表記が同じなら同じ鍵（選択位置の変化など、一覧そのものが同じ更新では戻さない）
+func candidateBarIdentity(_ surfaces: [String]) -> String {
+    "\(surfaces.count)|\(surfaces.first ?? "")|\(surfaces.last ?? "")"
+}
