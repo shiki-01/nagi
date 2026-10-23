@@ -131,6 +131,7 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 `frontend-windows/`（`nagi-windows`）と `frontend-windows-tsf/`（`nagi-windows-tsf`）は Linux 上で fmt / clippy / test と
 `x86_64-pc-windows-gnu` の `cargo check` / `clippy` が通っただけで、Windows 実機では一度も動かしていない。
 以下は Windows 10 22H2 以降 / 11 (x64) の実機で確認する項目。確認したら結果と日付を書き込むこと。
+検証の進め方・コマンド・記録方法は [`docs/windows-verification.md`](windows-verification.md)。
 
 ### 8.1 ビルド・単体テスト
 - [ ] `cd core && cargo test -p nagi-windows -p nagi-windows-tsf` が Windows ホストで通る
