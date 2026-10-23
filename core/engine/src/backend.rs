@@ -138,6 +138,15 @@ pub trait ConversionBackend: Send + Sync {
         Vec::new()
     }
 
+    /// Literal（数字・英字・記号だけの文節）に対する Rewriter だけの候補（良い順、最大 `limit` 件。
+    /// 出所は [`CandidateSource::Rewriter`]）。電卓・日付・漢数字・記号の装飾などを先に、
+    /// 全角/半角の「形式の変換」を末尾に並べる。`text` 自身は含めなくてよい（呼び出し側が先頭に置く）。
+    /// 辞書・LLM 経由の候補（Literal に漢字が混ざる）は出さない。既定実装は非対応（空を返す）
+    fn literal_candidates(&self, text: &str, limit: usize) -> Vec<BackendCandidate> {
+        let _ = (text, limit);
+        Vec::new()
+    }
+
     /// 溜まった完了通知を取り出す（取り出すと空になる）
     fn take_completions(&self) -> Vec<Completion> {
         Vec::new()
@@ -176,6 +185,8 @@ pub struct MockBackend {
     segments: HashMap<String, Vec<String>>,
     predictions: HashMap<String, Vec<String>>,
     next_words: HashMap<String, Vec<String>>,
+    /// Rewriter（既定チェーン）の候補を `segment_candidates` の末尾と `literal_candidates` に出すか
+    rewriter: bool,
 }
 
 impl MockBackend {
@@ -203,6 +214,13 @@ impl MockBackend {
             reading.to_string(),
             candidates.into_iter().map(str::to_string).collect(),
         );
+        self
+    }
+
+    /// Rewriter（`nagi_rewriter` の既定チェーン。電卓・記号・全角/半角など）の候補を有効にする
+    /// （既定は無効。サーバーの `Pipeline` と同じく、文節の候補では登録済みの候補の後ろに付ける）
+    pub fn with_rewriter(mut self) -> Self {
+        self.rewriter = true;
         self
     }
 
@@ -257,13 +275,42 @@ impl ConversionBackend for MockBackend {
                 .find(|(r, _)| r == reading)
                 .map(|(_, c)| c.clone())
         });
-        found
+        let mut out: Vec<BackendCandidate> = found
             .unwrap_or_default()
             .into_iter()
             .take(limit)
             .map(|surface| BackendCandidate {
                 surface,
                 sources: vec![CandidateSource::SystemDict],
+                reading: None,
+            })
+            .collect();
+        if self.rewriter {
+            for surface in nagi_rewriter::RewriterChain::default_chain().candidates(reading) {
+                if !out.iter().any(|c| c.surface == surface) {
+                    out.push(BackendCandidate {
+                        surface,
+                        sources: vec![CandidateSource::Rewriter],
+                        reading: None,
+                    });
+                }
+            }
+            out.truncate(limit);
+        }
+        out
+    }
+
+    fn literal_candidates(&self, text: &str, limit: usize) -> Vec<BackendCandidate> {
+        if !self.rewriter {
+            return Vec::new();
+        }
+        nagi_rewriter::RewriterChain::default_chain()
+            .candidates_forms_last(text, &[])
+            .into_iter()
+            .take(limit)
+            .map(|surface| BackendCandidate {
+                surface,
+                sources: vec![CandidateSource::Rewriter],
                 reading: None,
             })
             .collect()

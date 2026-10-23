@@ -549,11 +549,17 @@ impl Default for RewriterSection {
 }
 
 /// 変換結果の表記に関するセクション（`docs/ios-settings.md` §2 の `convert.*`）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConvertSection {
-    /// 電卓候補（`1+2` → `3`）を出すかどうか。既定: false。
+    /// 電卓候補（`1+2` → `3`）を出すかどうか。既定: true。
     pub calculator: bool,
+}
+
+impl Default for ConvertSection {
+    fn default() -> Self {
+        ConvertSection { calculator: true }
+    }
 }
 
 /// キーマップセクション。

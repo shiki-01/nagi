@@ -34,6 +34,9 @@ use std::sync::Arc;
 const LEFT_CONTEXT_CHARS: usize = 40;
 /// 文節 1 つ分に集める候補数の上限
 const CANDIDATE_LIMIT: usize = 50;
+/// 候補の末尾に並べる「形式の変換」（ひらがな・カタカナ・全角英数・半角英数）の最大数。
+/// 上限 `CANDIDATE_LIMIT` で切るときも、この枠は末尾に残す
+const FORM_CANDIDATES_MAX: usize = 4;
 
 /// 候補ウィンドウの初期表示（`conversion.initial_view`。設計書 §4.4）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -219,6 +222,8 @@ struct Session {
     next_words: Vec<BackendCandidate>,
     /// 直近の操作（モード切替）が、確定を伴わなくても次語候補を保つ
     keep_next_words: bool,
+    /// 変換開始時の入力の、読みの各部分を作ったローマ字（全角英数・半角英数の候補用）
+    raw_map: RawMap,
 }
 
 /// 入力中（変換前）の候補 1 つ
@@ -258,6 +263,41 @@ impl TypingSnapshot {
             flicks: self.flicks.as_deref(),
             geometry: self.geometry.as_deref(),
         }
+    }
+}
+
+/// 入力全体の読みと、その各部分を作ったローマ字（打鍵）の対応。Space 変換の開始時に Composer の
+/// 打鍵列から作る。`groups` は読みを先頭から順に区切った `(文字数, 元の打鍵)` で、1 つの打鍵列が
+/// 作る文字（`kya` → きゃ）は分けない。Literal の文字は自身が元の打鍵。対応が取れなければ空
+#[derive(Debug, Clone, Default)]
+struct RawMap {
+    /// 入力全体の読み（Composer のテキスト）
+    reading: String,
+    groups: Vec<(usize, String)>,
+}
+
+impl RawMap {
+    /// 読みの `start` 文字目から始まる `reading` に対応するローマ字。区切りが合わない（文節の境界が
+    /// 打鍵の途中にある）・対応が不明なら `None`
+    fn raw_for(&self, start: usize, reading: &str) -> Option<String> {
+        let len = reading.chars().count();
+        let mut pos = 0;
+        let mut out = String::new();
+        for (count, raw) in &self.groups {
+            if pos >= start + len {
+                break;
+            }
+            if pos >= start {
+                out.push_str(raw);
+            } else if pos + count > start {
+                return None;
+            }
+            pos += count;
+            if pos > start + len {
+                return None;
+            }
+        }
+        (pos >= start + len && !out.is_empty()).then_some(out)
     }
 }
 
@@ -366,6 +406,25 @@ fn push_candidate_with(
             reading: reading.map(str::to_string),
         });
     }
+}
+
+/// 候補の末尾に並べる「形式の変換」: ひらがな・カタカナ（出所 `Kana`）、全角英数・半角英数
+/// （出所 `Rewriter`。入力したローマ字 `raw` が分かるときだけ）。既出の表記は呼び出し側が
+/// 重ねない（`push_candidate`）
+fn form_candidates(reading: &str, raw: Option<&str>) -> Vec<(String, CandidateSource)> {
+    let mut out = vec![
+        (reading.to_string(), CandidateSource::Kana),
+        (to_katakana(reading), CandidateSource::Kana),
+    ];
+    if let Some(raw) = raw {
+        for surface in nagi_rewriter::ZenkakuAlnum.rewrite(raw) {
+            out.push((surface, CandidateSource::Rewriter));
+        }
+        if raw.chars().all(|c| c.is_ascii_graphic()) {
+            out.push((raw.to_string(), CandidateSource::Rewriter));
+        }
+    }
+    out
 }
 
 impl Engine {
@@ -478,6 +537,7 @@ impl Engine {
             last_word: None,
             next_words: Vec::new(),
             keep_next_words: false,
+            raw_map: RawMap::default(),
         }
     }
 
@@ -560,7 +620,7 @@ impl Engine {
     fn show_candidates(&self, sess: &mut Session) {
         if let State::Converting(conv) = &mut sess.state {
             let focus = conv.focus;
-            self.ensure_candidates(&sess.left_context, conv, focus);
+            self.ensure_candidates(&sess.left_context, &sess.raw_map, conv, focus);
             conv.visible = true;
         }
     }
@@ -1025,7 +1085,7 @@ impl Engine {
             self.select_composing(&mut sess, index as usize, &mut commit);
         } else if let State::Converting(conv) = &mut sess.state {
             let f = conv.focus;
-            self.ensure_candidates(&sess.left_context, conv, f);
+            self.ensure_candidates(&sess.left_context, &sess.raw_map, conv, f);
             let index = index as usize;
             if let Some(set) = conv.segments[f].candidates.as_mut()
                 && index < set.items.len()
@@ -2111,6 +2171,7 @@ impl Engine {
             app_id,
             secure_input,
             left_context,
+            raw_map,
             ..
         } = sess;
         let State::Converting(conv) = state else {
@@ -2131,7 +2192,7 @@ impl Engine {
         );
         if observer.on_forget(&ctx, &reading, &surface) {
             conv.segments[f].candidates = None;
-            self.ensure_candidates(left_context, conv, f);
+            self.ensure_candidates(left_context, raw_map, conv, f);
         }
     }
 
@@ -2180,6 +2241,79 @@ impl Engine {
         });
     }
 
+    /// Composer の打鍵列から、読みの各部分を作ったローマ字の対応を作る（`flush_pending` 済みの前提）。
+    /// 打鍵列を新しい Composer に打ち直し、1 打鍵ごとに増えた文字へ「その打鍵までに確定した打鍵」を
+    /// 割り当てる。打鍵が記録されない Literal（数字・大文字・Shift 後の英字）は自身を元の打鍵とする。
+    /// 打ち直した結果が元の入力と合わない（かな直接入力・フリック入力など）なら空の対応にする
+    fn build_raw_map(&self, composer: &Composer) -> RawMap {
+        let reading = composer.text();
+        let strokes = composer.strokes();
+        let mut replay = Composer::new(self.table.clone(), self.config.shift_letter);
+        // 打ち直しの文字ごとのグループ: (文字数, 元の打鍵)
+        let mut replayed: Vec<(usize, String)> = Vec::new();
+        let (mut emitted, mut used) = (0, 0);
+        let mut note = |replay: &Composer, upto: usize, used: &mut usize, emitted: &mut usize| {
+            let n = replay.len();
+            if n > *emitted {
+                let raw: String = strokes[*used..upto].iter().map(|s| s.ch).collect();
+                replayed.push((n - *emitted, raw));
+                *used = upto;
+                *emitted = n;
+            }
+        };
+        for (i, stroke) in strokes.iter().enumerate() {
+            replay.insert_char(stroke.ch);
+            let upto = i + 1 - replay.pending().chars().count();
+            note(&replay, upto, &mut used, &mut emitted);
+        }
+        replay.flush_pending();
+        note(&replay, strokes.len(), &mut used, &mut emitted);
+
+        // 元の入力との照合: 打ち直した文字列は、元の入力から Literal の文字を（打鍵が無いものとして）
+        // 取り除いたものでなければならない
+        let target: Vec<char> = replay.text().chars().collect();
+        let kinds: Vec<PieceKind> = composer
+            .pieces()
+            .iter()
+            .flat_map(|p| std::iter::repeat_n(p.kind, p.text.chars().count()))
+            .collect();
+        let original: Vec<char> = reading.chars().collect();
+        let mut positions: Vec<usize> = Vec::new(); // 打ち直しの k 文字目 → 元の入力での位置
+        for (j, c) in original.iter().enumerate() {
+            if positions.len() < target.len() && target[positions.len()] == *c {
+                positions.push(j);
+            } else if kinds[j] != PieceKind::Literal {
+                return RawMap::default();
+            }
+        }
+        if positions.len() != target.len() {
+            return RawMap::default();
+        }
+        // 元の入力を順にたどってグループを作る（打ち直しのグループの内側に取り除いた文字が
+        // 挟まっていれば対応が取れない）
+        let mut groups: Vec<(usize, String)> = Vec::new();
+        let (mut j, mut k) = (0, 0);
+        let mut it = replayed.iter();
+        while j < original.len() {
+            if k < positions.len() && positions[k] == j {
+                let Some((count, raw)) = it.next() else {
+                    return RawMap::default();
+                };
+                let span = positions[k + count - 1] - positions[k] + 1;
+                if span != *count {
+                    return RawMap::default();
+                }
+                groups.push((span, raw.clone()));
+                j += span;
+                k += count;
+            } else {
+                groups.push((1, original[j].to_string()));
+                j += 1;
+            }
+        }
+        RawMap { reading, groups }
+    }
+
     fn start_converting(&self, sess: &mut Session, how: Start) {
         sess.composer.flush_pending();
         sess.composer.end_literal_run();
@@ -2189,6 +2323,7 @@ impl Engine {
             sess.state = State::Direct;
             return;
         }
+        sess.raw_map = self.build_raw_map(&sess.composer);
         sess.origins.clear();
         // Space 変換は常に新しく変換する（古いライブ変換結果を持ち越さない。G-44）
         sess.live_conversion = None;
@@ -2262,13 +2397,31 @@ impl Engine {
                 }
             }
         }
-        sess.state = State::Converting(Conv {
+        let mut conv = Conv {
             segments,
             focus: 0,
             visible: false,
             range_anchor: None,
             sentence_alternatives: None,
-        });
+        };
+        // Literal だけの入力（`1+2`・`abc`・`(`）の Space 変換は、1 回目から候補ウィンドウを開く。
+        // 表記のほかに候補（電卓・記号の装飾・全角/半角など）が無ければ従来どおり開かない
+        if how == Start::Convert
+            && conv.segments.len() == 1
+            && conv.segments[0].kind == SegmentKind::Literal
+        {
+            self.ensure_candidates(&sess.left_context, &sess.raw_map, &mut conv, 0);
+            if conv.segments[0]
+                .candidates
+                .as_ref()
+                .is_some_and(|set| set.items.len() > 1)
+            {
+                conv.visible = true;
+            } else {
+                conv.segments[0].candidates = None;
+            }
+        }
+        sess.state = State::Converting(conv);
     }
 
     /// 曖昧入力: ローマ字の取りこぼしが混ざる入力（`kamji` の m など）で、補正の候補があれば、
@@ -2301,7 +2454,7 @@ impl Engine {
             range_anchor: None,
             sentence_alternatives: None,
         };
-        self.ensure_candidates(&sess.left_context, &mut conv, 0);
+        self.ensure_candidates(&sess.left_context, &sess.raw_map, &mut conv, 0);
         // 文節の候補（打鍵列なしの推定）の補正候補を、実際の打鍵列・座標で求めたものに差し替える
         if let Some(set) = conv.segments[0].candidates.as_mut() {
             let fuzzy_only = |c: &Candidate| c.sources == [CandidateSource::Fuzzy];
@@ -2409,7 +2562,8 @@ impl Engine {
                 continue;
             }
             let exists = items.iter().any(|i| i.surface == c.surface);
-            if !exists && items.len() >= CANDIDATE_LIMIT {
+            // 末尾の「形式の変換」の枠は残す
+            if !exists && items.len() >= CANDIDATE_LIMIT - FORM_CANDIDATES_MAX {
                 continue;
             }
             push_candidate_with(&mut items, &c.surface, &c.sources, None);
@@ -2417,6 +2571,21 @@ impl Engine {
                 alternatives.push(vec![Segment {
                     reading: reading.to_string(),
                     surface: c.surface,
+                    kind: SegmentKind::Japanese,
+                    candidates: None,
+                    chunk_id: 0,
+                }]);
+            }
+        }
+        // 最後に「形式の変換」（ひらがな・カタカナ・全角英数・半角英数）を末尾に足す
+        let raw = sess.raw_map.raw_for(0, reading);
+        for (surface, source) in form_candidates(reading, raw.as_deref()) {
+            let exists = items.iter().any(|i| i.surface == surface);
+            push_candidate_with(&mut items, &surface, &[source], None);
+            if !exists {
+                alternatives.push(vec![Segment {
+                    reading: reading.to_string(),
+                    surface,
                     kind: SegmentKind::Japanese,
                     candidates: None,
                     chunk_id: 0,
@@ -2474,8 +2643,14 @@ impl Engine {
         tail_chars(&s, LEFT_CONTEXT_CHARS)
     }
 
-    /// 文節の候補一覧を（未生成なら）作る。先頭は現在の表記、末尾にひらがな・カタカナ
-    fn ensure_candidates(&self, surrounding: &str, conv: &mut Conv, idx: usize) {
+    /// 文節の候補一覧を（未生成なら）作る。先頭は現在の表記。
+    ///
+    /// - 日本語: 辞書・LLM などの候補のあと、末尾に「形式の変換」（ひらがな・カタカナ・全角英数・
+    ///   半角英数）。全角英数・半角英数は、文節に対応するローマ字（`raws`）が分かるときだけ
+    /// - Literal: Rewriter だけの候補（電卓・記号の装飾・日付など、全角/半角は末尾）
+    ///
+    /// 件数は `CANDIDATE_LIMIT` までで、末尾の「形式の変換」の枠は上限に達しても残す
+    fn ensure_candidates(&self, surrounding: &str, raws: &RawMap, conv: &mut Conv, idx: usize) {
         if conv.segments[idx].candidates.is_some() {
             return;
         }
@@ -2502,8 +2677,27 @@ impl Engine {
             for c in &from_backend {
                 push_candidate_with(&mut items, &c.surface, &c.sources, c.reading.as_deref());
             }
-            push_candidate(&mut items, &seg.reading, &[CandidateSource::Kana]);
-            push_candidate(&mut items, &katakana, &[CandidateSource::Kana]);
+            items.truncate(CANDIDATE_LIMIT - FORM_CANDIDATES_MAX);
+            let offset: usize = conv.segments[..idx]
+                .iter()
+                .map(|s| s.reading.chars().count())
+                .sum();
+            let whole: String = conv.segments.iter().map(|s| s.reading.as_str()).collect();
+            let raw = (whole == raws.reading)
+                .then(|| raws.raw_for(offset, &seg.reading))
+                .flatten();
+            for (surface, source) in form_candidates(&seg.reading, raw.as_deref()) {
+                push_candidate(&mut items, &surface, &[source]);
+            }
+        } else if seg.kind == SegmentKind::Literal {
+            push_candidate(&mut items, &seg.surface, &[]);
+            for c in self
+                .backend
+                .literal_candidates(&seg.reading, CANDIDATE_LIMIT)
+            {
+                push_candidate_with(&mut items, &c.surface, &c.sources, None);
+            }
+            items.truncate(CANDIDATE_LIMIT);
         } else {
             push_candidate(&mut items, &seg.surface, &[]);
         }
@@ -2515,7 +2709,7 @@ impl Engine {
             return;
         };
         let f = conv.focus;
-        self.ensure_candidates(&sess.left_context, conv, f);
+        self.ensure_candidates(&sess.left_context, &sess.raw_map, conv, f);
         conv.visible = true;
         if let Some(set) = conv.segments[f].candidates.as_mut() {
             let n = set.items.len() as isize;
@@ -2575,7 +2769,7 @@ impl Engine {
         if conv.segments[f].kind != SegmentKind::Japanese {
             return;
         }
-        self.ensure_candidates(&sess.left_context, conv, f);
+        self.ensure_candidates(&sess.left_context, &sess.raw_map, conv, f);
         let reading = conv.segments[f].reading.clone();
         let target = if katakana {
             to_katakana(&reading)

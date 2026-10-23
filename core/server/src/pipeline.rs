@@ -962,6 +962,33 @@ impl ConversionBackend for Pipeline {
         out
     }
 
+    fn literal_candidates(&self, text: &str, limit: usize) -> Vec<BackendCandidate> {
+        let eff = self.runtime.effective();
+        let excluded: &[&str] = if eff.calculator {
+            &[]
+        } else {
+            &[nagi_rewriter::SIMPLE_CALCULATOR_ID]
+        };
+        // 全角/半角の「形式の変換」は末尾。辞書・LLM・学習は通さない（Literal に漢字が混ざらないように）
+        self.rewriter
+            .candidates_forms_last(text, excluded)
+            .into_iter()
+            .fold(Vec::<String>::new(), |mut acc, s| {
+                if !acc.contains(&s) {
+                    acc.push(s);
+                }
+                acc
+            })
+            .into_iter()
+            .take(limit)
+            .map(|surface| BackendCandidate {
+                surface,
+                sources: vec![CandidateSource::Rewriter],
+                reading: None,
+            })
+            .collect()
+    }
+
     fn fuzzy_candidates(
         &self,
         reading: &str,

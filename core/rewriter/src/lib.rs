@@ -1,11 +1,14 @@
 //! Rewriter: 決定的変換の最終段（設計書 §4.13）。
 //!
 //! LLM を使わない決定的な表記変換（全角/半角、カタカナ/半角カナ 等）を候補として提供する。
-//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）・日付（YYYYMMDD）・簡易な二項演算・絵文字/顔文字（読みの表 `config/emoji.tsv`、[`emoji`]）。複雑な式や曖昧な日付は対象外。
+//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）・日付（YYYYMMDD）・電卓（四則・括弧・優先順位つき）・記号の装飾（読み / 1 文字の ASCII 記号から、[`symbols`]）・絵文字/顔文字（読みの表 `config/emoji.tsv`、[`emoji`]）。曖昧な日付は対象外。
 
+mod calc;
 pub mod emoji;
+pub mod symbols;
 
 pub use emoji::{EmojiRewriter, EmojiTable};
+pub use symbols::{SYMBOL_REWRITER_ID, SymbolRewriter};
 
 /// 決定的な表記変換を提供するプラグイン
 pub trait Rewriter: Send + Sync {
@@ -16,13 +19,18 @@ pub trait Rewriter: Send + Sync {
     fn rewrite(&self, reading: &str) -> Vec<String>;
 }
 
+/// [`ZenkakuAlnum`] の識別子
+pub const ZENKAKU_ALNUM_ID: &str = "zenkaku_alnum";
+/// [`HankakuAlnum`] の識別子
+pub const HANKAKU_ALNUM_ID: &str = "hankaku_alnum";
+
 /// 半角英数字・半角記号（ASCII 0x21-0x7E）を全角に変換する
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ZenkakuAlnum;
 
 impl Rewriter for ZenkakuAlnum {
     fn id(&self) -> &str {
-        "zenkaku_alnum"
+        ZENKAKU_ALNUM_ID
     }
 
     fn rewrite(&self, reading: &str) -> Vec<String> {
@@ -39,7 +47,7 @@ pub struct HankakuAlnum;
 
 impl Rewriter for HankakuAlnum {
     fn id(&self) -> &str {
-        "hankaku_alnum"
+        HANKAKU_ALNUM_ID
     }
 
     fn rewrite(&self, reading: &str) -> Vec<String> {
@@ -217,8 +225,9 @@ fn is_valid_date(year: u32, month: u32, day: u32) -> bool {
     day <= days_in_month
 }
 
-/// 単純な二項演算（`数値 演算子 数値` の1回だけ。括弧・複数演算は対象外）を計算する。
-/// 演算子は `+` `-` `*` `/`。数値は非負の整数または小数（先頭の符号無し）
+/// 四則演算の式を計算する（[`calc`] の安全な自前パーサー）。演算子は `+ - * / × ÷`（全角も可）、
+/// 括弧・複数項（優先順位つき）・末尾の `=` に対応。数値は非負の整数または小数（先頭の符号無し）。
+/// 0 除算・桁あふれ・演算子の無い入力は候補を出さない
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SimpleCalculator;
 
@@ -231,78 +240,10 @@ impl Rewriter for SimpleCalculator {
     }
 
     fn rewrite(&self, reading: &str) -> Vec<String> {
-        match evaluate_simple_expression(reading) {
+        match calc::evaluate(reading) {
             Some(result) => vec![result],
             None => Vec::new(),
         }
-    }
-}
-
-/// 妥当な非負整数・小数の文字列か（桁数の上限あり。オーバーフロー・極端な精度低下を避ける）
-fn is_plausible_number(s: &str) -> bool {
-    if s.is_empty() || s.len() > 18 {
-        return false;
-    }
-    let mut seen_dot = false;
-    let mut has_digit = false;
-    for c in s.chars() {
-        if c == '.' {
-            if seen_dot {
-                return false;
-            }
-            seen_dot = true;
-        } else if c.is_ascii_digit() {
-            has_digit = true;
-        } else {
-            return false;
-        }
-    }
-    has_digit
-}
-
-/// `数値 演算子 数値` の形の文字列を計算する。パース不能・0除算・非有限の結果は `None`
-fn evaluate_simple_expression(reading: &str) -> Option<String> {
-    let op_index = reading.find(['+', '-', '*', '/'])?;
-    if op_index == 0 {
-        return None; // 先頭の符号は対象外
-    }
-    let (left, rest) = reading.split_at(op_index);
-    let op = rest.chars().next()?;
-    let right = &rest[1..];
-    if !is_plausible_number(left) || !is_plausible_number(right) {
-        return None;
-    }
-    let a: f64 = left.parse().ok()?;
-    let b: f64 = right.parse().ok()?;
-    let result = match op {
-        '+' => a + b,
-        '-' => a - b,
-        '*' => a * b,
-        '/' => {
-            if b == 0.0 {
-                return None;
-            }
-            a / b
-        }
-        _ => return None,
-    };
-    if !result.is_finite() {
-        return None;
-    }
-    Some(format_calc_result(result))
-}
-
-/// 計算結果を表示用に整形する（整数ならそのまま、小数は小数点以下4桁に丸めて末尾の0を除去）
-fn format_calc_result(x: f64) -> String {
-    let x = if x == 0.0 { 0.0 } else { x }; // -0.0 を 0.0 に正規化
-    if x == x.trunc() && x.abs() < 1e15 {
-        format!("{}", x as i64)
-    } else {
-        let rounded = (x * 10000.0).round() / 10000.0;
-        let s = format!("{rounded:.4}");
-        let s = s.trim_end_matches('0');
-        let s = s.trim_end_matches('.');
-        s.to_string()
     }
 }
 
@@ -463,6 +404,7 @@ impl RewriterChain {
                 Box::new(KanjiPositionalNumeral),
                 Box::new(DigitsToDate),
                 Box::new(SimpleCalculator),
+                Box::new(SymbolRewriter),
             ],
         }
     }
@@ -491,6 +433,25 @@ impl RewriterChain {
             .filter(|r| !excluded.contains(&r.id()))
             .flat_map(|r| r.rewrite(reading))
             .collect()
+    }
+
+    /// Literal（数字・英字・記号の入力）用の候補。全角/半角の「形式の変換」（[`ZenkakuAlnum`] /
+    /// [`HankakuAlnum`]）は末尾に回し、それ以外（電卓・日付・漢数字・記号の装飾など）を先に並べる。
+    /// `excluded` は [`Self::candidates_excluding`] と同じ
+    pub fn candidates_forms_last(&self, text: &str, excluded: &[&str]) -> Vec<String> {
+        let form_ids = [ZENKAKU_ALNUM_ID, HANKAKU_ALNUM_ID];
+        let mut out = self.candidates_excluding(text, &[excluded, &form_ids].concat());
+        for id in form_ids {
+            if !excluded.contains(&id) {
+                out.extend(
+                    self.rewriters
+                        .iter()
+                        .filter(|r| r.id() == id)
+                        .flat_map(|r| r.rewrite(text)),
+                );
+            }
+        }
+        out
     }
 }
 
@@ -692,11 +653,17 @@ mod tests {
         assert_eq!(r.rewrite("10-3"), vec!["7".to_string()]);
         assert_eq!(r.rewrite("3*4"), vec!["12".to_string()]);
         assert_eq!(r.rewrite("7/2"), vec!["3.5".to_string()]);
-        assert_eq!(r.rewrite("10/3"), vec!["3.3333".to_string()]);
-        assert_eq!(r.rewrite("1/3"), vec!["0.3333".to_string()]);
+        // 小数は有効桁 10 桁（末尾の 0 は落とす）
+        assert_eq!(r.rewrite("10/3"), vec!["3.333333333".to_string()]);
+        assert_eq!(r.rewrite("1/3"), vec!["0.3333333333".to_string()]);
         assert_eq!(r.rewrite("0/5"), vec!["0".to_string()]);
         assert_eq!(r.rewrite("2.5+2.5"), vec!["5".to_string()]);
         assert_eq!(r.rewrite("1.1+2.2"), vec!["3.3".to_string()]);
+        // 複数項・括弧・末尾の `=`・全角
+        assert_eq!(r.rewrite("1+2*3"), vec!["7".to_string()]);
+        assert_eq!(r.rewrite("(1+2)*3"), vec!["9".to_string()]);
+        assert_eq!(r.rewrite("1+2="), vec!["3".to_string()]);
+        assert_eq!(r.rewrite("１＋２"), vec!["3".to_string()]);
     }
 
     #[test]
@@ -708,10 +675,42 @@ mod tests {
         assert_eq!(r.rewrite("-3+4"), Vec::<String>::new());
         // 演算子が無い・数字以外
         assert_eq!(r.rewrite("abc"), Vec::<String>::new());
+        assert_eq!(r.rewrite("3"), Vec::<String>::new());
         assert_eq!(r.rewrite(""), Vec::<String>::new());
         // 演算子の前後が空
         assert_eq!(r.rewrite("+4"), Vec::<String>::new());
         assert_eq!(r.rewrite("4+"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn candidates_forms_last_puts_width_forms_at_the_end() {
+        let chain = RewriterChain::default_chain();
+        assert_eq!(
+            chain.candidates_forms_last("1+2", &[]),
+            vec!["3".to_string(), "１＋２".to_string()]
+        );
+        // 電卓を除外すると全角だけ
+        assert_eq!(
+            chain.candidates_forms_last("1+2", &[SIMPLE_CALCULATOR_ID]),
+            vec!["１＋２".to_string()]
+        );
+        // 記号: 装飾が先、全角化（記号の表と重複する表記を含む）は末尾
+        let parens = chain.candidates_forms_last("(", &[]);
+        assert_eq!(parens[0], "（");
+        assert_eq!(parens.last().map(String::as_str), Some("（"));
+        // 全角の入力は半角化が末尾
+        assert_eq!(
+            chain.candidates_forms_last("ＡＢ", &[]),
+            vec!["AB".to_string()]
+        );
+    }
+
+    #[test]
+    fn rewriter_chain_default_includes_symbols() {
+        let chain = RewriterChain::default_chain();
+        assert!(chain.candidates("かっこ").contains(&"「」".to_string()));
+        assert!(chain.candidates("(").contains(&"「".to_string()));
+        assert!(chain.candidates("1+2").iter().all(|s| s != "「"));
     }
 
     #[test]

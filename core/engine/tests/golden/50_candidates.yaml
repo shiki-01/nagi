@@ -10,7 +10,7 @@
     - key: "Space"
       expect: {state: converting, candidates_visible: false, focus: 0}
     - key: "Space"
-      expect: {state: converting, candidates_visible: true, selected: 1, candidates: ["愛", "亜", "あ", "ア"]}
+      expect: {state: converting, candidates_visible: true, selected: 1, candidates: ["愛", "亜", "あ", "ア", "ａ", "a"]}
 
 - name: cand-next-space-cycles
   backend: mock
@@ -29,6 +29,10 @@
       expect: {candidates_visible: true, selected: 2}
     - key: "Space"
       expect: {candidates_visible: true, selected: 3}
+    - key: "Space"
+      expect: {candidates_visible: true, selected: 4}
+    - key: "Space"
+      expect: {candidates_visible: true, selected: 5}
     - key: "Space"
       expect: {candidates_visible: true, selected: 0}
 
@@ -50,6 +54,10 @@
     - key: "Down"
       expect: {selected: 3}
     - key: "Down"
+      expect: {selected: 4}
+    - key: "Down"
+      expect: {selected: 5}
+    - key: "Down"
       expect: {selected: 0}
 
 - name: cand-up-arrow
@@ -68,9 +76,9 @@
     - key: "Up"
       expect: {selected: 0}
     - key: "Up"
-      expect: {selected: 3}
+      expect: {selected: 5}
     - key: "Up"
-      expect: {selected: 2}
+      expect: {selected: 4}
 
 - name: cand-shift-space-prev
   backend: mock
@@ -88,9 +96,9 @@
     - key: "Shift+Space"
       expect: {selected: 0}
     - key: "Shift+Space"
-      expect: {selected: 3}
+      expect: {selected: 5}
     - key: "Shift+Space"
-      expect: {selected: 2}
+      expect: {selected: 4}
 
 - name: cand-ctrl-n-next
   backend: mock
@@ -267,7 +275,7 @@
     - key: "Space"
       expect: {state: converting}
     - key: "Space"
-      expect: {candidates: ["愛", "亜", "あ", "ア"], selected: 1}
+      expect: {candidates: ["愛", "亜", "あ", "ア", "ａ", "a"], selected: 1}
 
 - name: cand-dedup-by-surface
   backend: mock

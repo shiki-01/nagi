@@ -1308,7 +1308,18 @@ fn sentence_view_shows_multiple_whole_sentence_candidates() {
         .iter()
         .map(|c| c.surface.as_str())
         .collect();
-    assert_eq!(surfaces, ["今日はいい", "京はいい"]);
+    // N-best のあとに、末尾の「形式の変換」（ひらがな・カタカナ・全角英数・半角英数）
+    assert_eq!(
+        surfaces,
+        [
+            "今日はいい",
+            "京はいい",
+            "きょうはいい",
+            "キョウハイイ",
+            "ｋｙｏｕｈａｉｉ",
+            "kyouhaii"
+        ]
+    );
     // まだ1つの「メガ文節」のまま（文節には分かれていない）
     let preedit = r.preedit.expect("preedit も差分に含まれるはず");
     assert_eq!(preedit.segments.len(), 1);
@@ -1711,10 +1722,10 @@ fn sentence_view_appends_whole_reading_dictionary_candidates_after_nbest() {
     let mut e = homophone_engine(vec!["神", "紙", "髪", "上", "かみ", "カミ"]);
     type_str(&mut e, "s", "kami");
     let r = press(&mut e, "s", "Space");
-    // N-best（紙・神）が先頭のまま、重複しない辞書候補が続く
+    // N-best（紙・神）が先頭のまま、重複しない辞書候補が続き、末尾に全角英数・半角英数
     assert_eq!(
         candidate_surfaces(&r),
-        ["紙", "神", "髪", "上", "かみ", "カミ"]
+        ["紙", "神", "髪", "上", "かみ", "カミ", "ｋａｍｉ", "kami"]
     );
     let items = &r.candidates.as_ref().unwrap().items;
     // 同じ表記は出所を併記する

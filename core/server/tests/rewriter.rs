@@ -109,16 +109,49 @@ fn emoji_and_kaomoji_can_be_disabled() {
 }
 
 #[test]
-fn calculator_candidate_only_when_enabled() {
+fn calculator_candidate_is_on_by_default_and_can_be_disabled() {
     let b = pipeline_with(nagi_config::Config::default(), "");
-    let c = b.segment_candidates("1+2", "", 20);
-    assert!(!surfaces(&c).contains(&"3"), "既定では電卓候補は出ない");
-    let mut config = nagi_config::Config::default();
-    config.convert.calculator = true;
-    let b = pipeline_with(config, "");
     let c = b.segment_candidates("1+2", "", 20);
     let hit = c.iter().find(|x| x.surface == "3").expect("電卓候補");
     assert!(hit.sources.contains(&CandidateSource::Rewriter));
+    let mut config = nagi_config::Config::default();
+    config.convert.calculator = false;
+    let b = pipeline_with(config, "");
+    let c = b.segment_candidates("1+2", "", 20);
+    assert!(!surfaces(&c).contains(&"3"), "無効にすると電卓候補は出ない");
+    assert!(!surfaces(&b.literal_candidates("1+2", 20)).contains(&"3"));
+}
+
+#[test]
+fn literal_candidates_are_rewriter_only_with_width_forms_last() {
+    let b = pipeline_with(nagi_config::Config::default(), "");
+    let c = b.literal_candidates("1+2", 20);
+    assert_eq!(surfaces(&c), ["3", "１＋２"]);
+    assert!(c.iter().all(|x| x.sources == [CandidateSource::Rewriter]));
+    // 複数項の式・末尾の `=`・全角
+    assert_eq!(surfaces(&b.literal_candidates("(1+2)*3=", 20))[0], "9");
+    assert_eq!(surfaces(&b.literal_candidates("１＋２", 20))[0], "3");
+    // 記号: 装飾 → 全角化の重複は除く
+    let paren = b.literal_candidates("(", 20);
+    let s = surfaces(&paren);
+    assert_eq!(&s[..3], ["（", "「", "『"]);
+    let mut dedup = s.clone();
+    dedup.sort();
+    dedup.dedup();
+    assert_eq!(dedup.len(), s.len());
+    // 辞書・LLM の候補（漢字）は混ざらない
+    let c = b.literal_candidates("abc", 20);
+    assert_eq!(surfaces(&c), ["ａｂｃ"]);
+}
+
+#[test]
+fn symbol_reading_candidates_come_from_the_rewriter_position() {
+    let b = pipeline_with(nagi_config::Config::default(), "");
+    let c = b.segment_candidates("かっこ", "", 50);
+    let hit = c.iter().find(|x| x.surface == "「」").expect("記号の候補");
+    assert!(hit.sources.contains(&CandidateSource::Rewriter));
+    let c = b.segment_candidates("まる", "", 50);
+    assert!(surfaces(&c).contains(&"○"));
 }
 
 #[test]

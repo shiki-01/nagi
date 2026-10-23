@@ -95,7 +95,7 @@
 | `ranking.source_order` | 候補の出所の優先順 | 配列（`learned` / `user_dict` / `llm` / `system_dict` / `kana` / `rewriter` の並べ替え） | デスクトップと同じ | D | core:ranking.source_order | 既存(toml) | 並べ替え UI が必要。記述子の型に「順序つき配列」が無いので追加が要る |
 | `convert.half_width_alnum` | 数字・英字を半角で確定 | choice: `half` / `full` / `follow_input` | `follow_input` | D | core:convert.half_width_alnum | 新規(core) | 全角/半角の相互変換（backlog 3 章）の基本設定 |
 | `convert.date_time` | 日付・時刻の候補（「きょう」「いま」） | bool | true | D | core:convert.date_time | 新規(core) | Rewriter の機能として実装 |
-| `convert.calculator` | 電卓候補（「1+2=」） | bool | false | D | core:convert.calculator | 新規(core) | |
+| `convert.calculator` | 電卓候補（「1+2=」） | bool | true | D | core:convert.calculator | 新規(core) | |
 | `rewriter.emoji` | 読みからの絵文字候補（「わらう」→😄） | bool | true | D | core:rewriter.emoji | 実装済み(core) | Rewriter の機能。表は `config/emoji.tsv`（自作・バイナリ同梱）。候補の末尾側（出所 `rewriter`）。ユーザー辞書・変換結果が先。入力中の候補は先頭文節の読みが表に完全一致するときだけ |
 | `rewriter.kaomoji` | 読みからの顔文字候補（「えがお」→(^_^)） | bool | true | D | core:rewriter.kaomoji | 実装済み(core) | 同上。旧 ID `convert.emoji_candidates` を 2 項目に分けた |
 | `convert.emoji_skin_tone` | 絵文字の肌色 | choice: `none` / `1`–`5` | `none` | D | kbd | 新規(iOS) | 絵文字キーボードと候補に適用 |

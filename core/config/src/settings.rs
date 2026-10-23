@@ -510,7 +510,7 @@ pub fn definitions() -> Vec<SettingDef> {
             "convert.calculator",
             "表記の候補",
             "電卓候補",
-            "「1+2」のような読みに、計算結果（3）を変換候補として加えます。",
+            "「1+2」「(1+2)*3」のような式に、計算結果（3、9）を変換候補として加えます。",
             SettingKind::Bool,
         ),
         def(
@@ -1098,12 +1098,15 @@ mod tests {
         let d = defs.iter().find(|d| d.key == "convert.calculator").unwrap();
         assert_eq!(d.level, SettingLevel::Detail);
         assert_eq!(d.platforms, SettingPlatforms::Both);
-        assert!(!crate::Config::default().convert.calculator);
-        let r =
-            apply_changes(None, &[set("convert.calculator", SettingValue::Bool(true))]).unwrap();
+        assert!(crate::Config::default().convert.calculator);
+        let r = apply_changes(
+            None,
+            &[set("convert.calculator", SettingValue::Bool(false))],
+        )
+        .unwrap();
         let (c, issues) = crate::parse(&r.source).unwrap();
         assert!(issues.is_empty(), "{issues:?}");
-        assert!(c.convert.calculator);
+        assert!(!c.convert.calculator);
     }
 
     #[test]
