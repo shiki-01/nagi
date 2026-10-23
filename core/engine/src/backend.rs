@@ -3,6 +3,7 @@
 //! 候補の供給元を差し替えられるように、状態機械は [`ConversionBackend`] だけを見る。
 //! 辞書との接続は `nagi-server` 側の実装が行う。
 
+use crate::kana::to_katakana;
 use crate::observer::CommitContext;
 use nagi_protocol::SetLayoutGeometryParams;
 use nagi_protocol::view::CandidateSource;
@@ -96,6 +97,14 @@ pub trait ConversionBackend: Send + Sync {
         limit: usize,
     ) -> Vec<BackendCandidate> {
         self.segment_candidates(reading, left_context, limit)
+    }
+
+    /// カタカナ語の原語の綴り（`コンピューター` → `computer`。良い順、重複なし、少数）。
+    /// `surfaces` は読み全体の候補の表記、`reading` はその読み。和製英語・複合語は出さない。
+    /// データが無い・非対応・設定で無効なら空（既定実装は非対応）
+    fn loanword_candidates(&self, surfaces: &[&str], reading: &str) -> Vec<String> {
+        let _ = (surfaces, reading);
+        Vec::new()
     }
 
     /// 打鍵列 `raw`（小文字のローマ字）が英語である確からしさの段階（英語の自動判定。
@@ -213,6 +222,8 @@ pub struct MockBackend {
     segments: HashMap<String, Vec<String>>,
     predictions: HashMap<String, Vec<String>>,
     next_words: HashMap<String, Vec<String>>,
+    /// カタカナ語 → 原語の綴り（テスト用。`loanword_candidates`）
+    loanwords: HashMap<String, Vec<String>>,
     /// Rewriter（既定チェーン）の候補を `segment_candidates` の末尾と `literal_candidates` に出すか
     rewriter: bool,
 }
@@ -261,6 +272,15 @@ impl MockBackend {
         self
     }
 
+    /// カタカナ語の原語を登録する: カタカナ表記 → 綴り（テスト用）
+    pub fn with_loanwords(mut self, katakana: &str, spellings: Vec<&str>) -> Self {
+        self.loanwords.insert(
+            katakana.to_string(),
+            spellings.into_iter().map(str::to_string).collect(),
+        );
+        self
+    }
+
     /// 予測変換の候補を登録する（読みの前方一致で使われる。テスト用）
     pub fn with_predictions(mut self, prefix: &str, candidates: Vec<&str>) -> Self {
         self.predictions.insert(
@@ -274,6 +294,23 @@ impl MockBackend {
 impl ConversionBackend for MockBackend {
     fn name(&self) -> &str {
         "mock"
+    }
+
+    fn loanword_candidates(&self, surfaces: &[&str], reading: &str) -> Vec<String> {
+        let kana = to_katakana(reading);
+        let mut out: Vec<String> = Vec::new();
+        for key in surfaces
+            .iter()
+            .copied()
+            .chain(std::iter::once(kana.as_str()))
+        {
+            for s in self.loanwords.get(key).into_iter().flatten() {
+                if !out.contains(s) {
+                    out.push(s.clone());
+                }
+            }
+        }
+        out
     }
 
     fn convert_sentence(&self, reading: &str, left_context: &str) -> Vec<BackendSegment> {

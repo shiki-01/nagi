@@ -43,6 +43,7 @@ fn engine(partial: bool) -> Option<Engine> {
 fn prefix_suggestions_are_cheap_enough_for_the_background() {
     for reading in [
         "きょうはいいてんき",
+        "こんぴゅーたー",
         "きょうはいいてんきなのでさんぽにいこう",
         "こんぴゅーたーをつかってしごとをするためにあたらしいぱそこんをかいました",
     ] {

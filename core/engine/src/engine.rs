@@ -1084,6 +1084,7 @@ impl Engine {
             if let Some((raw, japanese)) = &english {
                 self.insert_english_item(&mut items, raw, japanese, reading.chars().count());
             }
+            self.insert_loanword_items(&mut items, reading);
             if self.partial_suggestions {
                 self.append_prefix_items(&mut items, sess, reading);
             }
@@ -1142,6 +1143,47 @@ impl Engine {
             },
         );
         items.truncate(COMPOSING_CANDIDATES_LIMIT);
+    }
+
+    /// カタカナ語の原語（`こんぴゅーたー` → `コンピューター` の次に `computer`）を、読み全体の候補に足す。
+    /// 引く語は読み全体を置き換える候補のうちカタカナだけの表記と、読みをカタカナにしたもの。
+    /// 並びは読み全体のカタカナの候補の直後（無ければ読み全体の候補の末尾）。すでにある表記は重ねない。
+    /// 原語のデータが無い・設定で無効のときは何も足さない（H-58 件 B）
+    fn insert_loanword_items(&self, items: &mut Vec<ComposingItem>, reading: &str) {
+        let total = reading.chars().count();
+        let surfaces: Vec<&str> = items
+            .iter()
+            .filter(|i| i.covers == total)
+            .map(|i| i.surface.as_str())
+            .collect();
+        let spellings = self.backend.loanword_candidates(&surfaces, reading);
+        if spellings.is_empty() {
+            return;
+        }
+        let katakana = to_katakana(reading);
+        let mut pos = items
+            .iter()
+            .rposition(|i| i.covers == total && i.surface == katakana)
+            .or_else(|| items.iter().rposition(|i| i.covers == total))
+            .map_or(items.len(), |p| p + 1);
+        for spelling in spellings {
+            if items
+                .iter()
+                .any(|i| i.surface == spelling && i.covers == total)
+            {
+                continue;
+            }
+            items.insert(
+                pos,
+                ComposingItem {
+                    surface: spelling,
+                    covers: total,
+                    sources: vec![CandidateSource::Rewriter],
+                    reading: None,
+                },
+            );
+            pos += 1;
+        }
     }
 
     /// 読みの接頭辞だけを置き換える候補を、読み全体の候補の後ろに足す（H-58。フロントが

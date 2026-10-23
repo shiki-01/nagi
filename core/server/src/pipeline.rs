@@ -1041,6 +1041,16 @@ impl ConversionBackend for Pipeline {
         self.segment_candidates_inner(reading, left_context, limit, true)
     }
 
+    fn loanword_candidates(&self, surfaces: &[&str], reading: &str) -> Vec<String> {
+        if !self.runtime.effective().loanword {
+            return Vec::new();
+        }
+        match &self.loanword {
+            Some(loanword) => loanword.candidates(surfaces.iter().copied(), reading),
+            None => Vec::new(),
+        }
+    }
+
     fn literal_candidates(&self, text: &str, limit: usize) -> Vec<BackendCandidate> {
         let eff = self.runtime.effective();
         let excluded: &[&str] = if eff.calculator {

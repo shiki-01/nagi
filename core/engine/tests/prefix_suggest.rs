@@ -1,10 +1,10 @@
 //! 入力中の候補（サジェスト）の拡充（H-58）: 読み全体 → 接頭辞を 1 文字ずつ短く → 1 文字の順に並ぶこと、
 //! 総数が長さに応じて増えること、接頭辞の候補を選ぶと残りの読みが入力中に残ること、
-//! 対応を宣言しないクライアントには出ないこと、上限
+//! 対応を宣言しないクライアントには出ないこと、上限。カタカナ語の原語（件 B）も
 
 use nagi_engine::{
     BackendCandidate, BackendSegment, ConversionBackend, Engine, EngineConfig, KanaBackend,
-    parse_key,
+    MockBackend, parse_key,
 };
 use nagi_protocol::methods::ReadingInput;
 use nagi_protocol::view::{CandidateSource, CandidateView};
@@ -193,4 +193,56 @@ fn keys_still_work_with_the_expanded_list() {
     let mut e = engine(Arc::new(Gen), true, 120);
     let r = e.process_key("s", &parse_key("k").unwrap());
     assert!(r.candidates.is_none());
+}
+
+// ---- 件 B: カタカナ語の原語 ----
+
+fn loanword_backend(with_data: bool) -> Arc<dyn ConversionBackend> {
+    let mut b =
+        MockBackend::new().with_segments("こんぴゅーたー", vec!["コンピューター", "コンピュータ"]);
+    if with_data {
+        b = b.with_loanwords("コンピューター", vec!["computer"]);
+    }
+    Arc::new(b)
+}
+
+#[test]
+fn loanword_spelling_follows_the_katakana_candidate() {
+    for partial in [false, true] {
+        let mut e = engine(loanword_backend(true), partial, 120);
+        type_kana(&mut e, "こんぴゅーたー");
+        let items = suggestions(&mut e);
+        let surfaces: Vec<&str> = items.iter().map(|i| i.surface.as_str()).collect();
+        let kata = surfaces
+            .iter()
+            .position(|s| *s == "コンピューター")
+            .unwrap();
+        assert_eq!(surfaces.get(kata + 1), Some(&"computer"), "{surfaces:?}");
+        let computer = &items[kata + 1];
+        assert_eq!(computer.sources, [CandidateSource::Rewriter]);
+        assert_eq!(computer.covers, None, "読み全体を置き換える");
+    }
+}
+
+#[test]
+fn without_loanword_data_nothing_is_added() {
+    let mut e = engine(loanword_backend(false), true, 120);
+    type_kana(&mut e, "こんぴゅーたー");
+    let items = suggestions(&mut e);
+    assert!(items.iter().all(|i| i.surface != "computer"), "{items:?}");
+    assert!(items.iter().any(|i| i.surface == "コンピューター"));
+}
+
+#[test]
+fn selecting_the_loanword_candidate_commits_the_spelling() {
+    let mut e = engine(loanword_backend(true), false, 120);
+    type_kana(&mut e, "こんぴゅーたー");
+    let items = suggestions(&mut e);
+    let index = items.iter().position(|i| i.surface == "computer").unwrap();
+    let r = e.select_candidate("s", index as u32);
+    assert_eq!(r.commit.as_deref(), Some("computer"));
+    assert_eq!(
+        e.snapshot("s").unwrap().state,
+        nagi_engine::StateKind::Direct
+    );
 }

@@ -1,6 +1,6 @@
 //! 入力中の候補（サジェスト）の接頭辞の候補（H-58）の、実際の `Pipeline` + JSON-RPC 経由の確認:
 //! `initialize` の `capabilities.partial_suggestions` を宣言したときだけ出ること、辞書のみで引くこと、
-//! 残りの読みが入力中に残ること
+//! 所要時間の概算。カタカナ語の原語（小さな自作索引）が候補バーに出ること
 
 mod common;
 
@@ -8,6 +8,7 @@ use common::{FakeModel, dict_with_extra};
 use nagi_config::Config;
 use nagi_engine::EngineConfig;
 use nagi_learn::{LearnConfig, Learner};
+use nagi_loanword::{Entry, IndexBuilder, LoanwordIndex};
 use nagi_profile::SystemInfo;
 use nagi_server::{Pipeline, Runtime, Server, Tunables};
 use serde_json::{Value, json};
@@ -25,9 +26,23 @@ const EXTRA: &str = "\
 てんき\t1\t1\t3500\t転機
 き\t1\t1\t3000\t木
 き\t1\t1\t3200\t気
+こんぴゅーたー\t1\t1\t3000\tコンピューター
 ";
 
-fn server(partial: Option<bool>) -> Server {
+/// 自作の小さな原語の索引（computer のみ）
+fn fixture_loanword() -> Arc<LoanwordIndex> {
+    let mut b = IndexBuilder::new();
+    b.add(&Entry {
+        headword: "コンピューター".into(),
+        lang: "eng".into(),
+        spelling: "computer".into(),
+        wasei: false,
+        rank: 0,
+    });
+    Arc::new(LoanwordIndex::from_vec(b.build().unwrap()).unwrap())
+}
+
+fn server(partial: Option<bool>, loanword: bool) -> Server {
     let config = Config::default();
     let runtime = Runtime::new(
         SystemInfo {
@@ -40,11 +55,14 @@ fn server(partial: Option<bool>) -> Server {
         Learner::new(LearnConfig::default()),
         None,
     );
-    let pipeline = Pipeline::new(
+    let mut pipeline = Pipeline::new(
         Some(dict_with_extra(EXTRA)),
         Some(Box::new(FakeModel::new(&[]))),
         runtime,
     );
+    if loanword {
+        pipeline.set_loanword_index(Some(fixture_loanword()));
+    }
     let mut s = Server::new(Arc::new(pipeline), "balanced", EngineConfig::default());
     let mut params = json!({
         "protocol_version":1,"client_name":"t","client_version":"0","os":"ios"});
@@ -100,7 +118,7 @@ fn surfaces(items: &[Value]) -> Vec<String> {
 
 #[test]
 fn declared_client_gets_whole_then_prefixes_then_single_characters() {
-    let mut s = server(Some(true));
+    let mut s = server(Some(true), false);
     let items = typed(&mut s, "きょうはいいてんき");
     let covers: Vec<u64> = items
         .iter()
@@ -119,7 +137,7 @@ fn declared_client_gets_whole_then_prefixes_then_single_characters() {
 #[test]
 fn undeclared_or_false_clients_get_no_prefix_only_candidates() {
     for partial in [None, Some(false)] {
-        let mut s = server(partial);
+        let mut s = server(partial, false);
         let items = typed(&mut s, "きょうはいいてんき");
         assert!(!items.is_empty());
         assert!(
@@ -132,7 +150,7 @@ fn undeclared_or_false_clients_get_no_prefix_only_candidates() {
 
 #[test]
 fn selecting_a_prefix_candidate_over_rpc_keeps_the_rest_composing() {
-    let mut s = server(Some(true));
+    let mut s = server(Some(true), false);
     let items = typed(&mut s, "きょうはいいてんき");
     let index = items
         .iter()
@@ -146,4 +164,27 @@ fn selecting_a_prefix_candidate_over_rpc_keeps_the_rest_composing() {
     let r: Value = serde_json::from_str(&lines[0]).unwrap();
     assert_eq!(r["result"]["commit"], "今日", "{r}");
     assert_eq!(r["result"]["preedit"]["text"], "はいいてんき", "{r}");
+}
+
+#[test]
+fn loanword_spelling_appears_next_to_the_katakana_candidate() {
+    for partial in [None, Some(true)] {
+        let mut s = server(partial, true);
+        let items = typed(&mut s, "こんぴゅーたー");
+        let all = surfaces(&items);
+        let kata = all.iter().position(|x| x == "コンピューター").unwrap();
+        assert_eq!(
+            all.get(kata + 1).map(String::as_str),
+            Some("computer"),
+            "{all:?}"
+        );
+    }
+}
+
+#[test]
+fn without_loanword_data_only_the_katakana_appears() {
+    let mut s = server(Some(true), false);
+    let all = surfaces(&typed(&mut s, "こんぴゅーたー"));
+    assert!(all.iter().any(|x| x == "コンピューター"), "{all:?}");
+    assert!(all.iter().all(|x| x != "computer"), "{all:?}");
 }
