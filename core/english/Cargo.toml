@@ -1,0 +1,26 @@
+[package]
+name = "nagi-english"
+description = "Nagi 英語の自動判定: ローマ字入力の特徴量・英単語の語彙（fst 索引）・判定スコア。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+fst = "0.4.7"
+nagi-romaji.workspace = true
+thiserror = { workspace = true }
+
+# 非 Windows ではマップ中のファイルの置換に制約が無いため mmap を使う（nagi-dict と同じ方針）
+[target.'cfg(not(windows))'.dependencies]
+memmap2 = "0.9"
+
+[lints.rust]
+# ワークスペース既定は forbid。語彙ファイルの mmap（lexicon.rs の map_file 1 箇所）だけ解禁する
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -20,7 +20,7 @@ pub use backend::{
     BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend, KanaBackend,
     MockBackend, TypingHint,
 };
-pub use engine::{Engine, EngineConfig, InitialView, SessionSnapshot, StateKind};
+pub use engine::{AutoEnglishMode, Engine, EngineConfig, InitialView, SessionSnapshot, StateKind};
 pub use ir::{Candidate, CandidateSet, CursorPos, Preedit, Segment};
 pub use keymap::{KeyContext, KeyMap};
 pub use keys::{KeyParseError, key_from_text, parse_key};

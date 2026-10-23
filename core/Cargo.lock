@@ -849,7 +849,9 @@ dependencies = [
 name = "nagi-datafetch"
 version = "0.1.6"
 dependencies = [
+ "flate2",
  "nagi-dict",
+ "nagi-english",
  "rustls",
  "rustls-pki-types",
  "sha2",
@@ -871,12 +873,23 @@ dependencies = [
 name = "nagi-engine"
 version = "0.1.6"
 dependencies = [
+ "nagi-english",
  "nagi-protocol",
  "nagi-rewriter",
  "nagi-romaji",
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "nagi-english"
+version = "0.1.6"
+dependencies = [
+ "fst",
+ "memmap2",
+ "nagi-romaji",
  "thiserror 2.0.21",
 ]
 
@@ -947,6 +960,7 @@ dependencies = [
  "nagi-datafetch",
  "nagi-dict",
  "nagi-engine",
+ "nagi-english",
  "nagi-fuzzy",
  "nagi-infer",
  "nagi-learn",

@@ -397,6 +397,19 @@ pub fn definitions() -> Vec<SettingDef> {
             SettingKind::Bool,
         ),
         def(
+            "input.auto_english.mode",
+            "入力",
+            "英語の自動判定",
+            "ローマ字のまま打った英単語（例: typescript）を、日本語入力を切り替えずに英語として入力できるようにします。判定が高いとき、Space で出る候補の上位に英字が出ます。入力は自動では変わりません。「標準」「積極的」は今後の段階（先頭の候補を英字にする・入力中に切り替える）の予約で、現状は「慎重」と同じ動作です。",
+            choice(&[
+                ("off", "オフ"),
+                ("conservative", "慎重"),
+                ("standard", "標準（予約・現状は慎重と同じ）"),
+                ("aggressive", "積極的（予約・現状は慎重と同じ）"),
+            ]),
+        )
+        .simple(),
+        def(
             "input.fuzzy.enabled",
             "入力",
             "タイプミスの補正候補（曖昧入力）",
@@ -621,6 +634,9 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         }
         "input.dakuten_cycle" => Some(Text(config.input.dakuten_cycle.as_str().to_string())),
         "input.romaji_carryover" => Some(Bool(config.input.romaji_carryover)),
+        "input.auto_english.mode" => {
+            Some(Text(config.input.auto_english.mode.as_str().to_string()))
+        }
         "input.fuzzy.enabled" => Some(Bool(config.input.fuzzy.enabled)),
         "input.fuzzy.strength" => Some(Text(config.input.fuzzy.strength.as_str().to_string())),
         "input.fuzzy.max_candidates" => Some(n(config.input.fuzzy.max_candidates)),
@@ -1027,6 +1043,37 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.userdict.enabled && !c.snippet.enabled);
         assert_eq!(c.input.dakuten_cycle, crate::DakutenCycle::DakutenFirst);
+    }
+
+    #[test]
+    fn auto_english_definition_and_editing() {
+        let defs = definitions();
+        let d = defs
+            .iter()
+            .find(|d| d.key == "input.auto_english.mode")
+            .unwrap();
+        assert!(matches!(&d.kind, SettingKind::Choice { options } if options.len() == 4));
+        assert_eq!(d.level, SettingLevel::Simple);
+        let r = apply_changes(
+            None,
+            &[set(
+                "input.auto_english.mode",
+                SettingValue::Text("off".into()),
+            )],
+        )
+        .unwrap();
+        let (c, _) = crate::parse(&r.source).unwrap();
+        assert_eq!(c.input.auto_english.mode, crate::AutoEnglishMode::Off);
+        let bad = apply_changes(
+            None,
+            &[set(
+                "input.auto_english.mode",
+                SettingValue::Text("x".into()),
+            )],
+        )
+        .unwrap();
+        assert_eq!(bad.errors.len(), 1);
+        assert!(bad.applied.is_empty());
     }
 
     #[test]

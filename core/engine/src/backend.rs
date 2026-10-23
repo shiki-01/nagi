@@ -60,6 +60,12 @@ pub struct Completion {
     pub left_context: String,
 }
 
+/// 語彙を持たない英語の判定器（`english_level` の既定実装用。ローマ字テーブルの構築は 1 回だけ）
+fn default_english_judge() -> &'static nagi_english::Judge {
+    static JUDGE: std::sync::OnceLock<nagi_english::Judge> = std::sync::OnceLock::new();
+    JUDGE.get_or_init(|| nagi_english::Judge::standard(None))
+}
+
 /// 変換バックエンド
 pub trait ConversionBackend: Send + Sync {
     /// バックエンド名（診断用。入力内容は含めない）
@@ -78,6 +84,15 @@ pub trait ConversionBackend: Send + Sync {
         left_context: &str,
         limit: usize,
     ) -> Vec<BackendCandidate>;
+
+    /// 打鍵列 `raw`（小文字のローマ字）が英語である確からしさの段階（英語の自動判定。
+    /// `docs/plan-auto-english.md`）。`reading` は同じ打鍵列を日本語として読んだかな（辞書で単語として
+    /// 引けるなら日本語を優先するために使う）。既定実装は英語の語彙を持たない特徴量だけの判定
+    /// （劣化動作）。語彙・辞書・学習を持つバックエンドは上書きする
+    fn english_level(&self, raw: &str, reading: &str) -> nagi_english::Level {
+        let _ = reading;
+        default_english_judge().judge(raw, false).level
+    }
 
     /// 曖昧入力（タイプミス補正）の「もしかして」候補（良い順、最大 `limit` 件。出所は
     /// [`CandidateSource::Fuzzy`]）。`reading` は入力中の読み全体で、辞書でそのまま意味を持つなら

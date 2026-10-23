@@ -110,6 +110,8 @@ pub struct Pipeline {
     rewriter: RewriterChain,
     /// 曖昧入力の提案器（隣接表などを最初に使うときに作る。無効な間は作らない）
     fuzzy: OnceLock<FuzzyEngine>,
+    /// 英語の自動判定（語彙は `data/english/words.fst`。無ければ特徴量だけの劣化動作）
+    english: nagi_english::Judge,
 }
 
 /// dict・LLM の有無からバックエンド名を決める（`Pipeline::new` と `name()` の重複を1箇所にまとめる）
@@ -166,7 +168,38 @@ impl Pipeline {
             completions: Arc::new(Completions::new()),
             rewriter: RewriterChain::default_chain(),
             fuzzy: OnceLock::new(),
+            english: nagi_english::Judge::standard(None),
         }
+    }
+
+    /// 英単語の語彙を取り付ける（英語の自動判定）。`None` なら特徴量だけで判定する（劣化動作）
+    pub fn set_english_lexicon(&mut self, lexicon: Option<Arc<nagi_english::Lexicon>>) {
+        self.english = nagi_english::Judge::standard(lexicon);
+    }
+
+    /// 英語の語彙を取り付けているか
+    pub fn has_english_lexicon(&self) -> bool {
+        self.english.has_lexicon()
+    }
+
+    /// 読みが日本語として単語に引けるか（システム辞書・ユーザー辞書・スニペット・学習）。
+    /// 英語の自動判定で、日本語として尤もらしい読み（`sense` → せんせ など）を優先するために使う
+    fn reading_is_known(&self, reading: &str) -> bool {
+        if self
+            .dict
+            .as_ref()
+            .is_some_and(|d| !d.lookup(reading).is_empty())
+        {
+            return true;
+        }
+        let overlay = self.runtime.overlay();
+        !overlay.lookup(reading).is_empty()
+            || !overlay.snippets(reading).is_empty()
+            || self
+                .runtime
+                .learn_lookup(reading, context_hash(""))
+                .iter()
+                .any(|(_, score)| *score > 0.0)
     }
 
     fn make_llm(model: Box<dyn ConversionModel>, profile: nagi_profile::Profile) -> Llm {
@@ -987,6 +1020,12 @@ impl ConversionBackend for Pipeline {
                 reading: None,
             })
             .collect()
+    }
+
+    fn english_level(&self, raw: &str, reading: &str) -> nagi_english::Level {
+        // 辞書を引くのは、判定の対象になりうる打鍵列（小文字の英字だけ）のときだけ
+        let known = raw.bytes().all(|b| b.is_ascii_lowercase()) && self.reading_is_known(reading);
+        self.english.judge(raw, known).level
     }
 
     fn fuzzy_candidates(

@@ -6,11 +6,13 @@
 //!
 //! iOS の XCFramework（`nagi-ffi`）にはこの crate を含めない（TLS 実装を静的ライブラリに入れないため）。
 
+pub mod english;
 mod fsutil;
 pub mod http;
 pub mod model;
 pub mod mozc;
 
+pub use english::{SCOWL_FILE, build_english_lexicon, fetch_english, fetch_english_with};
 pub use http::{Body, Http, UreqHttp};
 pub use model::{ModelInfo, ModelKind, fetch_model, fetch_model_with};
 pub use mozc::{

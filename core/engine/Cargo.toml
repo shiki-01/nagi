@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+nagi-english.workspace = true
 nagi-protocol.workspace = true
 nagi-romaji.workspace = true
 nagi-rewriter.workspace = true

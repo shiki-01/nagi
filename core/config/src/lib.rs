@@ -390,6 +390,58 @@ impl Default for FuzzySection {
     }
 }
 
+/// 英語の自動判定の強さ（`[input.auto_english] mode`）。ローマ字のまま打った英単語を、
+/// 日本語入力を切り替えずに英語として入力できるようにする（`docs/plan-auto-english.md`）。
+/// 段階 1（Space の候補に ASCII を足す）だけが実装済みで、`Standard` と `Aggressive` は
+/// 段階 2 以降（先頭の候補を ASCII にする・入力中に切り替える）の予約として、
+/// 現状は `Conservative` と同じ動作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoEnglishMode {
+    /// 判定しない。
+    Off,
+    /// 慎重。自信が高いときだけ、Space の候補の上位に ASCII を置く。自動では変えない。既定。
+    Conservative,
+    /// 標準（予約。現状は慎重と同じ）。
+    Standard,
+    /// 積極的（予約。現状は慎重と同じ）。
+    Aggressive,
+}
+
+impl AutoEnglishMode {
+    /// 文字列表現を返す。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AutoEnglishMode::Off => "off",
+            AutoEnglishMode::Conservative => "conservative",
+            AutoEnglishMode::Standard => "standard",
+            AutoEnglishMode::Aggressive => "aggressive",
+        }
+    }
+}
+
+impl fmt::Display for AutoEnglishMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// 英語の自動判定（`[input.auto_english]`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoEnglishSection {
+    /// 判定の強さ。既定: Conservative（段階 1 のみ）。
+    pub mode: AutoEnglishMode,
+}
+
+impl Default for AutoEnglishSection {
+    fn default() -> Self {
+        AutoEnglishSection {
+            mode: AutoEnglishMode::Conservative,
+        }
+    }
+}
+
 /// 入力セクション。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -405,6 +457,8 @@ pub struct InputSection {
     pub romaji_carryover: bool,
     /// 曖昧入力（タイプミス補正の候補）。
     pub fuzzy: FuzzySection,
+    /// 英語の自動判定。
+    pub auto_english: AutoEnglishSection,
 }
 
 impl Default for InputSection {
@@ -415,6 +469,7 @@ impl Default for InputSection {
             dakuten_cycle: DakutenCycle::SmallFirst,
             romaji_carryover: true,
             fuzzy: FuzzySection::default(),
+            auto_english: AutoEnglishSection::default(),
         }
     }
 }
@@ -1036,6 +1091,9 @@ const FUZZY_KEYS: &[&str] = &[
     "use_touch_coords",
 ];
 
+/// `[input.auto_english]` の既知キー。
+const AUTO_ENGLISH_KEYS: &[&str] = &["mode"];
+
 /// 各セクションの既知キー。
 fn get_known_section_keys(section: &str) -> &'static [&'static str] {
     match section {
@@ -1062,6 +1120,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "dakuten_cycle",
             "romaji_carryover",
             "fuzzy",
+            "auto_english",
         ],
         "ranking" => &["source_order"],
         "learning" => &[
@@ -1105,13 +1164,16 @@ fn find_unknown_keys(table: &toml::Table) -> Vec<String> {
                     unknown.push(format!("{key}.{sub}"));
                 }
             }
-            // 入れ子のテーブル（`[input.fuzzy]`）
-            if key == "input"
-                && let Some(fuzzy) = section.get("fuzzy").and_then(|v| v.as_table())
-            {
-                for sub in fuzzy.keys() {
-                    if !FUZZY_KEYS.contains(&sub.as_str()) {
-                        unknown.push(format!("input.fuzzy.{sub}"));
+            // 入れ子のテーブル（`[input.fuzzy]` `[input.auto_english]`）
+            if key == "input" {
+                for (nested, known) in [("fuzzy", FUZZY_KEYS), ("auto_english", AUTO_ENGLISH_KEYS)]
+                {
+                    if let Some(table) = section.get(nested).and_then(|v| v.as_table()) {
+                        for sub in table.keys() {
+                            if !known.contains(&sub.as_str()) {
+                                unknown.push(format!("input.{nested}.{sub}"));
+                            }
+                        }
                     }
                 }
             }
@@ -1876,6 +1938,32 @@ min_chars = 3
             "literal_continue"
         );
         assert_eq!(format!("{}", ShiftLetter::SingleUpper), "single_upper");
+    }
+
+    #[test]
+    fn auto_english_defaults_parse_and_validate() {
+        let d = Config::default();
+        assert_eq!(d.input.auto_english.mode, AutoEnglishMode::Conservative);
+        assert_eq!(AutoEnglishMode::Aggressive.to_string(), "aggressive");
+        let (c, issues) = parse("[input.auto_english]\nmode = \"off\"\n").expect("parse");
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.input.auto_english.mode, AutoEnglishMode::Off);
+        for (v, m) in [
+            ("conservative", AutoEnglishMode::Conservative),
+            ("standard", AutoEnglishMode::Standard),
+            ("aggressive", AutoEnglishMode::Aggressive),
+        ] {
+            let (c, _) = parse(&format!("[input.auto_english]\nmode = \"{v}\"\n")).expect("parse");
+            assert_eq!(c.input.auto_english.mode, m);
+        }
+        assert!(parse("[input.auto_english]\nmode = \"x\"\n").is_err());
+        let (_, issues) = parse("[input.auto_english]\nbogus = 1\n").expect("parse");
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("input.auto_english.bogus") && i.line == 2),
+            "{issues:?}"
+        );
     }
 
     #[test]

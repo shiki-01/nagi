@@ -49,6 +49,21 @@ pub enum InitialView {
     Segment,
 }
 
+/// 英語の自動判定の強さ（`input.auto_english.mode`）。段階 1（Space の候補に ASCII を足す）だけが
+/// 実装済みで、`Standard` と `Aggressive` は段階 2 以降の予約として `Conservative` と同じ動作
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoEnglishMode {
+    /// 判定しない（候補の並びは従来どおり）
+    Off,
+    /// 慎重（既定）。自信が高いときだけ候補の上位に ASCII を置く。自動では変えない
+    #[default]
+    Conservative,
+    /// 標準（予約。現状は `Conservative` と同じ）
+    Standard,
+    /// 積極的（予約。現状は `Conservative` と同じ）
+    Aggressive,
+}
+
 /// エンジンの設定（`config.toml` の `[input]` `[conversion]` に対応する部分）
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -87,6 +102,8 @@ pub struct EngineConfig {
     pub fuzzy_input: bool,
     /// アプリごとの既定モード・素通し（`[apps]`）
     pub apps: AppsConfig,
+    /// 英語の自動判定（`input.auto_english.mode`。H-51）
+    pub auto_english: AutoEnglishMode,
 }
 
 impl Default for EngineConfig {
@@ -108,6 +125,7 @@ impl Default for EngineConfig {
             romaji_carryover: true,
             fuzzy_input: false,
             apps: AppsConfig::default(),
+            auto_english: AutoEnglishMode::default(),
         }
     }
 }
@@ -435,6 +453,30 @@ fn form_candidates(reading: &str, raw: Option<&str>) -> Vec<(String, CandidateSo
         }
     }
     out
+}
+
+/// 英語の自動判定で、打鍵列 `raw` の ASCII 候補を動かす先の位置（`items` の添字）。動かさないなら `None`。
+/// 自信が高い（High）なら先頭の次、中程度（Mid）なら主要な候補の少し後ろ（3 番目）。現在の先頭候補
+/// （最初の Space で出るもの）は変えない。`main_len` は「形式の変換」を足す前の候補数
+fn english_slot(level: nagi_english::Level, main_len: usize) -> Option<usize> {
+    let target = match level {
+        nagi_english::Level::High => 1,
+        nagi_english::Level::Mid => 3,
+        _ => return None,
+    };
+    let target = target.min(main_len);
+    (target >= 1).then_some(target)
+}
+
+/// `items` の中の表記 `raw` を `slot` へ前に動かす（すでにその位置より前なら何もしない）。
+/// 動かしたら元の位置を返す（呼び出し側が対応する並びも同じように動かせる）
+fn move_candidate_forward(items: &mut [Candidate], raw: &str, slot: usize) -> Option<usize> {
+    let pos = items.iter().position(|c| c.surface == raw)?;
+    if pos <= slot || pos == 0 {
+        return None;
+    }
+    items[slot..=pos].rotate_right(1);
+    Some(pos)
 }
 
 impl Engine {
@@ -2397,6 +2439,12 @@ impl Engine {
         // Space 変換は常に新しく変換する（古いライブ変換結果を持ち越さない。G-44）
         sess.live_conversion = None;
         if how == Start::Convert
+            && let Some(conv) = self.start_converting_english(sess)
+        {
+            sess.state = State::Converting(conv);
+            return;
+        }
+        if how == Start::Convert
             && self.config.fuzzy_input
             && let Some(conv) = self.start_converting_fuzzy(sess)
         {
@@ -2491,6 +2539,38 @@ impl Engine {
             }
         }
         sess.state = State::Converting(conv);
+    }
+
+    /// 英語の自動判定（段階 1）: ローマ字にならなかった英字が混ざる入力（`typescript` → `tyぺscりpt`
+    /// のように、日本語の文字と素通しの英字が交互に並ぶ）の全体が英語らしい（中程度以上）ときだけ、
+    /// 入力全体を 1 つの文節（表記は打った通りの読み）にして候補ウィンドウを開く。文節に割れると
+    /// 全体の ASCII を候補にできないため。ASCII の候補は上位（自信が高いとき）か主要な候補の後ろに
+    /// 置く。先頭は打った通りのままで、自動では置き換えない。判定が弱ければ `None`（通常の変換）
+    fn start_converting_english(&self, sess: &Session) -> Option<Conv> {
+        if self.config.auto_english == AutoEnglishMode::Off {
+            return None;
+        }
+        let reading = sess.composer.leftover_reading()?;
+        let raw = sess.raw_map.raw_for(0, &reading)?;
+        let level = self.backend.english_level(&raw, &reading);
+        if level < nagi_english::Level::Mid {
+            return None;
+        }
+        let mut conv = Conv {
+            segments: vec![Segment {
+                reading: reading.clone(),
+                surface: reading,
+                kind: SegmentKind::Japanese,
+                candidates: None,
+                chunk_id: 0,
+            }],
+            focus: 0,
+            visible: true,
+            range_anchor: None,
+            sentence_alternatives: None,
+        };
+        self.ensure_candidates(&sess.left_context, &sess.raw_map, &mut conv, 0);
+        Some(conv)
     }
 
     /// 曖昧入力: ローマ字の取りこぼしが混ざる入力（`kamji` の m など）で、補正の候補があれば、
@@ -2648,6 +2728,7 @@ impl Engine {
         }
         // 最後に「形式の変換」（ひらがな・カタカナ・全角英数・半角英数）を末尾に足す
         let raw = sess.raw_map.raw_for(0, reading);
+        let main_len = items.len();
         for (surface, source) in form_candidates(reading, raw.as_deref()) {
             let exists = items.iter().any(|i| i.surface == surface);
             push_candidate_with(&mut items, &surface, &[source], None);
@@ -2660,6 +2741,9 @@ impl Engine {
                     chunk_id: 0,
                 }]);
             }
+        }
+        if let Some(raw) = raw.as_deref() {
+            self.promote_english(&mut items, Some(&mut alternatives), raw, reading, main_len);
         }
         let mega = Segment {
             reading: reading.to_string(),
@@ -2712,6 +2796,33 @@ impl Engine {
         tail_chars(&s, LEFT_CONTEXT_CHARS)
     }
 
+    /// 英語の自動判定（段階 1）: 打鍵列 `raw` が英語らしいとき、その ASCII の候補を上位へ動かす。
+    /// 自動では変えない（先頭の候補は動かさない）。日本語として引ける読みは、バックエンドが
+    /// `english_level` の中で日本語を優先する。`alternatives` は `items` と添字が対応する並び
+    /// （文全体 N-best の文節列）で、同じように動かす
+    fn promote_english(
+        &self,
+        items: &mut [Candidate],
+        alternatives: Option<&mut Vec<Vec<Segment>>>,
+        raw: &str,
+        reading: &str,
+        main_len: usize,
+    ) {
+        if self.config.auto_english == AutoEnglishMode::Off {
+            return;
+        }
+        let level = self.backend.english_level(raw, reading);
+        let Some(slot) = english_slot(level, main_len) else {
+            return;
+        };
+        if let Some(pos) = move_candidate_forward(items, raw, slot)
+            && let Some(alternatives) = alternatives
+            && pos < alternatives.len()
+        {
+            alternatives[slot..=pos].rotate_right(1);
+        }
+    }
+
     /// 文節の候補一覧を（未生成なら）作る。先頭は現在の表記。
     ///
     /// - 日本語: 辞書・LLM などの候補のあと、末尾に「形式の変換」（ひらがな・カタカナ・全角英数・
@@ -2755,8 +2866,12 @@ impl Engine {
             let raw = (whole == raws.reading)
                 .then(|| raws.raw_for(offset, &seg.reading))
                 .flatten();
+            let main_len = items.len();
             for (surface, source) in form_candidates(&seg.reading, raw.as_deref()) {
                 push_candidate(&mut items, &surface, &[source]);
+            }
+            if let Some(raw) = raw.as_deref() {
+                self.promote_english(&mut items, None, raw, &seg.reading, main_len);
             }
         } else if seg.kind == SegmentKind::Literal {
             push_candidate(&mut items, &seg.surface, &[]);

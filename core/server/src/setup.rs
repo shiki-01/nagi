@@ -13,7 +13,7 @@ use nagi_dict::{Dictionary, UserDictionary};
 use nagi_engine::InitialView;
 use nagi_engine::KeyContext;
 use nagi_engine::touch::DakutenOrder;
-use nagi_engine::{AppClass, AppsConfig, EngineConfig};
+use nagi_engine::{AppClass, AppsConfig, AutoEnglishMode, EngineConfig};
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_protocol::methods::NotifyLevel;
@@ -165,6 +165,12 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
             },
             romaji_carryover: config.input.romaji_carryover,
             fuzzy_input: config.input.fuzzy.enabled,
+            auto_english: match config.input.auto_english.mode {
+                nagi_config::AutoEnglishMode::Off => AutoEnglishMode::Off,
+                nagi_config::AutoEnglishMode::Conservative => AutoEnglishMode::Conservative,
+                nagi_config::AutoEnglishMode::Standard => AutoEnglishMode::Standard,
+                nagi_config::AutoEnglishMode::Aggressive => AutoEnglishMode::Aggressive,
+            },
             apps: apps_config_from(&config.apps),
         },
         events,
@@ -339,6 +345,17 @@ pub fn load_dictionary(data_dir: &Path) -> Result<Arc<Dictionary>, String> {
     Dictionary::load(&path)
         .map(Arc::new)
         .map_err(|e| format!("辞書の読み込みに失敗しました: {e}"))
+}
+
+/// 英語の語彙（`<data_dir>/english/words.fst`）を読み込む。ファイルが無ければ `None`
+pub fn load_english_lexicon(
+    data_dir: Option<&Path>,
+) -> Option<Result<nagi_english::Lexicon, String>> {
+    let path = data_dir?.join("english").join("words.fst");
+    path.exists().then(|| {
+        nagi_english::Lexicon::load(&path)
+            .map_err(|e| format!("英語の語彙の読み込みに失敗しました: {e}"))
+    })
 }
 
 #[cfg(feature = "llama")]
@@ -589,7 +606,21 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
     }
 
     let applied_model = config.conversion.model.clone();
-    let pipeline = Arc::new(Pipeline::new(dict.clone(), model, runtime.clone()));
+    let mut pipeline = Pipeline::new(dict.clone(), model, runtime.clone());
+    // 英語の自動判定の語彙（任意。`cargo xtask fetch-english`）。無くても特徴量だけで動く
+    match load_english_lexicon(options.data_dir.as_deref()) {
+        Some(Ok(lexicon)) => {
+            notes.push(format!("英語の語彙: OK ({} words)", lexicon.len()));
+            pipeline.set_english_lexicon(Some(Arc::new(lexicon)));
+        }
+        Some(Err(e)) => notes.push(format!("{e}（英語の自動判定は特徴量のみで動作します）")),
+        None => notes.push(
+            "英語の語彙が見つかりません（英語の自動判定は特徴量のみで動作します。\
+             cargo xtask fetch-english で取得できます）"
+                .to_string(),
+        ),
+    }
+    let pipeline = Arc::new(pipeline);
     // メモリ逼迫・メモリ上限・`unload_model` でのモデルの解放と再読み込みの実行先
     let control: Arc<dyn crate::runtime::ModelControl> = pipeline.clone();
     runtime.set_model_control(Arc::downgrade(&control));
