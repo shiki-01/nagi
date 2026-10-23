@@ -11,6 +11,8 @@ final class SettingsModel: ObservableObject {
     /// エンジンに接続できない（または要求に失敗した）
     @Published private(set) var connectionFailed = false
     @Published private(set) var loaded = false
+    /// 現在の状態（プロファイルと理由・LLM の有無・学習件数など。`get_status`）。取得できなければ未接続の 1 行
+    @Published private(set) var statusLines: [String] = []
 
     private let supervisor: EngineSupervisor
     private var flushTask: Task<Void, Never>?
@@ -35,6 +37,19 @@ final class SettingsModel: ObservableObject {
                 self.connectionFailed = true
             }
             self.loaded = true
+        }
+        loadStatus()
+    }
+
+    /// 状態（`get_status`）を読み込み直す
+    private func loadStatus() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                self.statusLines = StatusMessages.statusLines(for: try await self.supervisor.getStatus())
+            } catch {
+                self.statusLines = [StatusMessages.unavailable]
+            }
         }
     }
 
@@ -122,6 +137,13 @@ struct SettingsView: View {
                 Text("設定項目がありません").foregroundColor(.secondary).padding()
             }
             Form {
+                if !model.statusLines.isEmpty {
+                    Section(header: Text("状態")) {
+                        ForEach(model.statusLines, id: \.self) { line in
+                            Text(line).textSelection(.enabled)
+                        }
+                    }
+                }
                 ForEach(model.state.groups, id: \.title) { group in
                     Section(header: Text(group.title)) {
                         ForEach(group.items, id: \.key) { item in

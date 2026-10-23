@@ -26,8 +26,8 @@ public enum StatusMessages {
         }
     }
 
-    /// 入力メニューに出す状態の行（選択不可の項目として並べる）
-    public static func menuLines(for status: StatusResult) -> [String] {
+    /// 設定ウィンドウの「状態」に出す行
+    public static func statusLines(for status: StatusResult) -> [String] {
         var lines = ["プロファイル: \(status.profile)（\(status.profile_reason)）"]
         lines.append(status.llm ? "変換: LLM + 辞書" : "変換: 辞書のみ")
         lines.append(status.learning ? "学習: 有効（\(status.learned_entries) 件）" : "学習: 無効")

@@ -176,15 +176,10 @@ final class NagiInputController: IMKInputController {
 
     // MARK: 入力メニュー
 
-    /// メニューバーの入力メニューに出る項目（状態の表示・設定・再読み込み・学習データの削除）
+    /// メニューバーの入力メニューに出る項目（設定・再読み込み・学習データの削除など）。
+    /// 状態（プロファイル・LLM の有無など）は横に長くなるので、設定ウィンドウの「状態」に置く
     override func menu() -> NSMenu! {
         let menu = NSMenu(title: "Nagi")
-        for line in statusLines() {
-            let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
         let entries: [(String, Selector)] = [
             ("設定…", #selector(openSettings(_:))),
             ("設定ファイルを再読み込み", #selector(reloadConfig(_:))),
@@ -198,16 +193,6 @@ final class NagiInputController: IMKInputController {
             menu.addItem(item)
         }
         return menu
-    }
-
-    /// メニューを開いた時点の状態（取得できなければ未接続の 1 行）
-    private func statusLines() -> [String] {
-        guard let context else { return [StatusMessages.unavailable] }
-        let supervisor = context.supervisor
-        switch SyncBridge.wait(timeout: context.keyTimeout, { try await supervisor.getStatus() }) {
-        case .success(let status): return StatusMessages.menuLines(for: status)
-        case .failure: return [StatusMessages.unavailable]
-        }
     }
 
     @objc func openSettings(_ sender: Any?) {

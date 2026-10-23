@@ -124,7 +124,7 @@ final class SupportTests: XCTestCase {
         let status = StatusResult(
             profile: "balanced", profile_reason: "既定", backend: "x", llm: false, learning: true,
             learned_entries: 3, user_dict_entries: 0, config_path: nil, config_error: true)
-        let lines = StatusMessages.menuLines(for: status)
+        let lines = StatusMessages.statusLines(for: status)
         XCTAssertEqual(lines.first, "プロファイル: balanced（既定）")
         XCTAssertTrue(lines.contains("変換: 辞書のみ"))
         XCTAssertTrue(lines.contains("学習: 有効（3 件）"))
