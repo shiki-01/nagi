@@ -84,14 +84,24 @@ final class OptionalDataInstaller: ObservableObject {
             guard let url = URL(string: source.url), url.scheme == "https" else {
                 throw OptionalDataError.badURL
             }
-            let (temp, response) = try await URLSession.shared.download(from: url)
+            // 圧縮の自動展開（Accept-Encoding の既定）を避け、配布元のバイト列そのものを受け取る
+            var request = URLRequest(url: url)
+            request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+            let (temp, response) = try await URLSession.shared.download(for: request)
             defer { try? fm.removeItem(at: temp) }
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 throw OptionalDataError.http(http.statusCode)
             }
             // 検証に通るまでは最終の場所へ置かない（壊れたデータで今あるものを置き換えない）
-            guard OptionalData.sha256Hex(of: temp) == source.sha256 else {
-                throw OptionalDataError.checksumMismatch
+            let actual = OptionalData.sha256Hex(of: temp)
+            guard actual == source.sha256 else {
+                // 原因の切り分け用に、実際のハッシュ・サイズ・応答ヘッダーを残す
+                let size = (try? fm.attributesOfItem(atPath: temp.path)[.size] as? Int) ?? 0
+                let http = response as? HTTPURLResponse
+                let type = http?.value(forHTTPHeaderField: "Content-Type") ?? "-"
+                let encoding = http?.value(forHTTPHeaderField: "Content-Encoding") ?? "-"
+                throw OptionalDataError.checksumMismatch(
+                    "実際: \((actual ?? "読めません").prefix(12))… \(size) バイト, 種別 \(type), 圧縮 \(encoding)")
             }
             try? fm.removeItem(at: archive)
             try fm.moveItem(at: temp, to: archive)
@@ -111,14 +121,14 @@ final class OptionalDataInstaller: ObservableObject {
 enum OptionalDataError: LocalizedError {
     case badURL
     case http(Int)
-    case checksumMismatch
+    case checksumMismatch(String)
     case build(String)
 
     var errorDescription: String? {
         switch self {
         case .badURL: return "取得元の URL が不正です"
         case .http(let code): return "配布元がエラーを返しました（HTTP \(code)）"
-        case .checksumMismatch: return "SHA-256 が一致しません（配布元のファイルが変わった可能性があります）"
+        case .checksumMismatch(let detail): return "SHA-256 が一致しません（\(detail)）"
         case .build(let reason): return "索引を組み立てられません（\(reason)）"
         }
     }
