@@ -35,8 +35,8 @@
 | `input.toggle_input` | トグル入力（同じキーの連続タップで次の文字） | bool | false | S | kbd+core | 既存(iOS) | 現状 `KeyboardModel` のコンストラクタ引数 `toggleInput`。タップを `toggle` ジェスチャでコアへ送る。false のときタップは先頭の文字 |
 | `input.toggle_timeout_ms` | トグル確定までの時間 | int 200–3000, step 50 | 1000 | D | kbd+core | iOS 側で完結（既存(iOS)） | コアには時間の概念が無く、キーボード拡張が判定する。設定画面には未登録で、`ios-settings.json` に値があればそれを使う（無ければ 1000ms。`IOSSettings.swift`）。コアの項目にはしない |
 | `input.compose_numbers` | 数字・記号のキーも入力中の文字列（コアの composing）に入れる | bool | true | D | kbd | 実装済み(iOS)・実機未確認（H-53） | かなから数字・記号のレイアウトへ切り替えた状態、または入力中のときだけ、`insert_reading` でコアへ送る（Literal。Space で電卓・全角・記号の候補）。何も選ばず確定すれば半角のまま。英字のレイアウトは対象外（直接入力）。パスワード欄は常に直接入力。false なら従来どおり直接入力。iOS 側で完結し、コアの設定にはしない |
-| `input.keep_preedit_on_symbols` | かな ⇄ 数字・記号の切替で入力中の文字列を保つ | bool | true | D | kbd | 実装済み(iOS)・実機未確認（H-56） | オフなら切替時に確定（従来）。`input.compose_numbers` がオフのときも確定（切替先で続けられないため）。パスワード欄は常に確定。`1+2` のような式を分断しない |
-| `input.keep_preedit_on_english` | かな ⇄ 英字の切替で入力中の文字列を保つ | bool | false | D | kbd | 実装済み(iOS)・実機未確認（H-56） | オンなら切替時に確定せず、英字のキー（Shift 含む）もコアへ送って同じ composing に続ける（Literal）。入力中の文字列が無いときは従来どおり直接入力。パスワード欄は常に従来動作 |
+| `input.keep_preedit_on_symbols` | かな ⇄ 数字・記号の切替で入力中の文字列を保つ | bool | true | D | kbd | 実装済み(iOS)・実機未確認（H-57） | オフなら切替時に確定（従来）。`input.compose_numbers` がオフのときも確定（切替先で続けられないため）。パスワード欄は常に確定。`1+2` のような式を分断しない |
+| `input.keep_preedit_on_english` | かな ⇄ 英字の切替で入力中の文字列を保つ | bool | false | D | kbd | 実装済み(iOS)・実機未確認（H-57） | オンなら切替時に確定せず、英字のキー（Shift 含む）もコアへ送って同じ composing に続ける（Literal）。入力中の文字列が無いときは従来どおり直接入力。パスワード欄は常に従来動作 |
 | `input.dakuten_cycle` | 濁点・小書き循環キーの順序 | choice: `small_first`（つ→っ→づ）/ `dakuten_first`（つ→づ→っ） | `small_first` | D | core:input.dakuten_cycle | 既存(GUI)（platforms=ios） | 従来の固定表の動作を既定にするため既定値と名前を変更（違いは「つ」「う」のみ）。`get_key_table` の `variants` にも反映 |
 | `input.dakuten_key_enabled` | 濁点キーを出す | bool | true | D | kbd | 新規(iOS) | OFF にすると、濁点はフリック・長押しのみ |
 | `input.shift_letter` | Shift + 英字の動作 | choice: `literal_continue` / `single_upper` | `literal_continue` | D | core:input.shift_letter | 既存(GUI) | QWERTY のみ有効 |
