@@ -246,3 +246,51 @@ fn selecting_the_loanword_candidate_commits_the_spelling() {
         nagi_engine::StateKind::Direct
     );
 }
+
+// ---- 記号の読み（H-60） ----
+
+fn symbol_backend() -> Arc<dyn ConversionBackend> {
+    Arc::new(
+        MockBackend::new()
+            .with_rewriter()
+            .with_segments("かっこ", vec!["括弧", "格好"])
+            .with_segments("かっこいい", vec!["格好いい"]),
+    )
+}
+
+#[test]
+fn symbol_reading_shows_brackets_right_after_the_best_conversion() {
+    for partial in [false, true] {
+        let mut e = engine(symbol_backend(), partial, 120);
+        type_kana(&mut e, "かっ");
+        let items = suggestions(&mut e);
+        assert!(items.iter().all(|i| i.surface != "「」"), "{items:?}");
+        type_kana(&mut e, "こ");
+        let items = suggestions(&mut e);
+        let all: Vec<&str> = items.iter().map(|i| i.surface.as_str()).collect();
+        assert_eq!(all[1], "「」", "{all:?}");
+        assert_eq!(all[2], "『』", "{all:?}");
+        assert!(all.contains(&"括弧") && all.contains(&"格好"), "{all:?}");
+        assert_eq!(items[1].sources, [CandidateSource::Rewriter]);
+        assert_eq!(items[1].covers, None, "読み全体を置き換える");
+    }
+}
+
+#[test]
+fn symbol_prefix_is_limited_and_only_for_declared_clients() {
+    let word = "かっこいい";
+    let mut e = engine(symbol_backend(), true, 120);
+    type_kana(&mut e, word);
+    let items = suggestions(&mut e);
+    let prefix: Vec<&str> = items
+        .iter()
+        .filter(|i| i.covers == Some(3) && i.sources == [CandidateSource::Rewriter])
+        .map(|i| i.surface.as_str())
+        .collect();
+    assert_eq!(prefix, ["「」", "『』", "（）"], "{items:?}");
+    assert!(items.iter().any(|i| i.surface == "格好いい"));
+    let mut e = engine(symbol_backend(), false, 120);
+    type_kana(&mut e, word);
+    let items = suggestions(&mut e);
+    assert!(items.iter().all(|i| i.covers.is_none()), "{items:?}");
+}

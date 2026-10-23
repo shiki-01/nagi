@@ -342,6 +342,12 @@ struct ComposingCands {
 /// 入力中の候補の最大件数
 const COMPOSING_CANDIDATES_LIMIT: usize = 12;
 
+/// 読み全体が記号の読みに一致したときに入力中の候補へ足す記号の最大件数（H-60）
+const SYMBOL_WHOLE_LIMIT: usize = 16;
+
+/// 読みの接頭辞が記号の読みに一致したときに足す記号の最大件数（H-60）
+const SYMBOL_PREFIX_LIMIT: usize = 3;
+
 /// 読みの接頭辞 1 つあたりの候補の最大件数（長さ 2 以上。H-58）。長い接頭辞は、辞書が文の途中の
 /// 切り方違いの似た候補を並べるので少なく、短いほど語として意味のある候補が増える
 fn prefix_candidates_limit(len: usize) -> usize {
@@ -1085,6 +1091,7 @@ impl Engine {
                 self.insert_english_item(&mut items, raw, japanese, reading.chars().count());
             }
             self.insert_loanword_items(&mut items, reading);
+            self.insert_symbol_items(&mut items, reading);
             if self.partial_suggestions {
                 self.append_prefix_items(&mut items, sess, reading);
             }
@@ -1186,6 +1193,51 @@ impl Engine {
         }
     }
 
+    /// 読み全体が記号の読みに一致するとき（`かっこ` → `「」` `『』` …）、その記号を読み全体の候補の
+    /// 先頭（最良の変換）の直後に足す。辞書の通常候補（括弧・格好）より後ろ・他の通常候補より前。
+    /// すでにある同じ表記は前へ動かして出所を併記する（H-60）
+    fn insert_symbol_items(&self, items: &mut Vec<ComposingItem>, reading: &str) {
+        let total = reading.chars().count();
+        let symbols = self.backend.symbol_candidates(reading);
+        if symbols.is_empty() {
+            return;
+        }
+        let mut pos = items
+            .iter()
+            .position(|i| i.covers == total)
+            .map_or(0, |p| p + 1);
+        for surface in symbols.into_iter().take(SYMBOL_WHOLE_LIMIT) {
+            if surface == reading {
+                continue;
+            }
+            if let Some(at) = items
+                .iter()
+                .position(|i| i.surface == surface && i.covers == total)
+            {
+                let mut item = items.remove(at);
+                if !item.sources.contains(&CandidateSource::Rewriter) {
+                    item.sources.push(CandidateSource::Rewriter);
+                }
+                pos = pos.min(items.len());
+                if at < pos {
+                    pos -= 1;
+                }
+                items.insert(pos, item);
+            } else {
+                items.insert(
+                    pos,
+                    ComposingItem {
+                        surface,
+                        covers: total,
+                        sources: vec![CandidateSource::Rewriter],
+                        reading: None,
+                    },
+                );
+            }
+            pos += 1;
+        }
+    }
+
     /// 読みの接頭辞だけを置き換える候補を、読み全体の候補の後ろに足す（H-58。フロントが
     /// `partial_suggestions` を宣言したときだけ）。読みの末尾を 1 文字ずつ削り（長い順 len-1 … 2）、
     /// それぞれの辞書候補を並べ、最後に 1 文字の読みの候補（漢字）を置く。LLM は使わない
@@ -1202,16 +1254,48 @@ impl Engine {
         }
         let max = self.config.suggest_max.max(items.len());
         let left = tail_chars(&sess.left_context, LEFT_CONTEXT_CHARS);
-        let candidates_of = |len: usize, limit: usize| -> Vec<(String, Vec<CandidateSource>)> {
-            let prefix: String = chars[..len].iter().collect();
-            self.backend
-                .prefix_candidates(&prefix, &left, limit)
-                .into_iter()
-                // ひらがな・カタカナだけの形式の候補は、読み全体のものだけで足りる
-                .filter(|c| c.surface != prefix && c.sources != [CandidateSource::Kana])
-                .map(|c| (c.surface, c.sources))
-                .collect()
-        };
+        // 接頭辞の候補（辞書など）の先頭の次に、その接頭辞が記号の読みなら記号を最大
+        // `SYMBOL_PREFIX_LIMIT` 件挟む（H-60）。第 2 要素は挟んだ記号の件数
+        let candidates_of =
+            |len: usize, limit: usize| -> (Vec<(String, Vec<CandidateSource>)>, usize) {
+                let prefix: String = chars[..len].iter().collect();
+                let mut found: Vec<(String, Vec<CandidateSource>)> = self
+                    .backend
+                    .prefix_candidates(&prefix, &left, limit)
+                    .into_iter()
+                    // ひらがな・カタカナだけの形式の候補は、読み全体のものだけで足りる
+                    .filter(|c| c.surface != prefix && c.sources != [CandidateSource::Kana])
+                    .map(|c| (c.surface, c.sources))
+                    .collect();
+                let mut inserted = 0;
+                if len >= 2 {
+                    for surface in self
+                        .backend
+                        .symbol_candidates(&prefix)
+                        .into_iter()
+                        .filter(|s| *s != prefix)
+                        .take(SYMBOL_PREFIX_LIMIT)
+                    {
+                        let sources = vec![CandidateSource::Rewriter];
+                        match found.iter().position(|(s, _)| *s == surface) {
+                            Some(at) => {
+                                let mut entry = found.remove(at);
+                                if !entry.1.contains(&CandidateSource::Rewriter) {
+                                    entry.1.push(CandidateSource::Rewriter);
+                                }
+                                let to = (1 + inserted).min(found.len());
+                                found.insert(to, entry);
+                            }
+                            None => {
+                                let to = (1 + inserted).min(found.len());
+                                found.insert(to, (surface, sources));
+                            }
+                        }
+                        inserted += 1;
+                    }
+                }
+                (found, inserted)
+            };
         let add = |items: &mut Vec<ComposingItem>,
                    len: usize,
                    found: Vec<(String, Vec<CandidateSource>)>,
@@ -1236,7 +1320,7 @@ impl Engine {
                 added += 1;
             }
         };
-        let tail = candidates_of(1, PREFIX_TAIL_LIMIT);
+        let (tail, _) = candidates_of(1, PREFIX_TAIL_LIMIT);
         let reserved = tail.len().min(PREFIX_TAIL_LIMIT);
         for len in (2..total).rev() {
             let room = max.saturating_sub(items.len() + reserved);
@@ -1244,8 +1328,8 @@ impl Engine {
                 break;
             }
             let limit = prefix_candidates_limit(len);
-            let found = candidates_of(len, limit);
-            add(items, len, found, room.min(limit));
+            let (found, symbols) = candidates_of(len, limit);
+            add(items, len, found, room.min(limit + symbols));
         }
         let room = max.saturating_sub(items.len());
         add(items, 1, tail, room);

@@ -1041,6 +1041,11 @@ impl ConversionBackend for Pipeline {
         self.segment_candidates_inner(reading, left_context, limit, true)
     }
 
+    fn symbol_candidates(&self, reading: &str) -> Vec<String> {
+        self.rewriter
+            .candidates_of(nagi_rewriter::SYMBOL_REWRITER_ID, reading)
+    }
+
     fn loanword_candidates(&self, surfaces: &[&str], reading: &str) -> Vec<String> {
         if !self.runtime.effective().loanword {
             return Vec::new();

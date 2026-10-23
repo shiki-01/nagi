@@ -435,6 +435,15 @@ impl RewriterChain {
             .collect()
     }
 
+    /// 識別子 `id` の Rewriter だけの候補（登録が無ければ空）
+    pub fn candidates_of(&self, id: &str, reading: &str) -> Vec<String> {
+        self.rewriters
+            .iter()
+            .filter(|r| r.id() == id)
+            .flat_map(|r| r.rewrite(reading))
+            .collect()
+    }
+
     /// Literal（数字・英字・記号の入力）用の候補。全角/半角の「形式の変換」（[`ZenkakuAlnum`] /
     /// [`HankakuAlnum`]）は末尾に回し、それ以外（電卓・日付・漢数字・記号の装飾など）を先に並べる。
     /// `excluded` は [`Self::candidates_excluding`] と同じ

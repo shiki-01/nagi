@@ -107,6 +107,14 @@ pub trait ConversionBackend: Send + Sync {
         Vec::new()
     }
 
+    /// 読み `reading` 全体が記号の読み（`かっこ` → `「」` `『』` …）に一致するときの記号の候補
+    /// （良い順、重複なし）。入力中の候補（サジェスト）で、辞書の候補の近くに目立たせるために使う。
+    /// 一致しない・非対応なら空（既定実装は非対応）
+    fn symbol_candidates(&self, reading: &str) -> Vec<String> {
+        let _ = reading;
+        Vec::new()
+    }
+
     /// 打鍵列 `raw`（小文字のローマ字）が英語である確からしさの段階（英語の自動判定。
     /// `docs/plan-auto-english.md`）。`reading` は同じ打鍵列を日本語として読んだかな（辞書で単語として
     /// 引けるなら日本語を優先するために使う）。既定実装は英語の語彙を持たない特徴量だけの判定
@@ -294,6 +302,15 @@ impl MockBackend {
 impl ConversionBackend for MockBackend {
     fn name(&self) -> &str {
         "mock"
+    }
+
+    fn symbol_candidates(&self, reading: &str) -> Vec<String> {
+        if self.rewriter {
+            nagi_rewriter::RewriterChain::default_chain()
+                .candidates_of(nagi_rewriter::SYMBOL_REWRITER_ID, reading)
+        } else {
+            Vec::new()
+        }
     }
 
     fn loanword_candidates(&self, surfaces: &[&str], reading: &str) -> Vec<String> {
