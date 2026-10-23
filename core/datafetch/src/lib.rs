@@ -12,7 +12,10 @@ pub mod http;
 pub mod model;
 pub mod mozc;
 
-pub use english::{SCOWL_FILE, build_english_lexicon, fetch_english, fetch_english_with};
+pub use english::{
+    LEXICON_FILE, SCOWL_FILE, build_english_lexicon, fetch_english, fetch_english_with,
+    install_english,
+};
 pub use http::{Body, Http, UreqHttp};
 pub use model::{ModelInfo, ModelKind, fetch_model, fetch_model_with};
 pub use mozc::{

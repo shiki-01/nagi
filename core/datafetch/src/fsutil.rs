@@ -92,3 +92,61 @@ pub(crate) fn download_verified(
     commit(&temp, dest)?;
     Ok((bytes, actual))
 }
+
+/// 固定（ピン留め）した取得元。`file` は保存先ディレクトリ内のファイル名
+pub(crate) struct Source<'a> {
+    pub file: &'a str,
+    pub url: &'a str,
+    pub sha256: &'a str,
+}
+
+/// `src` を `dest_dir` へ取得する。SHA-256 が一致する既存ファイルはスキップする。
+/// 実際にダウンロードしたとき `true`、スキップしたとき `false`
+pub(crate) fn fetch_pinned(
+    http: &dyn crate::http::Http,
+    dest_dir: &Path,
+    src: &Source<'_>,
+    progress: &mut dyn FnMut(crate::Progress),
+) -> Result<bool, String> {
+    use crate::Progress;
+
+    fs::create_dir_all(dest_dir)
+        .map_err(|e| format!("ディレクトリ作成失敗 {}: {}", dest_dir.display(), e))?;
+    let dest = dest_dir.join(src.file);
+    let file = src.file.to_string();
+    if sha256_file(&dest).as_deref() == Some(src.sha256) {
+        progress(Progress::Skipped {
+            file,
+            index: 1,
+            count: 1,
+        });
+        return Ok(false);
+    }
+    progress(Progress::Download {
+        file: file.clone(),
+        index: 1,
+        count: 1,
+        url: src.url.to_string(),
+        size: None,
+    });
+    let (bytes, sha256) = download_verified(
+        http,
+        src.url,
+        &dest,
+        src.sha256,
+        &file,
+        &mut |done, total| {
+            progress(Progress::Bytes {
+                file: file.clone(),
+                done,
+                total,
+            })
+        },
+    )?;
+    progress(Progress::Verified {
+        file,
+        bytes,
+        sha256,
+    });
+    Ok(true)
+}

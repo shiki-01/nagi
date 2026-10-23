@@ -5,7 +5,7 @@
 //! 頻度は SCOWL の「サイズ」（10 が最も一般的、70 までで約 10 万語規模）を段階として使う。
 
 use crate::Progress;
-use crate::fsutil::{commit, download_verified, sha256_file, temp_path};
+use crate::fsutil::{Source, commit, fetch_pinned, temp_path};
 use crate::http::{Http, UreqHttp};
 use flate2::read::GzDecoder;
 use nagi_english::LexiconBuilder;
@@ -19,6 +19,11 @@ pub const SCOWL_FILE: &str = "scowl-2020.12.07.tar.gz";
 const SCOWL_URL: &str =
     "https://downloads.sourceforge.net/project/wordlist/SCOWL/2020.12.07/scowl-2020.12.07.tar.gz";
 const SCOWL_SHA256: &str = "5587667caa20c4891390c2d42dbb4d5c4c3f41bee77af1457ece3ba23fb859cc";
+const SCOWL: Source<'static> = Source {
+    file: SCOWL_FILE,
+    url: SCOWL_URL,
+    sha256: SCOWL_SHA256,
+};
 
 /// 取り込むサイズ（段階）。95 などの大きいサイズは珍語・固有名詞が増えて日本語との衝突が増えるので使わない
 const LEVELS: [u8; 8] = [10, 20, 35, 40, 50, 55, 60, 70];
@@ -43,45 +48,35 @@ pub fn fetch_english_with(
     dest_dir: &Path,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<(), String> {
-    fs::create_dir_all(dest_dir)
-        .map_err(|e| format!("ディレクトリ作成失敗 {}: {}", dest_dir.display(), e))?;
-    let dest = dest_dir.join(SCOWL_FILE);
-    let file = SCOWL_FILE.to_string();
-    if sha256_file(&dest).as_deref() == Some(SCOWL_SHA256) {
-        progress(Progress::Skipped {
-            file,
-            index: 1,
-            count: 1,
-        });
-        return Ok(());
+    fetch_pinned(http, dest_dir, &SCOWL, progress).map(|_| ())
+}
+
+/// 語彙ファイル名（`<dest_dir>/` 下）
+pub const LEXICON_FILE: &str = "words.fst";
+
+/// 取得（スキップ可）と索引の組み立てまでを行う（`imserver --install-data` 用）。
+/// 取得済みで SHA-256 が一致し、索引もあるときは何もしない。何かを行ったとき `true`
+pub fn install_english(
+    dest_dir: &Path,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<bool, String> {
+    install_english_from(&UreqHttp, &SCOWL, dest_dir, progress)
+}
+
+fn install_english_from(
+    http: &dyn Http,
+    src: &Source<'_>,
+    dest_dir: &Path,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<bool, String> {
+    let downloaded = fetch_pinned(http, dest_dir, src, progress)?;
+    let lexicon = dest_dir.join(LEXICON_FILE);
+    if downloaded || !lexicon.is_file() {
+        build_english_lexicon(&dest_dir.join(src.file), &lexicon, progress)?;
+        Ok(true)
+    } else {
+        Ok(false)
     }
-    progress(Progress::Download {
-        file: file.clone(),
-        index: 1,
-        count: 1,
-        url: SCOWL_URL.to_string(),
-        size: None,
-    });
-    let (bytes, sha256) = download_verified(
-        http,
-        SCOWL_URL,
-        &dest,
-        SCOWL_SHA256,
-        &file,
-        &mut |done, total| {
-            progress(Progress::Bytes {
-                file: file.clone(),
-                done,
-                total,
-            })
-        },
-    )?;
-    progress(Progress::Verified {
-        file,
-        bytes,
-        sha256,
-    });
-    Ok(())
 }
 
 /// 取得済みのアーカイブ（`archive`）から語彙の fst 索引を組み立て、`out_path` へ書く。
@@ -300,6 +295,63 @@ mod tests {
         let err = fetch_english_with(&FakeHttp(b"dummy".to_vec()), &dir, &mut |_| {}).unwrap_err();
         assert!(err.contains("SHA-256 が不一致"), "{err}");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn sha_hex(data: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(data))
+    }
+
+    #[test]
+    fn install_builds_then_skips_when_already_installed() {
+        let dir = std::env::temp_dir().join(format!("nagi-datafetch-en3-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let archive = gz(&tar_of(&[(
+            "scowl/final/english-words.10",
+            b"the\nhello\n",
+        )]));
+        let sha = sha_hex(&archive);
+        let src = Source {
+            file: "fake.tar.gz",
+            url: "https://example.invalid/fake.tar.gz",
+            sha256: &sha,
+        };
+        let http = FakeHttp(archive);
+
+        let mut events = Vec::new();
+        let changed = install_english_from(&http, &src, &dir, &mut |p| events.push(p)).unwrap();
+        assert!(changed);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Progress::Download { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Progress::BuildDone { .. }))
+        );
+        let lex = nagi_english::Lexicon::load(&dir.join(LEXICON_FILE)).unwrap();
+        assert_eq!(lex.tier("hello"), Some(10));
+
+        // 2 回目: SHA-256 一致・索引ありなので取得も組み立てもしない
+        let mut events = Vec::new();
+        let changed = install_english_from(&http, &src, &dir, &mut |p| events.push(p)).unwrap();
+        assert!(!changed);
+        assert!(matches!(events.as_slice(), [Progress::Skipped { .. }]));
+
+        // 索引だけ消えていれば、取得はせず索引だけ組み立て直す
+        fs::remove_file(dir.join(LEXICON_FILE)).unwrap();
+        let mut events = Vec::new();
+        let changed = install_english_from(&http, &src, &dir, &mut |p| events.push(p)).unwrap();
+        assert!(changed);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Progress::Download { .. }))
+        );
+        assert!(dir.join(LEXICON_FILE).is_file());
         let _ = fs::remove_dir_all(&dir);
     }
 

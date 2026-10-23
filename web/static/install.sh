@@ -6,12 +6,12 @@
 # SHA-256 と署名・公証で確かめてから ~/Library/Input Methods に置き、入力ソースに登録する。
 # 管理者権限は使わない。入力内容や個人情報は送らない（取得するのは latest.json と zip だけ）。
 #
-# 続けて、辞書（Mozc）と変換モデル（zenz）を配布元から取得し、この Mac の中で辞書を組み立てる
+# 続けて、辞書（Mozc）・変換モデル（zenz）・英語の語彙（SCOWL）を配布元から取得し、この Mac の中で索引を組み立てる
 # （同梱の imserver --install-data。取得済みで SHA-256 が一致するものは飛ばす）。
 #
 # 環境変数:
 #   NAGI_MANIFEST_URL  latest.json の URL（既定: https://nagi.shiki-01.com/updates/macos/latest.json）
-#   NAGI_SKIP_DATA     1 なら辞書とモデルを取得しない
+#   NAGI_SKIP_DATA     1 なら辞書・モデル・語彙を取得しない
 set -eu
 
 MANIFEST_URL="${NAGI_MANIFEST_URL:-https://nagi.shiki-01.com/updates/macos/latest.json}"
@@ -74,11 +74,11 @@ data_ok=0
 if [ "${NAGI_SKIP_DATA:-0}" = "1" ]; then
   say "辞書とモデルの取得を飛ばしました（NAGI_SKIP_DATA=1）"
 else
-  say "辞書とモデルを取得しています（約 150MB。取得済みのものは飛ばします）"
+  say "辞書・モデル・英語の語彙を取得しています（約 200MB。取得済みのものは飛ばします）"
   # 標準出力は進捗の JSON（アプリ向け）なので捨て、標準エラーの人向けのログだけを表示する
   if "$APP/Contents/MacOS/imserver" --install-data --data-dir "$DATA_DIR" --model small >/dev/null; then
     data_ok=1
-    say "辞書とモデルを入れました: $DATA_DIR"
+    say "辞書・モデル・語彙を入れました: $DATA_DIR"
     # 辞書なしで起動済みのエンジンに読み込ませるため、動いていれば止める（次に使うとき OS が起動し直す）
     pkill -x NagiIMEApp >/dev/null 2>&1 || true
   else

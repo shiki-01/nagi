@@ -21,6 +21,10 @@ final class DataInstallSupportTests: XCTestCase {
             DataInstallProgress.parse(#"{"stage":"error","message":"x"}"#), .error("x"))
         XCTAssertNil(DataInstallProgress.parse("ログの行"))
         XCTAssertNil(DataInstallProgress.parse(#"{"stage":"unknown"}"#))
+        // 英語の語彙・外来語の索引の段階は、アプリ側の表示対象外（未知の種別として無視する）
+        XCTAssertNil(DataInstallProgress.parse(#"{"stage":"english_fetch","bytes":10,"total":40}"#))
+        XCTAssertNil(DataInstallProgress.parse(#"{"stage":"english_build"}"#))
+        XCTAssertNil(DataInstallProgress.parse(#"{"stage":"loanword_fetch","skipped":true}"#))
     }
 
     func testSkippedStepsAreSummarizedAtTheEnd() {
