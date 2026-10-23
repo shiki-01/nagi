@@ -14,8 +14,9 @@ name: windows-release
 #
 # リリース手順:
 #   1. core/Cargo.toml の [workspace.package] version を上げて main にコミットする
-#   2. gh workflow run windows-release.yml --ref main -f version=X.Y.Z
-#      （version が core/Cargo.toml と一致しなければ失敗する。タグ windows-vX.Y.Z はこのワークフローが作る）
+#   2. gh workflow run windows-release.yml --ref main
+#      （リリースするバージョンは core/Cargo.toml の version から自動で決める。入力は不要。
+#       タグ windows-vX.Y.Z はこのワークフローが作る）
 #   実機で未検証の間は prerelease（既定）にしておく。prerelease は web ワークフローの latest.json の取り込み対象外なので、
 #   サイトの更新確認・インストールコマンドには出ない。実機で確認できたら -f prerelease=false で公開する。
 #   公開せずビルドだけ試すときは -f publish=false（成果物は Actions の artifact に残る）。
@@ -23,9 +24,6 @@ name: windows-release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "リリースするバージョン（X.Y.Z。core/Cargo.toml の version と一致させる）"
-        required: true
       llama:
         description: "imserver を LLM（llama.cpp）有効でビルドする"
         type: boolean
@@ -52,7 +50,6 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     env:
-      VERSION: ${{ inputs.version }}
       TARGET: x86_64-pc-windows-msvc
     defaults:
       run:
@@ -60,17 +57,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: バージョンの確認
+      - name: バージョンの決定（core/Cargo.toml の version から）
         working-directory: core
         run: |
-          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::version は X.Y.Z 形式で指定してください: $VERSION"; exit 1; }
-          crate_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "xtask") | .version' | tr -d '\r')
-          if [ "$crate_version" != "$VERSION" ]; then
-            echo "::error::入力の version ($VERSION) と core/Cargo.toml の version ($crate_version) が一致しません"
-            exit 1
-          fi
-          if gh release view "windows-v$VERSION" >/dev/null 2>&1; then
-            echo "::error::リリース windows-v$VERSION は作成済みです"
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "xtask") | .version' | tr -d '\r')
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::core/Cargo.toml の version が X.Y.Z 形式ではありません: $VERSION"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "::notice::リリースするバージョン: $VERSION"
+          if [ "${{ inputs.publish }}" = "true" ] && gh release view "windows-v$VERSION" >/dev/null 2>&1; then
+            echo "::error::リリース windows-v$VERSION は作成済みです。core/Cargo.toml の version を上げてください"
             exit 1
           fi
         env:
@@ -187,9 +182,9 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nagi-windows-${{ inputs.version }}
+          name: nagi-windows-${{ env.VERSION }}
           path: |
-            Nagi-windows-${{ inputs.version }}.zip
+            Nagi-windows-${{ env.VERSION }}.zip
             latest.json
 
       - name: GitHub Releases に公開

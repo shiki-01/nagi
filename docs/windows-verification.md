@@ -105,14 +105,14 @@ cargo xtask bundle-windows --target x86_64-pc-windows-msvc
 
 ### 段階 B: CI（`windows-release.yml`）（8.7 の最初の項目）
 
-`windows-release.yml` は `workflow_dispatch` のみです（`ci.yml` も手動実行のみ）。実行する版は `main` の最新コミットで、`core/Cargo.toml` の `[workspace.package] version` と入力 `version` が一致しないと失敗します。変更はあらかじめ `main` に push してください。
+`windows-release.yml` は `workflow_dispatch` のみです（`ci.yml` も手動実行のみ）。実行する版は `main` の最新コミットで、リリースするバージョンは `core/Cargo.toml` の `[workspace.package] version` から自動で決まります（入力は不要）。変更はあらかじめ `main` に push してください。
 
-入力（`windows-release.yml` から確認済み）: `version`（必須、`X.Y.Z`）/ `llama`（既定 true）/ `publish`（既定 true）/ `prerelease`（既定 true）。
+入力（`windows-release.yml` から確認済み）: `llama`（既定 true）/ `publish`（既定 true）/ `prerelease`（既定 true）。
 
 公開せずにビルドだけ確認する場合:
 
 ```powershell
-gh workflow run windows-release.yml --ref main -f version=X.Y.Z -f publish=false
+gh workflow run windows-release.yml --ref main -f publish=false
 gh run list --workflow windows-release.yml --limit 1
 gh run watch <run-id>
 gh run download <run-id> -n nagi-windows-X.Y.Z -D <保存先ディレクトリ>
@@ -131,13 +131,13 @@ artifact 名は `nagi-windows-X.Y.Z`、中身は `Nagi-windows-X.Y.Z.zip` と `l
 失敗時の切り分け:
 
 - llama のステップだけ失敗 → `-f llama=false` で再実行し、辞書のみのビルドが通るか確認する（これは暫定の逃げ道。llama 有りでの再現手順を記録）。
-- バージョン不一致 → `core/Cargo.toml` の version を確認。
+- バージョンは `core/Cargo.toml` から自動で決まる。意図した値か、ジョブ冒頭の notice（「リリースするバージョン」）で確認。
 - 「リリース windows-vX.Y.Z は作成済みです」→ `publish=false` でも `gh release view` で作成済みを検査するため、未公開の version を使うか既存リリースを削除（削除は呼び出し元の判断）。
 
 公開して検証する場合（実機で未検証の間は prerelease の既定のまま）:
 
 ```powershell
-gh workflow run windows-release.yml --ref main -f version=X.Y.Z
+gh workflow run windows-release.yml --ref main
 ```
 
 `prerelease=true` の間は `web.yml` が `latest.json` を取り込まないため、サイトの `irm | iex` は 404 になります（想定どおり）。
