@@ -286,7 +286,7 @@ Get-Content .\web\static\install.ps1 -Raw | Invoke-Expression
 
 #### E-5 言語バー・モード（8.4・8.5b・8.5c）
 
-- [ ] タスクトレイの表示が「あ / A」で切り替わる。
+- [ ] タスクトレイの表示が「あ / A」で切り替わる。出ない場合は下記「デバッグの方法 > ログ」の tsf.log とチェックリスト §8.5d を見る。
 - [ ] 英数キー・半角/全角キー・トレイのクリックの往復でモードが反転し続けない。入力中の文字列が意図せず確定されない。
 - [ ] 英数 = IME 閉のとき、アプリ側が IME オフ扱いで困らない。Activate 直後・エンジン再起動後に OS とコアのモードが揃う。
 - [ ] 従来の言語バー（設定の「言語バー」を有効にした環境、またはデスクトップ言語バー）に「あ / A」のボタンが出る。ホスト切り替えや Deactivate でボタンが残らない。トレイの「あ / A」と二重に出ないか。
@@ -350,12 +350,14 @@ Stop-Process -Name imserver -Force
 #### ログ
 
 - `imserver` のログは **stderr のみ**で、入力内容は出力しません（`core/server/src/main.rs`）。プロファイルの判定理由などが起動時に出ます。
-- TSF の DLL から起動された `imserver` の stderr は親（ホストアプリ）から継承する設計（`frontend-windows/src/process.rs`）です。GUI アプリでは標準エラーが見えないため、**ホスト経由ではログを取れない可能性が高い**（要確認）。DLL 側のログ出力（`OutputDebugString` 等）は、確認した範囲では見当たりません（要確認。ソースの網羅的な検索はしていません）。
+- TSF の DLL から起動された `imserver` の stderr は親（ホストアプリ）から継承する設計（`frontend-windows/src/process.rs`）です。GUI アプリでは標準エラーが見えないため、**ホスト経由ではログを取れない可能性が高い**（要確認）。DLL 側のログは下記の tsf.log に出ます（`OutputDebugString` は使っていません）。
 - そのため不具合の再現は、可能なものから順に次のいずれかで行います。
   1. 下記「imserver を単体で動かす」で、エンジン単体の問題か切り分ける。
   2. エンジンが起動しているか（`Get-Process imserver`）、DLL が読み込まれているか（`tasklist /m nagi_windows_tsf.dll`）を見る。
   3. Sysinternals の Process Monitor（`imserver.exe` / `nagi_windows_tsf.dll` のレジストリ・ファイルアクセス）、Process Explorer（DLL の読み込み先）、DebugView（`OutputDebugString` があれば。無い場合は何も出ない）を使う。
-- 「ログを残す機能が足りない」場合は検証結果として報告してください（実装はこの文書の範囲外）。
+- **tsf.log（フロントの診断ログ。H-54）**: `%LOCALAPPDATA%\Nagi\logs\tsf.log`（256KB を超えると `tsf.log.1` へ 1 世代回る）。ホストプロセスごとに `pid=` 付きで追記される。入力内容（キー・テキスト・preedit）は書かない。記録するのは、DLL の Activate / Deactivate、エンジンの場所（`exe=… exists=…`）、起動の成否と失敗理由（`launch failed: spawn failed` / `initialize timeout` / `initialize failed` / `start failed: connection closed (engine exited)`）、クラッシュと再起動、minimal への切り替え、言語バーの登録結果（HRESULT）。書けない環境では黙って記録しない。
+- **トレイのアイコンが出ない場合**: まず tsf.log を見る。`[tsf] Activate` が無い → DLL が読み込まれていない。`[langbar] AddItem failed hr=…` → その HRESULT を報告。`AddItem ok` なのに出ない → チェックリスト §8.5d の 3〜4（TIPCAP の再登録・サインアウト・入力インジケーターの設定）。エンジンの起動失敗とは独立（エンジンが無くてもアイコンは出る想定）。
+- 「ログを残す機能が足りない」場合は検証結果として報告してください。
 
 #### imserver を単体で動かして JSON-RPC を確認する
 

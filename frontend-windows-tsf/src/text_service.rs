@@ -82,10 +82,18 @@ fn engine_location() -> EngineLocation {
 fn shared_engine() -> Arc<EngineHost> {
     ENGINE
         .get_or_init(|| {
-            let host = Arc::new(EngineHost::new(
-                &engine_location(),
-                env!("CARGO_PKG_VERSION"),
-            ));
+            let location = engine_location();
+            crate::tsf_log::log(
+                "engine",
+                &format!(
+                    "location exe={} exists={} data_dir={} exists={}",
+                    location.executable.display(),
+                    location.executable.exists(),
+                    location.data_dir.display(),
+                    location.data_dir.exists()
+                ),
+            );
+            let host = Arc::new(EngineHost::new(&location, env!("CARGO_PKG_VERSION")));
             host.start_in_background();
             host
         })
@@ -98,6 +106,17 @@ fn environment() -> &'static Mutex<EnvironmentReporter<Win32Probe>> {
 
 fn toasts() -> &'static Mutex<ToastThrottle> {
     TOASTS.get_or_init(|| Mutex::new(ToastThrottle::default()))
+}
+
+/// Activate 中の失敗を tsf.log に残す（HRESULT のみ）
+fn log_failure(what: &str, error: &windows::core::Error) {
+    crate::tsf_log::log(
+        "tsf",
+        &format!(
+            "{what} failed hr={}",
+            nagi_windows::diag::hresult_text(error.code().0)
+        ),
+    );
 }
 
 /// COM のエントリポイントでパニックを止める（パニックを FFI 境界から出すとホストアプリごと落ちる）
@@ -208,6 +227,7 @@ impl Core {
     // ---- 起動・終了 ----
 
     fn activate(self: &Rc<Self>, thread_mgr: ITfThreadMgr, client_id: u32) -> Result<()> {
+        crate::tsf_log::log("tsf", &format!("Activate client_id={client_id}"));
         self.client_id.set(client_id);
         *self.thread_mgr.borrow_mut() = Some(thread_mgr.clone());
 
@@ -235,9 +255,12 @@ impl Core {
             core: Rc::clone(self),
         }
         .into();
-        let keystroke: ITfKeystrokeMgr = thread_mgr.cast()?;
+        let keystroke: ITfKeystrokeMgr = thread_mgr
+            .cast()
+            .inspect_err(|e| log_failure("ITfKeystrokeMgr", e))?;
         // fforeground = true: フォーカスが無くても先にキーを受ける（IME として標準）
-        unsafe { keystroke.AdviseKeyEventSink(client_id, &key_sink, true) }?;
+        unsafe { keystroke.AdviseKeyEventSink(client_id, &key_sink, true) }
+            .inspect_err(|e| log_failure("AdviseKeyEventSink", e))?;
 
         // モード（コンパートメント）。失敗しても入力はできる（OS 側の表示とは同期しない）
         let compartment_sink: ITfCompartmentEventSink = CompartmentSink {
@@ -245,10 +268,14 @@ impl Core {
         }
         .into();
         *self.compartments.borrow_mut() =
-            ModeCompartments::new(&thread_mgr, client_id, &compartment_sink).ok();
+            ModeCompartments::new(&thread_mgr, client_id, &compartment_sink)
+                .inspect_err(|e| log_failure("mode compartments", e))
+                .ok();
         self.sync_mode_with_os();
 
-        // 言語バーのボタン（モード表示・切り替え・メニュー）
+        // 言語バーのボタン（トレイの入力インジケーター・モード切り替え・メニュー）。
+        // エンジンの接続状態には依存しない（エンジンは別スレッドで起動中でも登録する）。
+        // 失敗の理由は `LangBar::new` が tsf.log に残す
         *self.lang_bar.borrow_mut() = LangBar::new(&thread_mgr, Rc::downgrade(self)).ok();
         self.refresh_lang_bar();
 
@@ -260,10 +287,20 @@ impl Core {
         }
 
         self.poll_environment();
+        crate::tsf_log::log(
+            "tsf",
+            &format!(
+                "Activate done langbar={} compartments={} message_window={}",
+                self.lang_bar.borrow().is_some(),
+                self.compartments.borrow().is_some(),
+                self.message_window.borrow().is_some()
+            ),
+        );
         Ok(())
     }
 
     fn deactivate(&self) {
+        crate::tsf_log::log("tsf", "Deactivate");
         let thread_mgr = self.thread_mgr.borrow().clone();
         let id = self.client_id.get();
         if let Some(tm) = &thread_mgr {
@@ -805,7 +842,10 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
 impl ITfTextInputProcessorEx_Impl for TextService_Impl {
     fn ActivateEx(&self, ptim: Ref<ITfThreadMgr>, tid: u32, _dwflags: u32) -> Result<()> {
         guarded(
-            || Err(E_FAIL.into()),
+            || {
+                crate::tsf_log::log("tsf", "ActivateEx panicked");
+                Err(E_FAIL.into())
+            },
             || {
                 let tm = ptim.ok()?.clone();
                 // 二重の Activate に備えて、前の状態を閉じる
@@ -815,6 +855,7 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
                 let core = Rc::new_cyclic(|me| Core::new(me.clone()));
                 *self.core.borrow_mut() = Some(Rc::clone(&core));
                 core.activate(tm, tid)
+                    .inspect_err(|e| log_failure("Activate", e))
             },
         )
     }

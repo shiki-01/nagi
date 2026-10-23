@@ -198,6 +198,15 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 - [ ] `GetReconversion`: `ITfFnReconversion` を呼ぶアプリ（Office 等）で再変換の候補一覧が出て、選ぶと範囲が置き換わりキャレットが末尾に来る。複数文節の範囲で、選んだ候補以外の部分（残りの文節）が失われない。アプリが文書ロックを持つ最中に呼んだ場合に失敗して固まらない。呼んだ後にコアが変換中のまま残らない（直後の入力が通常どおり）。選択が空・200 文字超・入力中は失敗する。待ちきれないとき（初回の逆引き索引）の通知
 - [ ] `THIRD_PARTY_LICENSES_WINDOWS.md`（104 crates）が実際の Windows のビルド（MSVC・`--features llama`）の依存と一致する（`cargo tree --target x86_64-pc-windows-msvc` を Windows 上で実行して比較。llama.cpp のビルド用の crate が漏れていないか）。zip の `THIRD_PARTY_LICENSES.md` が Windows 用になっている
 
+### 8.5d トレイのアイコンが出ない場合の確認と tsf.log（H-54。実機で一度も動かしていない）
+- [ ] Windows 11 / 10 のタスクバー右端の入力インジケーターに「あ / A」（藍の角アイコン）が出る。出ない場合の確認の順序:
+  1. `%LOCALAPPDATA%\Nagi\logs\tsf.log` を開く（フロントの診断ログ。入力内容は書かない。256KB で `tsf.log.1` へ回る）。`[tsf] Activate` が無ければ、Nagi が選ばれていない・DLL が読み込まれていない（`tasklist /m nagi_windows_tsf.dll`、`regsvr32` の登録、設定の「言語と地域」で Nagi が有効か）
+  2. `[langbar] AddItem ok (GUID_LBI_INPUTMODE)` があるか。`AddItem failed hr=0x…` / `ITfLangBarItemMgr unavailable` ならその HRESULT を記録する。`[tsf] Activate done langbar=false` は登録失敗
+  3. `AddItem ok` なのにトレイに出ないなら、アイコン側（`GetIcon` のサイズ・描画）か、シェルがこの項目を採用していない。`GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT` / `IMMERSIVESUPPORT` / `UIELEMENTENABLED` が登録されているか（`regsvr32` を管理者で再実行）、サインアウトして入れ直す
+  4. 設定 > 時刻と言語 > 言語と地域 > 日本語 > 言語のオプション > キーボード で Nagi が見えるか。「入力インジケーター」をオフにしていないか（設定 > 個人用設定 > タスクバー > システムトレイ アイコン）
+- [ ] 右クリックでメニュー（ひらがな / 英数・状態・「設定ファイルを開く…」）、左クリックでひらがな ⇄ 英数。エンジン起動に失敗している環境（`imserver.exe` が無い・初期化失敗）でもアイコンとメニューは出る（メニューは「変換エンジンに接続していません」）
+- [ ] tsf.log の内容: `[engine] location exe=… exists=…`（imserver の置き場）、`starting` / `started …` / `launch failed: spawn failed|initialize timeout|initialize failed|…` / `stopped (crash or start failure)` / `entering minimal profile`。複数のホストプロセスが同時に書いても行が壊れない
+
 ### 8.6 設計の再検討事項
 - ホストプロセスごとに imserver を起動する方式のメモリ・起動時間。名前付きパイプ + 常駐ブローカーへの変更要否（H-39）。**判断に必要な実測項目と設計案は decisions.md H-43 §4**（ホスト 1/5/10 個のメモリ合計、`initialize` の所要、パイプ往復の増分、`learning.tsv` の取りこぼし、AppContainer からの接続可否、再接続の所要）
 

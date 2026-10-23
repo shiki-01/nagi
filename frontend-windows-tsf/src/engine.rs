@@ -139,6 +139,10 @@ impl EngineHost {
         let subscribers: Subscribers = Arc::default();
         let target = Arc::clone(&subscribers);
         supervisor.set_on_event(move |event| {
+            // 診断ログ（起動の成否・クラッシュ・minimal 切替など。入力内容を含むイベントは記録しない）
+            if let Some((tag, message)) = nagi_windows::diag::describe_event(&event) {
+                crate::tsf_log::log(tag, &message);
+            }
             for waker in deliver(&target, event) {
                 waker();
             }
@@ -156,15 +160,28 @@ impl EngineHost {
     pub fn start_in_background(&self) {
         let supervisor = Arc::clone(&self.supervisor);
         std::thread::spawn(move || {
-            // 失敗は `EngineEvent::LaunchFailed` として通知され、再起動も予約済み
-            let _ = supervisor.start();
+            // 失敗は `EngineEvent::LaunchFailed` として通知され、再起動も予約済み。
+            // 通信路が起動直後に閉じた場合（`LaunchFailed` にならない）の理由もここで記録する
+            crate::tsf_log::log("engine", "starting");
+            if let Err(error) = supervisor.start() {
+                crate::tsf_log::log(
+                    "engine",
+                    &format!(
+                        "start failed: {}",
+                        nagi_windows::diag::describe_error(&error)
+                    ),
+                );
+            }
         });
     }
 
     /// スリープ復帰時などの強制再起動（`restart_now` は接続を待つので別スレッドで行う）
     pub fn restart_in_background(&self) {
         let supervisor = Arc::clone(&self.supervisor);
-        std::thread::spawn(move || supervisor.restart_now());
+        std::thread::spawn(move || {
+            crate::tsf_log::log("engine", "restart requested (resume from sleep)");
+            supervisor.restart_now();
+        });
     }
 
     /// 正常終了（`shutdown` を送って閉じる。学習の保存のため）

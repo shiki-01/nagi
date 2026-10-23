@@ -18,6 +18,7 @@
 //! - [`reconvert`] — 再変換の対象テキストの判定
 //! - [`toast`] — 通知パネルの配置
 //! - [`icon`] — 入力方式アイコン（.ico）の生成
+//! - [`diag`] — 診断ログ（tsf.log）の整形・ローテーション判断・イベントの文言（入力内容は含めない）
 //! - [`process`]: 子プロセス（imserver）の stdin/stdout を通信路にする実装
 
 #![warn(missing_docs)]
@@ -26,6 +27,7 @@
 pub mod candidates;
 pub mod client;
 pub mod context;
+pub mod diag;
 pub mod environment;
 pub mod icon;
 pub mod keynorm;

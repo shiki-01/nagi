@@ -7,6 +7,7 @@
 //!
 //! - [`render`]: 応答 → 編集計画（OS 非依存。Linux でもテストする）
 //! - [`engine`]: エンジン接続のまとめ（OS 非依存。UI スレッドを塞がない起動・短いタイムアウト）
+//! - [`tsf_log`]: 診断ログ `%LOCALAPPDATA%\Nagi\logs\tsf.log` への追記（入力内容は書かない。H-54）
 //! - Windows のみ: COM/TSF の実装（`dll` / `register` / `text_service` / `edit` / `keys`）。
 //!   `unsafe` はこれらのモジュールに隔離し、`#![allow(unsafe_code)]` で明示している
 //!
@@ -34,6 +35,7 @@
 
 pub mod engine;
 pub mod render;
+pub mod tsf_log;
 
 #[cfg(windows)]
 mod candidate_window;

@@ -5,8 +5,10 @@
 //! `Core` が決める。ここは COM の受け口と、表示用の `HICON`（文字を描いたアイコン）だけ。
 //! モードの正はコアで、切り替えは `mode_comp` のコンパートメントへ書く形に統一している
 //! （他のクライアントやトレイの操作と同じ経路。`Core::request_mode`）。
-//! Win8 以降のデスクトップではトレイの「あ / A」はコンパートメントから OS が描くので、
-//! このボタンは従来の言語バー（有効にしている環境・一部のアプリ）向けの補助。
+//!
+//! Win8 以降（特に 11）のシェルの入力インジケーター（トレイの「あ / A」）は、言語バー項目のうち
+//! `guidItem == GUID_LBI_INPUTMODE` のものだけを表示する（独自 GUID の項目はレガシー言語バーにしか出ない）。
+//! このボタンがトレイの表示・左クリックでの切り替え・右クリックのメニューの実体になる（decisions.md H-54）。
 
 #![allow(unsafe_code)]
 
@@ -22,19 +24,21 @@ use windows::Win32::Graphics::Gdi::{
     DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, FillRect, GetDC, HBITMAP,
     HGDIOBJ, ReleaseDC, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::TextServices::{
-    ITfLangBarItem_Impl, ITfLangBarItemButton, ITfLangBarItemButton_Impl, ITfLangBarItemMgr,
-    ITfLangBarItemSink, ITfMenu, ITfSource, ITfSource_Impl, ITfThreadMgr, TF_LANGBARITEMINFO,
-    TF_LBI_CLK_LEFT, TF_LBI_ICON, TF_LBI_STYLE_BTN_BUTTON, TF_LBI_STYLE_SHOWNINTRAY, TF_LBI_TEXT,
-    TF_LBI_TOOLTIP, TF_LBMENUF_CHECKED, TF_LBMENUF_GRAYED, TF_LBMENUF_SEPARATOR, TfLBIClick,
+    GUID_LBI_INPUTMODE, ITfLangBarItem_Impl, ITfLangBarItemButton, ITfLangBarItemButton_Impl,
+    ITfLangBarItemMgr, ITfLangBarItemSink, ITfMenu, ITfSource, ITfSource_Impl, ITfThreadMgr,
+    TF_LANGBARITEMINFO, TF_LBI_CLK_LEFT, TF_LBI_ICON, TF_LBI_STYLE_BTN_BUTTON,
+    TF_LBI_STYLE_SHOWNINTRAY, TF_LBI_TEXT, TF_LBI_TOOLTIP, TF_LBMENUF_CHECKED, TF_LBMENUF_GRAYED,
+    TF_LBMENUF_SEPARATOR, TfLBIClick,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateIconIndirect, GetSystemMetrics, HICON, ICONINFO, SM_CXSMICON, SW_SHOWNORMAL,
+    CreateIconIndirect, HICON, ICONINFO, SM_CXSMICON, SW_SHOWNORMAL,
 };
 use windows::core::{BOOL, BSTR, GUID, IUnknown, Interface, PCWSTR, Ref, Result, implement, w};
 
-use crate::guids::{CLSID_NAGI_TEXT_SERVICE, GUID_NAGI_LANGBAR_BUTTON};
+use crate::guids::CLSID_NAGI_TEXT_SERVICE;
 use crate::text_service::Core;
 use crate::win::{make_font, wide};
 
@@ -67,7 +71,7 @@ impl ITfLangBarItem_Impl for Button_Impl {
         }
         let mut info = TF_LANGBARITEMINFO {
             clsidService: CLSID_NAGI_TEXT_SERVICE,
-            guidItem: GUID_NAGI_LANGBAR_BUTTON,
+            guidItem: GUID_LBI_INPUTMODE,
             dwStyle: TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY,
             ulSort: SORT_ORDER,
             szDescription: [0; 32],
@@ -146,7 +150,8 @@ impl ITfLangBarItemButton_Impl for Button_Impl {
     }
 
     fn GetIcon(&self) -> Result<HICON> {
-        let size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16);
+        // システム DPI に合わせた小アイコンの大きさ（100% で 16px）
+        let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem()) }.max(16);
         make_icon(status::button_text(self.mode()), size)
     }
 
@@ -275,7 +280,15 @@ pub struct LangBar {
 impl LangBar {
     /// ボタンを作って言語バーに追加する
     pub fn new(thread_mgr: &ITfThreadMgr, core: Weak<Core>) -> Result<Self> {
-        let manager: ITfLangBarItemMgr = thread_mgr.cast()?;
+        let manager: ITfLangBarItemMgr = thread_mgr.cast().inspect_err(|e| {
+            crate::tsf_log::log(
+                "langbar",
+                &format!(
+                    "ITfLangBarItemMgr unavailable hr={}",
+                    nagi_windows::diag::hresult_text(e.code().0)
+                ),
+            );
+        })?;
         let sinks: Sinks = Rc::default();
         let item: ITfLangBarItemButton = Button {
             core,
@@ -283,7 +296,16 @@ impl LangBar {
             next_cookie: RefCell::new(0),
         }
         .into();
-        unsafe { manager.AddItem(&item) }?;
+        unsafe { manager.AddItem(&item) }.inspect_err(|e| {
+            crate::tsf_log::log(
+                "langbar",
+                &format!(
+                    "AddItem failed hr={}",
+                    nagi_windows::diag::hresult_text(e.code().0)
+                ),
+            );
+        })?;
+        crate::tsf_log::log("langbar", "AddItem ok (GUID_LBI_INPUTMODE)");
         Ok(Self {
             manager,
             item,
@@ -303,6 +325,13 @@ impl LangBar {
 
 impl Drop for LangBar {
     fn drop(&mut self) {
-        let _ = unsafe { self.manager.RemoveItem(&self.item) };
+        let result = unsafe { self.manager.RemoveItem(&self.item) };
+        crate::tsf_log::log(
+            "langbar",
+            &format!(
+                "RemoveItem hr={}",
+                nagi_windows::diag::hresult_text(result.err().map_or(0, |e| e.code().0))
+            ),
+        );
     }
 }
