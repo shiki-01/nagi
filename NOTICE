@@ -159,17 +159,23 @@ Loanword source data: JMdict (derived index)
 
 Source: JMdict / EDRDG (Electronic Dictionary Research and Development Group)
         https://www.edrdg.org/jmdict/j_jmdict.html
+        Distributed in JSON form by jmdict-simplified (scriptin, MIT License for
+        the conversion tooling): https://github.com/scriptin/jmdict-simplified
+        Pinned release: 3.6.2+20261019180022 (jmdict-eng-3.6.2+20261019180022.json.zip,
+        SHA-256 ef3ea475127ce2a85c60baa3ca5a8f7e33b836e02c4fad6633b3dd72d2b362c9)
 License: Creative Commons Attribution-ShareAlike 4.0 International
          (CC BY-SA 4.0) -- see https://www.edrdg.org/edrdg/licence.html
          Full license text: https://creativecommons.org/licenses/by-sa/4.0/legalcode
 
-Nagi uses the loanword source information (the `lsource` elements: the source
-language and the original spelling of loanwords) of JMdict to offer the
-original word (for example, "computer" or "Arbeit") as a conversion candidate.
-JMdict is not redistributed with Nagi's source code or binaries; it is
-downloaded separately (`cargo xtask fetch-loanword`, `imserver --install-data`,
-or the iOS host app) and a derived index (data/loanword/loanword.fst) is built
-on the user's device. The derived index remains subject to CC BY-SA 4.0.
+Nagi uses the loanword source information (the `languageSource` entries: the
+source language and the original spelling of loanwords, and for words without
+one, a single-word English gloss whose sound matches the katakana headword) of
+JMdict to offer the original word (for example, "computer" or "Arbeit") as a
+conversion candidate. JMdict is not redistributed with Nagi's source code or
+binaries; it is downloaded separately (`cargo xtask fetch-loanword`,
+`imserver --install-data`, or the iOS host app) and a derived index
+(data/loanword/loanword.fst) is built on the user's device. The derived index
+remains subject to CC BY-SA 4.0.
 
 ================================================================================
 English word list: SCOWL (derived index)

@@ -43,10 +43,10 @@ enum Task {
     /// 英単語の語彙（SCOWL）を取得し SHA-256 検証して、fst 索引を組み立てる
     /// （data/english/words.fst。英語の自動判定の語彙。無くても動く）
     FetchEnglish,
-    /// カタカナ語の原語データ（JMdict）を取得して索引（data/loanword/loanword.fst）を組み立てる。
-    /// SHA-256 が未固定のときは検証せずに取得し、固定すべき値を表示する
+    /// カタカナ語の原語データ（JMdict。jmdict-simplified の固定した版）を取得し SHA-256 検証して、
+    /// 索引（data/loanword/loanword.fst）を組み立てる
     FetchLoanword {
-        /// 取得せず、手元の JMdict（gzip の XML）から索引だけ組み立てる
+        /// 取得せず、手元の jmdict-eng-*.json.zip から索引だけ組み立てる
         #[arg(long)]
         from: Option<std::path::PathBuf>,
     },

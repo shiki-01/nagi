@@ -1,14 +1,12 @@
-//! カタカナ語の原語データ（JMdict の `lsource`）の取得と、fst 索引の組み立て。
+//! カタカナ語の原語データ（JMdict の languageSource）の取得と、fst 索引の組み立ての進捗通知。
 //!
 //! JMdict は EDRDG の辞書（CC BY-SA 4.0）。**同梱せず**、利用者の手元で配布元から取得して
-//! 索引（`loanword.fst`）だけを組み立てる。出典の表示は `NOTICE`。
-//!
-//! EDRDG の `JMdict_e.gz` は更新のたびに同じ URL の中身が変わるので、SHA-256 は「固定した
-//! 時点のファイル」に対して検証する。固定していない間（[`JMDICT_SHA256`] が `None`）は
-//! 取得を拒否する（`cargo xtask fetch-loanword` だけが、下見として SHA-256 を表示して取得できる）。
+//! 索引（`loanword.fst`）だけを組み立てる。出典の表示は `NOTICE`。取得するのは
+//! scriptin/jmdict-simplified のリリース資産（版ごとに不変）で、`nagi_loanword::archive` の
+//! 固定値（tag・URL・SHA-256）に対して検証する。組み立て本体は `nagi_loanword::archive`。
 
 use crate::Progress;
-use crate::fsutil::{Source, download_verified, fetch_pinned};
+use crate::fsutil::{Source, fetch_pinned};
 use crate::http::{Http, UreqHttp};
 use nagi_loanword::archive::{JMDICT_SHA256, JMDICT_URL};
 use std::fs;
@@ -23,16 +21,12 @@ pub fn install_loanword(
     dest_dir: &Path,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<bool, String> {
-    let sha = JMDICT_SHA256.ok_or_else(|| {
-        "JMdict の SHA-256 が未固定のため、原語データは取得しません（docs/decisions.md H-52）"
-            .to_string()
-    })?;
     install_loanword_from(
         &UreqHttp,
         &Source {
             file: JMDICT_FILE,
             url: JMDICT_URL,
-            sha256: sha,
+            sha256: JMDICT_SHA256,
         },
         dest_dir,
         progress,
@@ -55,39 +49,7 @@ fn install_loanword_from(
     }
 }
 
-/// SHA-256 を検証せずに取得して、そのハッシュを返す（固定する値を決めるための下見。xtask 専用）
-pub fn fetch_loanword_unpinned(
-    dest_dir: &Path,
-    progress: &mut dyn FnMut(Progress),
-) -> Result<String, String> {
-    fs::create_dir_all(dest_dir)
-        .map_err(|e| format!("ディレクトリ作成失敗 {}: {}", dest_dir.display(), e))?;
-    let file = JMDICT_FILE.to_string();
-    progress(Progress::Download {
-        file: file.clone(),
-        index: 1,
-        count: 1,
-        url: JMDICT_URL.to_string(),
-        size: None,
-    });
-    let (_, sha) = download_verified(
-        &UreqHttp,
-        JMDICT_URL,
-        &dest_dir.join(JMDICT_FILE),
-        "",
-        &file,
-        &mut |done, total| {
-            progress(Progress::Bytes {
-                file: file.clone(),
-                done,
-                total,
-            })
-        },
-    )?;
-    Ok(sha)
-}
-
-/// 取得済みの JMdict（gzip の XML）から索引を組み立て、`out_path` へ書く。登録した語の数を返す
+/// 取得済みの JMdict（zip）から索引を組み立て、`out_path` へ書く。登録した語の数を返す
 pub fn build_loanword_index(
     archive: &Path,
     out_path: &Path,
@@ -95,7 +57,7 @@ pub fn build_loanword_index(
 ) -> Result<usize, String> {
     progress(Progress::BuildStart);
     let start = Instant::now();
-    let count = nagi_loanword::archive::build_index_file(archive, out_path)?;
+    let count = nagi_loanword::archive::build_index_file(archive, out_path)?.words;
     progress(Progress::BuildDone {
         bytes: fs::metadata(out_path).map(|m| m.len()).unwrap_or(0),
         seconds: start.elapsed().as_secs_f64(),
@@ -108,19 +70,11 @@ pub fn build_loanword_index(
 mod tests {
     use super::*;
     use crate::http::Body;
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
     use sha2::{Digest, Sha256};
-    use std::io::{Cursor, Write};
+    use std::io::Cursor;
 
-    const XML: &str = "<JMdict><entry><r_ele><reb>アルバイト</reb></r_ele>\
-        <sense><lsource xml:lang=\"ger\">Arbeit</lsource></sense></entry></JMdict>";
-
-    fn gz(data: &[u8]) -> Vec<u8> {
-        let mut e = GzEncoder::new(Vec::new(), Compression::fast());
-        e.write_all(data).unwrap();
-        e.finish().unwrap()
-    }
+    const JSON: &str = r#"{"words":[{"kana":[{"text":"アルバイト","common":true}],
+        "sense":[{"languageSource":[{"lang":"ger","text":"Arbeit"}]}]}]}"#;
 
     struct FakeHttp(Vec<u8>);
 
@@ -137,11 +91,11 @@ mod tests {
     fn install_builds_then_skips() {
         let dir = std::env::temp_dir().join(format!("nagi-datafetch-lw-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let archive = gz(XML.as_bytes());
+        let archive = nagi_loanword::archive::zip_of_json(JSON);
         let sha = format!("{:x}", Sha256::digest(&archive));
         let src = Source {
-            file: "fake.gz",
-            url: "https://example.invalid/fake.gz",
+            file: "fake.json.zip",
+            url: "https://example.invalid/fake.json.zip",
             sha256: &sha,
         };
         let http = FakeHttp(archive);
@@ -166,8 +120,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nagi-datafetch-lw2-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let src = Source {
-            file: "fake.gz",
-            url: "https://example.invalid/fake.gz",
+            file: "fake.json.zip",
+            url: "https://example.invalid/fake.json.zip",
             sha256: &"0".repeat(64),
         };
         let err =
@@ -178,12 +132,8 @@ mod tests {
     }
 
     #[test]
-    fn unpinned_install_is_refused() {
-        if JMDICT_SHA256.is_none() {
-            let dir = std::env::temp_dir().join("nagi-datafetch-lw3-never-created");
-            let err = install_loanword(&dir, &mut |_| {}).unwrap_err();
-            assert!(err.contains("未固定"), "{err}");
-            assert!(!dir.exists());
-        }
+    fn pinned_source_is_the_jmdict_simplified_release() {
+        assert!(JMDICT_URL.contains("scriptin/jmdict-simplified/releases/download/"));
+        assert_eq!(JMDICT_SHA256.len(), 64);
     }
 }

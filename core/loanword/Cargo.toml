@@ -9,10 +9,13 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-flate2 = "1.1"
 fst = "0.4.7"
 nagi-rewriter.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+# 取得物は zip（jmdict-simplified のリリース資産）。展開だけ使う
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # 非 Windows ではマップ中のファイルの置換に制約が無いため mmap を使う（nagi-english と同じ方針。
 # iOS のキーボード拡張のメモリ上限に効く）

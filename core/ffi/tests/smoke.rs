@@ -203,7 +203,7 @@ fn optional_data_sources_and_index_build() {
     // 組み立ての失敗は理由を返し、成功は NULL
     let dir = std::env::temp_dir().join(format!("nagi-ffi-opt-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let missing = CString::new(dir.join("none.gz").to_str().unwrap()).unwrap();
+    let missing = CString::new(dir.join("none.zip").to_str().unwrap()).unwrap();
     let out = CString::new(dir.join("out.fst").to_str().unwrap()).unwrap();
     let kind = CString::new("loanword").unwrap();
     let err = unsafe {
@@ -223,15 +223,16 @@ fn optional_data_sources_and_index_build() {
     assert!(!err.is_null());
     unsafe { nagi_ffi::nagi_string_free(err) };
 
-    // 本物の最小の JMdict（gzip）から組み立てる
-    use std::io::Write;
-    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    gz.write_all(
-        "<JMdict><entry><r_ele><reb>アルバイト</reb></r_ele><sense><lsource xml:lang=\"ger\">Arbeit</lsource></sense></entry></JMdict>".as_bytes(),
+    // 最小の JMdict（zip の JSON）から組み立てる
+    assert_eq!(v["loanword"]["sha256"].as_str().unwrap().len(), 64);
+    let archive = dir.join("jmdict.json.zip");
+    std::fs::write(
+        &archive,
+        nagi_loanword::archive::zip_of_json(
+            r#"{"words":[{"kana":[{"text":"アルバイト"}],"sense":[{"languageSource":[{"lang":"ger","text":"Arbeit"}]}]}]}"#,
+        ),
     )
     .unwrap();
-    let archive = dir.join("JMdict_e.gz");
-    std::fs::write(&archive, gz.finish().unwrap()).unwrap();
     let archive_c = CString::new(archive.to_str().unwrap()).unwrap();
     let err = unsafe {
         nagi_ffi::nagi_build_optional_index(kind.as_ptr(), archive_c.as_ptr(), out.as_ptr())

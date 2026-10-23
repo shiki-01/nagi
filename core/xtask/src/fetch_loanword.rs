@@ -1,10 +1,9 @@
 //! `cargo xtask fetch-loanword` — カタカナ語の原語データ（JMdict）を取得し、
 //! fst 索引（`data/loanword/loanword.fst`）を組み立てる。
 //!
-//! 固定した SHA-256 があれば `imserver --install-data` と同じ検証つきの取得。未固定の間は
-//! 検証せずに取得して SHA-256 を表示する（固定する値を決めるための下見）。
+//! 固定した版（jmdict-simplified のリリース資産）を SHA-256 検証つきで取得する。`--from` は手元の zip から組み立てる。
 
-use nagi_datafetch::{JMDICT_FILE, LOANWORD_INDEX_FILE, Progress};
+use nagi_datafetch::{LOANWORD_INDEX_FILE, Progress};
 use std::fs;
 use std::path::PathBuf;
 
@@ -49,23 +48,7 @@ pub fn run(from: Option<PathBuf>) -> Result<(), String> {
         eprintln!("\n完了。{words} 語（{} から）", archive.display());
         return Ok(());
     }
-    match nagi_datafetch::install_loanword(&dir, &mut report) {
-        Ok(_) => {}
-        Err(e) if e.contains("未固定") => {
-            eprintln!("警告: SHA-256 が未固定のため、検証せずに取得します");
-            let sha = nagi_datafetch::fetch_loanword_unpinned(&dir, &mut report)?;
-            eprintln!("  この取得の SHA-256: {sha}");
-            eprintln!(
-                "  → core/datafetch/src/loanword.rs の JMDICT_SHA256 を Some(\"{sha}\") にして固定してください"
-            );
-            nagi_datafetch::build_loanword_index(
-                &dir.join(JMDICT_FILE),
-                &dir.join(LOANWORD_INDEX_FILE),
-                &mut report,
-            )?;
-        }
-        Err(e) => return Err(e),
-    }
+    nagi_datafetch::install_loanword(&dir, &mut report)?;
     eprintln!("\n完了");
     Ok(())
 }

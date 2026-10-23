@@ -5,7 +5,8 @@
 //!
 //! - `normalize`: カタカナの正規化（長音・小書き・中黒・ヴ）と骨格
 //! - `archive`: 取得済みの JMdict（gzip）から索引ファイルを組み立てる
-//! - `jmdict`: JMdict の XML から索引の入力を取り出す
+//! - `jmdict`: JMdict の JSON（jmdict-simplified）から索引の入力を取り出す
+//! - `phonetic`: カタカナ語と英単語の音の近さ（lsource の無い語の推定用）
 //! - `index`: fst 索引の組み立てと問い合わせ
 //! - `rewriter`: `nagi-rewriter` の [`nagi_rewriter::Rewriter`] 実装
 
@@ -13,6 +14,7 @@ pub mod archive;
 pub mod index;
 pub mod jmdict;
 pub mod normalize;
+pub mod phonetic;
 pub mod rewriter;
 
 pub use index::{Entry, IndexBuilder, Loan, LoanwordError, LoanwordIndex, MAX_RESULTS};

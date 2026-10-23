@@ -115,14 +115,14 @@ char *nagi_last_notes(NagiServerHandle handle);
 /// 任意データの取得元の一覧（JSON）を返す。
 ///
 /// {"english": {"dir","file","url","sha256","index_file"}, "loanword": {...}}。
-/// sha256 が null のデータは、配布元のハッシュを固定していないので取得してはいけない。
+/// sha256 は取得したファイルの SHA-256（検証して一致しなければ使わない）。
 ///
 /// @return UTF-8 C 文字列。nagi_string_free で解放必須。
 char *nagi_optional_data_sources(void);
 
 /// 取得済みのアーカイブから、任意データの索引を組み立てる。
 ///
-/// @param kind "english"（SCOWL の tar.gz → words.fst）または "loanword"（JMdict の gz → loanword.fst）
+/// @param kind "english"（SCOWL の tar.gz → words.fst）または "loanword"（JMdict の zip → loanword.fst）
 /// @param archive_path 取得済みのアーカイブのパス（UTF-8）
 /// @param out_path 出力する索引のパス（UTF-8。一時ファイル経由で置き換える）
 ///

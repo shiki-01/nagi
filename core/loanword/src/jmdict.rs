@@ -1,187 +1,136 @@
-//! JMdict（EDRDG）の XML から、外来語の原語（`lsource`）を取り出す。
+//! JMdict（EDRDG）の JSON（jmdict-simplified の `jmdict-eng-*.json`）から、外来語の原語を取り出す。
 //!
-//! 使う構造（`JMdict_e` で確認した形。`docs/decisions.md` H-52）:
+//! 使う構造（実物で確認。`docs/decisions.md` H-52）:
 //!
-//! ```xml
-//! <entry>
-//!   <k_ele><keb>…</keb><ke_pri>news1</ke_pri></k_ele>
-//!   <r_ele><reb>アルバイト</reb><re_pri>ichi1</re_pri></r_ele>
-//!   <sense><lsource xml:lang="ger">Arbeit</lsource>…</sense>
-//!   <sense><lsource xml:lang="eng" ls_wasei="y">salaried man</lsource></sense>
-//! </entry>
+//! ```json
+//! {"version": "...", "words": [
+//!   {"kana": [{"text": "アルバイト", "common": true}], "kanji": [{"text": "…", "common": false}],
+//!    "sense": [{"languageSource": [{"lang": "ger", "full": true, "wasei": false, "text": "Arbeit"}],
+//!               "gloss": [{"lang": "eng", "text": "part-time job"}]}]}]}
 //! ```
 //!
-//! `xml:lang` は省略時 `eng`、`ls_type="part"` は一部だけの借用、`ls_wasei="y"` は和製英語。
-//! 綴りが空の `lsource` は捨てる。XML パーサは使わず、この構造に必要な分だけ文字列で走査する
-//! （DTD の実体宣言は読み飛ばす。要素の中身に出る実体は標準の 5 つだけ復号する）。
+//! `words` だけを 1 語ずつ読み（118MB の JSON を丸ごとメモリに載せない）、見出し（kana / kanji の
+//! `text`）がカタカナだけの語を対象にする。`languageSource.text` が null（綴りなし）の語義と、
+//! `languageSource` が空の語義は、gloss が 1 語の英単語で音が近いときだけ「推定の原語」（低順位）にする。
 
 use crate::index::Entry;
 use crate::normalize::is_katakana_word;
+use crate::phonetic::gloss_matches;
+use serde::Deserialize;
+use serde::de::{DeserializeSeed, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use std::fmt;
+use std::io::Read;
 
 /// 綴りの最大文字数（これを超えるものは句や文なので候補にしない）
 const MAX_SPELLING_CHARS: usize = 48;
+/// 推定の原語の順位の下限（lsource 由来は 0〜3）
+pub const INFERRED_RANK_BASE: u8 = 100;
 
-/// `xml` から索引の入力を取り出す。見出し（`keb` / `reb`）がカタカナだけの語が対象
-pub fn extract(xml: &str) -> Vec<Entry> {
+#[derive(Deserialize)]
+struct Headword {
+    text: String,
+    #[serde(default)]
+    common: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LangSource {
+    lang: String,
+    #[serde(default = "yes")]
+    full: bool,
+    #[serde(default)]
+    wasei: bool,
+    text: Option<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct Gloss {
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Sense {
+    #[serde(default)]
+    language_source: Vec<LangSource>,
+    #[serde(default)]
+    gloss: Vec<Gloss>,
+}
+
+#[derive(Deserialize)]
+struct Word {
+    #[serde(default)]
+    kana: Vec<Headword>,
+    #[serde(default)]
+    kanji: Vec<Headword>,
+    #[serde(default)]
+    sense: Vec<Sense>,
+}
+
+/// `reader` の JSON から索引の入力を取り出し、1 件ずつ `sink` に渡す
+pub fn extract_reader<R: Read>(reader: R, sink: &mut dyn FnMut(Entry)) -> Result<(), String> {
+    let mut de = serde_json::Deserializer::from_reader(reader);
+    let mut on_word = |w: Word| word_to_entries(&w, sink);
+    Deserializer::deserialize_map(&mut de, TopVisitor(&mut on_word))
+        .map_err(|e| format!("JMdict の JSON を読めません: {e}"))
+}
+
+/// 文字列の JSON から取り出す（テスト・小さな入力用）
+pub fn extract(json: &str) -> Result<Vec<Entry>, String> {
     let mut out = Vec::new();
-    let mut rest = xml;
-    while let Some(start) = rest.find("<entry>") {
-        let after = &rest[start + "<entry>".len()..];
-        let Some(end) = after.find("</entry>") else {
-            break;
-        };
-        entry_to_records(&after[..end], &mut out);
-        rest = &after[end + "</entry>".len()..];
+    extract_reader(json.as_bytes(), &mut |e| out.push(e))?;
+    Ok(out)
+}
+
+struct TopVisitor<'a>(&'a mut dyn FnMut(Word));
+
+impl<'de> Visitor<'de> for TopVisitor<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("JMdict の JSON オブジェクト")
     }
-    out
-}
 
-/// `<tag …>中身</tag>` の中身を順に返す（属性は無視）
-fn elements<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
-    elements_with_attrs(xml, tag)
-        .into_iter()
-        .map(|(_, body)| body)
-        .collect()
-}
-
-/// `<tag 属性>中身</tag>` の (属性文字列, 中身) を順に返す。`<tag/>`（中身なし）は中身を空にする
-fn elements_with_attrs<'a>(xml: &'a str, tag: &str) -> Vec<(&'a str, &'a str)> {
-    let open = format!("<{tag}");
-    let close = format!("</{tag}>");
-    let mut out = Vec::new();
-    let mut rest = xml;
-    while let Some(i) = rest.find(&open) {
-        let after = &rest[i + open.len()..];
-        // `<lsource` と `<lsource_x` のような別名を取り違えない
-        let boundary = after.chars().next();
-        if !matches!(
-            boundary,
-            Some('>') | Some(' ') | Some('/') | Some('\n') | Some('\t')
-        ) {
-            rest = after;
-            continue;
-        }
-        let Some(gt) = after.find('>') else {
-            break;
-        };
-        let attrs = &after[..gt];
-        if let Some(stripped) = attrs.strip_suffix('/') {
-            out.push((stripped, ""));
-            rest = &after[gt + 1..];
-            continue;
-        }
-        let body_start = &after[gt + 1..];
-        let Some(end) = body_start.find(&close) else {
-            break;
-        };
-        out.push((attrs, &body_start[..end]));
-        rest = &body_start[end + close.len()..];
-    }
-    out
-}
-
-/// 属性文字列から `name="value"` の value を取り出す
-fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
-    let needle = format!("{name}=\"");
-    let i = attrs.find(&needle)?;
-    // 属性名の直前は空白（`xml:lang` を `lang` で取り違えない）
-    if i > 0 && !attrs[..i].ends_with(char::is_whitespace) {
-        return None;
-    }
-    let v = &attrs[i + needle.len()..];
-    Some(&v[..v.find('"')?])
-}
-
-fn unescape(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
-
-/// 優先度タグ（`news1` `ichi1` `spec1` `gai1` `nf01` …）から順位（0 が最も一般的、3 が無印）
-fn priority_rank(tags: &[&str]) -> u8 {
-    let mut best = 3u8;
-    for t in tags {
-        let r = if t.ends_with('1') && !t.starts_with("nf") {
-            0
-        } else if t.ends_with('2') && !t.starts_with("nf") {
-            1
-        } else if let Some(n) = t.strip_prefix("nf").and_then(|n| n.parse::<u32>().ok()) {
-            if n <= 12 {
-                0
-            } else if n <= 24 {
-                1
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        while let Some(key) = map.next_key::<String>()? {
+            if key == "words" {
+                map.next_value_seed(WordsSeed(&mut *self.0))?;
             } else {
-                2
+                map.next_value::<IgnoredAny>()?;
             }
-        } else {
-            2
-        };
-        best = best.min(r);
+        }
+        Ok(())
     }
-    best
 }
 
-fn entry_to_records(entry: &str, out: &mut Vec<Entry>) {
-    let mut headwords: Vec<String> = Vec::new();
-    for tag in ["keb", "reb"] {
-        for h in elements(entry, tag) {
-            let h = unescape(h.trim());
-            if is_katakana_word(&h) && !headwords.contains(&h) {
-                headwords.push(h);
-            }
-        }
-    }
-    if headwords.is_empty() {
-        return;
-    }
-    let mut pri: Vec<&str> = Vec::new();
-    for tag in ["ke_pri", "re_pri"] {
-        pri.extend(elements(entry, tag).into_iter().map(str::trim));
-    }
-    let pri_rank = priority_rank(&pri);
+struct WordsSeed<'a>(&'a mut dyn FnMut(Word));
 
-    for sense in elements(entry, "sense") {
-        let mut sources: Vec<(String, String, bool, bool)> = Vec::new(); // lang, spelling, wasei, part
-        for (attrs, body) in elements_with_attrs(sense, "lsource") {
-            let spelling = unescape(body.trim());
-            if spelling.is_empty()
-                || spelling.chars().count() > MAX_SPELLING_CHARS
-                || spelling.chars().any(is_kana)
-            {
-                continue;
-            }
-            sources.push((
-                attr(attrs, "xml:lang").unwrap_or("eng").to_string(),
-                spelling,
-                attr(attrs, "ls_wasei") == Some("y"),
-                attr(attrs, "ls_type") == Some("part"),
-            ));
+impl<'de> DeserializeSeed<'de> for WordsSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for WordsSeed<'_> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("words の配列")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while let Some(word) = seq.next_element::<Word>()? {
+            (self.0)(word);
         }
-        // 同じ言語の綴りが 1 つの語義に複数あるものは複合語（hot dog → hot + dog）なので捨てる
-        // （言語が違うものは、同じ語の別の言語での綴り。espada: por / spa）
-        let multi: Vec<String> = sources
-            .iter()
-            .filter(|s| sources.iter().filter(|t| t.0 == s.0).count() > 1)
-            .map(|s| s.0.clone())
-            .collect();
-        for (lang, spelling, wasei, part) in sources {
-            if multi.contains(&lang) {
-                continue;
-            }
-            let rank = pri_rank * 2 + u8::from(part);
-            for h in &headwords {
-                out.push(Entry {
-                    headword: h.clone(),
-                    lang: lang.clone(),
-                    spelling: spelling.clone(),
-                    wasei,
-                    rank,
-                });
-            }
-        }
+        Ok(())
     }
 }
 
@@ -189,65 +138,117 @@ fn is_kana(c: char) -> bool {
     matches!(c, '\u{3040}'..='\u{30FF}')
 }
 
+/// 前半と後半が同じ語（ワクワク）か
+fn is_reduplicated(s: &str) -> bool {
+    let c: Vec<char> = s.chars().collect();
+    c.len() >= 4 && c.len() % 2 == 0 && c[..c.len() / 2] == c[c.len() / 2..]
+}
+
+fn word_to_entries(w: &Word, sink: &mut dyn FnMut(Entry)) {
+    // 見出し: カタカナだけの kana / kanji 表記（common なら順位が上）
+    let mut heads: Vec<(&str, bool)> = Vec::new();
+    for h in w.kana.iter().chain(w.kanji.iter()) {
+        if is_katakana_word(&h.text) && !heads.iter().any(|(t, _)| *t == h.text) {
+            heads.push((&h.text, h.common));
+        }
+    }
+    if heads.is_empty() {
+        return;
+    }
+    for sense in &w.sense {
+        let spelled: Vec<&LangSource> = sense
+            .language_source
+            .iter()
+            .filter(|s| {
+                s.text.as_deref().is_some_and(|t| {
+                    let t = t.trim();
+                    !t.is_empty()
+                        && t.chars().count() <= MAX_SPELLING_CHARS
+                        && !t.chars().any(is_kana)
+                })
+            })
+            .collect();
+        if !spelled.is_empty() {
+            // 同じ言語の綴りが 1 つの語義に複数あるものは複合語（hot + dog）なので捨てる
+            // （言語が違うものは、同じ語の別の言語での綴り。espada: por / spa）
+            for s in &spelled {
+                if spelled.iter().filter(|t| t.lang == s.lang).count() > 1 {
+                    continue;
+                }
+                let text = s.text.as_deref().unwrap_or("").trim();
+                for (head, common) in &heads {
+                    sink(Entry {
+                        headword: (*head).to_string(),
+                        lang: s.lang.clone(),
+                        spelling: text.to_string(),
+                        wasei: s.wasei,
+                        rank: u8::from(!common) * 2 + u8::from(!s.full),
+                    });
+                }
+            }
+            continue;
+        }
+        // 綴りの無い語義: 和製英語の印があれば出さない。無ければ gloss から推定する
+        if sense.language_source.iter().any(|s| s.wasei) {
+            continue;
+        }
+        let lang = sense
+            .language_source
+            .first()
+            .map_or("eng", |s| s.lang.as_str());
+        for (head, common) in &heads {
+            if is_reduplicated(head) {
+                continue; // ワクワク・ペラペラなどの擬音語・擬態語は外来語ではない
+            }
+            // gloss は重要な順なので、音が合う最初の 1 つだけ採る（mail に email と male を並べない）
+            if let Some(g) = sense
+                .gloss
+                .iter()
+                .find(|g| !g.text.ends_with("ly") && gloss_matches(head, &g.text))
+            {
+                sink(Entry {
+                    headword: (*head).to_string(),
+                    lang: lang.to_string(),
+                    spelling: g.text.clone(),
+                    wasei: false,
+                    rank: INFERRED_RANK_BASE + u8::from(!common),
+                });
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const FIXTURE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE JMdict [
-<!ENTITY n "noun (common) (futsuumeishi)">
-]>
-<JMdict>
-<entry>
-<ent_seq>1</ent_seq>
-<r_ele><reb>コンピューター</reb><re_pri>ichi1</re_pri><re_pri>news1</re_pri></r_ele>
-<r_ele><reb>コンピュータ</reb></r_ele>
-<sense><pos>&n;</pos><lsource xml:lang="eng">computer</lsource><gloss>computer</gloss></sense>
-</entry>
-<entry>
-<ent_seq>2</ent_seq>
-<k_ele><keb>アルバイト</keb></k_ele>
-<r_ele><reb>アルバイト</reb><re_pri>ichi1</re_pri></r_ele>
-<sense><lsource xml:lang="ger">Arbeit</lsource></sense>
-</entry>
-<entry>
-<ent_seq>3</ent_seq>
-<r_ele><reb>サラリーマン</reb></r_ele>
-<sense><lsource ls_wasei="y" xml:lang="eng">salaried man</lsource></sense>
-</entry>
-<entry>
-<ent_seq>4</ent_seq>
-<r_ele><reb>ホットドッグ</reb></r_ele>
-<sense><lsource xml:lang="eng" ls_type="part">hot</lsource><lsource xml:lang="eng" ls_type="part">dog</lsource></sense>
-</entry>
-<entry>
-<ent_seq>5</ent_seq>
-<r_ele><reb>エスパダ</reb></r_ele>
-<sense><lsource xml:lang="por">espada</lsource><lsource xml:lang="spa">espada</lsource></sense>
-</entry>
-<entry>
-<ent_seq>6</ent_seq>
-<r_ele><reb>テレビ</reb><re_pri>ichi1</re_pri></r_ele>
-<sense><lsource ls_type="part">television</lsource><lsource/></sense>
-</entry>
-<entry>
-<ent_seq>7</ent_seq>
-<k_ele><keb>猫</keb></k_ele>
-<r_ele><reb>ねこ</reb></r_ele>
-<sense><lsource xml:lang="eng">not-a-loan</lsource></sense>
-</entry>
-<entry>
-<ent_seq>8</ent_seq>
-<r_ele><reb>ランドセル</reb></r_ele>
-<sense><lsource xml:lang="dut"/></sense>
-</entry>
-<entry>
-<ent_seq>9</ent_seq>
-<r_ele><reb>ロックアンドロール</reb></r_ele>
-<sense><lsource xml:lang="eng">rock &amp; roll</lsource></sense>
-</entry>
-</JMdict>
-"#;
+    const FIXTURE: &str = r#"{
+  "version": "3.6.2", "languages": ["eng"], "commonOnly": false, "dictDate": "2026-10-19",
+  "dictRevisions": ["x"], "tags": {"n": "noun"},
+  "words": [
+    {"id": "1", "kanji": [], "kana": [{"text": "アルバイト", "common": true, "tags": [], "appliesToKanji": ["*"]}],
+     "sense": [{"partOfSpeech": ["n"], "languageSource": [{"lang": "ger", "full": true, "wasei": false, "text": "Arbeit"}],
+                "gloss": [{"lang": "eng", "text": "part-time job"}]}]},
+    {"id": "2", "kana": [{"text": "コンピューター", "common": true}, {"text": "コンピュータ", "common": false}],
+     "sense": [{"languageSource": [], "gloss": [{"lang": "eng", "text": "computer"}, {"lang": "eng", "text": "calculator"}]}]},
+    {"id": "3", "kana": [{"text": "サラリーマン"}],
+     "sense": [{"languageSource": [{"lang": "eng", "full": true, "wasei": true, "text": "salaried man"}], "gloss": [{"text": "office worker"}]}]},
+    {"id": "4", "kana": [{"text": "ホットドッグ"}],
+     "sense": [{"languageSource": [{"lang": "eng", "full": false, "wasei": false, "text": "hot"}, {"lang": "eng", "full": false, "wasei": false, "text": "dog"}], "gloss": []}]},
+    {"id": "5", "kana": [{"text": "エスパダ"}],
+     "sense": [{"languageSource": [{"lang": "por", "text": "espada"}, {"lang": "spa", "text": "espada"}]}]},
+    {"id": "6", "kana": [{"text": "テレビ", "common": true}],
+     "sense": [{"languageSource": [{"lang": "eng", "full": false, "wasei": false, "text": "television"}]}]},
+    {"id": "7", "kanji": [{"text": "猫"}], "kana": [{"text": "ねこ"}],
+     "sense": [{"languageSource": [{"lang": "eng", "text": "not-a-loan"}]}]},
+    {"id": "8", "kana": [{"text": "カバン"}],
+     "sense": [{"languageSource": [{"lang": "dut", "text": null}], "gloss": [{"text": "bag"}]}]},
+    {"id": "9", "kana": [{"text": "マンション", "common": true}],
+     "sense": [{"languageSource": [{"lang": "eng", "full": true, "wasei": false, "text": "mansion"}]}]},
+    {"id": "10", "kana": [{"text": "ガス", "common": true}],
+     "sense": [{"languageSource": [{"lang": "dut", "text": null}], "gloss": [{"text": "gas"}]}]}
+  ]
+}"#;
 
     fn find<'a>(v: &'a [Entry], head: &str) -> Vec<&'a Entry> {
         v.iter().filter(|e| e.headword == head).collect()
@@ -255,52 +256,74 @@ mod tests {
 
     #[test]
     fn extracts_language_spelling_wasei_and_rank() {
-        let v = extract(FIXTURE);
-        let c = find(&v, "コンピューター");
-        assert_eq!(c.len(), 1);
+        let v = extract(FIXTURE).unwrap();
+        let a = find(&v, "アルバイト");
+        assert_eq!(a.len(), 1);
         assert_eq!(
-            (c[0].lang.as_str(), c[0].spelling.as_str()),
-            ("eng", "computer")
+            (a[0].lang.as_str(), a[0].spelling.as_str()),
+            ("ger", "Arbeit")
         );
-        assert_eq!(c[0].rank, 0);
-        assert!(!c[0].wasei);
-        // 見出しが複数あれば、どれからも引ける
-        assert_eq!(find(&v, "コンピュータ").len(), 1);
-        // keb と reb が同じ綴りでも重複しない
-        assert_eq!(find(&v, "アルバイト").len(), 1);
-        assert_eq!(find(&v, "アルバイト")[0].lang, "ger");
+        assert_eq!(a[0].rank, 0);
         assert!(find(&v, "サラリーマン")[0].wasei);
         assert_eq!(find(&v, "エスパダ").len(), 2);
-        // 省略時は eng、part は順位が 1 つ下
-        let t = find(&v, "テレビ");
-        assert_eq!(t.len(), 1);
-        assert_eq!((t[0].lang.as_str(), t[0].rank), ("eng", 1));
-        assert_eq!(find(&v, "ロックアンドロール")[0].spelling, "rock & roll");
+        // full = false は順位が 1 つ下、common でなければさらに 2 下
+        assert_eq!(find(&v, "テレビ")[0].rank, 1);
+        assert!(!find(&v, "マンション")[0].wasei);
     }
 
     #[test]
-    fn skips_compounds_empty_sources_and_non_katakana_headwords() {
-        let v = extract(FIXTURE);
+    fn infers_from_single_word_gloss_only_when_phonetically_close() {
+        let v = extract(FIXTURE).unwrap();
+        let c = find(&v, "コンピューター");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].spelling, "computer");
+        assert!(c[0].rank >= INFERRED_RANK_BASE);
+        // 見出しが複数あれば、どれからも引ける（common でない方は順位が 1 つ下）
+        assert_eq!(find(&v, "コンピュータ")[0].rank, INFERRED_RANK_BASE + 1);
+        // 音が合わない gloss（bag / カバン）、綴りなしでも言語だけの語義は推定しない
+        assert!(find(&v, "カバン").is_empty());
+        // 言語が eng 以外で綴りが無くても、gloss が音で一致すれば推定（言語は lsource のもの）
+        let g = find(&v, "ガス");
+        assert_eq!((g[0].lang.as_str(), g[0].spelling.as_str()), ("dut", "gas"));
+    }
+
+    #[test]
+    fn skips_compounds_wasei_without_spelling_and_non_katakana() {
+        let v = extract(FIXTURE).unwrap();
         assert!(find(&v, "ホットドッグ").is_empty());
-        assert!(find(&v, "ランドセル").is_empty());
         assert!(v.iter().all(|e| e.headword != "猫" && e.headword != "ねこ"));
     }
 
     #[test]
-    fn attr_does_not_confuse_names() {
-        assert_eq!(
-            attr(r#" xml:lang="ger" ls_wasei="y""#, "xml:lang"),
-            Some("ger")
-        );
-        assert_eq!(attr(r#" xml:lang="ger""#, "lang"), None);
-        assert_eq!(attr(r#" ls_wasei="y""#, "ls_wasei"), Some("y"));
+    fn inference_takes_the_first_matching_gloss_and_skips_mimetics() {
+        let v = extract(
+            r#"{"words":[
+            {"kana":[{"text":"メール"}],"sense":[{"gloss":[{"text":"email"},{"text":"male"}]}]},
+            {"kana":[{"text":"ペラペラ"}],"sense":[{"gloss":[{"text":"volubly"}]}]},
+            {"kana":[{"text":"ワクワク"}],"sense":[{"gloss":[{"text":"wakuwaku"}]}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(find(&v, "メール").len(), 1);
+        assert_eq!(find(&v, "メール")[0].spelling, "email");
+        assert!(find(&v, "ペラペラ").is_empty());
+        assert!(find(&v, "ワクワク").is_empty());
     }
 
     #[test]
-    fn priority_ranks() {
-        assert_eq!(priority_rank(&["news1"]), 0);
-        assert_eq!(priority_rank(&["news2", "nf30"]), 1);
-        assert_eq!(priority_rank(&["nf30"]), 2);
-        assert_eq!(priority_rank(&[]), 3);
+    fn broken_json_is_an_error() {
+        assert!(extract("{").is_err());
+        assert!(extract("[]").is_err());
+        assert!(extract(r#"{"words": 3}"#).is_err());
+    }
+
+    #[test]
+    fn streams_without_reading_unknown_keys_into_memory() {
+        let mut n = 0;
+        extract_reader(
+            br#"{"tags":{"a":[1,2,3]},"words":[],"after":1}"#.as_slice(),
+            &mut |_| n += 1,
+        )
+        .unwrap();
+        assert_eq!(n, 0);
     }
 }

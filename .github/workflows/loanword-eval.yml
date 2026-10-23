@@ -1,0 +1,39 @@
+name: loanword-eval
+
+# カタカナ語の原語候補の実データ評価（手動実行）。固定した JMdict（jmdict-simplified）を取得して
+# 索引を組み立て、bench/loanword/eval.tsv で取りこぼし率・誤訳率・誤出力率を測る。
+# 見るべき出力: 「索引の組み立て」の完了行（語数）・所要時間・ピークメモリ、「評価」の MISS/LEAK 一覧
+# （先頭 80 件）と末尾の pos … の 1 行
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: 取得（SHA-256 検証）と索引の組み立て
+        run: |
+          cargo build --release -p xtask
+          /usr/bin/time -v cargo xtask fetch-loanword 2>&1 | tee /tmp/fetch.log
+          echo "--- 所要時間・ピークメモリ"
+          grep -E "Elapsed \(wall clock\)|Maximum resident set size" /tmp/fetch.log
+          echo "--- ファイル"
+          ls -l ../data/loanword/
+      - name: 評価
+        run: |
+          cargo test --release -p nagi-loanword --test eval -- --nocapture 2>&1 | tee /tmp/eval.log
+          echo "--- サマリ"
+          grep -E "^(索引|pos )" /tmp/eval.log

@@ -364,7 +364,7 @@ pub unsafe extern "C" fn nagi_last_notes(handle: NagiServerHandle) -> *mut c_cha
 /// 任意データの取得元の一覧（JSON）を返す。
 ///
 /// `{"english": {"dir", "file", "url", "sha256", "index_file"}, "loanword": {...}}`。
-/// `sha256` が `null` のデータは、まだ配布元のハッシュを固定していないので取得してはいけない。
+/// `sha256` は取得したファイルの SHA-256 で、検証して一致しなければ使ってはいけない。
 /// `dir` は `<data_dir>/` 下のディレクトリ名、`file` は取得したアーカイブの保存名、
 /// `index_file` は組み立てる索引の名前。
 ///
@@ -396,7 +396,7 @@ pub extern "C" fn nagi_optional_data_sources() -> *mut c_char {
 /// 取得済みのアーカイブから、任意データの索引を組み立てる。
 ///
 /// # Arguments
-/// - `kind`: `"english"`（SCOWL の tar.gz → words.fst）または `"loanword"`（JMdict の gz → loanword.fst）
+/// - `kind`: `"english"`（SCOWL の tar.gz → words.fst）または `"loanword"`（JMdict の zip → loanword.fst）
 /// - `archive_path`: 取得済みのアーカイブのパス（UTF-8）
 /// - `out_path`: 出力する索引のパス（UTF-8）。一時ファイル経由で置き換える
 ///
@@ -433,13 +433,13 @@ pub unsafe extern "C" fn nagi_build_optional_index(
     let result = catch_unwind(AssertUnwindSafe(|| {
         let (archive, out) = (std::path::Path::new(&archive), std::path::Path::new(&out));
         match kind.as_str() {
-            "english" => nagi_english::scowl::build_lexicon_file(archive, out),
-            "loanword" => nagi_loanword::archive::build_index_file(archive, out),
+            "english" => nagi_english::scowl::build_lexicon_file(archive, out).map(|_| ()),
+            "loanword" => nagi_loanword::archive::build_index_file(archive, out).map(|_| ()),
             other => Err(format!("不明な種別です: {other}")),
         }
     }));
     match result {
-        Ok(Ok(_)) => std::ptr::null_mut(),
+        Ok(Ok(())) => std::ptr::null_mut(),
         Ok(Err(message)) => fail(&message),
         Err(_) => fail("索引の組み立て中に内部エラーが起きました"),
     }
