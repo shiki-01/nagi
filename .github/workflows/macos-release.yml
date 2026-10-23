@@ -157,8 +157,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # タグは git で先に作る（API 経由のタグ作成が 403 になる場合があるため。H-53）
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "macos-v$VERSION" "$GITHUB_SHA"
+          git push origin "refs/tags/macos-v$VERSION"
           gh release create "macos-v$VERSION" "Nagi-macos-$VERSION.zip" latest.json \
-            --target "$GITHUB_SHA" \
             --title "Nagi for macOS $VERSION" \
             --notes "Developer ID で署名・公証済み。インストール: \`curl -fsSL https://nagi.shiki-01.com/install.sh | sh\`（辞書とモデルも配布元から自動で取得する。入力メニューの「辞書とモデルをダウンロード…」からも入れられる）"
 
