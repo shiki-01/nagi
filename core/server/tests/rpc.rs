@@ -625,7 +625,7 @@ fn eof_on_stdin_exits_cleanly() {
     // stdin を閉じる（EOF）
     drop(p.stdin.take());
     let status = p.child.wait().unwrap();
-    assert!(status.success());
+    assert!(status.success(), "EOF 後は正常終了する: {status:?}");
 }
 
 #[test]
