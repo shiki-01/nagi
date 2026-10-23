@@ -1,0 +1,205 @@
+# アプリの種類ごとの既定モード・素通し（docs/plan-next-features.md A）
+
+- name: apps-focus-in-code-app-switches-to-alphanumeric
+  config:
+    apps: {classes: {com.apple.Terminal: code}, code_mode: alphanumeric}
+  steps:
+    - action: set_context
+      app_id: com.apple.Terminal
+    - action: focus_in
+      expect: {mode: alphanumeric, result_mode: alphanumeric, consumed: false}
+
+- name: apps-focus-in-prefix-pattern-and-case-insensitive
+  config:
+    apps: {classes: {"com.jetbrains.*": code}, code_mode: alphanumeric}
+  steps:
+    - action: set_context
+      app_id: com.JetBrains.intellij
+    - action: focus_in
+      expect: {mode: alphanumeric}
+
+- name: apps-focus-in-general-app-keeps-mode
+  config:
+    apps: {classes: {com.apple.Terminal: code}, code_mode: alphanumeric}
+  steps:
+    - action: set_context
+      app_id: com.apple.Safari
+    - action: focus_in
+      expect: {mode: hiragana, result_mode: null}
+
+- name: apps-focus-in-without-app-id-keeps-mode
+  config:
+    apps: {classes: {com.apple.Terminal: code}, code_mode: alphanumeric}
+  steps:
+    - action: focus_in
+      expect: {mode: hiragana, result_mode: null}
+
+- name: apps-focus-in-chat-hiragana-from-alphanumeric
+  config:
+    mode: alphanumeric
+    apps: {classes: {com.tinyspeck.slackmacgap: chat}, chat_mode: hiragana}
+  steps:
+    - action: set_context
+      app_id: com.tinyspeck.slackmacgap
+    - action: focus_in
+      expect: {mode: hiragana, result_mode: hiragana}
+
+- name: apps-focus-in-keep-does-not-change-mode
+  config:
+    mode: alphanumeric
+    apps: {classes: {com.tinyspeck.slackmacgap: chat}, chat_mode: keep}
+  steps:
+    - action: set_context
+      app_id: com.tinyspeck.slackmacgap
+    - action: focus_in
+      expect: {mode: alphanumeric, result_mode: null}
+
+- name: apps-remember-mode-overrides-class-default
+  config:
+    apps: {classes: {com.apple.Terminal: code}, code_mode: alphanumeric, remember_mode: true}
+  steps:
+    - action: set_context
+      app_id: com.apple.Terminal
+    - action: focus_in
+      expect: {mode: alphanumeric}
+    - key: "Kana"
+      expect: {mode: hiragana}
+    - action: focus_out
+    - action: focus_in
+      expect: {mode: hiragana}
+
+- name: apps-remember-mode-off-uses-class-default
+  config:
+    apps: {classes: {com.apple.Terminal: code}, code_mode: alphanumeric, remember_mode: false}
+  steps:
+    - action: set_context
+      app_id: com.apple.Terminal
+    - action: focus_in
+      expect: {mode: alphanumeric}
+    - key: "Kana"
+      expect: {mode: hiragana}
+    - action: focus_out
+    - action: focus_in
+      expect: {mode: alphanumeric}
+
+- name: apps-remember-mode-is-per-app
+  config:
+    apps: {classes: {com.apple.Terminal: code}, code_mode: alphanumeric, remember_mode: true}
+  steps:
+    - action: set_context
+      app_id: com.apple.Safari
+    - key: "Eisu"
+      expect: {mode: alphanumeric}
+    - action: set_context
+      app_id: com.apple.Terminal
+    - action: focus_in
+      expect: {mode: alphanumeric}
+    - key: "Kana"
+      expect: {mode: hiragana}
+    - action: set_context
+      app_id: com.apple.Safari
+    - action: focus_in
+      expect: {mode: alphanumeric}
+
+- name: apps-passthrough-slash-command
+  config:
+    apps: {passthrough: "/$@!:#"}
+  steps:
+    - key: {text: "/"}
+    - key: "h"
+    - key: "e"
+    - key: "l"
+    - key: "p"
+      expect: {preedit: "/help", segments: ["/help"], kinds: [literal], state: composing, pending: ""}
+    - key: "Enter"
+      expect: {consumed: true, commit: "/help", state: direct}
+
+- name: apps-passthrough-space-commits-word-and-passes-space
+  config:
+    apps: {passthrough: "/$@!:#"}
+  steps:
+    - key: {text: "@"}
+    - key: "a"
+    - key: "b"
+      expect: {preedit: "@ab", kinds: [literal]}
+    - key: "Space"
+      expect: {consumed: false, commit: "@ab", state: direct}
+    - key: "a"
+      expect: {preedit: "あ", kinds: [japanese]}
+
+- name: apps-passthrough-dollar-and-uppercase
+  config:
+    apps: {passthrough: "/$@!:#"}
+  steps:
+    - key: {text: "$"}
+    - key: {text: "H"}
+    - key: {text: "O"}
+    - key: "m"
+    - key: "e"
+      expect: {preedit: "$HOme", kinds: [literal]}
+    - key: "Enter"
+      expect: {commit: "$HOme"}
+
+- name: apps-passthrough-only-at-start
+  config:
+    apps: {passthrough: "/$@!:#"}
+  steps:
+    - key: "a"
+    - key: {text: "/"}
+      expect: {kinds: [japanese]}
+
+- name: apps-passthrough-disabled-by-default
+  steps:
+    - key: {text: "/"}
+      expect: {preedit: "・", kinds: [japanese]}
+
+- name: apps-passthrough-not-in-alphanumeric-mode
+  config:
+    mode: alphanumeric
+    apps: {passthrough: "/"}
+  steps:
+    - key: {text: "/"}
+      expect: {consumed: false, state: direct}
+
+- name: apps-passthrough-escape-cancels-then-japanese-again
+  config:
+    apps: {passthrough: "/"}
+  steps:
+    - key: {text: "/"}
+    - key: "x"
+    - key: "Escape"
+      expect: {state: direct}
+    - key: "k"
+    - key: "a"
+      expect: {preedit: "か", kinds: [japanese]}
+
+- name: minus-after-digit-stays-ascii
+  steps:
+    - key: "1"
+    - key: {text: "-"}
+    - key: "2"
+      expect: {preedit: "1-2", segments: ["1-2"], kinds: [literal]}
+
+- name: minus-in-parenthesized-expression
+  steps:
+    - key: {text: "("}
+    - key: "1"
+    - key: {text: "-"}
+    - key: "2"
+    - key: {text: ")"}
+      expect: {state: composing}
+
+- name: minus-after-kana-is-still-long-vowel
+  steps:
+    - key: "k"
+    - key: "a"
+    - key: {text: "-"}
+      expect: {preedit: "かー", kinds: [japanese]}
+
+- name: minus-after-digit-then-kana
+  steps:
+    - key: "3"
+    - key: {text: "-"}
+    - key: "k"
+    - key: "a"
+      expect: {kinds: [literal, japanese]}

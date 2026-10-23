@@ -10,10 +10,10 @@ use nagi_config::{
     Config, DakutenCycle, InitialView as ConfigInitialView, Issue, Severity, ShiftLetter,
 };
 use nagi_dict::{Dictionary, UserDictionary};
-use nagi_engine::EngineConfig;
 use nagi_engine::InitialView;
 use nagi_engine::KeyContext;
 use nagi_engine::touch::DakutenOrder;
+use nagi_engine::{AppClass, AppsConfig, EngineConfig};
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_protocol::methods::NotifyLevel;
@@ -165,9 +165,47 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
             },
             romaji_carryover: config.input.romaji_carryover,
             fuzzy_input: config.input.fuzzy.enabled,
+            apps: apps_config_from(&config.apps),
         },
         events,
     )
+}
+
+/// `[apps]` の設定から engine のアプリ設定を作る
+pub fn apps_config_from(apps: &nagi_config::AppsSection) -> AppsConfig {
+    use nagi_config::{AppClass as C, AppDefaultMode as M};
+    let mode = |m: M| match m {
+        M::Keep => None,
+        M::Hiragana => Some(InputMode::Hiragana),
+        M::Alphanumeric => Some(InputMode::Alphanumeric),
+    };
+    AppsConfig {
+        rules: apps
+            .rules()
+            .into_iter()
+            .map(|(pattern, class)| {
+                let class = match class {
+                    C::Code => AppClass::Code,
+                    C::Chat => AppClass::Chat,
+                    C::General => AppClass::General,
+                };
+                (pattern, class)
+            })
+            .collect(),
+        code_mode: mode(apps.code_mode),
+        chat_mode: mode(apps.chat_mode),
+        general_mode: mode(apps.general_mode),
+        remember_mode: apps.remember_mode,
+        // 素通しにできるのは ASCII の記号だけ（英数字を入れると通常の入力ができなくなる）
+        passthrough_chars: if apps.passthrough {
+            apps.passthrough_chars
+                .chars()
+                .filter(char::is_ascii_punctuation)
+                .collect()
+        } else {
+            Vec::new()
+        },
+    }
 }
 
 /// 設定ファイルの問題を通知（`notify`）に直す
@@ -622,6 +660,33 @@ pub fn user_dict_events(issues: &[nagi_dict::UserDictIssue]) -> Vec<Event> {
 mod tests {
     use super::*;
     use nagi_engine::{Action, parse_key};
+
+    #[test]
+    fn apps_config_from_default_maps_table_modes_and_passthrough() {
+        let apps = apps_config_from(&nagi_config::AppsSection::default());
+        assert_eq!(apps.classify("com.apple.Terminal"), AppClass::Code);
+        assert_eq!(apps.classify("com.jetbrains.goland"), AppClass::Code);
+        assert_eq!(apps.classify("com.apple.Safari"), AppClass::General);
+        assert_eq!(
+            apps.default_mode(AppClass::Code),
+            Some(InputMode::Alphanumeric)
+        );
+        assert_eq!(apps.default_mode(AppClass::Chat), None);
+        assert_eq!(apps.default_mode(AppClass::General), None);
+        assert!(apps.remember_mode);
+        assert_eq!(apps.passthrough_chars, vec!['/', '$', '@', '!', ':', '#']);
+    }
+
+    #[test]
+    fn apps_config_from_disabled_passthrough_and_non_symbol_chars() {
+        let mut section = nagi_config::AppsSection {
+            passthrough_chars: "/a1あ@".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(apps_config_from(&section).passthrough_chars, vec!['/', '@']);
+        section.passthrough = false;
+        assert!(apps_config_from(&section).passthrough_chars.is_empty());
+    }
 
     #[test]
     fn engine_config_from_maps_dakuten_cycle() {

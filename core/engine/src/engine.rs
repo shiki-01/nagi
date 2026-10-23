@@ -7,6 +7,7 @@
 //! `preedit` / `candidates` / `mode` と、確定文字列）をまとめて返す。
 
 use crate::action::{Action, Direction};
+use crate::apps::AppsConfig;
 use crate::backend::{BackendCandidate, BackendSegment, Completion, ConversionBackend, TypingHint};
 use crate::ir::{
     Candidate, CandidateSet, CandidateSource, CursorPos, Preedit, Segment, SegmentKind,
@@ -84,6 +85,8 @@ pub struct EngineConfig {
     /// 曖昧入力（`input.fuzzy.enabled`）。ローマ字の取りこぼしが混ざる入力にも入力中の候補と
     /// Space 変換の候補を出し、補正の候補（出所 `Fuzzy`）を混ぜられるようにする
     pub fuzzy_input: bool,
+    /// アプリごとの既定モード・素通し（`[apps]`）
+    pub apps: AppsConfig,
 }
 
 impl Default for EngineConfig {
@@ -104,6 +107,7 @@ impl Default for EngineConfig {
             dakuten_order: touch::DakutenOrder::default(),
             romaji_carryover: true,
             fuzzy_input: false,
+            apps: AppsConfig::default(),
         }
     }
 }
@@ -224,6 +228,10 @@ struct Session {
     keep_next_words: bool,
     /// 変換開始時の入力の、読みの各部分を作ったローマ字（全角英数・半角英数の候補用）
     raw_map: RawMap,
+    /// 素通しの語を入力中か（先頭が `[apps]` の対象記号だった。Space で語を確定してスペースを通す）
+    passthrough_run: bool,
+    /// 直近の操作で利用者がモードを切り替えた（アプリごとのモード記憶に反映する）
+    mode_touched: bool,
 }
 
 /// 入力中（変換前）の候補 1 つ
@@ -375,6 +383,8 @@ pub struct Engine {
     observer: Option<Arc<dyn CommitObserver>>,
     /// フロントが渡したキー矩形の既定（`set_layout_geometry` の `session_id` 省略）
     geometry: Option<Arc<SetLayoutGeometryParams>>,
+    /// アプリごとに覚えたモード（キーは小文字のアプリ識別子。`[apps] remember_mode`。再起動で消える）
+    app_modes: HashMap<String, InputMode>,
 }
 
 fn tail_chars(s: &str, n: usize) -> String {
@@ -440,6 +450,7 @@ impl Engine {
             sessions: HashMap::new(),
             observer: None,
             geometry: None,
+            app_modes: HashMap::new(),
         }
     }
 
@@ -538,6 +549,8 @@ impl Engine {
             next_words: Vec::new(),
             keep_next_words: false,
             raw_map: RawMap::default(),
+            passthrough_run: false,
+            mode_touched: false,
         }
     }
 
@@ -559,6 +572,7 @@ impl Engine {
         sess.touch_toggle = None;
         let mut commit = String::new();
         let consumed = self.handle_key(&mut sess, key, &mut commit);
+        self.remember_mode(&mut sess);
         let result = self.finish(&mut sess, consumed, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
@@ -611,6 +625,7 @@ impl Engine {
             }
             None => false,
         };
+        self.remember_mode(&mut sess);
         let result = self.finish(&mut sess, consumed, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
@@ -773,12 +788,44 @@ impl Engine {
         }
     }
 
-    /// フォーカスを得た（状態は変えない）
+    /// フォーカスを得た。入力の状態は変えないが、アプリの種類ごとの既定モード（`[apps]`）があれば
+    /// モードを切り替える（`set_context` で伝わったアプリ識別子による。優先順位は、アプリごとの
+    /// 記憶、種類ごとの既定、変えない）。入力中の文字列があれば、切り替えの前に確定する
     pub fn focus_in(&mut self, session_id: &str) -> ProcessKeyResult {
         let mut sess = self.take_session(session_id);
-        let result = self.finish(&mut sess, false, String::new());
+        let mut commit = String::new();
+        if let Some(mode) = self.focus_mode(&sess)
+            && mode != sess.mode
+        {
+            self.commit_all(&mut sess, &mut commit);
+            sess.mode = mode;
+            sess.keep_next_words = true;
+        }
+        let result = self.finish(&mut sess, false, commit);
         self.sessions.insert(session_id.to_string(), sess);
         result
+    }
+
+    /// フォーカスを得たときに使うモード。`None` は変えない
+    fn focus_mode(&self, sess: &Session) -> Option<InputMode> {
+        let app = sess.app_id.as_deref()?;
+        let apps = &self.config.apps;
+        if apps.remember_mode
+            && let Some(mode) = self.app_modes.get(&app.to_lowercase())
+        {
+            return Some(*mode);
+        }
+        apps.default_mode(apps.classify(app))
+    }
+
+    /// 利用者がモードを切り替えていたら、アプリごとの記憶に反映する
+    fn remember_mode(&mut self, sess: &mut Session) {
+        if !std::mem::take(&mut sess.mode_touched) || !self.config.apps.remember_mode {
+            return;
+        }
+        if let Some(app) = &sess.app_id {
+            self.app_modes.insert(app.to_lowercase(), sess.mode);
+        }
     }
 
     /// フォーカスを失った: 表示中の surface を確定して Direct へ戻る
@@ -1644,6 +1691,13 @@ impl Engine {
         {
             action = Some(suggest);
         }
+        // 素通しの語の入力中の Space は、変換ではなく語の確定（スペース自体はアプリに渡す）
+        if sess.passthrough_run
+            && matches!(sess.state, State::Composing)
+            && matches!(action, Some(Action::StartConvert))
+        {
+            action = Some(Action::CommitAndPassThrough);
+        }
         // 確定取消（Ctrl+Backspace）以外の操作が来たら、確定直後の記憶を捨てる。
         // 未割当キー（素通し）でも捨てる（「確定直後のみ有効」という制約はここで実現する）
         if !matches!(action, Some(Action::UndoCommit)) {
@@ -1677,6 +1731,7 @@ impl Engine {
             Action::SetMode(mode) => {
                 self.commit_all(sess, commit);
                 sess.mode = mode;
+                sess.mode_touched = true;
                 sess.keep_next_words = true;
                 true
             }
@@ -1686,6 +1741,7 @@ impl Engine {
                     InputMode::Hiragana => InputMode::Alphanumeric,
                     InputMode::Alphanumeric => InputMode::Hiragana,
                 };
+                sess.mode_touched = true;
                 sess.keep_next_words = true;
                 true
             }
@@ -1733,6 +1789,19 @@ impl Engine {
         if matches!(sess.state, State::Converting(_)) {
             // 変換結果を確定して新しい入力を始める
             self.commit_all(sess, commit);
+        }
+        // 素通し: 未入力で先頭が対象の記号なら、その語は日本語に変換せず ASCII（Literal）で入力する
+        if matches!(sess.state, State::Direct)
+            && sess.composer.is_empty()
+            && sess.mode == InputMode::Hiragana
+            && self.config.apps.is_passthrough_start(stroke.ch)
+        {
+            sess.live_conversion = None;
+            sess.live_suppressed = false;
+            sess.composer.begin_literal_run(stroke.ch);
+            sess.passthrough_run = true;
+            sess.state = State::Composing;
+            return;
         }
         // 文中編集は固定部分と対応が取れないので変換結果を捨てる（G-43）
         // 新規入力の開始でも古い結果を持ち越さない
@@ -3121,6 +3190,9 @@ impl Engine {
     /// 前回返した状態との差分を `ProcessKeyResult` にまとめる
     fn finish(&self, sess: &mut Session, consumed: bool, commit: String) -> ProcessKeyResult {
         self.refresh_next_words(sess, consumed, !commit.is_empty());
+        if matches!(sess.state, State::Direct) {
+            sess.passthrough_run = false;
+        }
         // Composing を抜けたら、入力中の候補は持ち越さない（同じ読みを入れ直したときに古い候補を
         // 出さない。作り直しはサーバーが入力のたびに予約する）
         if !matches!(sess.state, State::Composing) {

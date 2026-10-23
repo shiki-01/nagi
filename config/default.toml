@@ -233,6 +233,42 @@ kaomoji = true
 # 既定: true
 calculator = true
 
+[apps]
+# アプリの種類ごとの既定モードと、記号で始まる語の素通し
+# アプリは、フロントが伝えるアプリ識別子（macOS: bundle id、Windows: 実行ファイル名）で
+# code（コードエディタ・ターミナル）/ chat / general（それ以外）に分ける。分類表は同梱しており、
+# [apps.classes] で追加・上書きできる
+
+# フォーカスを得たときの入力モード（種類ごと）
+# keep = 変えない（前回のまま）、hiragana = ひらがな、alphanumeric = 英数
+# 既定: code は alphanumeric、chat と general は keep
+code_mode = "alphanumeric"
+chat_mode = "keep"
+general_mode = "keep"
+
+# 手で切り替えた入力モードをアプリごとに覚え、次にそのアプリに入ったとき最優先で使う
+# 覚えた内容は再起動で消える
+# 既定: true
+remember_mode = true
+
+# 素通し: 何も入力していない状態で下の記号を打ったとき、その語（スペースまで）は
+# 日本語に変換せず ASCII のまま入力する（/help、@name、$HOME、:wq など）。
+# スペースで語を確定し、スペース自体はアプリに渡る
+# 既定: true
+passthrough = true
+
+# 素通しの先頭記号（ASCII の記号を並べる）
+# 既定: "/$@!:#"
+passthrough_chars = "/$@!:#"
+
+# 利用者の分類表（パターン = 種類）。同梱の表より優先する。
+# パターンは完全一致。末尾が * なら前方一致（例: com.jetbrains.*）。大文字小文字は区別しない
+# 同梱の表の例: com.apple.Terminal, com.googlecode.iterm2, com.microsoft.VSCode,
+#   com.jetbrains.*, com.apple.dt.Xcode, WindowsTerminal.exe, Code.exe など（code）
+# [apps.classes]
+# "com.example.MyEditor" = "code"
+# "com.example.*" = "chat"
+
 [userdict]
 # ユーザー辞書の語を変換・予測に使うかどうか
 # false にしても登録内容は消えない（スニペットは [snippet] で別に切り替える）

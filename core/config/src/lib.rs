@@ -562,6 +562,179 @@ impl Default for ConvertSection {
     }
 }
 
+/// アプリの種類（`[apps]` の分類）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppClass {
+    /// コードエディタ・ターミナル。
+    Code,
+    /// チャット・メッセンジャー。
+    Chat,
+    /// それ以外。
+    General,
+}
+
+/// フォーカスを得たときの入力モード。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppDefaultMode {
+    /// 変えない（前回のまま）。
+    Keep,
+    /// ひらがな。
+    Hiragana,
+    /// 英数。
+    Alphanumeric,
+}
+
+impl AppDefaultMode {
+    /// 文字列表現を返す。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AppDefaultMode::Keep => "keep",
+            AppDefaultMode::Hiragana => "hiragana",
+            AppDefaultMode::Alphanumeric => "alphanumeric",
+        }
+    }
+}
+
+/// 同梱のアプリ分類表（パターン → 種類）。末尾が `*` なら前方一致、それ以外は完全一致。
+/// 大文字小文字は区別しない（Windows の実行ファイル名のため）。macOS は bundle id、Windows は実行ファイル名。
+pub const DEFAULT_APP_CLASSES: &[(&str, AppClass)] = &[
+    // macOS: ターミナル・コードエディタ
+    ("com.apple.Terminal", AppClass::Code),
+    ("com.googlecode.iterm2", AppClass::Code),
+    ("com.mitchellh.ghostty", AppClass::Code),
+    ("net.kovidgoyal.kitty", AppClass::Code),
+    ("org.alacritty", AppClass::Code),
+    ("com.github.wez.wezterm", AppClass::Code),
+    ("dev.warp.Warp-Stable", AppClass::Code),
+    ("co.zeit.hyper", AppClass::Code),
+    ("com.microsoft.VSCode", AppClass::Code),
+    ("com.microsoft.VSCodeInsiders", AppClass::Code),
+    ("com.todesktop.230313mzl4w4u92", AppClass::Code),
+    ("com.vscodium", AppClass::Code),
+    ("com.jetbrains.*", AppClass::Code),
+    ("com.apple.dt.Xcode", AppClass::Code),
+    ("dev.zed.Zed", AppClass::Code),
+    ("com.sublimetext.*", AppClass::Code),
+    ("com.panic.Nova", AppClass::Code),
+    ("org.vim.MacVim", AppClass::Code),
+    // Windows: 実行ファイル名
+    ("WindowsTerminal.exe", AppClass::Code),
+    ("cmd.exe", AppClass::Code),
+    ("powershell.exe", AppClass::Code),
+    ("pwsh.exe", AppClass::Code),
+    ("wezterm-gui.exe", AppClass::Code),
+    ("alacritty.exe", AppClass::Code),
+    ("Code.exe", AppClass::Code),
+    ("Cursor.exe", AppClass::Code),
+    ("devenv.exe", AppClass::Code),
+    ("idea64.exe", AppClass::Code),
+    ("pycharm64.exe", AppClass::Code),
+    ("webstorm64.exe", AppClass::Code),
+    ("sublime_text.exe", AppClass::Code),
+    // チャット
+    ("com.tinyspeck.slackmacgap", AppClass::Chat),
+    ("com.hnc.Discord", AppClass::Chat),
+    ("jp.naver.line.mac", AppClass::Chat),
+    ("com.apple.MobileSMS", AppClass::Chat),
+    ("ru.keepcoder.Telegram", AppClass::Chat),
+    ("com.microsoft.teams2", AppClass::Chat),
+    ("us.zoom.xos", AppClass::Chat),
+    ("Slack.exe", AppClass::Chat),
+    ("Discord.exe", AppClass::Chat),
+    ("LINE.exe", AppClass::Chat),
+    ("Telegram.exe", AppClass::Chat),
+];
+
+/// アプリごとの既定モード・素通しのセクション。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppsSection {
+    /// `code` のアプリでフォーカスを得たときのモード。既定: alphanumeric。
+    pub code_mode: AppDefaultMode,
+    /// `chat` のアプリでフォーカスを得たときのモード。既定: keep。
+    pub chat_mode: AppDefaultMode,
+    /// `general`（上記以外）のアプリでフォーカスを得たときのモード。既定: keep。
+    pub general_mode: AppDefaultMode,
+    /// アプリごとに、手で切り替えたモードを覚えるか。既定: true。
+    pub remember_mode: bool,
+    /// 未入力で先頭が対象の記号のとき、その語を日本語変換せず ASCII で入力するか。既定: true。
+    pub passthrough: bool,
+    /// 素通しの先頭記号（ASCII の記号を並べた文字列）。既定: "/$@!:#"。
+    pub passthrough_chars: String,
+    /// 利用者の分類表（パターン → 種類）。同梱の表より優先する。既定: 空。
+    pub classes: std::collections::HashMap<String, AppClass>,
+}
+
+impl Default for AppsSection {
+    fn default() -> Self {
+        AppsSection {
+            code_mode: AppDefaultMode::Alphanumeric,
+            chat_mode: AppDefaultMode::Keep,
+            general_mode: AppDefaultMode::Keep,
+            remember_mode: true,
+            passthrough: true,
+            passthrough_chars: "/$@!:#".to_string(),
+            classes: Default::default(),
+        }
+    }
+}
+
+impl AppsSection {
+    /// 分類の規則を優先順に並べる。利用者の表が同梱の表より先で、それぞれ完全一致が前方一致より先、
+    /// 前方一致は長いパターンが先。大文字小文字は区別しないため、パターンは小文字にして返す
+    pub fn rules(&self) -> Vec<(String, AppClass)> {
+        fn ordered(mut rules: Vec<(String, AppClass)>) -> Vec<(String, AppClass)> {
+            rules.sort_by(|a, b| {
+                let prefix = |p: &str| p.ends_with('*');
+                prefix(&a.0)
+                    .cmp(&prefix(&b.0))
+                    .then(b.0.len().cmp(&a.0.len()))
+                    .then(a.0.cmp(&b.0))
+            });
+            rules
+        }
+        let user = self
+            .classes
+            .iter()
+            .map(|(k, v)| (k.trim().to_lowercase(), *v))
+            .filter(|(k, _)| !k.is_empty())
+            .collect();
+        let builtin = DEFAULT_APP_CLASSES
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), *v))
+            .collect();
+        let mut rules = ordered(user);
+        rules.extend(ordered(builtin));
+        rules
+    }
+
+    /// `app_id` の種類。どの規則にも当たらなければ `General`
+    pub fn classify(&self, app_id: &str) -> AppClass {
+        let id = app_id.to_lowercase();
+        for (pattern, class) in self.rules() {
+            let hit = match pattern.strip_suffix('*') {
+                Some(prefix) => id.starts_with(prefix),
+                None => id == pattern,
+            };
+            if hit {
+                return class;
+            }
+        }
+        AppClass::General
+    }
+
+    /// 種類ごとの、フォーカスを得たときのモード
+    pub fn mode_for(&self, class: AppClass) -> AppDefaultMode {
+        match class {
+            AppClass::Code => self.code_mode,
+            AppClass::Chat => self.chat_mode,
+            AppClass::General => self.general_mode,
+        }
+    }
+}
+
 /// キーマップセクション。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -634,6 +807,8 @@ pub struct Config {
     pub keymap: KeymapSection,
     /// アップデートセクション。
     pub update: UpdateSection,
+    /// アプリごとの既定モード・素通しのセクション。
+    pub apps: AppsSection,
 }
 
 impl Config {
@@ -849,6 +1024,7 @@ const KNOWN_KEYS: &[&str] = &[
     "snippet",
     "keymap",
     "update",
+    "apps",
 ];
 
 /// `[input.fuzzy]` の既知キー。
@@ -901,6 +1077,15 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         "userdict" | "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
+        "apps" => &[
+            "code_mode",
+            "chat_mode",
+            "general_mode",
+            "remember_mode",
+            "passthrough",
+            "passthrough_chars",
+            "classes",
+        ],
         _ => &[],
     }
 }
@@ -1808,5 +1993,58 @@ x = 1
         assert!(issues.is_empty());
         let err = parse("\u{feff}[conversion]\r\nnum_candidates = 0\r\n").unwrap_err();
         assert_eq!(err[0].line, 2);
+    }
+
+    #[test]
+    fn apps_default_classification_table() {
+        let a = AppsSection::default();
+        assert_eq!(a.classify("com.apple.Terminal"), AppClass::Code);
+        assert_eq!(a.classify("com.jetbrains.intellij"), AppClass::Code);
+        assert_eq!(a.classify("COM.MICROSOFT.VSCODE"), AppClass::Code);
+        assert_eq!(a.classify("WindowsTerminal.exe"), AppClass::Code);
+        assert_eq!(a.classify("com.tinyspeck.slackmacgap"), AppClass::Chat);
+        assert_eq!(a.classify("com.apple.Safari"), AppClass::General);
+        assert_eq!(a.mode_for(AppClass::Code), AppDefaultMode::Alphanumeric);
+        assert_eq!(a.mode_for(AppClass::General), AppDefaultMode::Keep);
+        assert!(a.remember_mode && a.passthrough);
+        assert_eq!(a.passthrough_chars, "/$@!:#");
+    }
+
+    #[test]
+    fn apps_section_parses_and_user_table_wins() {
+        let src = r#"
+[apps]
+code_mode = "hiragana"
+remember_mode = false
+passthrough = false
+passthrough_chars = "/"
+
+[apps.classes]
+"com.apple.Terminal" = "general"
+"com.example.*" = "code"
+"com.example.chat" = "chat"
+"#;
+        let (c, issues) = parse(src).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.apps.code_mode, AppDefaultMode::Hiragana);
+        assert!(!c.apps.remember_mode && !c.apps.passthrough);
+        assert_eq!(c.apps.passthrough_chars, "/");
+        // 利用者の表が同梱の表より優先
+        assert_eq!(c.apps.classify("com.apple.Terminal"), AppClass::General);
+        // 前方一致より完全一致が先
+        assert_eq!(c.apps.classify("com.example.foo"), AppClass::Code);
+        assert_eq!(c.apps.classify("com.example.chat"), AppClass::Chat);
+        // 同梱の表は引き続き効く
+        assert_eq!(c.apps.classify("com.googlecode.iterm2"), AppClass::Code);
+    }
+
+    #[test]
+    fn apps_unknown_key_warns_and_bad_value_errors() {
+        let (_, issues) = parse("[apps]\nbogus = 1\n").unwrap();
+        assert!(
+            issues.iter().any(|i| i.message.contains("apps.bogus")),
+            "{issues:?}"
+        );
+        assert!(parse("[apps]\ncode_mode = \"x\"\n").is_err());
     }
 }

@@ -167,6 +167,14 @@ fn choice(options: &[(&str, &str)]) -> SettingKind {
     }
 }
 
+fn apps_mode_choice() -> SettingKind {
+    choice(&[
+        ("keep", "前回のまま"),
+        ("hiragana", "ひらがな"),
+        ("alphanumeric", "英数"),
+    ])
+}
+
 fn int(min: i32, max: i32, step: i32) -> SettingKind {
     SettingKind::Int { min, max, step }
 }
@@ -527,6 +535,48 @@ pub fn definitions() -> Vec<SettingDef> {
             "短い読みから定型文を候補に出します。オフにしても登録内容は消えません。",
             SettingKind::Bool,
         ),
+        def(
+            "apps.code_mode",
+            "アプリごとの設定",
+            "コードエディタ・ターミナルの既定モード",
+            "コードエディタ・ターミナルに入ったときの入力モードです。「前回のまま」なら切り替えません。どのアプリがこれに当たるかは config.toml の [apps.classes] で追加できます。",
+            apps_mode_choice(),
+        ),
+        def(
+            "apps.chat_mode",
+            "アプリごとの設定",
+            "チャットアプリの既定モード",
+            "チャット・メッセンジャーに入ったときの入力モードです。",
+            apps_mode_choice(),
+        ),
+        def(
+            "apps.general_mode",
+            "アプリごとの設定",
+            "そのほかのアプリの既定モード",
+            "上記以外のアプリに入ったときの入力モードです。",
+            apps_mode_choice(),
+        ),
+        def(
+            "apps.remember_mode",
+            "アプリごとの設定",
+            "アプリごとにモードを覚える",
+            "手で切り替えた入力モードをアプリごとに覚え、次にそのアプリに入ったときその状態で始めます。覚えた内容は再起動で消えます。",
+            SettingKind::Bool,
+        ),
+        def(
+            "apps.passthrough",
+            "アプリごとの設定",
+            "記号で始まる語を変換しない",
+            "何も入力していない状態で下の記号を打つと、その語（スペースまで）は日本語に変換せず、そのまま入力します。/help や @name、$HOME の入力用です。",
+            SettingKind::Bool,
+        ),
+        def(
+            "apps.passthrough_chars",
+            "アプリごとの設定",
+            "変換しない先頭の記号",
+            "ASCII の記号を並べて指定します（例: /$@!:#）。",
+            SettingKind::Text,
+        ),
         update_check,
     ]
 }
@@ -592,6 +642,12 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         "predict.next_word" => Some(Bool(config.predict.next_word)),
         "predict.next_word_count" => Some(n(config.predict.next_word_count)),
         "update.auto_check" => Some(Bool(config.update.auto_check)),
+        "apps.code_mode" => Some(Text(config.apps.code_mode.as_str().to_string())),
+        "apps.chat_mode" => Some(Text(config.apps.chat_mode.as_str().to_string())),
+        "apps.general_mode" => Some(Text(config.apps.general_mode.as_str().to_string())),
+        "apps.remember_mode" => Some(Bool(config.apps.remember_mode)),
+        "apps.passthrough" => Some(Bool(config.apps.passthrough)),
+        "apps.passthrough_chars" => Some(Text(config.apps.passthrough_chars.clone())),
         _ => None,
     }
 }
@@ -1090,6 +1146,31 @@ mod tests {
         let (c, issues) = crate::parse(&r.source).unwrap();
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.rewriter.emoji && !c.rewriter.kaomoji);
+    }
+
+    #[test]
+    fn apps_definitions_round_trip() {
+        let r = apply_changes(
+            None,
+            &[
+                set("apps.code_mode", SettingValue::Text("hiragana".into())),
+                set("apps.remember_mode", SettingValue::Bool(false)),
+                set("apps.passthrough_chars", SettingValue::Text("/@".into())),
+            ],
+        )
+        .unwrap();
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.apps.code_mode, crate::AppDefaultMode::Hiragana);
+        assert!(!c.apps.remember_mode);
+        assert_eq!(c.apps.passthrough_chars, "/@");
+        let bad = apply_changes(
+            None,
+            &[set("apps.chat_mode", SettingValue::Text("x".into()))],
+        )
+        .unwrap();
+        assert_eq!(bad.errors.len(), 1);
     }
 
     #[test]

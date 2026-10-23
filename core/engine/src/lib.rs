@@ -4,6 +4,7 @@
 //! [`ConversionBackend`] の裏に置き、辞書（`minimal` 経路）や LLM を差し替えられる。
 
 pub mod action;
+pub mod apps;
 pub mod backend;
 pub mod engine;
 pub mod ir;
@@ -14,6 +15,7 @@ pub mod observer;
 pub mod touch;
 
 pub use action::{Action, Direction};
+pub use apps::{AppClass, AppsConfig};
 pub use backend::{
     BackendCandidate, BackendSegment, BackendSentence, Completion, ConversionBackend, KanaBackend,
     MockBackend, TypingHint,

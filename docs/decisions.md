@@ -1504,3 +1504,13 @@ H-41・H-42 の残件のうち、実機なしで作れるものを実装し、�
 - **直した既存テスト**: 候補の末尾が増えたための期待値（`api.rs` の sentence 経路 2 件、`50_candidates.yaml` の先頭 Space・循環・↑↓）、電卓の既定 ON（`rewriter.rs`、`settings.rs`）、有効桁 10 の仕様変更（`10/3`・`1/3` の桁数）
 - **未対応・要判断**: 形式候補を選んで確定すると、既存のカタカナ候補と同じく読み → 表記が学習される（例: きょう → `ｋｙｏｕ`）。学習から除外するかは要判断。`docs/ime-design-doc.md` に電卓の記述は見当たらなかった。実バックエンド（LLM）での遅延の計測は未実施
 
+
+### H-49. アプリの種類ごとの既定モード・記号で始まる語の素通し・数式の `-`（2026-10-23、`docs/plan-next-features.md` A、要実機確認）
+
+- **設定 `[apps]`**（`core/config`、`config/default.toml`、設定 GUI の「アプリごとの設定」）: `code_mode`（既定 `alphanumeric`）/ `chat_mode` / `general_mode`（既定 `keep`。`hiragana` / `alphanumeric` / `keep`）、`remember_mode`（既定 true）、`passthrough`（既定 true）、`passthrough_chars`（既定 `"/$@!:#"`）、`[apps.classes]`（利用者の分類表。パターン = `code` | `chat` | `general`）。同梱の分類表は `nagi_config::DEFAULT_APP_CLASSES`（macOS の bundle id と Windows の実行ファイル名。`com.jetbrains.*` など）。照合は大文字小文字を区別せず、末尾 `*` は前方一致。優先順位は「利用者の表 > 同梱の表」、それぞれ「完全一致 > 前方一致（長いパターン先）」。分類表は GUI には出さない（`config.toml` で編集）
+- **focus_in**: 新しい Action は作らず、`Engine::focus_in` がセッションのアプリ識別子（直前の `set_context` で伝わったもの）からモードを決め、変わるなら入力中の文字列を確定してからモードを切り替え、応答の `mode` で返す。優先順位は「アプリごとの記憶 > 種類ごとの既定 > 変えない」。`app_id` が無い（`set_context` が先に来ていない）ときは変えない
+- **モードの記憶**: 利用者のモード切替（`SetMode` / `ToggleMode`。`process_key` と `perform_action` 経由）をエンジンのメモリに保持する（キーは小文字のアプリ識別子）。**再起動で消える**（永続化は未実装）。`focus_in` による自動切替は記憶しない
+- **素通し**: Hiragana モードで未入力（Direct・Composer が空）のとき、対象記号を打つと `Composer::begin_literal_run` で Literal を始め、以降の ASCII は Shift+英字と同じ英字継続（literal_mode）で Literal になる。その語の入力中の Space は変換ではなく**語の確定（`CommitAndPassThrough`）**で、スペース自体はアプリに渡る。Enter は確定、Esc は取り消し。英数モード・入力中の途中・`passthrough = false` では働かない。素通しにできるのは ASCII の記号だけ（`passthrough_chars` の英数字・非 ASCII は無視）。タッチ入力の `insert_reading` も同じ経路を通る
+- **数式の `-`**: 直前（保留なし）が Literal の数字のときの `-` は ASCII `-` のまま（`1-2`・`(1-2)`・`10-3-2`）。それ以外（`ka-` → かー、先頭の `-`、`1ka-` → 1かー）の長音の規則は従来どおり。`merge_math_pieces`（直前の変更。コード内のコメントが「H-49」を指すのはこの件）で `(1-2)` は 1 つの Literal 文節にまとまり、電卓候補が出る
+- **迷った判断**: (1) 分類表の優先順位の解決は設定側（`AppsSection::rules`）で行い、エンジンには優先順に並べた規則だけを渡す（エンジンは設定クレートに依存しない）。(2) 素通しの先頭記号は文字列（`"/$@!:#"`）にした（設定 GUI の Text で編集できるため）。(3) 素通しの Space を「確定してスペースを通す」にした（`/help` のあとのスペースが日本語変換の開始になる不都合を避けるため。スペースで全角英数などの形式候補は出なくなる）
+- **未確認・未対応**: macOS では `activateServer` が `focus_in` の応答を反映した直後に `adoptSelectedMode`（OS で選ばれている入力ソースへコアを合わせ直す）を呼ぶ。`syncMode` が OS 側の入力ソースを同期的に切り替えない場合、コアのモードが元に戻り、**切り替えた結果がアプリごとの記憶として記録される**可能性がある（フロントは未変更）。実機で確認し、必要なら `adoptSelectedMode` を `focus_in` の応答にモードが含まれたときは省く。Windows・iOS で `set_context` が `focus_in` より先に送られているかは未確認。記憶の永続化は未実装

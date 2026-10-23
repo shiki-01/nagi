@@ -3,10 +3,12 @@
 //! 形式は `tests/golden/README.md` を参照。
 
 use nagi_engine::{
-    Engine, EngineConfig, KanaBackend, MockBackend, SessionSnapshot, StateKind, key_from_text,
-    parse_key,
+    AppClass, AppsConfig, Engine, EngineConfig, KanaBackend, MockBackend, SessionSnapshot,
+    StateKind, key_from_text, parse_key,
 };
-use nagi_protocol::methods::{ProcessKeyResult, RestoreSegment, RestoreSessionParams};
+use nagi_protocol::methods::{
+    ProcessKeyResult, RestoreSegment, RestoreSessionParams, SetContextParams,
+};
 use nagi_protocol::view::{InputMode, SegmentKind};
 use nagi_romaji::{PunctuationStyle, ShiftLetterMode};
 use serde::Deserialize;
@@ -61,6 +63,22 @@ struct ConfigSpec {
     page_size: Option<usize>,
     mode: Option<String>,
     romaji_carryover: Option<bool>,
+    apps: Option<AppsSpec>,
+}
+
+/// `[apps]` 相当（分類表はパターン → code | chat | general）
+#[derive(Debug, Default, Deserialize)]
+struct AppsSpec {
+    #[serde(default)]
+    classes: BTreeMap<String, String>,
+    code_mode: Option<String>,
+    chat_mode: Option<String>,
+    general_mode: Option<String>,
+    #[serde(default)]
+    remember_mode: bool,
+    /// 素通しの先頭記号（空・省略なら無効）
+    #[serde(default)]
+    passthrough: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +118,9 @@ struct Step {
     /// `action: live_convert` の期待 reading（サーバーがデバウンス後に渡す入力全体の読み）
     #[serde(default)]
     reading: Option<String>,
+    /// `action: set_context` のアプリ識別子
+    #[serde(default)]
+    app_id: Option<String>,
     #[serde(default)]
     restore: Option<RestoreSpec>,
     #[serde(default)]
@@ -209,6 +230,30 @@ fn build_engine(case: &Case) -> Engine {
         }
         if let Some(b) = c.romaji_carryover {
             config.romaji_carryover = b;
+        }
+        if let Some(a) = &c.apps {
+            let class = |s: &str| match s {
+                "code" => AppClass::Code,
+                "chat" => AppClass::Chat,
+                "general" => AppClass::General,
+                other => panic!("不明な apps 分類: {other}"),
+            };
+            let mode = |m: &Option<String>| match m.as_deref() {
+                None | Some("keep") => None,
+                Some(m) => Some(parse_mode(m)),
+            };
+            config.apps = AppsConfig {
+                rules: a
+                    .classes
+                    .iter()
+                    .map(|(k, v)| (k.to_lowercase(), class(v)))
+                    .collect(),
+                code_mode: mode(&a.code_mode),
+                chat_mode: mode(&a.chat_mode),
+                general_mode: mode(&a.general_mode),
+                remember_mode: a.remember_mode,
+                passthrough_chars: a.passthrough.chars().collect(),
+            };
         }
     }
     let backend: Arc<dyn nagi_engine::ConversionBackend> = match case.backend.as_deref() {
@@ -369,6 +414,26 @@ fn run_case(case: &Case) -> Vec<String> {
             },
             (Some(KeySpec::Text { text }), None) => {
                 engine.process_key(&case.session, &key_from_text(text))
+            }
+            (None, Some("set_context")) => {
+                let app_id = step
+                    .app_id
+                    .clone()
+                    .expect("action: set_context には app_id: が必要");
+                engine.set_context(
+                    &case.session,
+                    &SetContextParams {
+                        session_id: case.session.clone(),
+                        surrounding_text: None,
+                        app_id: Some(app_id),
+                        secure_input: None,
+                    },
+                );
+                // 応答を持たないステップ。直前の応答の revision を保つため、状態だけを検査する
+                ProcessKeyResult {
+                    revision: prev_revision,
+                    ..Default::default()
+                }
             }
             (None, Some("focus_in")) => engine.focus_in(&case.session),
             (None, Some("focus_out")) => engine.focus_out(&case.session),

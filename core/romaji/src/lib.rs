@@ -465,7 +465,10 @@ impl Composer {
             self.flush_pending();
             self.literal_mode = matches!(self.shift_letter, ShiftLetterMode::LiteralContinue);
             self.insert_at_cursor(ch, PieceKind::Literal);
-        } else if ch.is_ascii_digit() || (self.literal_mode && ch.is_ascii_graphic()) {
+        } else if ch.is_ascii_digit()
+            || (self.literal_mode && ch.is_ascii_graphic())
+            || self.is_minus_after_digit(ch)
+        {
             self.flush_pending();
             self.insert_at_cursor(ch, PieceKind::Literal);
         } else if !ch.is_ascii() {
@@ -481,6 +484,26 @@ impl Composer {
             self.pending_keys.push(stroke);
             self.insert_emits(emits);
         }
+    }
+
+    /// 数式の `-`（`1-2`・`(1-2)`）か。保留が無く、直前が数字（Literal）の `-` は長音 `ー` にしない。
+    /// それ以外（`あ-` `ka-` など）の長音の規則はそのまま
+    fn is_minus_after_digit(&self, ch: char) -> bool {
+        ch == '-'
+            && !self.converter.has_pending()
+            && self.cursor > 0
+            && matches!(
+                self.chars.get(self.cursor - 1),
+                Some((c, PieceKind::Literal, _)) if c.is_ascii_digit()
+            )
+    }
+
+    /// 英字継続（literal モード）を開始して 1 文字を Literal で挿入する。以降の ASCII の
+    /// 記号・英字は、`end_literal_run`（変換・確定・Esc）まで Literal になる。素通し（`/help` など）用
+    pub fn begin_literal_run(&mut self, ch: char) {
+        self.flush_pending();
+        self.literal_mode = true;
+        self.insert_at_cursor(ch, PieceKind::Literal);
     }
 
     /// 入力中の文字を作った実際の打鍵列（保留を除く。`text()` と同じ順）。
@@ -2295,5 +2318,52 @@ mod tests {
         assert_eq!(c.flicks(), [Some((100.0, 0.8)), Some((80.0, 0.9))]);
         c.remove_front(1);
         assert_eq!(c.flicks(), [Some((80.0, 0.9))]);
+    }
+
+    #[test]
+    fn minus_after_digit_is_ascii_but_long_vowel_rule_is_kept() {
+        let (mut c, _) = setup_composer();
+        for ch in "1-2".chars() {
+            c.insert_char(ch);
+        }
+        assert_eq!(c.text(), "1-2");
+        assert!(c.pieces().iter().all(|p| p.kind == PieceKind::Literal));
+        // 数字の後ろの連続
+        let (mut c, _) = setup_composer();
+        for ch in "10-3-2".chars() {
+            c.insert_char(ch);
+        }
+        assert_eq!(c.text(), "10-3-2");
+        // かなの後ろ・保留のあとは長音のまま
+        let (mut c, _) = setup_composer();
+        for ch in "ka-".chars() {
+            c.insert_char(ch);
+        }
+        assert_eq!(c.text(), "かー");
+        // 数字の後ろでも、保留中のローマ字があれば長音の規則が先（`1ka-` は か + ー）
+        let (mut c, _) = setup_composer();
+        for ch in "1ka-".chars() {
+            c.insert_char(ch);
+        }
+        assert_eq!(c.text(), "1かー");
+        // 先頭の `-` は従来どおり
+        let (mut c, _) = setup_composer();
+        c.insert_char('-');
+        assert_eq!(c.text(), "ー");
+    }
+
+    #[test]
+    fn begin_literal_run_keeps_following_ascii_literal() {
+        let (mut c, _) = setup_composer();
+        c.begin_literal_run('/');
+        for ch in "help".chars() {
+            c.insert_char(ch);
+        }
+        assert_eq!(c.text(), "/help");
+        assert!(c.pieces().iter().all(|p| p.kind == PieceKind::Literal));
+        c.end_literal_run();
+        c.insert_char('k');
+        c.insert_char('a');
+        assert_eq!(c.text(), "/helpか");
     }
 }

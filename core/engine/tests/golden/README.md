@@ -18,6 +18,11 @@
     page_size: 9
     mode: hiragana                   # | alphanumeric（初期モード）
     romaji_carryover: true           # | false（Backspace でのローマ字の引き継ぎ。H-23）
+    apps:                            # アプリごとの既定モード・素通し（H-49）
+      classes: {com.apple.Terminal: code, "com.jetbrains.*": code}   # パターン → code | chat | general
+      code_mode: alphanumeric        # chat_mode / general_mode も。keep（省略）= 前回のまま
+      remember_mode: true            # アプリごとのモード記憶
+      passthrough: "/$@!:#"          # 素通しの先頭記号（省略 = 無効）
   session: s1              # 任意
   steps:
     - key: "k"             # `Ctrl+Shift+Right` 形式。または {text: "😀"}
@@ -41,6 +46,7 @@
         result_preedit_present: true   # 応答に preedit（差分）が含まれるか
         result_candidates_present: false
         revision_increased: true       # 応答の revision が前のステップより増えたか
+    - action: set_context  # app_id: com.apple.Terminal（アプリ識別子を伝える。応答は検査しない）
     - action: focus_out    # focus_in | focus_out | reset | restore | live_convert | refresh_suggest（入力中の候補を作る）
     - action: restore
       restore:
