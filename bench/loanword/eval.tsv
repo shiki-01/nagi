@@ -1,5 +1,6 @@
 # 外来語の原語候補の評価（自作・正解つき）。列: 種別<TAB>カタカナ表記<TAB>期待する原語（大文字小文字は区別しない）
 # pos = 原語が候補に出るべき / wasei = 和製英語なので何も出さない / neg = 外来語でないので何も出さない
+# info = 集計に含めず、出力だけ表示する（JMdict が和製英語の印を付けていない英語由来語、日本語のローマ字化の gloss など。2026-10-23 の見直しで wasei/neg から移した）
 pos	コンピューター	computer
 pos	コンピュータ	computer
 pos	ラジオ	radio
@@ -198,7 +199,6 @@ pos	ティッシュ	tissue
 pos	キャンディー	candy
 pos	ジェットコースター	roller coaster
 wasei	サラリーマン	
-wasei	マンション	
 wasei	ガソリンスタンド	
 wasei	ナイター	
 wasei	ノートパソコン	
@@ -213,15 +213,11 @@ wasei	スキンシップ
 wasei	オーダーメイド	
 wasei	ベビーカー	
 wasei	ホッチキス	
-wasei	シール	
-wasei	クーラー	
 wasei	テレビゲーム	
-wasei	ワンピース	
 neg	ピカチュウ	
 neg	ドラえもん	
 neg	ヤクルト	
 neg	ニンジン	
-neg	カタカナ	
 neg	ワクワク	
 neg	ドキドキ	
 neg	ペラペラ	
@@ -237,3 +233,9 @@ neg	スズキ
 neg	ヤマダ	
 neg	クマモン	
 neg	アキヒト	
+neg	ヤマモト	
+info	マンション	
+info	シール	
+info	クーラー	
+info	ワンピース	
+info	カタカナ	

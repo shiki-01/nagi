@@ -27,7 +27,8 @@ jobs:
       - name: 取得（SHA-256 検証）と索引の組み立て
         run: |
           cargo build --release -p xtask
-          /usr/bin/time -v cargo xtask fetch-loanword 2>&1 | tee /tmp/fetch.log
+          # cargo 経由だとコンパイラのメモリが混ざるので、ビルド済みのバイナリを直接測る
+          CARGO_MANIFEST_DIR="$PWD/xtask" /usr/bin/time -v target/release/xtask fetch-loanword 2>&1 | tee /tmp/fetch.log
           echo "--- 所要時間・ピークメモリ"
           grep -E "Elapsed \(wall clock\)|Maximum resident set size" /tmp/fetch.log
           echo "--- ファイル"

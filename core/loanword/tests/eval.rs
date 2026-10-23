@@ -5,6 +5,7 @@
 //!
 //! - 取りこぼし率 = `pos` のうち、期待する原語が候補に出なかった割合
 //! - 誤訳率 = `pos` のうち、候補は出たが期待する原語が無かった割合（取りこぼしの内数）
+//! - `info` は集計に含めず出力だけ表示する
 //! - 誤出力率 = `wasei` と `neg`（出してはいけない語）のうち、何か候補が出た割合
 
 use nagi_loanword::{LoanwordIndex, LoanwordRewriter};
@@ -62,6 +63,7 @@ fn evaluation_corpus() {
                     }
                 }
             }
+            "info" => println!("INFO {input} 出力={got:?}"),
             _ => {
                 banned += 1;
                 if !got.is_empty() {
