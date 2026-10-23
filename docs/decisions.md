@@ -1610,7 +1610,13 @@ H-41・H-42 の残件のうち、実機なしで作れるものを実装し、�
 - **迷った判断**: (1) 番号は指示の「H-44（次番号を確認）」が既に使われていたため H-54。 (2) ログの時刻は UTC（ローカル時刻の取得に追加の API を使わないため）。 (3) `LOCALAPPDATA` が無ければログなし（`%TEMP%` 等へは逃がさない）。 (4) `GUID_NAGI_LANGBAR_BUTTON` は削除（同じ DLL で二つの項目を出さない。旧 GUID の項目は Deactivate で外れるので残骸は出ない）。
 - **未確認（実機）**: トレイに「あ / A」が出ること、左クリックの切り替え、右クリックのメニュー、`dwStyle` で足りるか（出ない場合に `TF_LBI_STYLE_TEXTCOLORICON` などを試す）、複数プロセスからの追記。手順は `docs/real-hardware-checklist.md` §8.5d、`docs/windows-verification.md`。
 
-### H-55. Windows: imserver 起動失敗（5 回失敗 → 辞書のみ）の原因仮説と、stderr 非継承・panic 回避・終了コード記録（2026-10-23、ユーザー指示、実機未確認）
+### H-55. 数式・記号の入力中に候補バーへ電卓・全角・記号の候補を出す（2026-10-23、要実機確認）
+
+- 症状: iOS の数字・記号で `1+2` を打つと下線だけで、候補バーが空のまま（TestFlight 64d0f9b）。
+- 原因（コア）: 入力中の候補（composing の suggest）は日本語の読みだけが対象で、Literal だけの preedit は候補が作られなかった。Space / 変換キー（`perform_action` の Space・StartConvert）は、コアのテストでは Literal でも 1 回目から候補ウィンドウが開く（`1+2` → `1+2`・`3`・`１＋２`、`(1+2)*3` → `9`、`1+2=` → 答え）。Swift 側（候補バーの表示・`classifyCandidates`・Space/変換キーの送信）に Literal を弾く処理は見つからなかった。実機で Space 後も出ないなら別原因（下記ログで切り分ける）。
+- 修正: preedit 全体が 1 つの Literal の式（数字と記号を含む。`merge_math_pieces` で全角括弧もまとめる）または記号 1 文字のとき、入力中の候補に `literal_candidates`（Rewriter のみ。電卓 → 記号の装飾 → 全角/半角）を出す。辞書・LLM は通さないので軽い。`1`・`123`・`abc` のような数字だけ・英字だけは打つたびに出ると邪魔なので対象外（既存のゴールデンは変えていない）。入力中の候補の選択は学習に通さない。
+
+### H-56. Windows: imserver 起動失敗（5 回失敗 → 辞書のみ）の原因仮説と、stderr 非継承・panic 回避・終了コード記録（2026-10-23、ユーザー指示、実機未確認）
 
 - **症状**: Windows 実機で「imserver の起動に 5 回失敗したので辞書のみで起動します」。5 回が約 3 秒で揃う（バックオフ 200ms から倍々で 5 回 = 即時終了型と整合）。Linux では再現しない。
 - **仮説 A（有力）**: DLL が imserver を `stderr(Stdio::inherit())` で起動していた（`process.rs`）。GUI ホストの stderr が無効・壊れたハンドルだと、imserver の最初の `eprintln!`（`main.rs` の起動メモ・プロファイル行）が panic（`failed printing to stderr`）して終了コード 101 で即死する。Linux で `/dev/full` を stderr にすると同じ panic を再現できた（修正前は `core/server/tests/broken_stderr.rs` が失敗、修正後は通る）。なお std は無効ハンドル（`ERROR_INVALID_HANDLE`）の書き込みは成功扱いにするので、実機の症状が出る条件は「有効だが書けないハンドル」（閉じたパイプ等）に限られる可能性があり、**仮説 A が実機の原因かは未確認**。

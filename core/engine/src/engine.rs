@@ -917,6 +917,9 @@ impl Engine {
         if pieces.is_empty() {
             return None;
         }
+        if let Some(text) = Self::literal_expression(&pieces) {
+            return Some(text);
+        }
         if pieces.iter().any(|p| p.kind != PieceKind::Japanese) {
             // 曖昧入力: ローマ字の取りこぼし（`kamji` の m など）だけが混ざる入力も、
             // 打った通りの読みとして候補（補正の「もしかして」を含む）を作る
@@ -927,6 +930,29 @@ impl Engine {
                 .flatten();
         }
         Some(pieces.iter().map(|p| p.text.as_str()).collect())
+    }
+
+    /// 入力全体が数式・記号の 1 つの Literal（`1+2`・`(1+2)*3`・`$`。括弧が全角になる分は
+    /// `merge_math_pieces` で 1 つにまとめる）なら、その文字列。入力中の候補（電卓・全角・記号）を出す対象。
+    /// 数字だけ・英字だけ（`1`・`abc`）は、打つたびに候補が出て邪魔なので対象外（Space 変換では出る）
+    fn literal_expression(pieces: &[Piece]) -> Option<String> {
+        let merged = merge_math_pieces(pieces.to_vec());
+        let [piece] = merged.as_slice() else {
+            return None;
+        };
+        if piece.kind != PieceKind::Literal {
+            return None;
+        }
+        let text = &piece.text;
+        let has_symbol = text.chars().any(|c| !c.is_alphanumeric());
+        let has_digit = text.chars().any(|c| c.is_ascii_digit());
+        let single = text.chars().count() == 1;
+        (has_symbol && (has_digit || single)).then(|| text.clone())
+    }
+
+    /// 現在の入力中の候補が Literal（式・記号）向けか
+    fn composing_is_literal(&self, sess: &Session) -> bool {
+        Self::literal_expression(&sess.composer.pieces()).is_some()
     }
 
     /// 入力中の候補を作り直す（バックグラウンドのスレッドから、デバウンス後に呼ぶ）。
@@ -940,7 +966,11 @@ impl Engine {
         let current = self.candidate_reading(&sess);
         let result = if current.as_deref() == Some(reading) {
             let typing = TypingSnapshot::of(&sess, reading);
-            let items = self.compute_composing_items(reading, &sess.left_context, &typing);
+            let items = if self.composing_is_literal(&sess) {
+                self.compute_literal_composing_items(reading)
+            } else {
+                self.compute_composing_items(reading, &sess.left_context, &typing)
+            };
             // 中身が入れ替わったら選択は無効（同じなら選択を保つ）
             let same = sess
                 .composing_cands
@@ -961,6 +991,23 @@ impl Engine {
         };
         self.sessions.insert(session_id.to_string(), sess);
         result
+    }
+
+    /// Literal（式・記号）の入力中の候補: Rewriter だけ（電卓 → 記号の装飾 → 全角/半角）。
+    /// 辞書・LLM は通さないので軽い。表記そのもの（入力済み）は含めない
+    fn compute_literal_composing_items(&self, text: &str) -> Vec<ComposingItem> {
+        let total = text.chars().count();
+        self.backend
+            .literal_candidates(text, COMPOSING_CANDIDATES_LIMIT)
+            .into_iter()
+            .filter(|c| c.surface != text)
+            .map(|c| ComposingItem {
+                surface: c.surface,
+                covers: total,
+                sources: c.sources,
+                reading: None,
+            })
+            .collect()
     }
 
     /// 入力中の候補: 読み全体の最良の変換、先頭の文節の候補（部分変換）、ひらがな・カタカナ
@@ -1101,17 +1148,21 @@ impl Engine {
         let total = reading.chars().count();
         let covers = item.covers.min(total);
         let prefix: String = reading.chars().take(covers).collect();
-        self.notify_commit(
-            sess,
-            &[Segment {
-                // 曖昧入力の補正候補は、補正後の読みで確定・学習する
-                reading: item.reading.clone().unwrap_or_else(|| prefix.clone()),
-                surface: item.surface.clone(),
-                kind: SegmentKind::Japanese,
-                candidates: None,
-                chunk_id: 0,
-            }],
-        );
+        let literal = self.composing_is_literal(sess);
+        // Literal（式・記号）の候補は学習しない
+        if !literal {
+            self.notify_commit(
+                sess,
+                &[Segment {
+                    // 曖昧入力の補正候補は、補正後の読みで確定・学習する
+                    reading: item.reading.clone().unwrap_or_else(|| prefix.clone()),
+                    surface: item.surface.clone(),
+                    kind: SegmentKind::Japanese,
+                    candidates: None,
+                    chunk_id: 0,
+                }],
+            );
+        }
         let before_len = commit.len();
         commit.push_str(&item.surface);
         sess.live_conversion = None;
@@ -1123,7 +1174,11 @@ impl Engine {
             sess.state = State::Direct;
             sess.last_commit = Some(LastCommit {
                 pieces: vec![Piece {
-                    kind: PieceKind::Japanese,
+                    kind: if literal {
+                        PieceKind::Literal
+                    } else {
+                        PieceKind::Japanese
+                    },
                     text: prefix,
                 }],
                 committed_len_utf16: utf16::utf16_len(&commit[before_len..]),
@@ -1600,7 +1655,11 @@ impl Engine {
         }
         let reading = cc.reading.clone();
         let typing = TypingSnapshot::of(sess, &reading);
-        let items = self.compute_composing_items(&reading, &sess.left_context, &typing);
+        let items = if self.composing_is_literal(sess) {
+            self.compute_literal_composing_items(&reading)
+        } else {
+            self.compute_composing_items(&reading, &sess.left_context, &typing)
+        };
         if items == cc.items {
             return false;
         }

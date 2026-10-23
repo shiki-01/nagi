@@ -520,3 +520,92 @@ fn dakuten_order_decides_tsu_and_u_cycles() {
         DakutenOrder::SmallFirst
     );
 }
+
+// ---- 数字・記号（Literal）の式を insert_reading で打つ（iOS の数字・記号レイアウト） ----
+
+fn rewriter_engine() -> Engine {
+    Engine::new(
+        Arc::new(nagi_engine::MockBackend::new().with_rewriter()),
+        EngineConfig::default(),
+    )
+}
+
+fn type_literal(e: &mut Engine, s: &str) -> ProcessKeyResult {
+    let mut last = None;
+    for c in s.chars() {
+        last = Some(e.insert_reading("s", &ReadingInput::Text(c.to_string())));
+    }
+    last.unwrap()
+}
+
+fn cand_surfaces(r: &ProcessKeyResult) -> Vec<String> {
+    r.candidates
+        .as_ref()
+        .map(|c| c.items.iter().map(|i| i.surface.clone()).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn literal_expression_shows_rewriter_candidates_while_composing() {
+    // 入力中の候補はサーバーがデバウンス後に作る（composing_candidate_reading → refresh）
+    for (input, want) in [("1+2", vec!["3", "１＋２"]), ("(1+2)*3", vec!["9"])] {
+        let mut e = rewriter_engine();
+        type_literal(&mut e, input);
+        let reading = e.composing_candidate_reading("s").expect("Literal も対象");
+        let r = e
+            .refresh_composing_candidates("s", &reading)
+            .expect("候補の差分");
+        let s = cand_surfaces(&r);
+        for w in want {
+            assert!(s.contains(&w.to_string()), "{input}: {s:?}");
+        }
+        assert!(r.candidates.unwrap().visible);
+    }
+    // 数字だけ・英字だけは対象外（打つたびに出さない）
+    for input in ["1", "123", "abc"] {
+        let mut e = rewriter_engine();
+        type_literal(&mut e, input);
+        assert!(e.composing_candidate_reading("s").is_none(), "{input}");
+    }
+}
+
+#[test]
+fn literal_composing_candidate_can_be_selected_without_learning() {
+    let mut e = rewriter_engine();
+    type_literal(&mut e, "1+2");
+    let reading = e.composing_candidate_reading("s").unwrap();
+    e.refresh_composing_candidates("s", &reading).unwrap();
+    let r = e.select_candidate("s", 0);
+    assert_eq!(r.commit.as_deref(), Some("3"));
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+}
+
+#[test]
+fn literal_expression_space_and_convert_open_the_window() {
+    for action in [TouchAction::Space, TouchAction::StartConvert] {
+        let mut e = rewriter_engine();
+        type_literal(&mut e, "1+2");
+        let r = e.perform_action("s", &action);
+        let s = cand_surfaces(&r);
+        assert!(r.candidates.as_ref().unwrap().visible, "{action:?}");
+        assert_eq!(s, ["1+2", "3", "１＋２"], "{action:?}");
+    }
+}
+
+#[test]
+fn paren_expression_via_insert_reading_has_calc_candidate() {
+    let mut e = rewriter_engine();
+    type_literal(&mut e, "(1+2)*3");
+    let r = e.perform_action("s", &TouchAction::Space);
+    let s = cand_surfaces(&r);
+    assert!(s.contains(&"9".to_string()), "{s:?}");
+}
+
+#[test]
+fn equals_gives_the_answer_via_insert_reading() {
+    let mut e = rewriter_engine();
+    type_literal(&mut e, "1+2=");
+    let r = e.perform_action("s", &TouchAction::Space);
+    let s = cand_surfaces(&r);
+    assert!(s.iter().any(|x| x.contains('3')), "{s:?}");
+}
