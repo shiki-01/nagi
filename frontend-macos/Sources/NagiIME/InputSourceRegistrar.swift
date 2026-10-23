@@ -147,6 +147,41 @@ public enum InputSourceRegistrar {
         return property(source, keyInputSourceID)
     }
 
+    /// Nagi の入力ソース（ひらがな・英字）と、標準の英字キーボード（ABC / U.S.）の属性を一覧にする。
+    /// 「標準の英字を削除できない」ときに、macOS が Nagi の英字を ASCII 入力可能と判定しているかを調べるための出力
+    public static func diagnose() -> String {
+        let keys: [(String, String)] = [
+            ("ID", "TISPropertyInputSourceID"),
+            ("種別", "TISPropertyInputSourceType"),
+            ("カテゴリ", "TISPropertyInputSourceCategory"),
+            ("名前", "TISPropertyLocalizedName"),
+            ("バンドル", "TISPropertyBundleID"),
+        ]
+        let flags: [(String, String)] = [
+            ("ASCII 入力可能", "TISPropertyInputSourceIsASCIICapable"),
+            ("有効", "TISPropertyInputSourceIsEnabled"),
+            ("有効化できる", "TISPropertyInputSourceIsEnableCapable"),
+            ("選択できる", "TISPropertyInputSourceIsSelectCapable"),
+        ]
+        var lines: [String] = ["macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"]
+        for source in find(nil) {
+            let id = property(source, keyInputSourceID) ?? ""
+            let bundle = property(source, keyBundleID) ?? ""
+            let isNagi = id.lowercased().contains("nagi") || bundle.lowercased().contains("nagi")
+            let isAppleASCII = id.hasPrefix("com.apple.keylayout.") && (id.hasSuffix(".ABC") || id.hasSuffix(".US"))
+            guard isNagi || isAppleASCII else { continue }
+            lines.append("")
+            for (label, key) in keys { lines.append("\(label): \(property(source, key) ?? "-")") }
+            for (label, key) in flags {
+                let value = TISGetInputSourceProperty(source, key as CFString).map {
+                    CFBooleanGetValue(Unmanaged<CFBoolean>.fromOpaque($0).takeUnretainedValue())
+                }
+                lines.append("\(label): \(value.map { $0 ? "はい" : "いいえ" } ?? "-")")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private static func identifier(of source: TISInputSource) -> String {
         property(source, keyInputSourceID) ?? UUID().uuidString
     }

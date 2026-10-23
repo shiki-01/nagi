@@ -30,6 +30,8 @@ final class SupportTests: XCTestCase {
 
     func testHostOptionsRegisterFlag() {
         XCTAssertFalse(HostOptions.parse(arguments: [], environment: [:]).register)
+        XCTAssertFalse(HostOptions.parse(arguments: [], environment: [:]).diagnose)
+        XCTAssertTrue(HostOptions.parse(arguments: ["--diagnose"], environment: [:]).diagnose)
         let o = HostOptions.parse(arguments: ["--register", "--no-llm"], environment: [:])
         XCTAssertTrue(o.register)
         XCTAssertTrue(o.noLLM)

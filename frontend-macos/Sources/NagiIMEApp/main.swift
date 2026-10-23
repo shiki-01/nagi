@@ -14,6 +14,12 @@ if options.register {
     exit(report.succeeded ? 0 : 1)
 }
 
+if options.diagnose {
+    // IMKServer・エンジンを起動せず、入力ソースの属性を表示して終了する
+    print(InputSourceRegistrar.diagnose())
+    exit(0)
+}
+
 let app = NSApplication.shared
 let host = NagiIMEHost(options: options)
 
