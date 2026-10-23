@@ -2,6 +2,7 @@
 //!
 //! タスクは OS 非依存にするため、シェルスクリプトではなくこの crate に Rust で書く。
 
+mod app_icon;
 mod build_dict;
 mod build_ios_xcframework;
 mod bundle_macos;

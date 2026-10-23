@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::mode_icons;
+use crate::{app_icon, mode_icons};
 
 /// 既定のバンドル識別子。
 #[cfg(test)]
@@ -18,6 +18,8 @@ const DEFAULT_BUNDLE_ID: &str = "com.shiki.inputmethod.Nagi";
 const MIN_MACOS: &str = "13.0";
 /// アイコン画像のファイル名（Contents/Resources に置く。Info.plist が参照する）。
 const ICON_FILE: &str = "nagi-icon.tiff";
+/// アプリアイコン（.icns）のファイル名（Contents/Resources に置く。`CFBundleIconFile` と `tsInputMethodIconFileKey` が参照する）。
+const APP_ICNS_FILE: &str = "nagi.icns";
 /// アイコンの色（RGB。落ち着いた青緑）。
 const ICON_COLOR: [u8; 3] = [0x3A, 0x7C, 0x89];
 /// ひらがなモードのアイコン画像のファイル名（文字の形のテンプレートアイコン）。
@@ -236,6 +238,8 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str, public_key: 
 	<string>ja</string>
 	<key>CFBundleExecutable</key>
 	<string>{exe}</string>
+	<key>CFBundleIconFile</key>
+	<string>{app_icns}</string>
 	<key>CFBundleIdentifier</key>
 	<string>{id}</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -305,7 +309,7 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str, public_key: 
 	<key>tsInputMethodNameKey</key>
 	<string>Nagi</string>
 	<key>tsInputMethodIconFileKey</key>
-	<string>{icon}</string>
+	<string>{app_icns}</string>
 	<key>tsInputMethodCharacterRepertoireKey</key>
 	<array>
 		<string>Latn</string>
@@ -322,7 +326,7 @@ pub fn info_plist(executable: &str, version: &str, bundle_id: &str, public_key: 
         mode_id = mode_id,
         min = MIN_MACOS,
         conn = conn,
-        icon = ICON_FILE,
+        app_icns = APP_ICNS_FILE,
         hiragana_icon = HIRAGANA_ICON_FILE,
         roman_icon = ROMAN_ICON_FILE,
     )
@@ -444,6 +448,11 @@ pub fn run(opts: Options) -> Result<(), String> {
     )
     .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
     fs::write(
+        resources_dir.join(APP_ICNS_FILE),
+        app_icon::app_icns(ICON_COLOR),
+    )
+    .map_err(|e| format!("アイコンの書き込みに失敗しました: {e}"))?;
+    fs::write(
         resources_dir.join(HIRAGANA_ICON_FILE),
         mode_icon_tiff(&mode_icons::HIRAGANA_16, &mode_icons::HIRAGANA_32),
     )
@@ -541,7 +550,8 @@ mod tests {
             "<key>NSPrincipalClass</key>\n\t<string>NSApplication</string>",
             "<key>TISIntendedLanguage</key>\n\t<string>ja</string>",
             "<key>TISIconIsTemplate</key>\n\t<true/>",
-            "<key>tsInputMethodIconFileKey</key>\n\t<string>nagi-icon.tiff</string>",
+            "<key>tsInputMethodIconFileKey</key>\n\t<string>nagi.icns</string>",
+            "<key>CFBundleIconFile</key>\n\t<string>nagi.icns</string>",
             "<key>tsInputModeDefaultStateKey</key><true/>",
             "<key>tsInputModePrimaryInScriptKey</key><true/>",
             "<key>tsInputModeJISKeyboardShortcutKey</key><integer>1</integer>",
