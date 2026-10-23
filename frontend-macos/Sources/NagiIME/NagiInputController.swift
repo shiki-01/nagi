@@ -320,8 +320,12 @@ final class NagiInputController: IMKInputController {
         if lastCandidates != nil { showCandidates(lastCandidates) }
     }
 
-    /// `update_candidates` 通知
+    /// `update_candidates` 通知。入力中の文字列が無いのに届いた候補（確定・取消のあとに遅れて届いたもの）は表示しない
     func applyAsyncCandidates(_ candidates: CandidatesView) {
+        guard let preedit = context?.store.preedit(for: sessionId), !preedit.text.isEmpty else {
+            hideCandidates()
+            return
+        }
         showCandidates(CandidatePaging.page(for: candidates))
     }
 
@@ -341,6 +345,8 @@ final class NagiInputController: IMKInputController {
 
     private func renderPreedit(_ preedit: PreeditView) {
         context?.store.update(sessionId: sessionId, preedit: preedit)
+        // 入力中の文字列が空になったら、候補は残さない（取り残し防止。コアの応答に依らず閉じる）
+        if preedit.text.isEmpty { hideCandidates() }
         guard let client = textClient else { return }
         if preedit.text.isEmpty {
             if hasMarked {
@@ -421,17 +427,28 @@ final class NagiInputController: IMKInputController {
     private func showCandidates(_ page: CandidatePage?) {
         lastCandidates = page
         guard let page, let context else {
-            context?.panel.hide()
+            hidePanelIfOwner()
             return
         }
         var rect = NSRect.zero
         _ = textClient?.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
+        context.panelOwner = sessionId
         context.panel.show(page: page, near: rect)
     }
 
     private func hideCandidates() {
         lastCandidates = nil
-        context?.panel.hide()
+        hidePanelIfOwner()
+    }
+
+    /// 候補パネルは全入力欄で共有しているので、自分が出したものだけを閉じる
+    /// （別の入力欄が出した候補を、遅れて来た deactivate で消してしまわないように）
+    private func hidePanelIfOwner() {
+        guard let context else { return }
+        if context.panelOwner == nil || context.panelOwner == sessionId {
+            context.panelOwner = nil
+            context.panel.hide()
+        }
     }
 }
 #endif

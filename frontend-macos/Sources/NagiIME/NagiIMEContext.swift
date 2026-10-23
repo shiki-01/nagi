@@ -11,6 +11,8 @@ public final class NagiIMEContext {
     public let supervisor: EngineSupervisor
     public let store: SessionStore
     let panel = CandidatePanel()
+    /// 候補パネルを今出している入力欄のセッション ID（メインスレッドからのみ触る）
+    var panelOwner: String?
     let toast = StatusToast()
     /// 同期要求の待ち上限（EngineSupervisor の要求タイムアウト 0.5s より少し長く）
     public var keyTimeout: TimeInterval = 0.6
@@ -63,6 +65,11 @@ public final class NagiIMEContext {
     }
 
     func unregister(sessionId: String) {
+        // 破棄される入力欄が出していた候補パネルは閉じる
+        if panelOwner == sessionId {
+            panelOwner = nil
+            panel.hide()
+        }
         controllers[sessionId] = nil
         store.remove(sessionId: sessionId)
     }
