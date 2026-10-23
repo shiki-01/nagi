@@ -33,6 +33,8 @@ final class IOSSettingsTests: XCTestCase {
         XCTAssertEqual(s.hapticEngine, "standard")
         XCTAssertEqual(s.toggleTimeoutMs, 1000)
         XCTAssertTrue(s.composeNumbers)
+        XCTAssertTrue(s.keepPreeditOnSymbols)
+        XCTAssertFalse(s.keepPreeditOnEnglish)
         XCTAssertEqual(s.flickThresholdPoints, 14, accuracy: 1e-9)
         XCTAssertEqual(s.heightScale, 1.0, accuracy: 1e-9)
         XCTAssertEqual(s.schema, NagiIOSSettings.currentSchema)
@@ -230,6 +232,10 @@ final class IOSSettingsTests: XCTestCase {
     func testComposeNumbers() throws {
         XCTAssertFalse(try decode(#"{"input.compose_numbers":false}"#).composeNumbers)
         XCTAssertTrue(try decode(#"{"input.compose_numbers":"x"}"#).composeNumbers)
+        XCTAssertFalse(try decode(#"{"input.keep_preedit_on_symbols":false}"#).keepPreeditOnSymbols)
+        XCTAssertTrue(try decode(#"{"input.keep_preedit_on_symbols":"x"}"#).keepPreeditOnSymbols)
+        XCTAssertTrue(try decode(#"{"input.keep_preedit_on_english":true}"#).keepPreeditOnEnglish)
+        XCTAssertFalse(try decode(#"{"input.keep_preedit_on_english":1}"#).keepPreeditOnEnglish)
     }
 
     // MARK: 派生値

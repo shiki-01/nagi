@@ -222,4 +222,37 @@ final class ThemeTests: XCTestCase {
         XCTAssertFalse(NumberCompose.nextContext(previousMode: .kana, previousContext: true, nextMode: .alpha))
         XCTAssertFalse(NumberCompose.nextContext(previousMode: .kana, previousContext: true, nextMode: .emoji))
     }
+
+    func testEnglishComposeOnlyWithPreeditAndSetting() {
+        XCTAssertTrue(EnglishCompose.shouldCompose(mode: .alpha, keepSetting: true, isSecure: false, hasPreedit: true))
+        XCTAssertFalse(EnglishCompose.shouldCompose(mode: .alpha, keepSetting: true, isSecure: false, hasPreedit: false))
+        XCTAssertFalse(EnglishCompose.shouldCompose(mode: .alpha, keepSetting: false, isSecure: false, hasPreedit: true))
+        XCTAssertFalse(EnglishCompose.shouldCompose(mode: .alpha, keepSetting: true, isSecure: true, hasPreedit: true))
+        XCTAssertFalse(EnglishCompose.shouldCompose(mode: .number, keepSetting: true, isSecure: false, hasPreedit: true))
+    }
+
+    func testLayoutSwitchKeep() {
+        func keep(_ from: LayoutMode, _ to: LayoutMode, preedit: Bool = true, secure: Bool = false,
+                  symbols: Bool = true, english: Bool = true, compose: Bool = true) -> Bool {
+            LayoutSwitchKeep.shouldKeep(
+                from: from, to: to, hasPreedit: preedit, isSecure: secure,
+                keepOnSymbols: symbols, keepOnEnglish: english, composeNumbers: compose
+            )
+        }
+        XCTAssertTrue(keep(.kana, .number))
+        XCTAssertTrue(keep(.number, .kana))
+        XCTAssertTrue(keep(.number, .symbol))
+        XCTAssertFalse(keep(.kana, .number, symbols: false))
+        XCTAssertFalse(keep(.kana, .number, compose: false))
+        XCTAssertFalse(keep(.kana, .number, preedit: false))
+        XCTAssertFalse(keep(.kana, .number, secure: true))
+        XCTAssertFalse(keep(.kana, .kana))
+        XCTAssertTrue(keep(.kana, .alpha))
+        XCTAssertTrue(keep(.alpha, .kana))
+        XCTAssertFalse(keep(.kana, .alpha, english: false))
+        XCTAssertTrue(keep(.kana, .alpha, symbols: false, compose: false))
+        XCTAssertFalse(keep(.alpha, .number, compose: false))
+        XCTAssertFalse(keep(.kana, .emoji))
+        XCTAssertFalse(keep(.alpha, .emoji))
+    }
 }

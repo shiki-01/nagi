@@ -175,3 +175,31 @@ enum NumberCompose {
         }
     }
 }
+
+/// 英字のレイアウトの文字を、コアの入力中の文字列（Literal）に通すかの判定（設定 `input.keep_preedit_on_english`）。
+/// 入力中の文字列があるときだけ（無いときは従来どおり直接入力）
+enum EnglishCompose {
+    static func shouldCompose(mode: LayoutMode, keepSetting: Bool, isSecure: Bool, hasPreedit: Bool) -> Bool {
+        keepSetting && !isSecure && hasPreedit && mode == .alpha
+    }
+}
+
+/// レイアウトを切り替えるとき、入力中の文字列を確定せずに保つかの判定
+/// （設定 `input.keep_preedit_on_symbols` / `input.keep_preedit_on_english`）。
+/// 保たないときは従来どおり確定してから切り替える
+enum LayoutSwitchKeep {
+    /// かな・数字・記号の間（かな同士は対象外）は `keepOnSymbols`、英字とそれらの間は `keepOnEnglish`。
+    /// 数字・記号が関わる切替は、切替先で入力が続くよう `composeNumbers`（`input.compose_numbers`）がオンのときだけ
+    static func shouldKeep(
+        from: LayoutMode, to: LayoutMode, hasPreedit: Bool, isSecure: Bool,
+        keepOnSymbols: Bool, keepOnEnglish: Bool, composeNumbers: Bool
+    ) -> Bool {
+        guard hasPreedit, !isSecure else { return false }
+        func japanese(_ mode: LayoutMode) -> Bool { mode == .kana || NumberCompose.isNumberOrSymbol(mode) }
+        let numeric = NumberCompose.isNumberOrSymbol(from) || NumberCompose.isNumberOrSymbol(to)
+        if numeric && !composeNumbers { return false }
+        if japanese(from) && japanese(to) { return keepOnSymbols && !(from == .kana && to == .kana) }
+        if (from == .alpha && japanese(to)) || (to == .alpha && japanese(from)) { return keepOnEnglish }
+        return false
+    }
+}

@@ -479,7 +479,11 @@ final class KeyboardModel: ObservableObject {
         case .off: output = text
         case .once, .caps: output = shift ?? text.uppercased()
         }
-        hostInsert(output)
+        if composesEnglish {
+            insertReading(output)
+        } else {
+            hostInsert(output)
+        }
         if shiftState == .once { shiftState = .off }
     }
 
@@ -489,6 +493,15 @@ final class KeyboardModel: ObservableObject {
         NumberCompose.shouldCompose(
             mode: layoutDef.mode, setting: ios.composeNumbers, isSecure: host?.hostIsSecure() ?? false,
             japaneseContext: japaneseContext, hasPreedit: hasPreedit
+        )
+    }
+
+    /// 英字のレイアウトの文字を、入力中の文字列（コアの composing）に続けるか。
+    /// 設定 `input.keep_preedit_on_english` がオンで、入力中の文字列があり、パスワード欄でないときだけ
+    private var composesEnglish: Bool {
+        EnglishCompose.shouldCompose(
+            mode: layoutDef.mode, keepSetting: ios.keepPreeditOnEnglish, isSecure: host?.hostIsSecure() ?? false,
+            hasPreedit: hasPreedit
         )
     }
 
@@ -540,7 +553,7 @@ final class KeyboardModel: ObservableObject {
         DiagLog.log("toggle key=\(keyId) index=\(index) continued=\(continued) hadState=\(toggleState != nil) timeout=\(ios.toggleTimeoutMs)")
         let base = cycle[index]
         let text = (layoutDef.mode != .kana && upper) ? base.uppercased() : base
-        if layoutDef.mode == .kana || composesNumbers {
+        if layoutDef.mode == .kana || composesNumbers || composesEnglish {
             for _ in 0..<replaceCount {
                 if !send("backspace(toggle)", { $0.perform(.backspace) }) { hostDeleteBackward(1) }
             }
@@ -746,7 +759,8 @@ final class KeyboardModel: ObservableObject {
     }
 
     /// 別のレイアウトへ。`target` は `kana` / `alpha`（各モードに割り当てたレイアウト）またはレイアウトの id。
-    /// 入力中の文字列は確定してから切り替える。切り替えたら true（自動選択・割り当ての反映からも使う）
+    /// 入力中の文字列は確定してから切り替える（設定 `input.keep_preedit_on_symbols` / `input.keep_preedit_on_english` で
+    /// 保つ場合を除く。保てば切替先でも同じ入力中の文字列に続く）。切り替えたら true（自動選択・割り当ての反映からも使う）
     @discardableResult
     private func changeLayout(target: String) -> Bool {
         let next: KeyboardLayoutDef?
@@ -760,7 +774,12 @@ final class KeyboardModel: ObservableObject {
             return false
         }
         toggleState = nil
-        if hasPreedit, let session = session, let result = session.perform(.commit) {
+        let keep = LayoutSwitchKeep.shouldKeep(
+            from: layoutDef.mode, to: next.mode, hasPreedit: hasPreedit, isSecure: host?.hostIsSecure() ?? false,
+            keepOnSymbols: ios.keepPreeditOnSymbols, keepOnEnglish: ios.keepPreeditOnEnglish,
+            composeNumbers: ios.composeNumbers
+        )
+        if hasPreedit, !keep, let session = session, let result = session.perform(.commit) {
             apply(result, origin: "response(commit before layout switch)")
         }
         japaneseContext = NumberCompose.nextContext(
