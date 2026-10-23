@@ -209,6 +209,26 @@ impl KeyMap {
         }
     }
 
+    /// Composing でサジェスト（入力中の候補）が表示されているときの、↓ / Tab / ↑ の割当。
+    /// 既定の解決（`resolve`）は Tab = `Predict`・↑↓ = `NoOp` のままで、サジェストの有無は
+    /// コンテキストだけでは分からないので、状態機械が表示中のときだけこれを先に引く。
+    /// キーマップで上書きされているキーは `None`（上書きを優先する）
+    pub fn suggest_action(&self, key: &KeyEvent) -> Option<Action> {
+        let m = key.modifiers;
+        if m.ctrl || m.alt || m.meta {
+            return None;
+        }
+        let action = match key.keysym {
+            keysym::DOWN | keysym::TAB => Action::SuggestNext,
+            keysym::UP => Action::SuggestPrev,
+            _ => return None,
+        };
+        let overridden = self
+            .overrides
+            .contains_key(&(KeyContext::Composing, KeySpec::from_event(key)));
+        (!overridden).then_some(action)
+    }
+
     fn resolve_composing(&self, key: &KeyEvent) -> Option<Action> {
         let m = key.modifiers;
         if let Some(c) = ctrl_letter(key) {
@@ -333,6 +353,8 @@ pub fn parse_action(spec: &str) -> Result<Action, String> {
         ("ToHankaku", None) => Ok(Action::ToHankaku),
         ("ToggleMode", None) => Ok(Action::ToggleMode),
         ("CommitAndPassThrough", None) => Ok(Action::CommitAndPassThrough),
+        ("SuggestNext", None) => Ok(Action::SuggestNext),
+        ("SuggestPrev", None) => Ok(Action::SuggestPrev),
         ("NoOp", None) => Ok(Action::NoOp),
         ("MoveCursor", a) => Ok(Action::MoveCursor(direction(a)?)),
         ("MoveFocus", a) => Ok(Action::MoveFocus(direction(a)?)),
@@ -634,5 +656,31 @@ mod tests {
     fn parse_action_rejects_insert_and_unknown() {
         assert!(parse_action("Insert").is_err());
         assert!(parse_action("NotAnAction").is_err());
+    }
+
+    #[test]
+    fn parse_action_suggest() {
+        assert_eq!(parse_action("SuggestNext"), Ok(Action::SuggestNext));
+        assert_eq!(parse_action("SuggestPrev"), Ok(Action::SuggestPrev));
+        assert!(parse_action("SuggestNext:Left").is_err());
+    }
+
+    #[test]
+    fn suggest_action_defaults_and_overrides() {
+        let key = |s: &str| parse_key(s).unwrap();
+        let map = KeyMap::default_preset();
+        // 既定の解決は従来どおり（サジェストの有無は状態機械が見る）
+        assert_eq!(resolve(Composing, Hiragana, "Tab"), Some(Action::Predict));
+        assert_eq!(resolve(Composing, Hiragana, "Down"), Some(Action::NoOp));
+        assert_eq!(map.suggest_action(&key("Tab")), Some(Action::SuggestNext));
+        assert_eq!(map.suggest_action(&key("Down")), Some(Action::SuggestNext));
+        assert_eq!(map.suggest_action(&key("Up")), Some(Action::SuggestPrev));
+        assert_eq!(map.suggest_action(&key("Ctrl+Down")), None);
+        assert_eq!(map.suggest_action(&key("Left")), None);
+        // 上書きされたキーは対象外
+        let (map, w) = KeyMap::with_overrides(&[(Composing, "Tab".into(), "ToKatakana".into())]);
+        assert!(w.is_empty());
+        assert_eq!(map.suggest_action(&key("Tab")), None);
+        assert_eq!(map.suggest_action(&key("Down")), Some(Action::SuggestNext));
     }
 }

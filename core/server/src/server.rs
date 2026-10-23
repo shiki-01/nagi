@@ -508,7 +508,18 @@ impl Server {
             method::SET_CONTEXT => {
                 self.require_initialized()?;
                 let p: SetContextParams = params(req)?;
-                self.engine_lock().set_context(&p.session_id.clone(), &p);
+                let cleared = self.engine_lock().set_context(&p.session_id.clone(), &p);
+                // 文脈が変わって入力中のサジェストを捨てたら、消えた差分を届けて新しい文脈で作り直す
+                if let Some(r) = cleared
+                    && let Some(candidates) = r.candidates
+                {
+                    self.runtime.push_candidates_update(UpdateCandidatesParams {
+                        session_id: p.session_id.clone(),
+                        revision: r.revision,
+                        candidates,
+                    });
+                }
+                self.maybe_schedule_composing_candidates(&p.session_id);
                 to_value(EmptyResult {})
             }
             method::SET_ENVIRONMENT => {

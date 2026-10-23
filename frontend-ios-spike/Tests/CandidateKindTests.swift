@@ -7,7 +7,7 @@ final class CandidateKindTests: XCTestCase {
     ) -> CandidatesView {
         CandidatesView(
             items: items.map { CandidateView(surface: $0.0, sources: $0.1, covers: $0.2, reading: nil) },
-            selected: 0, page_size: 9, visible: visible)
+            selected: 0, page_size: 9, visible: visible, unselected: nil)
     }
 
     func testNextWordInDirectState() {

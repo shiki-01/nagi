@@ -1624,3 +1624,491 @@ fn kana_key_from_alphanumeric_switches_mode_first() {
     assert_eq!(r.mode, Some(InputMode::Hiragana));
     assert_eq!(r.reconvert_selection, None);
 }
+
+// ---- Space 変換: 読み全体の辞書候補を N-best の後ろに足す ----
+
+/// 文全体の N-best と、読み全体の文節候補（同音異義語）を別々に返すテスト用バックエンド
+struct HomophoneBackend {
+    reading: &'static str,
+    nbest: Vec<&'static str>,
+    segments: Vec<&'static str>,
+}
+
+impl ConversionBackend for HomophoneBackend {
+    fn name(&self) -> &str {
+        "homophone-test"
+    }
+
+    fn convert_sentence(&self, reading: &str, _: &str) -> Vec<BackendSegment> {
+        let surface = if reading == self.reading {
+            self.nbest[0]
+        } else {
+            reading
+        };
+        vec![BackendSegment {
+            reading: reading.to_string(),
+            surface: surface.to_string(),
+            sources: vec![CandidateSource::SystemDict],
+        }]
+    }
+
+    fn segment_candidates(&self, reading: &str, _: &str, limit: usize) -> Vec<BackendCandidate> {
+        if reading != self.reading {
+            return Vec::new();
+        }
+        self.segments
+            .iter()
+            .take(limit)
+            .map(|s| BackendCandidate {
+                surface: s.to_string(),
+                sources: vec![CandidateSource::SystemDict],
+                reading: None,
+            })
+            .collect()
+    }
+
+    fn sentence_candidates(&self, reading: &str, _: &str, limit: usize) -> Vec<BackendSentence> {
+        if reading != self.reading {
+            return Vec::new();
+        }
+        self.nbest
+            .iter()
+            .take(limit)
+            .map(|s| BackendSentence {
+                segments: vec![BackendSegment {
+                    reading: reading.to_string(),
+                    surface: s.to_string(),
+                    sources: vec![CandidateSource::Llm],
+                }],
+            })
+            .collect()
+    }
+}
+
+fn homophone_engine(segments: Vec<&'static str>) -> Engine {
+    Engine::new(
+        Arc::new(HomophoneBackend {
+            reading: "かみ",
+            nbest: vec!["紙", "神"],
+            segments,
+        }),
+        EngineConfig::default(),
+    )
+}
+
+fn candidate_surfaces(r: &nagi_protocol::ProcessKeyResult) -> Vec<String> {
+    r.candidates
+        .as_ref()
+        .expect("候補の差分")
+        .items
+        .iter()
+        .map(|c| c.surface.clone())
+        .collect()
+}
+
+#[test]
+fn sentence_view_appends_whole_reading_dictionary_candidates_after_nbest() {
+    let mut e = homophone_engine(vec!["神", "紙", "髪", "上", "かみ", "カミ"]);
+    type_str(&mut e, "s", "kami");
+    let r = press(&mut e, "s", "Space");
+    // N-best（紙・神）が先頭のまま、重複しない辞書候補が続く
+    assert_eq!(
+        candidate_surfaces(&r),
+        ["紙", "神", "髪", "上", "かみ", "カミ"]
+    );
+    let items = &r.candidates.as_ref().unwrap().items;
+    // 同じ表記は出所を併記する
+    assert_eq!(
+        items[1].sources,
+        [CandidateSource::Llm, CandidateSource::SystemDict]
+    );
+    assert_eq!(items[2].sources, [CandidateSource::SystemDict]);
+    // 先頭は従来どおり N-best の 1 件目
+    assert_eq!(r.preedit.unwrap().text, "紙");
+}
+
+#[test]
+fn sentence_view_dictionary_candidate_can_be_selected_and_committed() {
+    let mut e = homophone_engine(vec!["神", "髪"]);
+    type_str(&mut e, "s", "kami");
+    press(&mut e, "s", "Space");
+    press(&mut e, "s", "Space"); // 神
+    let r = press(&mut e, "s", "Space"); // 髪（辞書候補）
+    assert_eq!(r.preedit.unwrap().text, "髪");
+    let r = press(&mut e, "s", "Enter");
+    assert_eq!(r.commit.as_deref(), Some("髪"));
+}
+
+#[test]
+fn sentence_view_dictionary_candidates_are_capped() {
+    let many: Vec<&'static str> = (0..80)
+        .map(|i| &*Box::leak(format!("語{i}").into_boxed_str()))
+        .collect();
+    let mut e = homophone_engine(many);
+    type_str(&mut e, "s", "kami");
+    let r = press(&mut e, "s", "Space");
+    let surfaces = candidate_surfaces(&r);
+    assert_eq!(surfaces.len(), 50);
+    assert_eq!(&surfaces[..3], ["紙", "神", "語0"]);
+}
+
+#[test]
+fn sentence_view_without_nbest_diversity_keeps_segment_path() {
+    // N-best が 1 件だけなら従来どおり文節経路（辞書候補は文節の候補一覧に出る）
+    let mut e = Engine::new(
+        Arc::new(HomophoneBackend {
+            reading: "かみ",
+            nbest: vec!["紙"],
+            segments: vec!["神", "髪"],
+        }),
+        EngineConfig::default(),
+    );
+    type_str(&mut e, "s", "kami");
+    let r = press(&mut e, "s", "Space");
+    assert!(r.candidates.is_none_or(|c| !c.visible));
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "紙");
+}
+
+// ---- 入力中のサジェストの選択 ----
+
+fn suggest_engine() -> Engine {
+    let backend = MockBackend::new().with_sentence(
+        "きょうはあめ",
+        vec![
+            ("きょう", vec!["今日", "京"]),
+            ("は", vec!["は"]),
+            ("あめ", vec!["雨", "飴"]),
+        ],
+    );
+    Engine::new(Arc::new(backend), EngineConfig::default())
+}
+
+/// サジェスト付きの Composing にして、候補の表記一覧を返す（サーバーのデバウンス後の更新と同じ）
+fn type_with_suggest(e: &mut Engine, keys: &str) -> Vec<String> {
+    type_str(e, "s", keys);
+    let reading = e.composing_candidate_reading("s").expect("対象の読み");
+    let r = e
+        .refresh_composing_candidates("s", &reading)
+        .expect("候補が作られる");
+    candidate_surfaces(&r)
+}
+
+fn selected(e: &Engine) -> u32 {
+    e.snapshot("s").unwrap().candidates.selected
+}
+
+#[test]
+fn suggest_next_and_prev_cycle_through_candidates() {
+    let mut e = suggest_engine();
+    let items = type_with_suggest(&mut e, "kyouhaame");
+    let n = items.len() as u32;
+    assert!(n >= 3);
+    // 未選択 → 先頭 → ... → 末尾 → 先頭
+    let r = press(&mut e, "s", "Down");
+    assert!(r.consumed);
+    assert_eq!(selected(&e), 0);
+    for i in 1..n {
+        press(&mut e, "s", "Down");
+        assert_eq!(selected(&e), i);
+    }
+    press(&mut e, "s", "Down");
+    assert_eq!(selected(&e), 0);
+    // 先頭の前は未選択（selected は 0 のまま。次の ↑ で末尾）
+    press(&mut e, "s", "Up");
+    press(&mut e, "s", "Up");
+    assert_eq!(selected(&e), n - 1);
+    press(&mut e, "s", "Up");
+    assert_eq!(selected(&e), n - 2);
+    // Tab も SuggestNext
+    press(&mut e, "s", "Tab");
+    assert_eq!(selected(&e), n - 1);
+    // 状態は Composing のまま、候補は表示されたまま
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert!(snap.candidates.visible);
+}
+
+#[test]
+fn suggest_selection_is_reported_as_candidates_diff() {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    press(&mut e, "s", "Down");
+    let r = press(&mut e, "s", "Down");
+    assert_eq!(r.candidates.expect("選択が変わった差分").selected, 1);
+}
+
+#[test]
+fn enter_commits_the_selected_suggestion() {
+    let mut e = suggest_engine();
+    let items = type_with_suggest(&mut e, "kyouhaame");
+    let index = items.iter().position(|s| s == "京").unwrap();
+    for _ in 0..=index {
+        press(&mut e, "s", "Down");
+    }
+    let r = press(&mut e, "s", "Enter");
+    // 部分変換の候補: その分だけ確定し、残りは入力中のまま
+    assert_eq!(r.commit.as_deref(), Some("京"));
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert_eq!(snap.preedit.text, "はあめ");
+    assert_eq!(e.snapshot("s").unwrap().candidates.selected, 0);
+}
+
+#[test]
+fn enter_commits_whole_suggestion_and_learns_it() {
+    let (mut e, rec) = suggest_engine_with_observer();
+    type_with_suggest(&mut e, "kyouhaame");
+    press(&mut e, "s", "Down"); // 先頭 = 読み全体の最良
+    let r = press(&mut e, "s", "Enter");
+    assert_eq!(r.commit.as_deref(), Some("今日は雨"));
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+    assert_eq!(rec.commits.lock().unwrap().len(), 1);
+}
+
+fn suggest_engine_with_observer() -> (Engine, Arc<Recorder>) {
+    let mut e = suggest_engine();
+    let rec = Arc::new(Recorder::default());
+    e.set_commit_observer(rec.clone());
+    (e, rec)
+}
+
+#[test]
+fn enter_without_selection_commits_the_displayed_reading() {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    let r = press(&mut e, "s", "Enter");
+    assert_eq!(r.commit.as_deref(), Some("きょうはあめ"));
+}
+
+#[test]
+fn escape_clears_suggest_selection_only() {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    press(&mut e, "s", "Down");
+    press(&mut e, "s", "Down");
+    assert_eq!(selected(&e), 1);
+    let r = press(&mut e, "s", "Escape");
+    assert!(r.consumed);
+    assert!(r.commit.is_none());
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Composing);
+    assert_eq!(snap.preedit.text, "きょうはあめ");
+    assert_eq!(snap.candidates.selected, 0);
+    assert!(snap.candidates.visible);
+    // 選択が無ければ従来どおり入力全体の破棄
+    press(&mut e, "s", "Escape");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+}
+
+#[test]
+fn other_keys_clear_suggest_selection_and_work_as_before() {
+    for key in ["a", "BackSpace", "Left", "Home", "End", "Delete"] {
+        let mut e = suggest_engine();
+        type_with_suggest(&mut e, "kyouhaame");
+        press(&mut e, "s", "Down");
+        press(&mut e, "s", "Down");
+        assert_eq!(selected(&e), 1);
+        press(&mut e, "s", key);
+        assert_eq!(selected(&e), 0, "{key}");
+    }
+    // Space は変換（選択は解除）
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    press(&mut e, "s", "Down");
+    press(&mut e, "s", "Down");
+    press(&mut e, "s", "Space");
+    let snap = e.snapshot("s").unwrap();
+    assert_eq!(snap.state, StateKind::Converting);
+    assert_eq!(snap.preedit.text, "今日は雨");
+}
+
+#[test]
+fn refreshing_with_different_items_clears_suggest_selection() {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    press(&mut e, "s", "Down");
+    press(&mut e, "s", "Down");
+    // 同じ中身の再計算では選択を保つ
+    let reading = "きょうはあめ";
+    let _ = e.refresh_composing_candidates("s", reading);
+    assert_eq!(selected(&e), 1);
+    // 文脈が変わって作り直すと、選択は無効
+    e.set_context("s", &context_with("前の文"));
+    assert_eq!(selected(&e), 0);
+}
+
+fn context_with(text: &str) -> SetContextParams {
+    SetContextParams {
+        session_id: "s".into(),
+        app_id: None,
+        secure_input: None,
+        surrounding_text: Some(SurroundingText {
+            text: text.into(),
+            cursor: text.encode_utf16().count() as u32,
+        }),
+    }
+}
+
+#[test]
+fn tab_and_arrows_keep_old_behavior_without_suggestions() {
+    // サジェストが無い（まだ作っていない）: ↓ / ↑ は NoOp で消費のみ、Tab は Predict（候補が無ければ何もしない）
+    let mut e = suggest_engine();
+    type_str(&mut e, "s", "kyouhaame");
+    for key in ["Down", "Up", "Tab"] {
+        let r = press(&mut e, "s", key);
+        assert!(r.consumed, "{key}");
+        let snap = e.snapshot("s").unwrap();
+        assert_eq!(snap.state, StateKind::Composing, "{key}");
+        assert_eq!(snap.preedit.text, "きょうはあめ", "{key}");
+        assert_eq!(snap.candidates.selected, 0);
+    }
+    // Tab の Predict は予測候補があれば Converting へ入る
+    let backend = MockBackend::new().with_predictions("きょ", vec!["今日"]);
+    let mut e = Engine::new(Arc::new(backend), EngineConfig::default());
+    type_str(&mut e, "s", "kyo");
+    press(&mut e, "s", "Tab");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+}
+
+#[test]
+fn keymap_override_of_tab_wins_over_suggest_selection() {
+    use nagi_engine::{KeyContext, KeyMap};
+    let (keymap, warnings) = KeyMap::with_overrides(&[(
+        KeyContext::Composing,
+        "Tab".to_string(),
+        "ToKatakana".to_string(),
+    )]);
+    assert!(warnings.is_empty());
+    let backend = MockBackend::new().with_sentence("きょう", vec![("きょう", vec!["今日", "京"])]);
+    let config = EngineConfig {
+        keymap,
+        ..EngineConfig::default()
+    };
+    let mut e = Engine::new(Arc::new(backend), config);
+    type_with_suggest(&mut e, "kyou");
+    press(&mut e, "s", "Tab");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Converting);
+    assert_eq!(e.snapshot("s").unwrap().preedit.text, "キョウ");
+}
+
+// ---- サジェストの取り残し ----
+
+/// サジェスト表示後に `leave` を行うと、同期応答の candidates が非表示になる
+fn assert_suggest_hidden_after(
+    name: &str,
+    leave: impl FnOnce(&mut Engine) -> nagi_protocol::ProcessKeyResult,
+) {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    assert!(e.snapshot("s").unwrap().candidates.visible);
+    let r = leave(&mut e);
+    let c = r
+        .candidates
+        .unwrap_or_else(|| panic!("{name}: 候補の差分が返らない"));
+    assert!(!c.visible, "{name}");
+    assert!(c.items.is_empty(), "{name}");
+    assert!(!e.snapshot("s").unwrap().candidates.visible, "{name}");
+}
+
+#[test]
+fn leaving_composing_always_hides_suggestions() {
+    use nagi_protocol::methods::RestoreSessionParams;
+    use nagi_protocol::methods::TouchAction;
+    assert_suggest_hidden_after("Enter", |e| press(e, "s", "Enter"));
+    assert_suggest_hidden_after("Space", |e| press(e, "s", "Space"));
+    assert_suggest_hidden_after("Esc", |e| press(e, "s", "Escape"));
+    assert_suggest_hidden_after("focus_out", |e| e.focus_out("s"));
+    assert_suggest_hidden_after("reset", |e| e.reset("s"));
+    assert_suggest_hidden_after("Eisu", |e| press(e, "s", "Eisu"));
+    assert_suggest_hidden_after("ToggleMode", |e| press(e, "s", "Zenkaku"));
+    assert_suggest_hidden_after("F7", |e| press(e, "s", "F7"));
+    assert_suggest_hidden_after("perform Commit", |e| {
+        e.perform_action("s", &TouchAction::Commit)
+    });
+    assert_suggest_hidden_after("restore", |e| {
+        e.restore_session(
+            "s",
+            &RestoreSessionParams {
+                session_id: "s".into(),
+                segments: Vec::new(),
+                cursor: 0,
+                focus: None,
+                converting: false,
+            },
+        )
+    });
+    assert_suggest_hidden_after("reconvert", |e| e.reconvert("s", "今日"));
+}
+
+#[test]
+fn backspace_to_empty_hides_suggestions() {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "a");
+    let r = press(&mut e, "s", "BackSpace");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+    assert!(!r.candidates.expect("非表示の差分").visible);
+}
+
+#[test]
+fn undo_commit_does_not_resurrect_stale_suggestions() {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    press(&mut e, "s", "Enter");
+    let r = press(&mut e, "s", "Ctrl+BackSpace");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Composing);
+    // 取り消した直後はまだ候補を作っていない（サーバーが作り直す）ので、古い候補は出ない
+    assert!(!e.snapshot("s").unwrap().candidates.visible);
+    assert!(r.candidates.is_none_or(|c| !c.visible));
+    assert!(e.composing_candidate_reading("s").is_some());
+}
+
+#[test]
+fn retyping_the_same_reading_recomputes_suggestions() {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    press(&mut e, "s", "Escape");
+    press(&mut e, "s", "Escape");
+    assert_eq!(e.snapshot("s").unwrap().state, StateKind::Direct);
+    // 同じ読みを一度に入れ直しても、古い候補は出ず、再計算の対象になる
+    e.insert_reading(
+        "s",
+        &nagi_protocol::methods::ReadingInput::Text("きょうはあめ".into()),
+    );
+    assert!(!e.snapshot("s").unwrap().candidates.visible);
+    assert_eq!(
+        e.composing_candidate_reading("s").as_deref(),
+        Some("きょうはあめ")
+    );
+}
+
+#[test]
+fn context_change_invalidates_suggestions_and_requests_recompute() {
+    let mut e = suggest_engine();
+    type_with_suggest(&mut e, "kyouhaame");
+    assert!(e.composing_candidate_reading("s").is_none());
+    // 同じ文脈の再通知では何も起きない
+    assert!(e.set_context("s", &context_with("")).is_none());
+    assert!(e.snapshot("s").unwrap().candidates.visible);
+    // 文脈が変わると、サジェストを消す差分が返り、作り直しの対象になる
+    let r = e
+        .set_context("s", &context_with("昨日"))
+        .expect("非表示の差分");
+    assert!(!r.candidates.unwrap().visible);
+    assert!(e.composing_candidate_reading("s").is_some());
+    // 同じ読みでも文脈が変わったら作り直せる
+    let r = e.refresh_composing_candidates("s", "きょうはあめ").unwrap();
+    assert!(r.candidates.unwrap().visible);
+    assert!(e.composing_candidate_reading("s").is_none());
+}
+
+#[test]
+fn stale_async_refresh_never_shows_outside_composing_or_for_other_reading() {
+    let mut e = suggest_engine();
+    type_str(&mut e, "s", "kyouhaame");
+    let reading = e.composing_candidate_reading("s").unwrap();
+    press(&mut e, "s", "Enter");
+    assert!(e.refresh_composing_candidates("s", &reading).is_none());
+    assert!(!e.snapshot("s").unwrap().candidates.visible);
+    type_str(&mut e, "s", "kyou");
+    assert!(e.refresh_composing_candidates("s", &reading).is_none());
+}

@@ -253,7 +253,10 @@ preset = "default"
 # キー仕様: "Ctrl+j" のような "修飾+キー名" 形式（修飾: Ctrl/Shift/Alt/Meta、順不同）
 # Action 名: StartConvert / NextCand / PrevCand / Commit / Cancel / Backspace /
 #   DeleteForward / MoveCursor:Left / MoveCursor:Right / MoveCursorHome / MoveCursorEnd /
-#   ToKatakana / ToHiragana / ToggleMode / NoOp
+#   ToKatakana / ToHiragana / ToggleMode / NoOp / SuggestNext / SuggestPrev
+# SuggestNext / SuggestPrev は入力中のサジェスト（候補）の選択を進める / 戻す（末尾の次は先頭、
+# 先頭の前は未選択）。既定ではサジェスト表示中だけ ↓ / Tab = SuggestNext、↑ = SuggestPrev になる
+# （選択中の Enter でその候補を確定、Esc で選択解除、Space で変換）。上書きしたキーはその割当が優先
 # 既定: 空（上書きなし）
 # [keymap.composing]
 # "Ctrl+j" = "ToKatakana"

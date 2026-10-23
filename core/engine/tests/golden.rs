@@ -94,7 +94,7 @@ struct RestoreSegSpec {
 struct Step {
     #[serde(default)]
     key: Option<KeySpec>,
-    /// `focus_in` | `focus_out` | `reset` | `restore` | `live_convert`
+    /// `focus_in` | `focus_out` | `reset` | `restore` | `live_convert` | `refresh_suggest`
     #[serde(default)]
     action: Option<String>,
     /// `action: live_convert` の期待 reading（サーバーがデバウンス後に渡す入力全体の読み）
@@ -381,6 +381,15 @@ fn run_case(case: &Case) -> Vec<String> {
                 // 反映されなかった（読みが古い等）場合は何も返らない
                 engine
                     .live_convert(&case.session, reading)
+                    .unwrap_or_default()
+            }
+            (None, Some("refresh_suggest")) => {
+                // サーバーがデバウンス後に行う入力中の候補（サジェスト）の作成。対象が無ければ何も返らない
+                engine
+                    .composing_candidate_reading(&case.session)
+                    .and_then(|reading| {
+                        engine.refresh_composing_candidates(&case.session, &reading)
+                    })
                     .unwrap_or_default()
             }
             (None, Some("restore")) => {

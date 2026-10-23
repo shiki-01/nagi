@@ -50,10 +50,13 @@ public enum CandidatePaging {
         let pageIndex = selected / size
         let start = pageIndex * size
         let end = min(start + size, total)
+        // 入力中のサジェストで、まだ何も選んでいないときは強調する行を出さない
+        let nothingSelected = view.unselected == true
         let rows = (start..<end).map { i in
             CandidateRow(
                 number: i - start + 1, surface: view.items[i].surface,
-                label: label(for: view.items[i].sources), isSelected: i == selected)
+                label: label(for: view.items[i].sources),
+                isSelected: i == selected && !nothingSelected)
         }
         return CandidatePage(
             rows: rows, pageIndex: pageIndex, pageCount: (total + size - 1) / size, total: total)

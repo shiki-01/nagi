@@ -71,6 +71,10 @@ pub enum Action {
     UndoCommit,
     /// 選択中の確定済みテキストの再変換をフロントに要求する（未入力のみ。ひらがなモードでのかなキー・変換キー）
     Reconvert,
+    /// 入力中のサジェストの次の候補を選ぶ（Composing でサジェスト表示中の ↓ / Tab。末尾の次は先頭へ戻る）
+    SuggestNext,
+    /// 入力中のサジェストの前の候補を選ぶ（Composing でサジェスト表示中の ↑。先頭の前は未選択）
+    SuggestPrev,
     /// キーを消費するだけで何もしない
     NoOp,
 }
@@ -109,6 +113,8 @@ impl fmt::Display for Action {
             Action::CommitAndPassThrough => write!(f, "CommitAndPassThrough"),
             Action::UndoCommit => write!(f, "UndoCommit"),
             Action::Reconvert => write!(f, "Reconvert"),
+            Action::SuggestNext => write!(f, "SuggestNext"),
+            Action::SuggestPrev => write!(f, "SuggestPrev"),
             Action::NoOp => write!(f, "NoOp"),
         }
     }

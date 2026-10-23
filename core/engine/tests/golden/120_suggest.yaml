@@ -1,0 +1,52 @@
+# 入力中のサジェスト（Composing の候補）の選択。`action: refresh_suggest` はサーバーが
+# デバウンス後に行う `refresh_composing_candidates` に相当する
+
+- name: suggest-down-enter-commits-selected
+  backend: mock
+  mock:
+    sentences:
+      "きょう":
+        - {reading: "きょう", candidates: ["今日", "京"]}
+  steps:
+    - key: "k"
+    - key: "y"
+    - key: "o"
+    - key: "u"
+    - action: refresh_suggest
+      expect: {state: composing, candidates_visible: true, candidates: ["今日", "京", "きょう", "キョウ"], selected: 0}
+    - key: "Down"
+      expect: {consumed: true, state: composing, selected: 0, result_candidates_present: true}
+    - key: "Down"
+      expect: {selected: 1, result_candidates_present: true}
+    - key: "Enter"
+      expect: {commit: "京", state: direct, candidates_visible: false}
+
+- name: suggest-up-wraps-to-last-and-escape-clears-selection
+  backend: mock
+  mock:
+    sentences:
+      "きょう":
+        - {reading: "きょう", candidates: ["今日", "京"]}
+  steps:
+    - key: "k"
+    - key: "y"
+    - key: "o"
+    - key: "u"
+    - action: refresh_suggest
+    - key: "Up"
+      expect: {selected: 3, state: composing}
+    - key: "Escape"
+      expect: {consumed: true, state: composing, selected: 0, candidates_visible: true, preedit: "きょう"}
+    - key: "Escape"
+      expect: {state: direct, candidates_visible: false}
+
+- name: suggest-absent-keeps-old-tab-and-arrow-behavior
+  steps:
+    - key: "k"
+    - key: "y"
+    - key: "o"
+    - key: "u"
+    - key: "Down"
+      expect: {consumed: true, state: composing, preedit: "きょう"}
+    - key: "Tab"
+      expect: {consumed: true, state: composing, preedit: "きょう"}

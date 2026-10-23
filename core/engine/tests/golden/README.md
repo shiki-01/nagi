@@ -41,7 +41,7 @@
         result_preedit_present: true   # 応答に preedit（差分）が含まれるか
         result_candidates_present: false
         revision_increased: true       # 応答の revision が前のステップより増えたか
-    - action: focus_out    # focus_in | focus_out | reset | restore
+    - action: focus_out    # focus_in | focus_out | reset | restore | live_convert | refresh_suggest（入力中の候補を作る）
     - action: restore
       restore:
         segments: [{reading: "かな", surface: "かな", kind: japanese}]

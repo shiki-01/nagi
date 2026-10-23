@@ -208,6 +208,10 @@ struct Session {
     touch_toggle: Option<TouchToggle>,
     /// 入力中（変換前）の候補。バックグラウンドで作る（`refresh_composing_candidates`）
     composing_cands: Option<ComposingCands>,
+    /// 入力中のサジェストの選択位置（`None` = 未選択）。サジェストが表示されている間だけ意味を持ち、
+    /// 選択キー（`SuggestNext` / `SuggestPrev`）以外の操作・サジェストの入れ替わり・表示が消える
+    /// ことで `None` に戻る
+    suggest_selected: Option<usize>,
     /// 直前に確定した語（変換を経た最後の日本語の文節の表記）。次語予測の文脈と、
     /// 次の確定で学習するバイグラムの「直前の語」になる。語以外の確定・フォーカス喪失で消える
     last_word: Option<String>,
@@ -261,6 +265,8 @@ impl TypingSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ComposingCands {
     reading: String,
+    /// 計算時点の左文脈。文脈が変わった（同じ読みの再入力でも）ら作り直す
+    left_context: String,
     items: Vec<ComposingItem>,
 }
 
@@ -468,6 +474,7 @@ impl Engine {
             pending_reconvert: false,
             touch_toggle: None,
             composing_cands: None,
+            suggest_selected: None,
             last_word: None,
             next_words: Vec::new(),
             keep_next_words: false,
@@ -747,7 +754,7 @@ impl Engine {
         let sess = self.sessions.get(session_id)?;
         let reading = self.candidate_reading(sess)?;
         match &sess.composing_cands {
-            Some(c) if c.reading == reading => None,
+            Some(c) if c.reading == reading && c.left_context == sess.left_context => None,
             _ => Some(reading),
         }
     }
@@ -785,8 +792,17 @@ impl Engine {
         let result = if current.as_deref() == Some(reading) {
             let typing = TypingSnapshot::of(&sess, reading);
             let items = self.compute_composing_items(reading, &sess.left_context, &typing);
+            // 中身が入れ替わったら選択は無効（同じなら選択を保つ）
+            let same = sess
+                .composing_cands
+                .as_ref()
+                .is_some_and(|c| c.reading == reading && c.items == items);
+            if !same {
+                sess.suggest_selected = None;
+            }
             sess.composing_cands = Some(ComposingCands {
                 reading: reading.to_string(),
+                left_context: sess.left_context.clone(),
                 items,
             });
             let result = self.finish(&mut sess, false, String::new());
@@ -1315,9 +1331,18 @@ impl Engine {
         result
     }
 
-    /// Surrounding Text・secure input などの文脈を保存する（secure input 中は文脈を持たない）
-    pub fn set_context(&mut self, session_id: &str, ctx: &SetContextParams) {
+    /// Surrounding Text・secure input などの文脈を保存する（secure input 中は文脈を持たない）。
+    ///
+    /// 入力中（Composing）に左文脈が変わった場合は、文脈が違う前提で作ったサジェストを捨てる。
+    /// 表示中のサジェストが消える差分があれば返す（サーバーが `update_candidates` で届け、続けて
+    /// 新しい文脈で作り直す）
+    pub fn set_context(
+        &mut self,
+        session_id: &str,
+        ctx: &SetContextParams,
+    ) -> Option<ProcessKeyResult> {
         let mut sess = self.take_session(session_id);
+        let old_left = sess.left_context.clone();
         if let Some(app) = &ctx.app_id
             && sess.app_id.as_ref() != Some(app)
         {
@@ -1355,7 +1380,16 @@ impl Engine {
                 sess.next_words.clear();
             }
         }
+        let mut result = None;
+        if sess.left_context != old_left
+            && matches!(sess.state, State::Composing)
+            && sess.composing_cands.take().is_some()
+        {
+            sess.suggest_selected = None;
+            result = Some(self.finish(&mut sess, false, String::new()));
+        }
         self.sessions.insert(session_id.to_string(), sess);
+        result.filter(|r| r.candidates.is_some())
     }
 
     /// セッションを破棄する
@@ -1421,7 +1455,12 @@ impl Engine {
         if items == cc.items {
             return false;
         }
-        sess.composing_cands = Some(ComposingCands { reading, items });
+        sess.suggest_selected = None;
+        sess.composing_cands = Some(ComposingCands {
+            reading,
+            left_context: sess.left_context.clone(),
+            items,
+        });
         true
     }
 
@@ -1533,11 +1572,37 @@ impl Engine {
             State::Composing => KeyContext::Composing,
             State::Converting(_) => KeyContext::Converting,
         };
-        let action = self.keymap.resolve(ctx, sess.mode, key);
+        let mut action = self.keymap.resolve(ctx, sess.mode, key);
+        // サジェスト表示中は、既定の割当（Tab = Predict / ↑↓ = NoOp）をサジェストの選択に読み替える
+        // （キーマップで上書きされたキーは `suggest_action` が `None` を返すので上書きが優先）
+        if ctx == KeyContext::Composing
+            && matches!(action, Some(Action::Predict | Action::NoOp))
+            && self
+                .visible_suggest(sess)
+                .is_some_and(|(_, cc)| !cc.items.is_empty())
+            && let Some(suggest) = self.keymap.suggest_action(key)
+        {
+            action = Some(suggest);
+        }
         // 確定取消（Ctrl+Backspace）以外の操作が来たら、確定直後の記憶を捨てる。
         // 未割当キー（素通し）でも捨てる（「確定直後のみ有効」という制約はここで実現する）
         if !matches!(action, Some(Action::UndoCommit)) {
             sess.last_commit = None;
+        }
+        // サジェストの選択中の操作。選択キー以外は選択を解除してから従来どおり処理する
+        if let Some(selected) = sess.suggest_selected
+            && !matches!(action, Some(Action::SuggestNext | Action::SuggestPrev))
+        {
+            sess.suggest_selected = None;
+            match action {
+                // Enter: 選択中の候補を確定する（選べなければ表示中の読みの確定）
+                Some(Action::Commit) if self.select_composing(sess, selected, commit) => {
+                    return true;
+                }
+                // Esc: 選択を解除するだけ（入力中のまま）
+                Some(Action::Cancel) => return true,
+                _ => {}
+            }
         }
         match action {
             Some(action) => self.apply(sess, action, commit),
@@ -1658,10 +1723,30 @@ impl Engine {
             Action::Commit | Action::CommitFocused => self.commit_all(sess, commit),
             Action::StartConvert | Action::NextCand => self.start_converting(sess, Start::Convert),
             Action::Predict => self.predict(sess),
+            Action::SuggestNext | Action::SuggestPrev => self.select_suggest(sess, action),
             Action::ToKatakana => self.start_converting(sess, Start::Katakana),
             Action::ToHiragana => self.start_converting(sess, Start::Hiragana),
             _ => {}
         }
+    }
+
+    /// サジェストの選択を動かす。次: 未選択 → 先頭 → … → 末尾 → 先頭（循環）。
+    /// 前: 先頭 → 未選択、未選択 → 末尾。サジェストが表示されていなければ何もしない
+    fn select_suggest(&self, sess: &mut Session, action: Action) {
+        let len = self
+            .visible_suggest(sess)
+            .map_or(0, |(_, cc)| cc.items.len());
+        if len == 0 {
+            sess.suggest_selected = None;
+            return;
+        }
+        sess.suggest_selected = match (action, sess.suggest_selected) {
+            (Action::SuggestNext, None) => Some(0),
+            (Action::SuggestNext, Some(i)) => Some((i + 1) % len),
+            (_, None) => Some(len - 1),
+            (_, Some(0)) => None,
+            (_, Some(i)) => Some(i - 1),
+        };
     }
 
     fn leave_if_empty(&self, sess: &mut Session) {
@@ -2311,6 +2396,33 @@ impl Engine {
         if alternatives.len() < 2 {
             return None;
         }
+        // 読み全体に対する文節候補（学習・ユーザー辞書・システム辞書の同音異義語・かな・Rewriter）を
+        // 末尾に足す。短い単語で N-best が似た表記ばかりでも、辞書の候補から選べるようにする。
+        // 1 件目（N-best の先頭）は変えない。同じ表記は出所を併記してまとめる。
+        // 選ぶと読み全体が 1 文節としてその表記になる（文節編集は N-best の候補と同じく可能）
+        for c in self
+            .backend
+            .segment_candidates(reading, &context, CANDIDATE_LIMIT)
+        {
+            // 曖昧入力の補正は上で読み全体用に求めている（ここでは打鍵列が無いので重複させない）
+            if c.sources == [CandidateSource::Fuzzy] {
+                continue;
+            }
+            let exists = items.iter().any(|i| i.surface == c.surface);
+            if !exists && items.len() >= CANDIDATE_LIMIT {
+                continue;
+            }
+            push_candidate_with(&mut items, &c.surface, &c.sources, None);
+            if !exists {
+                alternatives.push(vec![Segment {
+                    reading: reading.to_string(),
+                    surface: c.surface,
+                    kind: SegmentKind::Japanese,
+                    candidates: None,
+                    chunk_id: 0,
+                }]);
+            }
+        }
         let mega = Segment {
             reading: reading.to_string(),
             surface: items[0].surface.clone(),
@@ -2718,6 +2830,7 @@ impl Engine {
                 selected: 0,
                 page_size,
                 visible: true,
+                unselected: None,
             };
         }
         if let State::Converting(conv) = &sess.state
@@ -2738,15 +2851,11 @@ impl Engine {
                 selected: set.selected as u32,
                 page_size,
                 visible: true,
+                unselected: None,
             };
         }
         // 入力中（変換前）の候補。現在の入力と対応しているものだけを出す
-        if let Some(reading) = self.candidate_reading(sess)
-            && let Some(cc) = sess
-                .composing_cands
-                .as_ref()
-                .filter(|c| c.reading == reading)
-        {
+        if let Some((reading, cc)) = self.visible_suggest(sess) {
             let total = reading.chars().count();
             return CandidatesView {
                 items: cc
@@ -2759,15 +2868,27 @@ impl Engine {
                         reading: i.reading.clone(),
                     })
                     .collect(),
-                selected: 0,
+                selected: sess.suggest_selected.unwrap_or(0) as u32,
                 page_size,
                 visible: true,
+                // 未選択のあいだは強調する行を出さない（↓ / Tab で初めて先頭が選ばれる）
+                unselected: sess.suggest_selected.is_none().then_some(true),
             };
         }
         CandidatesView {
             page_size,
             ..Default::default()
         }
+    }
+
+    /// 表示中のサジェスト（入力中の候補）: 現在の入力と対応している候補一覧と、その読み
+    fn visible_suggest<'a>(&self, sess: &'a Session) -> Option<(String, &'a ComposingCands)> {
+        let reading = self.candidate_reading(sess)?;
+        let cc = sess
+            .composing_cands
+            .as_ref()
+            .filter(|c| c.reading == reading)?;
+        Some((reading, cc))
     }
 
     /// 確定直後の次語候補を更新する。Direct 以外（入力が始まった）・確定を伴わない操作・
@@ -2806,6 +2927,19 @@ impl Engine {
     /// 前回返した状態との差分を `ProcessKeyResult` にまとめる
     fn finish(&self, sess: &mut Session, consumed: bool, commit: String) -> ProcessKeyResult {
         self.refresh_next_words(sess, consumed, !commit.is_empty());
+        // Composing を抜けたら、入力中の候補は持ち越さない（同じ読みを入れ直したときに古い候補を
+        // 出さない。作り直しはサーバーが入力のたびに予約する）
+        if !matches!(sess.state, State::Composing) {
+            sess.composing_cands = None;
+        }
+        // サジェストの選択は、表示中で範囲内のときだけ保つ
+        if let Some(i) = sess.suggest_selected
+            && self
+                .visible_suggest(sess)
+                .is_none_or(|(_, cc)| i >= cc.items.len())
+        {
+            sess.suggest_selected = None;
+        }
         let preedit = self.build_preedit(sess).to_view();
         let candidates = self.build_candidates(sess);
         let mut result = ProcessKeyResult {

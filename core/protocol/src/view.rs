@@ -155,4 +155,10 @@ pub struct CandidatesView {
 
     /// ウィンドウが表示されているか
     pub visible: bool,
+
+    /// `Some(true)` なら、どの候補も選ばれていない（候補は表示するが、強調する行は無い）。
+    /// 入力中のサジェストで、まだ選んでいないとき（`selected` は 0 だが先頭を選んだわけではない）に使う。
+    /// 省略（None）は従来どおり `selected` の行が選択中
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub unselected: Option<bool>,
 }

@@ -253,3 +253,68 @@ fn get_key_table_requires_initialize() {
     );
     assert!(r["error"].is_object(), "{r}");
 }
+
+/// 溜まった通知から `update_candidates` の `candidates` だけを取り出す
+fn candidate_updates(s: &mut Server) -> Vec<Value> {
+    s.poll_notifications()
+        .iter()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|l| l["method"] == "update_candidates")
+        .map(|l| l["params"]["candidates"].clone())
+        .collect()
+}
+
+#[test]
+fn set_context_drops_stale_suggestions_and_rebuilds_them() {
+    use nagi_engine::MockBackend;
+    use std::time::Duration;
+
+    let backend = MockBackend::new().with_sentence(
+        "きょうは",
+        vec![("きょう", vec!["今日", "京"]), ("は", vec!["は"])],
+    );
+    let mut s = Server::new(Arc::new(backend), "balanced", EngineConfig::default());
+    call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocol_version":1,"client_name":"t","client_version":"0","os":"ios"}}),
+    );
+    insert(&mut s, 2, json!({"type":"text","content":"きょうは"}));
+    std::thread::sleep(Duration::from_millis(600));
+    let first = candidate_updates(&mut s);
+    assert!(first.iter().any(|c| c["visible"] == true), "{first:?}");
+
+    // 文脈が変わった: 古いサジェストを消す通知が（応答と一緒に）届き、そのあと新しい文脈で作り直される
+    let lines = s.handle_line(
+        &json!({"jsonrpc":"2.0","id":3,"method":"set_context","params":{
+            "session_id":"s","surrounding_text":{"text":"昨日","cursor":2}}})
+        .to_string(),
+    );
+    let mut updates: Vec<Value> = lines
+        .iter()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|l| l["method"] == "update_candidates")
+        .map(|l| l["params"]["candidates"].clone())
+        .collect();
+    assert_eq!(updates.first().map(|c| &c["visible"]), Some(&json!(false)));
+    std::thread::sleep(Duration::from_millis(600));
+    updates.extend(candidate_updates(&mut s));
+    assert!(
+        updates.last().is_some_and(|c| c["visible"] == true),
+        "{updates:?}"
+    );
+
+    // 確定したあとは、遅れて届く更新でサジェストが復活しない
+    let r = call(
+        &mut s,
+        json!({"jsonrpc":"2.0","id":4,"method":"process_key","params":{
+            "session_id":"s","keysym":65293,"keycode":36,"text":"","modifiers":{},"kind":"down"}}),
+    );
+    assert!(r["result"]["commit"].is_string());
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(
+        candidate_updates(&mut s)
+            .iter()
+            .all(|c| c["visible"] != true)
+    );
+}

@@ -47,7 +47,7 @@ final class PreeditAndCandidateTests: XCTestCase {
     {
         CandidatesView(
             items: (0..<count).map { CandidateView(surface: "c\($0)", sources: [.llm, .systemDict, .llm], covers: nil, reading: nil) },
-            selected: selected, page_size: pageSize, visible: visible)
+            selected: selected, page_size: pageSize, visible: visible, unselected: nil)
     }
 
     func testPagingSecondPage() throws {

@@ -58,12 +58,17 @@ public struct CandidatesView: Codable {
 	public let page_size: UInt32
 	/// ウィンドウが表示されているか
 	public let visible: Bool
+	/// `Some(true)` なら、どの候補も選ばれていない（候補は表示するが、強調する行は無い）。
+	/// 入力中のサジェストで、まだ選んでいないとき（`selected` は 0 だが先頭を選んだわけではない）に使う。
+	/// 省略（None）は従来どおり `selected` の行が選択中
+	public let unselected: Bool?
 
-	public init(items: [CandidateView], selected: UInt32, page_size: UInt32, visible: Bool) {
+	public init(items: [CandidateView], selected: UInt32, page_size: UInt32, visible: Bool, unselected: Bool?) {
 		self.items = items
 		self.selected = selected
 		self.page_size = page_size
 		self.visible = visible
+		self.unselected = unselected
 	}
 }
 

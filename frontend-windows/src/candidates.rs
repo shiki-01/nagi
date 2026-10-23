@@ -80,7 +80,8 @@ impl CandidatePage {
                 index: i as u32,
                 surface: view.items[i].surface.clone(),
                 label: source_labels(&view.items[i].sources),
-                is_selected: i == selected,
+                // 入力中のサジェストで、まだ何も選んでいないときは強調しない
+                is_selected: i == selected && view.unselected != Some(true),
             })
             .collect();
         Some(Self {
@@ -444,6 +445,7 @@ mod tests {
             selected,
             page_size,
             visible: true,
+            unselected: None,
         }
     }
 
