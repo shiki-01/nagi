@@ -2354,7 +2354,7 @@ impl Engine {
         }
         let mut segments: Vec<Segment> = Vec::new();
         let mut context = sess.left_context.clone();
-        for piece in pieces {
+        for piece in merge_math_pieces(pieces) {
             match (piece.kind, how) {
                 (PieceKind::Japanese, Start::Convert) => {
                     let left_tail = tail_chars(&context, LEFT_CONTEXT_CHARS);
@@ -3167,4 +3167,49 @@ impl Engine {
         result.revision = sess.revision as u32;
         result
     }
+}
+
+/// 数式の記号として扱う全角文字（ローマ字表で `(` `)` `+` などが変わったもの）
+fn is_math_symbol(c: char) -> bool {
+    matches!(
+        c,
+        '（' | '）' | '＋' | '－' | '＊' | '／' | '＝' | '×' | '÷'
+    )
+}
+
+/// `(1+2)*3` のように、Literal と数式記号だけの Japanese Piece（`（` `）` など）が隣接し、
+/// Literal に数字を含む連なりを 1 つの Literal Piece にまとめる。括弧が日本語扱いで
+/// 文節が割れ、電卓候補が出ないのを防ぐ（H-49）。数字を含まない連なり（`(` 単体など）は従来どおり
+fn merge_math_pieces(pieces: Vec<Piece>) -> Vec<Piece> {
+    let joinable = |p: &Piece| match p.kind {
+        PieceKind::Literal => true,
+        PieceKind::Japanese => p.text.chars().all(is_math_symbol),
+    };
+    let mut out: Vec<Piece> = Vec::with_capacity(pieces.len());
+    let mut i = 0;
+    while i < pieces.len() {
+        if !joinable(&pieces[i]) {
+            out.push(pieces[i].clone());
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < pieces.len() && joinable(&pieces[j]) {
+            j += 1;
+        }
+        let run = &pieces[i..j];
+        let has_digit = run
+            .iter()
+            .any(|p| p.kind == PieceKind::Literal && p.text.chars().any(|c| c.is_numeric()));
+        if has_digit && run.len() > 1 {
+            out.push(Piece {
+                kind: PieceKind::Literal,
+                text: run.iter().map(|p| p.text.as_str()).collect(),
+            });
+        } else {
+            out.extend(run.iter().cloned());
+        }
+        i = j;
+    }
+    out
 }

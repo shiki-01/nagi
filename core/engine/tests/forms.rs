@@ -225,3 +225,25 @@ fn composing_suggestions_do_not_include_form_candidates() {
         assert!(c.items.iter().all(|i| i.surface != "ｋｙｏｕ"));
     }
 }
+
+#[test]
+fn paren_expression_is_one_literal_segment_with_calc_candidate() {
+    // `(` `)` は全角（日本語扱い）になるが、数字と隣接する数式は 1 つの Literal にまとまり、電卓候補が出る
+    let mut e = engine_with(MockBackend::new().with_rewriter());
+    type_str(&mut e, "(1+2)*3");
+    let r = press(&mut e, "Space");
+    assert!(r.candidates.as_ref().expect("候補").visible);
+    let s = surfaces(&r);
+    assert_eq!(s[0], "（1+2）*3");
+    assert!(s.contains(&"9".to_string()), "{s:?}");
+    assert_eq!(r.preedit.as_ref().unwrap().segments.len(), 1);
+}
+
+#[test]
+fn paren_expression_commits_typed_text() {
+    let mut e = engine_with(MockBackend::new().with_rewriter());
+    type_str(&mut e, "(1+2)");
+    press(&mut e, "Space");
+    let r = press(&mut e, "Enter");
+    assert_eq!(r.commit.as_deref(), Some("（1+2）"));
+}
