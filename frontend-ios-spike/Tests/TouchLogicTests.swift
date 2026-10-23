@@ -195,4 +195,31 @@ final class ThemeTests: XCTestCase {
         let simple = NagiIOSSettings.definitions.filter { newKeys.contains($0.key) && $0.isSimple }.map { $0.key }
         XCTAssertEqual(Set(simple), [NagiIOSSettings.Key.keyboardTheme, NagiIOSSettings.Key.keyboardAccent])
     }
+
+    // MARK: NumberCompose
+
+    func testNumberComposeOnlyForNumberAndSymbolInJapaneseContext() {
+        func should(_ mode: LayoutMode, setting: Bool = true, secure: Bool = false, ja: Bool = true, preedit: Bool = false) -> Bool {
+            NumberCompose.shouldCompose(mode: mode, setting: setting, isSecure: secure, japaneseContext: ja, hasPreedit: preedit)
+        }
+        XCTAssertTrue(should(.number))
+        XCTAssertTrue(should(.symbol))
+        XCTAssertFalse(should(.alpha))
+        XCTAssertFalse(should(.kana))
+        XCTAssertFalse(should(.number, setting: false))
+        XCTAssertFalse(should(.number, secure: true))
+        XCTAssertFalse(should(.number, ja: false))
+        XCTAssertTrue(should(.number, ja: false, preedit: true))
+        XCTAssertFalse(should(.number, secure: true, preedit: true))
+    }
+
+    func testNumberComposeContextFollowsLayoutSwitches() {
+        XCTAssertTrue(NumberCompose.nextContext(previousMode: .alpha, previousContext: false, nextMode: .kana))
+        XCTAssertTrue(NumberCompose.nextContext(previousMode: .kana, previousContext: true, nextMode: .number))
+        XCTAssertTrue(NumberCompose.nextContext(previousMode: .number, previousContext: true, nextMode: .symbol))
+        XCTAssertFalse(NumberCompose.nextContext(previousMode: .alpha, previousContext: true, nextMode: .number))
+        XCTAssertFalse(NumberCompose.nextContext(previousMode: .number, previousContext: false, nextMode: .symbol))
+        XCTAssertFalse(NumberCompose.nextContext(previousMode: .kana, previousContext: true, nextMode: .alpha))
+        XCTAssertFalse(NumberCompose.nextContext(previousMode: .kana, previousContext: true, nextMode: .emoji))
+    }
 }

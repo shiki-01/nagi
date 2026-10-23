@@ -146,6 +146,10 @@ struct NagiIOSSettings: Codable, Equatable {
             description: "同じキーを続けて押すと次の文字（あ→い→う）になります。オフのときはフリックで入力し、タップは常に先頭の文字です。",
             kind: .bool, isSimple: true, defaultValue: .bool(false)),
         NagiIOSSettingDef(
+            key: Key.composeNumbers, group: "入力", label: "数字・記号も入力中の文字列にする",
+            description: "かなから数字・記号のキーボードに切り替えて入力した文字を、入力中の文字列に入れます。スペースで電卓の答え・全角・記号の候補が出ます。何も選ばずに確定すれば半角のままです。オフにすると直接入力します。パスワード欄では常に直接入力です。",
+            kind: .bool, isSimple: false, defaultValue: .bool(true)),
+        NagiIOSSettingDef(
             key: Key.flickSensitivity, group: "入力", label: "フリック感度",
             description: "値が大きいほど、短い移動でフリックと判定します。",
             kind: .float(min: 0.5, max: 2.0, step: 0.1), isSimple: true, defaultValue: .number(1.0)),
@@ -264,6 +268,7 @@ struct NagiIOSSettings: Codable, Equatable {
     enum Key {
         static let toggleInput = "input.toggle_input"
         static let toggleTimeoutMs = "input.toggle_timeout_ms"
+        static let composeNumbers = "input.compose_numbers"
         static let flickSensitivity = "flick.sensitivity"
         static let flickThresholdPt = "flick.threshold_pt"
         static let flickPopup = "flick.popup"
@@ -337,6 +342,8 @@ struct NagiIOSSettings: Codable, Equatable {
     // MARK: キーボードが使う値
 
     var toggleInput: Bool { bool(Key.toggleInput) }
+    /// 数字・記号のキーを入力中の文字列（コアの composing）に入れるか
+    var composeNumbers: Bool { bool(Key.composeNumbers) }
     var flickPopup: Bool { bool(Key.flickPopup) }
     var flickLongPressMs: Int { int(Key.flickLongPressMs) }
     /// トグルキー（レイアウトの `toggle`）が次の押下を「置き換え」とみなす時間。

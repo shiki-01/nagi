@@ -32,6 +32,7 @@ final class IOSSettingsTests: XCTestCase {
         XCTAssertEqual(s.commitMethod, "insert")
         XCTAssertEqual(s.hapticEngine, "standard")
         XCTAssertEqual(s.toggleTimeoutMs, 1000)
+        XCTAssertTrue(s.composeNumbers)
         XCTAssertEqual(s.flickThresholdPoints, 14, accuracy: 1e-9)
         XCTAssertEqual(s.heightScale, 1.0, accuracy: 1e-9)
         XCTAssertEqual(s.schema, NagiIOSSettings.currentSchema)
@@ -224,6 +225,11 @@ final class IOSSettingsTests: XCTestCase {
         XCTAssertEqual(try decode(#"{"input.toggle_timeout_ms":5000}"#).toggleTimeoutMs, 3000)
         XCTAssertEqual(try decode(#"{"input.toggle_timeout_ms":1500}"#).toggleTimeoutMs, 1500)
         XCTAssertEqual(try decode(#"{"input.toggle_timeout_ms":"x"}"#).toggleTimeoutMs, 1000)
+    }
+
+    func testComposeNumbers() throws {
+        XCTAssertFalse(try decode(#"{"input.compose_numbers":false}"#).composeNumbers)
+        XCTAssertTrue(try decode(#"{"input.compose_numbers":"x"}"#).composeNumbers)
     }
 
     // MARK: 派生値
