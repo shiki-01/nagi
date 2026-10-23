@@ -1,6 +1,6 @@
 # Nagi 進捗記録
 
-最終更新: 2026-10-22（Windows: GetReconversion・言語バーのボタン・Windows 用ライセンス一覧・ブローカーの設計メモ、決定は H-43。その前に Windows 配布: `bundle-windows`・`install.ps1`/`uninstall.ps1`・`windows-release.yml`・更新検査の整合・SmartScreen 方針、決定は H-42。その前に Windows フロント: Win32/TSF 層の実装、決定は H-41）／ 2026-10-22（Windows フロント: 候補ウィンドウ・環境/文脈・表示属性・文言のロジックを追加、決定は H-40。その前に OS 非依存部 `nagi-windows` に SessionStore・VK_IME_ON/OFF を追加、TSF 層 `nagi-windows-tsf` の骨組み。決定は H-39）／ 2026-10-16（iOS: 確定方式・注目文節・取り消し・トグル・触覚音・入力欄の種類・キーボード切替の原因、既定モデル small。決定は H-22(c)・H-27〜H-33）／ 2026-10-15（iOS: 設定・レイアウト・ユーザー辞書・次語予測・絵文字候補・堅牢性・レビュー修正。決定は H-16〜H-21）／ 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-17）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
+最終更新: 2026-10-23（iOS: 実機確認の結果を反映。決定・記録は H-44。残りの実機確認の手順は `docs/ios-device-checklist.md` §5）／ 2026-10-22（Windows: GetReconversion・言語バーのボタン・Windows 用ライセンス一覧・ブローカーの設計メモ、決定は H-43。その前に Windows 配布: `bundle-windows`・`install.ps1`/`uninstall.ps1`・`windows-release.yml`・更新検査の整合・SmartScreen 方針、決定は H-42。その前に Windows フロント: Win32/TSF 層の実装、決定は H-41）／ 2026-10-22（Windows フロント: 候補ウィンドウ・環境/文脈・表示属性・文言のロジックを追加、決定は H-40。その前に OS 非依存部 `nagi-windows` に SessionStore・VK_IME_ON/OFF を追加、TSF 層 `nagi-windows-tsf` の骨組み。決定は H-39）／ 2026-10-16（iOS: 確定方式・注目文節・取り消し・トグル・触覚音・入力欄の種類・キーボード切替の原因、既定モデル small。決定は H-22(c)・H-27〜H-33）／ 2026-10-15（iOS: 設定・レイアウト・ユーザー辞書・次語予測・絵文字候補・堅牢性・レビュー修正。決定は H-16〜H-21）／ 2026-10-14（iOS の実機検証・タッチ入力・製品版キーボードを追記。決定は decisions.md の H-6〜H-17）／ 2026-09-30（G-35〜G-49 の反映: SudachiDict 対応・モデル比較・bundle id 変更・モデル非同期読み込み・設定 RPC/GUI・ライブ変換とローマ字入力の挙動修正。それ以前は 2026-09-27 時点: ライブ変換・範囲操作・reconvert・確定取消・辞書ベースのビームサーチ・ed25519署名検証（origin）と、実LLMビームサーチ・KVキャッシュ再利用（別セッション、G-32〜G-34）を統合後）。決定の詳細・根拠は `docs/decisions.md`（特に G 節）を参照。
 
 ## 完了した項目（Phase 1 のコア部分）
 
@@ -211,51 +211,92 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 
 1. ~~本体アプリ: ユーザー辞書の登録・編集 UI（`userdict.entries`）~~ → 実装済み（`App/UserDictionaryView.swift`。実機確認は `docs/ios-device-checklist.md` §2）
 2. 配布の準備: 正式なアイコン、プライバシーポリシー、外部テスト（Beta App Review）、フルアクセスの用途の明記
-3. 堅牢性: 複数プロセスでの学習データの同時アクセス（D-5。コア側の課題を含む）、他機種での上限・応答時間の実測
-4. 設定のコア側新規項目（`docs/ios-settings.md` §4 段階4）
-5. 最後にまとめて: 見た目と操作感の調整（実機のフィードバックを集める）
+3. 堅牢性: 複数プロセスでの学習データの同時アクセス（D-5。2026-10-23 に順番の確認まで済み。同時書き込みは偶然のみで未検証。コア側の課題を含む）、他機種での上限・応答時間の実測（後日。ユーザーが実施予定。checklist §5.4）
+4. 設定のコア側新規項目（`docs/ios-settings.md` §4 段階4。未完了の詳細は下の「設定のコア側新規項目（B-1）」）
+5. 最後にまとめて: 見た目と操作感の調整（未完了の詳細は下の「見た目と操作感の調整（B-2）」。範囲は未決）
 6. ~~要判断（診断ログの既定・iOS の既定モデル）~~ → 決定済み（H-22。診断ログは TestFlight で既定 ON・App Store 版で既定 OFF、既定モデルは small。`RequestsOpenAccess` は H-18 で true。`docs/ios-device-checklist.md` §0）
+7. D-6: 設計書への追記を実施（2026-10-23）
+8. 2026-10-23 の確認で残ったもの: 既定の同期待ち時間（H-10。checklist §5.5。未決）、`docs/ios-release.md` §0.3 系の 4 項目（checklist §5.6。Mac と Xcode が要る。CI の成果物はログのみ）、フルアクセス（触覚）の OFF / ON 比較（H-18。checklist §5.3）、速打ちで音・触覚が鳴らない改善要望（checklist §1）
+
+### 設定のコア側新規項目（B-1）
+
+- コアにすでにある（`core/config/src/settings.rs`、`config/default.toml`。iOS 画面に出ているかは確認が要る）: `input.dakuten_cycle`、`learning.strength` / `learning.forget_days` / `learning.max_entries`、`predict.next_word` / `predict.next_word_count`（LLM 版は未実装）、`convert.calculator`、`userdict.enabled` / `snippet.enabled`
+- コアにまだ無い（9 件）:
+  1. `convert.half_width_alnum`（数字・英字を半角で確定。`half` / `full` / `follow_input`）
+  2. `convert.date_time`（「きょう」「いま」などの日付・時刻候補）
+  3. `input.auto_commit_ms`（一定時間で自動確定。既定は無効。入力を失わない原則との兼ね合い）
+  4. `input.auto_space_alpha`（英単語の後の自動スペース）
+  5. `input.long_vowel_assist`（「ー」「っ」の補助）
+  6. `userdict.max_entries`（ユーザー辞書の上限。今は iOS 側の定数で、コアの設定に無い）
+  7. `snippet.entries`（スニペットの登録・編集。iOS の `UserDictionaryView` に実装がある可能性があり、確認が要る）
+  8. 次語予測の LLM 版（`predict.next_word` の拡張。上の「次語予測」の未決事項）
+  9. `exp.*`（`exp.style_convert` / `exp.reconvert` / `exp.speculative_decode` / `exp.llm_reranker`。実験的機能。コアにまだ無い）
+- 注意: `docs/ios-settings.md` §2 の「状況」列は、実装済みの項目も「新規(core)」のままになっている。更新は別作業。
+
+### 見た目と操作感の調整（B-2）
+
+範囲は未決（`progress.md` の「最後にまとめて」は範囲を決めた一覧が無かったため、資料の記載から挙げた）。範囲はユーザーが決める。
+
+1. 入力中の候補: 並び・件数（12 件）、展開「﹀」のグリッド（H-14）
+2. 次語候補の見え方: 薄い背景の濃さ、消える速さ（H-19。確認済みだが調整の余地あり）
+3. 「もしかして」の表示: 候補バーでのラベルの見え方、余分な候補（「上」「上じ」。2026-10-23 に確認。調整余地あり。H-24・H-25）
+4. 絵文字・顔文字の候補: 読み（例: えがお）での見え方と、設定 UI への追従（H-21。設定 UI は未完了）
+5. 「簡易モード（辞書のみ）」の注意: 出す条件（10 秒以上続いたとき）と文言（H-26。未確認）
+6. 変換の差し替え（small）: 0.6 秒後の差し替えのちらつき（H-10。checklist §5.5 と同じ）
+7. テーマ・アクセント・キーの間隔・角丸・高さ: 既定値の見直し（checklist で確認済み。既定値を変えるかは未決）
+8. 片手モード: 幅 0.9 でのボタンの大きさ（確認済み。調整の余地あり）
+9. ホームの「LLM が使える見込み」の文言（`App/DataStatusView.swift` 付近）
+10. 入力テストタブの説明文: H-34 で修正済み。再確認
+
+範囲外: 本物のアプリアイコン、プライバシーポリシー、Beta App Review（配布の準備。上の項目 2）／キーボードが切り替わる件（H-33。iOS の仕様で、Nagi 側では直せない）／`docs/ios-backlog.md` §3 の未実装のアイデア（クリップボードのタブ、句読点の自動置換など）
 
 ## キーアイコンの Iconify 対応（2026-10-22、決定は decisions.md H-36）
 
 - 実装済み（実機・CI 未確認）: `icon` の `sf:` / `iconify:` 書式（スキーマ + `LayoutLoader.decode`）、ホストアプリの取り込み時の解決（`App/IconifyResolver.swift`。Iconify API → WKWebView で PNG 化 → App Group `keyboard/assets/icons/`）、拡張の描画（`KeyIconView`）、ライセンス一覧（レイアウトタブ・About）
 - サイトエディタ（`web/`）の `iconify:` 対応は完了（`validate.ts` の書式検査、アイコン入力欄、ブラウザ直取得のプレビュー、書き出し JSON は ID のみ）。
-- 未完了: Iconify API の実応答の確認（開発環境から接続できず未確認）、実機での取り込み・描画の確認
+- 2026-10-23 に実機で取り込み・描画を確認（問題なし。H-44）
+- 未完了: 開発環境からの Iconify API の実応答の確認（開発環境から接続できず未確認）
 
-## iOS 実機確認待ちの一覧（2026-10-21）
+## iOS 実機確認待ちの一覧（2026-10-23）
 
-実装済みで、実機（TestFlight）での確認が済んでいないもの。確認手順は各節と `docs/ios-device-checklist.md` を参照。
+実装済みで、実機（TestFlight）での確認が済んでいないもの。確認手順は `docs/ios-device-checklist.md` §5 を参照。
 
-| 項目 | 節 | 確認方法 |
+| 項目 | 節 | 状況（2026-10-23） |
 | --- | --- | --- |
-| 曖昧入力 M1・M2: 誤補正（固有名詞・俗語の文）、矩形の座標系、タッチ位置、候補バーの「もしかして」の見え方、σ_noise の実測 | H-24・H-25 | 入力テスト、診断ログ。CI での Swift ビルド・テストは 2026-10-21 に成功済み |
-| 絵文字・顔文字候補の見え方と設定 UI の追従 | H-21 | 読み（例: えがお）で候補を確認 |
-| メモリ上限の閾値（150/1024/2048MB）と LLM 再読み込みの待ち時間（30 秒）の見直し | H-16・H-26 | 診断ログ `unload_model (keyboard hidden)` `reload_model ok=` `llm restored` |
-| フルアクセスが要る機能（触覚など）の可否 | H-18 | `docs/ios-device-checklist.md` |
-| 他機種での拡張のメモリ上限・応答時間の実測、small の応答時間の実機再確認 | H-17 | 別機種で計測 |
-| 複数プロセスでの学習データの同時アクセス（D-5） | mobile-roadmap D-5 | 本体アプリとキーボードで同時に学習・削除 |
+| メモリ上限の閾値（150/1024/2048MB）と LLM 再読み込みの見直し | H-16・H-26 | **報告待ち。** 実機で意図的に起こせないため、ユーザーが自然に起きたときの診断ログを待つ（checklist §5.2）。再読み込みの待ち時間は H-26 のとおり（約 10〜12 秒。「30 秒」はコア側の自動再読み込みの値） |
+| フルアクセスが要る機能（触覚など）の可否 | H-18 | **据え置き（未確認）。** OFF / ON の比較を実施していない（checklist §5.3） |
+| 他機種での拡張のメモリ上限・応答時間の実測、small の応答時間の実機再確認 | H-17 | **後日。** ユーザーが別の機種で後日実施する（checklist §5.4） |
+
+確認済み（2026-10-23 の実機確認。詳細は `docs/ios-device-checklist.md` §2、記録は H-44）:
+- 曖昧入力 M1・M2（H-24・H-25）: 確認、調整余地あり。`kamji` で「感じ」は出るが、「上」「上じ」の余分な候補が出る（`m` を `i`（かみ）と読んだ補正と思われる）。誤補正の多さと並びは未判断。σ_noise は実測しない（指の位置を保存しない方針）。
+- 絵文字・顔文字候補の見え方（H-21）: 問題なし。設定 UI への追従は未完了。
+- Iconify のキーアイコン（H-36）: 問題なし。
+- 学習データの削除（D-5）: 順番の確認で問題なし。同時書き込みは偶然にしか起きないため未検証。
+- クリック音（compat）・触覚の設定値と実際の動作（H-30）: 設定どおり。改善要望あり（速打ちで前回の音・触覚が終わるまで次が鳴らない。`docs/ios-device-checklist.md` §1 の改善要望。未対応）。
+- コア API の連携（capabilities / get_key_table / set_environment / メモリ警告）: 2026-10-22 の項目で確認済み。
 
 確認済み: メール・URL 欄の英字切替、検索欄の改行キー、注目文節まで確定、`insert` 確定（H-31・H-34）、数字欄（`.numberPad` ほか。H-35）。欄ごとの標準キーボードの自動選択は iOS の挙動で対応不可（H-33・H-35）。
-2026-10-22 の実機確認で問題なし: クリック音（互換モード）・触覚の設定値と実際の動作の一致（H-30）、iOS の `capabilities` / `get_key_table` / `set_environment` / メモリ警告の連携（「モバイル向けコア API」）。詳細は `docs/ios-device-checklist.md` §2。
+2026-10-22 の実機確認で問題なし: クリック音（互換モード）・触覚の設定値と実際の動作の一致（H-30。2026-10-23 にも確認）、iOS の `capabilities` / `get_key_table` / `set_environment` / メモリ警告の連携（「モバイル向けコア API」）。詳細は `docs/ios-device-checklist.md` §2。
 
 ## モバイル向けコア API（2026-10-14、決定は decisions.md H-16）
 
 - 実装済み: LLM だけの解放/再読み込み（`unload_model` / `reload_model`、メモリ逼迫 critical・メモリ上限不足での自動解放、normal から 30 秒後の自動再読み込み）、`get_key_table`、D-4（`initialize.capabilities`・`set_environment.memory_budget_mb`・メモリ上限に従うプロファイル判定）
 - iOS（Swift）側の追従は済み（起動時の `capabilities`、`get_key_table`、`set_environment`・メモリ警告による `unload_model` 連携。2026-10-22 に実機で問題なし。`KanaKeyTable.swift` の複製表はフォールバックとして残る）
-- 未完了: 実機でのメモリ上限の閾値（150/1024/2048MB）と再読み込みの待ち時間（30 秒）の見直し
+- 未完了: 実機でのメモリ上限の閾値（150/1024/2048MB）の見直し（報告待ち。checklist §5.2）。再読み込みの待ち時間は H-26 のとおり（保持 10 秒、通常に戻ったら即時の再読み込み。合計約 10〜12 秒）。「30 秒」はコア側の自動再読み込み（normal から 30 秒後）の値
 
 ## 絵文字・顔文字の読みからの候補（2026-10-14、決定は decisions.md H-21）
 
 - 実装済み: Rewriter `EmojiRewriter`（`core/rewriter/src/emoji.rs`）、表 `config/emoji.tsv`（`include_str!` 同梱。絵文字 413 読み・顔文字 101 読み）、設定 `rewriter.emoji` / `rewriter.kaomoji`（既定 true・detail・both）
-- 未完了: iOS 側の設定 UI 追従（`IOSSettings.swift`）、実機での見え方の確認
+- 実機での見え方は 2026-10-23 に確認済み（問題なし。H-44）
+- 未完了: iOS 側の設定 UI 追従（`IOSSettings.swift`）
 
 ## 曖昧入力 M1（2026-10-15、決定は decisions.md H-24）
 
 - 実装済み: 新クレート `nagi-fuzzy`（QWERTY 隣接表、置換・脱落・挿入・転置・濁点/小書き・同じ行内の隣、辞書の trie による枝刈り付き探索）、`CandidateSource::Fuzzy`、`Pipeline` / エンジンへの統合（入力中の候補・Space 変換の「もしかして」候補）、設定 `input.fuzzy.{enabled,strength,max_candidates,kinds}`（既定オフ）、評価 `nagi-fuzzy-eval`（正解率 約 40%、クリーン入力の誤訂正 0%、展開 p50 1.6ms）
-- 未完了: Swift 側（iOS の設定 UI は汎用フォームに自動で出る想定。候補の「もしかして」ラベルの追従）、実機での確認、M2（タッチ座標・実際の打鍵列）、M3（LLM 再採点）、補正後の読みを候補に持たせる表示
+- 未完了: Swift 側（iOS の設定 UI は汎用フォームに自動で出る想定。候補の「もしかして」ラベルの追従）、実機での確認（2026-10-23 に実施。「もしかして」は出る。余分な候補は調整余地あり。H-44）、M2（タッチ座標・実際の打鍵列）、M3（LLM 再採点）、補正後の読みを候補に持たせる表示
 
 ## 曖昧入力 M2（2026-10-15、決定は decisions.md H-25）
 
 - 実装済み: Composer が実際の打鍵列（`Stroke`）を保持（BS・G-49 巻き戻し・引き継ぎ・カーソル移動・部分確定に追従）、`set_layout_geometry`（キー矩形から隣接を導出）、`insert_reading` の任意の `touch` / `flick`（`InsertReadingTouchParams`）、座標つきのガウス尤度の置換コスト、`CandidateView.reading`（補正後の読み。選ぶとその読みで確定・学習）、設定 `input.fuzzy.use_touch_coords`（既定 true・detail・ios）、評価 `nagi-fuzzy-eval` に座標ノイズモデル（M1 比で上位 5 件の正解率 +9〜+23pt、クリーン入力の誤訂正 0〜0.13%）
 - Swift 側は実装済み（コミット d08893f。geometry・touch / flick の送信、「もしかして: ○○」表示、テスト追従、生成 config で `[input.fuzzy] enabled = true`）
-- 未完了: CI での Swift ビルド・テストの確認、実機での確認（矩形の座標系、タッチ位置、候補バーの見え方）、M3（LLM 再採点）
+- 未完了: CI での Swift ビルド・テストの確認、実機での確認（矩形の座標系、タッチ位置。候補バーの見え方は 2026-10-23 に確認、H-44）、M3（LLM 再採点）
