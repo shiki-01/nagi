@@ -562,11 +562,20 @@ fn literal_expression_shows_rewriter_candidates_while_composing() {
         assert!(r.candidates.unwrap().visible);
     }
     // 数字だけ・英字だけは対象外（打つたびに出さない）
-    for input in ["1", "123", "abc"] {
+    for input in ["1", "123"] {
         let mut e = rewriter_engine();
         type_literal(&mut e, input);
         assert!(e.composing_candidate_reading("s").is_none(), "{input}");
     }
+    // 英字だけ（`abc` → あbc）は英語らしさの判定のために候補の計算が走る（H-56）。語彙なしの
+    // 特徴量だけの判定でも英語らしいので、打った通りの次に ASCII が出る
+    let mut e = rewriter_engine();
+    type_literal(&mut e, "abc");
+    let reading = e
+        .composing_candidate_reading("s")
+        .expect("英語らしい打鍵列");
+    let shown = cand_surfaces(&e.refresh_composing_candidates("s", &reading).unwrap());
+    assert_eq!(&shown[..2], ["あbc", "abc"], "{shown:?}");
 }
 
 #[test]

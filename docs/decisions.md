@@ -1626,3 +1626,25 @@ H-41・H-42 の残件のうち、実機なしで作れるものを実装し、�
 - **入力内容を stderr に出していないことの確認**: `core/server/src` の stderr 出力（`main.rs` / `setup.rs` / `pipeline.rs` / `install_data.rs`）は、起動メモ（モデル/辞書/設定の読み込み結果・パス・エラー文）、プロファイルとその理由、モデル読み込み完了/失敗、キャリブレーションの所要時間、データ取得の進捗のみで、キー・preedit・確定文字列・周辺テキストは出力しない（`lib.rs` の方針どおり）。したがって stderr ファイルの保存は CLAUDE.md の「ログに入力内容を残さない」に反しない。ただしパス（ユーザー名を含みうる）と設定ファイルのエラー行は含まれうる。
 - **迷った判断**: (1) 終了コードの受け渡しは trait の `on_close` を変えず、`Transport::exit_report()` を既定 `None` の追加メソッドにした（既存のモック・実装を変えない）。 (2) `Crashed` / `EnteredMinimalMode` の形は変えず、詳細は新イベントにした（`status.rs`・TSF の既存テストへの影響を避けるため。トーストは出さない）。 (3) EOF 後の終了待ちは最大 1 秒（stdout だけ閉じて生きている子はコード不明のまま）。 (4) ログは tsf.log と同じディレクトリ（ユーザー別の `%LOCALAPPDATA%`。他ユーザーから読めない）。 (5) 統合テスト `broken_stderr.rs` は Linux のみ（`/dev/full`）で、`--no-llm` のため通常の `cargo test` で動く。
 - **未確認（実機）**: 実機の原因が仮説 A か（修正後に起動失敗が消えるか）、`imserver-<pid>.log` が作られ追記されること、Windows での終了コード（NTSTATUS の符号付き表記）の取得、`CREATE_NO_WINDOW` と stderr ファイルの併用、掃除。手順は `docs/real-hardware-checklist.md` §8.5e、`docs/windows-verification.md`。
+
+### H-57. iOS: レイアウト切替時の確定を設定にする／入力中の候補バーに英語（ASCII）の候補を出す（2026-10-23、要実機確認）
+
+#### 件 1: 切替時に入力中の文字列を保つ設定（iOS のみ、コアの変更なし）
+
+- **症状（ユーザー実機報告）**: かな → 数字・記号へ切り替えた瞬間に入力中の文字列が確定され、`1+2` のような式が分断される。英字との切替も同様。
+- **原因**: `KeyboardModel.changeLayout` が、切替の前に必ず `perform(.commit)` を送っていた（H-53 の「未確定のままレイアウトを切り替えたときの確定」）。
+- **設定**（`NagiIOSSettings`、詳細モード、設定画面は記述子から自動）: `input.keep_preedit_on_symbols`（かな ⇄ 数字・記号。既定 **true**）、`input.keep_preedit_on_english`（かな ⇄ 英字。既定 **false**＝従来どおり確定）。
+- **判定**（`TouchLogic.swift` の純関数 `LayoutSwitchKeep.shouldKeep` / `EnglishCompose.shouldCompose`。`TouchLogicTests` / `IOSSettingsTests`）: 入力中の文字列があり、パスワード欄でなく、(a) かな・数字・記号の間（かな同士は対象外）は `keep_preedit_on_symbols`、(b) 英字とそれらの間は `keep_preedit_on_english`。数字・記号が関わる切替は、切替先で続けられるよう `input.compose_numbers` がオンのときだけ保つ（オフなら確定）。絵文字・カスタムへの切替は常に確定。
+- **切替先での入力**: 数字・記号は H-53 の経路（`hasPreedit` なら compose）でそのまま同じ composing に続く。英字は、`keep_preedit_on_english` がオンで入力中の文字列があるときだけ、英字キー（Shift 適用後の文字）とトグルも `insertReading` でコアへ送る（Literal として入る）。入力中の文字列が無ければ従来どおり `hostInsert`。`japaneseContext` の更新（`NumberCompose.nextContext`）は変えていない。
+- **迷った判断**: 英字 → 数字・記号のように英字で入力を続けた後の切替は、数字・記号側の条件（`compose_numbers`）と英字側の設定の両方が通るときに保つ（`hasPreedit` なので数字・記号側はそのまま compose する）。
+- **未確認（実機・CI）**: Swift はローカルでコンパイルしていない。切替後の下線の見た目、英字レイアウトでの Shift・Backspace・Space・Enter、トグルの置き換え。
+
+#### 件 2: 「こmぷてr」（computer）が英語の候補にならない
+
+- **原因 1（語彙ファイルの場所・読み込みは問題なし）**: 拡張が読む場所は `<App Group>/data/english/words.fst`（`SharedStore.dataDir()` → `core` の `load_english_lexicon`）で、ホストアプリの取り込み先（`OptionalData.indexURL` = `containerURL/data/<dir>/<index_file>`、`dir`=`english`・`index_file`=`words.fst` は ffi の `nagi_optional_data_sources` が `LEXICON_FILE` から返す）と一致する。語彙はホストの「追加データ」で入れるまで存在せず、未導入だと**特徴量だけの劣化動作**になる。そのとき `computer` は素通し 2 文字（m・r）/ 8 文字で 0.43（Low）となり、**設計上 Mid に届かない**（語彙があれば tier ヒットで 0.9 = High）。実機で効かなかった可能性の大半は「語彙未導入（または導入後にキーボードを開き直していない。コアは起動時に 1 度だけ読む）」。これは設計上の限界で、コードでは直していない（テスト `without_a_lexicon_computer_is_not_judged_english` で固定）。
+- **原因 2（コア）**: H-51 の段階 1 は Space の候補窓だけで、入力中の候補バー（composing の suggest）には出ていなかった。さらに入力中の候補は「保留中のローマ字が無い」ことが条件（`candidate_reading`）で、`computer` は末尾の `r` が保留のため、打ち終わりの時点で候補バー自体が出なかった（曖昧入力が無効の既定では、`こmぷて` でも日本語の読みとして作れない）。
+- **修正**（`core/engine`、macOS・Windows の入力中サジェストにも同じく効く）: 英語らしい打鍵列の候補を入力中の候補に足す。(1) `english_typing`: 実際の打鍵列 + 保留（小文字の ASCII 3 文字以上）を打ち直して現在の入力と一致するときだけ対象（かな直接・フリック・数字・Shift 入力は対象外）。(2) 日本語の読みとして候補を作れず、ローマ字にならなかった英字を含む入力（`english_only_reading`）は、打った通りの文字列を読みとして候補を作る。キー入力の経路（`composing_candidate_reading`）では判定せず、判定はデバウンス後のバックグラウンド（`compute_items_for`）で行う。(3) 判定（`english_level`。日本語として引ける読みは除かれる）が **High なら 2 番目**、**Mid なら主要な候補の後ろ（ひらがな・カタカナの前。ただし先頭にはしない）**に打鍵列の ASCII を足す。Low 以下は足さない。英語と判定されなければ、日本語の読みを作れない入力は従来どおり候補なし。先頭は動かさない。(4) その候補を選ぶと ASCII を確定する。読みにローマ字にならなかった英字を含む候補は学習に通さない（`こmぷてr` → computer を学習しない。曖昧入力の補正候補は従来どおり補正後の読みで学習）。
+- **ゴールデン／既存テストの変更**: `engine/tests/touch.rs` の `literal_expression_shows_rewriter_candidates_while_composing` は、英字だけ `abc`（→ あbc）を「候補の読みなし」としていたが、`abc` は英語らしい（語彙なしの特徴量でも High）ので、`composing_candidate_reading` が `Some` になり、候補は `あbc`・`abc` になる、に変えた。状態機械のゴールデン（YAML）は変えていない。
+- **テスト**: `server/tests/composing_english.rs`（iOS と同じ呼び出し = `insert_reading` の `text` を 1 文字ずつ。語彙は `core/english/tests/fixtures/words.txt`）。`computer` で 1 番目 `こmぷてr`・2 番目 `computer`、選択で `computer` を確定、`kyouhagoogle...` など日本語の入力の全接頭辞で ASCII 候補が出ない、語彙なしでは出ない。
+- **誤判定の見込み**: 判定は H-51 と同じ（誤判定 0 を優先した閾値）。入力途中の状態（接頭辞）は評価コーパスで測っていない（日本語の接頭辞で ASCII が出ないことを上のテストの数件で確認したのみ）。`comp` のように語彙にない子音連続の途中は Mid になりうる（候補の後ろに出るだけで、先頭は動かさない）。
+- **未確認（実機）**: 語彙導入後の iOS で `computer` の候補バー表示、導入直後に拡張が語彙を読むタイミング（キーボードを開き直す必要）、入力途中の見た目のちらつき。

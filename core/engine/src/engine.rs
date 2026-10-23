@@ -908,8 +908,65 @@ impl Engine {
         }
     }
 
-    /// 入力中の候補を作れる状態なら、現在の読み
+    /// 入力中の候補を作れる状態なら、現在の読み。日本語の読みとして作れなければ、英語らしい打鍵列
+    /// （`english_only_reading`）の表示の読み
     fn candidate_reading(&self, sess: &Session) -> Option<String> {
+        self.japanese_candidate_reading(sess)
+            .or_else(|| self.english_only_reading(sess))
+    }
+
+    /// 英語の自動判定（入力中の候補）の対象になりうる打鍵列。保留中のローマ字を含む打鍵列 `raw`
+    /// （小文字の ASCII 3 文字以上）と、日本語として読んだかな `reading`（保留の n は ん）。
+    /// 実際の打鍵列を打ち直して、いまの入力と一致するときだけ（かな直接入力・フリック・数字・Shift 入力を含む
+    /// 入力は対象外）。判定そのものはここでは行わない（キー入力の経路を軽く保つ）
+    fn english_typing(&self, sess: &Session) -> Option<(String, String)> {
+        if self.config.auto_english == AutoEnglishMode::Off
+            || !matches!(sess.state, State::Composing)
+        {
+            return None;
+        }
+        let composer = &sess.composer;
+        let pending = composer.pending();
+        let raw: String = composer
+            .strokes()
+            .iter()
+            .map(|s| s.ch)
+            .chain(pending.chars())
+            .collect();
+        if raw.chars().count() < 3 || !raw.bytes().all(|b| b.is_ascii_lowercase()) {
+            return None;
+        }
+        let mut replay = Composer::new(self.table.clone(), self.config.shift_letter);
+        for ch in raw.chars() {
+            replay.insert_char(ch);
+        }
+        let text = composer.text();
+        if replay.text() != text || replay.pending() != pending {
+            return None;
+        }
+        let tail = if pending == "n" { "ん" } else { pending };
+        Some((raw, format!("{text}{tail}")))
+    }
+
+    /// 日本語の読みとして入力中の候補を作れない英語らしい打鍵列の、候補の対象の読み（表示どおりの
+    /// 打った通りの文字列。保留のローマ字も含む）。ローマ字にならなかった英字（`こmぷてr` の m）を
+    /// 含み、保留中か曖昧入力が無効で日本語の候補を作れない入力のときだけ。英語かどうかの判定は
+    /// 候補の計算側（バックグラウンド）で行う
+    fn english_only_reading(&self, sess: &Session) -> Option<String> {
+        if !sess.composer.text().bytes().any(|b| b.is_ascii_lowercase()) {
+            return None;
+        }
+        self.english_typing(sess)?;
+        // 表示の読みは保留のローマ字を打った通りに並べる（`n` も ん にしない）
+        Some(format!(
+            "{}{}",
+            sess.composer.text(),
+            sess.composer.pending()
+        ))
+    }
+
+    /// 日本語の読みとして入力中の候補を作れる状態なら、現在の読み
+    fn japanese_candidate_reading(&self, sess: &Session) -> Option<String> {
         if !matches!(sess.state, State::Composing) || sess.composer.has_pending() {
             return None;
         }
@@ -965,12 +1022,7 @@ impl Engine {
         let mut sess = self.take_session(session_id);
         let current = self.candidate_reading(&sess);
         let result = if current.as_deref() == Some(reading) {
-            let typing = TypingSnapshot::of(&sess, reading);
-            let items = if self.composing_is_literal(&sess) {
-                self.compute_literal_composing_items(reading)
-            } else {
-                self.compute_composing_items(reading, &sess.left_context, &typing)
-            };
+            let items = self.compute_items_for(&sess, reading);
             // 中身が入れ替わったら選択は無効（同じなら選択を保つ）
             let same = sess
                 .composing_cands
@@ -991,6 +1043,76 @@ impl Engine {
         };
         self.sessions.insert(session_id.to_string(), sess);
         result
+    }
+
+    /// 現在の入力（`reading` はその候補の読み）の入力中の候補を作る。式・記号（Literal）、日本語の読み、
+    /// 日本語の読みを作れない英語らしい打鍵列の 3 通り
+    fn compute_items_for(&self, sess: &Session, reading: &str) -> Vec<ComposingItem> {
+        if self.composing_is_literal(sess) {
+            return self.compute_literal_composing_items(reading);
+        }
+        let english = self.english_typing(sess);
+        if self.japanese_candidate_reading(sess).as_deref() == Some(reading) {
+            let typing = TypingSnapshot::of(sess, reading);
+            let mut items = self.compute_composing_items(reading, &sess.left_context, &typing);
+            if let Some((raw, japanese)) = &english {
+                self.insert_english_item(&mut items, raw, japanese, reading.chars().count());
+            }
+            items
+        } else {
+            // 日本語の読みを作れない（保留中、または曖昧入力が無効）: 英語らしいときだけ、打った通りの文字列と
+            // その ASCII を出す。英語らしくなければ候補なし（従来も保留中は候補を出さない）
+            let mut items = Vec::new();
+            if let Some((raw, japanese)) = &english {
+                let total = reading.chars().count();
+                items.push(ComposingItem {
+                    surface: reading.to_string(),
+                    covers: total,
+                    sources: vec![CandidateSource::Kana],
+                    reading: None,
+                });
+                self.insert_english_item(&mut items, raw, japanese, total);
+                if items.len() < 2 {
+                    items.clear();
+                }
+            }
+            items
+        }
+    }
+
+    /// 英語の自動判定（段階 1、入力中の候補）: 打鍵列 `raw` の判定が High なら先頭の次（2 番目）、
+    /// Mid なら主要な候補の後ろ（ひらがな・カタカナの前）に、その ASCII を足す。先頭は動かさない。
+    /// Low 以下は足さない（日本語として引ける読みはバックエンドが `english_level` の中で除く）。
+    /// `japanese` は同じ打鍵列を日本語として読んだかな、`total` は候補が置き換える読みの文字数
+    fn insert_english_item(
+        &self,
+        items: &mut Vec<ComposingItem>,
+        raw: &str,
+        japanese: &str,
+        total: usize,
+    ) {
+        let level = self.backend.english_level(raw, japanese);
+        let slot = match level {
+            nagi_english::Level::High => 1.min(items.len()),
+            nagi_english::Level::Mid => items
+                .iter()
+                .position(|i| i.sources == [CandidateSource::Kana] && i.covers == total)
+                .unwrap_or(items.len()),
+            _ => return,
+        };
+        items.retain(|i| !(i.surface == raw && i.covers == total));
+        // 先頭は動かさない
+        let slot = slot.clamp(1.min(items.len()), items.len());
+        items.insert(
+            slot,
+            ComposingItem {
+                surface: raw.to_string(),
+                covers: total,
+                sources: vec![CandidateSource::Rewriter],
+                reading: None,
+            },
+        );
+        items.truncate(COMPOSING_CANDIDATES_LIMIT);
     }
 
     /// Literal（式・記号）の入力中の候補: Rewriter だけ（電卓 → 記号の装飾 → 全角/半角）。
@@ -1149,8 +1271,8 @@ impl Engine {
         let covers = item.covers.min(total);
         let prefix: String = reading.chars().take(covers).collect();
         let literal = self.composing_is_literal(sess);
-        // Literal（式・記号）の候補は学習しない
-        if !literal {
+        // Literal（式・記号）の候補と、ローマ字にならなかった英字を含む読み（英語の ASCII 候補）は学習しない
+        if !literal && (item.reading.is_some() || !prefix.bytes().any(|b| b.is_ascii_lowercase())) {
             self.notify_commit(
                 sess,
                 &[Segment {
@@ -1654,12 +1776,7 @@ impl Engine {
             return false;
         }
         let reading = cc.reading.clone();
-        let typing = TypingSnapshot::of(sess, &reading);
-        let items = if self.composing_is_literal(sess) {
-            self.compute_literal_composing_items(&reading)
-        } else {
-            self.compute_composing_items(&reading, &sess.left_context, &typing)
-        };
+        let items = self.compute_items_for(sess, &reading);
         if items == cc.items {
             return false;
         }
