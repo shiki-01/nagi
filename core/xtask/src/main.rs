@@ -9,6 +9,7 @@ mod bundle_macos;
 mod bundle_windows;
 mod fetch_dict;
 mod fetch_english;
+mod fetch_loanword;
 mod fetch_model;
 mod gen_licenses;
 mod mode_icons;
@@ -42,6 +43,13 @@ enum Task {
     /// 英単語の語彙（SCOWL）を取得し SHA-256 検証して、fst 索引を組み立てる
     /// （data/english/words.fst。英語の自動判定の語彙。無くても動く）
     FetchEnglish,
+    /// カタカナ語の原語データ（JMdict）を取得して索引（data/loanword/loanword.fst）を組み立てる。
+    /// SHA-256 が未固定のときは検証せずに取得し、固定すべき値を表示する
+    FetchLoanword {
+        /// 取得せず、手元の JMdict（gzip の XML）から索引だけ組み立てる
+        #[arg(long)]
+        from: Option<std::path::PathBuf>,
+    },
     /// 変換モデル（zenz GGUF）を取得し SHA-256 検証する（data/models/ へ）
     FetchModel {
         #[arg(long, value_enum, default_value_t = ModelVariant::Small)]
@@ -143,6 +151,7 @@ fn main() -> ExitCode {
         Task::FetchDict => fetch_dict::run(),
         Task::BuildDict { source } => build_dict::run(source),
         Task::FetchEnglish => fetch_english::run(),
+        Task::FetchLoanword { from } => fetch_loanword::run(from),
         Task::FetchModel { variant } => fetch_model::run(variant),
         Task::GenTypes => types::generate(),
         Task::CheckTypes => types::check(),

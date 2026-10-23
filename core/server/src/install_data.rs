@@ -2,7 +2,8 @@
 //!
 //! `<data_dir>/dict/mozc/` へ Mozc OSS 辞書を取得し、`<data_dir>/dict/nagi-dict.bin` を組み立て、
 //! `<data_dir>/models/` へ zenz モデルを取得し、`<data_dir>/english/words.fst`（英語の自動判定の語彙。
-//! SCOWL から組み立て）を取得する。SHA-256 が一致する取得済みファイルはスキップする。
+//! SCOWL から組み立て）と `<data_dir>/loanword/loanword.fst`（カタカナ語の原語。JMdict から組み立て。
+//! 失敗しても警告だけ）を取得する。SHA-256 が一致する取得済みファイルはスキップする。
 //! 進捗は標準出力に 1 行 1 JSON で出す（フロントがパースする）。人向けのログは標準エラー。
 //!
 //! 取得処理は feature `data-install`（`nagi-datafetch`）が必要。引数解析は feature によらず行い、
@@ -96,6 +97,35 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
         let _ = out.flush();
     }
 
+    /// 任意データ（語彙・原語）の進捗。段階名は `<prefix>_fetch` / `<prefix>_build`
+    fn optional_progress(prefix: &str, last: &mut u64, p: Progress) {
+        let fetch = format!("{prefix}_fetch");
+        match p {
+            Progress::Skipped { file, .. } => {
+                eprintln!("imserver: スキップ: {file} (SHA-256 一致)");
+                emit(json!({"stage": fetch, "skipped": true}));
+            }
+            Progress::Download { file, .. } => {
+                eprintln!("imserver: ダウンロード中: {file}");
+                *last = 0;
+                emit(json!({"stage": fetch, "bytes": 0}));
+            }
+            Progress::Bytes { done, total, .. } => {
+                if Some(done) == total || done - *last >= BYTES_STEP {
+                    *last = done;
+                    emit(json!({"stage": fetch, "bytes": done, "total": total}));
+                }
+            }
+            Progress::BuildStart => emit(json!({"stage": format!("{prefix}_build")})),
+            Progress::BuildDone { bytes, seconds, .. } => {
+                eprintln!(
+                    "imserver: {prefix} の索引を組み立てました ({bytes} bytes, {seconds:.1}s)"
+                );
+            }
+            _ => {}
+        }
+    }
+
     let result = (|| {
         let dict_dir = args.data_dir.join("dict");
         let mozc_dir = dict_dir.join("mozc");
@@ -171,33 +201,23 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
         }
 
         // 4. 英語の語彙（SCOWL → words.fst）。取得済みで索引もあれば何もしない
-        let mut english_bytes_emitted = 0u64;
-        let english_changed =
-            nagi_datafetch::install_english(&args.data_dir.join("english"), &mut |p| match p {
-                Progress::Skipped { file, .. } => {
-                    eprintln!("imserver: スキップ: {file} (SHA-256 一致)");
-                    emit(json!({"stage": "english_fetch", "skipped": true}));
-                }
-                Progress::Download { file, .. } => {
-                    eprintln!("imserver: ダウンロード中: {file}");
-                    english_bytes_emitted = 0;
-                    emit(json!({"stage": "english_fetch", "bytes": 0}));
-                }
-                Progress::Bytes { done, total, .. } => {
-                    if Some(done) == total || done - english_bytes_emitted >= BYTES_STEP {
-                        english_bytes_emitted = done;
-                        emit(json!({"stage": "english_fetch", "bytes": done, "total": total}));
-                    }
-                }
-                Progress::BuildStart => emit(json!({"stage": "english_build"})),
-                Progress::BuildDone { bytes, seconds, .. } => {
-                    eprintln!(
-                        "imserver: 英語の語彙を組み立てました ({bytes} bytes, {seconds:.1}s)"
-                    );
-                }
-                _ => {}
-            })?;
-        changed |= english_changed;
+        let mut last = 0u64;
+        changed |= nagi_datafetch::install_english(&args.data_dir.join("english"), &mut |p| {
+            optional_progress("english", &mut last, p)
+        })?;
+
+        // 5. カタカナ語の原語データ（JMdict → loanword.fst）。任意のデータなので、失敗しても
+        // 辞書とモデルの導入は成功として扱い、警告だけ出す（原語候補が出ないだけで変換は動く）
+        let mut last = 0u64;
+        match nagi_datafetch::install_loanword(&args.data_dir.join("loanword"), &mut |p| {
+            optional_progress("loanword", &mut last, p)
+        }) {
+            Ok(c) => changed |= c,
+            Err(message) => {
+                eprintln!("imserver: 警告: 原語データを入れられませんでした: {message}");
+                emit(json!({"stage": "warning", "message": message}));
+            }
+        }
         Ok::<bool, String>(changed)
     })();
 

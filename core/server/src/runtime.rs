@@ -115,6 +115,8 @@ pub struct Tunables {
     pub kaomoji_enabled: bool,
     /// `convert.calculator`
     pub calculator_enabled: bool,
+    /// `convert.loanword.enabled`
+    pub loanword_enabled: bool,
     /// `input.fuzzy.*`（曖昧入力）
     pub fuzzy: FuzzySettings,
 }
@@ -179,6 +181,7 @@ impl Tunables {
             emoji_enabled: config.rewriter.emoji,
             kaomoji_enabled: config.rewriter.kaomoji,
             calculator_enabled: config.convert.calculator,
+            loanword_enabled: config.convert.loanword.enabled,
             fuzzy: FuzzySettings::from_config(&config.input.fuzzy),
         }
     }
@@ -210,6 +213,8 @@ pub struct Effective {
     pub kaomoji: bool,
     /// 電卓候補（`convert.calculator`）
     pub calculator: bool,
+    /// カタカナ語の原語の候補（`convert.loanword.enabled`）
+    pub loanword: bool,
     /// 曖昧入力（`input.fuzzy.*`）
     pub fuzzy: FuzzySettings,
 }
@@ -852,6 +857,7 @@ impl Runtime {
             emoji: t.emoji_enabled,
             kaomoji: t.kaomoji_enabled,
             calculator: t.calculator_enabled,
+            loanword: t.loanword_enabled,
             fuzzy: t.fuzzy,
         }
     }

@@ -11,6 +11,7 @@
 pub mod features;
 pub mod judge;
 pub mod lexicon;
+pub mod scowl;
 
 pub use features::{Features, analyze};
 pub use judge::{HIGH_THRESHOLD, Judge, Level, MID_THRESHOLD, Verdict};

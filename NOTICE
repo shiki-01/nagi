@@ -153,3 +153,34 @@ redistributed with Nagi's source code; it is downloaded separately via
 `cargo xtask fetch-model` with SHA-256 verification. Any redistribution of
 this model, in original or modified form, must comply with the CC BY-SA 4.0
 license, including attribution and share-alike requirements.
+================================================================================
+Loanword source data: JMdict (derived index)
+================================================================================
+
+Source: JMdict / EDRDG (Electronic Dictionary Research and Development Group)
+        https://www.edrdg.org/jmdict/j_jmdict.html
+License: Creative Commons Attribution-ShareAlike 4.0 International
+         (CC BY-SA 4.0) -- see https://www.edrdg.org/edrdg/licence.html
+         Full license text: https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+Nagi uses the loanword source information (the `lsource` elements: the source
+language and the original spelling of loanwords) of JMdict to offer the
+original word (for example, "computer" or "Arbeit") as a conversion candidate.
+JMdict is not redistributed with Nagi's source code or binaries; it is
+downloaded separately (`cargo xtask fetch-loanword`, `imserver --install-data`,
+or the iOS host app) and a derived index (data/loanword/loanword.fst) is built
+on the user's device. The derived index remains subject to CC BY-SA 4.0.
+
+================================================================================
+English word list: SCOWL (derived index)
+================================================================================
+
+Source: SCOWL (Spell Checking Oriented Word Lists), Kevin Atkinson
+        http://wordlist.aspell.net/
+License: permissive (the copyright and permission notices must be kept);
+         see the `Copyright` file in the downloaded archive.
+
+SCOWL is not redistributed with Nagi; it is downloaded separately
+(`cargo xtask fetch-english`, `imserver --install-data`, or the iOS host app)
+and used to build the English word index (data/english/words.fst) that the
+automatic English detection consults.

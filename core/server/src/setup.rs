@@ -358,6 +358,17 @@ pub fn load_english_lexicon(
     })
 }
 
+/// カタカナ語の原語の索引（`<data_dir>/loanword/loanword.fst`）を読み込む。ファイルが無ければ `None`
+pub fn load_loanword_index(
+    data_dir: Option<&Path>,
+) -> Option<Result<nagi_loanword::LoanwordIndex, String>> {
+    let path = data_dir?.join("loanword").join("loanword.fst");
+    path.exists().then(|| {
+        nagi_loanword::LoanwordIndex::load(&path)
+            .map_err(|e| format!("原語データの読み込みに失敗しました: {e}"))
+    })
+}
+
 #[cfg(feature = "llama")]
 fn load_model(
     data_dir: &Path,
@@ -617,6 +628,19 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
         None => notes.push(
             "英語の語彙が見つかりません（英語の自動判定は特徴量のみで動作します。\
              cargo xtask fetch-english で取得できます）"
+                .to_string(),
+        ),
+    }
+    // カタカナ語の原語の索引（任意）。無ければ原語の候補が出ないだけ
+    match load_loanword_index(options.data_dir.as_deref()) {
+        Some(Ok(index)) => {
+            notes.push(format!("原語データ: OK ({} keys)", index.len()));
+            pipeline.set_loanword_index(Some(Arc::new(index)));
+        }
+        Some(Err(e)) => notes.push(format!("{e}（原語の候補は出ません）")),
+        None => notes.push(
+            "原語データが見つかりません（カタカナ語の原語の候補は出ません。\
+             cargo xtask fetch-loanword または --install-data で取得できます）"
                 .to_string(),
         ),
     }

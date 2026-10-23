@@ -9,6 +9,7 @@
 pub mod english;
 mod fsutil;
 pub mod http;
+pub mod loanword;
 pub mod model;
 pub mod mozc;
 
@@ -17,6 +18,10 @@ pub use english::{
     install_english,
 };
 pub use http::{Body, Http, UreqHttp};
+pub use loanword::{
+    JMDICT_FILE, LOANWORD_INDEX_FILE, build_loanword_index, fetch_loanword_unpinned,
+    install_loanword,
+};
 pub use model::{ModelInfo, ModelKind, fetch_model, fetch_model_with};
 pub use mozc::{
     MOZC_COMMIT, build_mozc_dict, fetch_mozc, fetch_mozc_with, mozc_file_count, mozc_file_names,

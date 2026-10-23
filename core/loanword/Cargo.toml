@@ -1,0 +1,28 @@
+[package]
+name = "nagi-loanword"
+description = "Nagi カタカナ語の原語候補: カタカナの正規化・fst 索引（JMdict の lsource 由来）・Rewriter。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+flate2 = "1.1"
+fst = "0.4.7"
+nagi-rewriter.workspace = true
+thiserror = { workspace = true }
+
+# 非 Windows ではマップ中のファイルの置換に制約が無いため mmap を使う（nagi-english と同じ方針。
+# iOS のキーボード拡張のメモリ上限に効く）
+[target.'cfg(not(windows))'.dependencies]
+memmap2 = "0.9"
+
+[lints.rust]
+# ワークスペース既定は forbid。索引ファイルの mmap（index.rs の map_file 1 箇所）だけ解禁する
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

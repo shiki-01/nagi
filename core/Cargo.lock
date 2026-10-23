@@ -852,6 +852,7 @@ dependencies = [
  "flate2",
  "nagi-dict",
  "nagi-english",
+ "nagi-loanword",
  "rustls",
  "rustls-pki-types",
  "sha2",
@@ -887,6 +888,7 @@ dependencies = [
 name = "nagi-english"
 version = "0.1.6"
 dependencies = [
+ "flate2",
  "fst",
  "memmap2",
  "nagi-romaji",
@@ -897,6 +899,9 @@ dependencies = [
 name = "nagi-ffi"
 version = "0.1.6"
 dependencies = [
+ "flate2",
+ "nagi-english",
+ "nagi-loanword",
  "nagi-server",
  "serde_json",
 ]
@@ -922,6 +927,17 @@ dependencies = [
 [[package]]
 name = "nagi-learn"
 version = "0.1.6"
+
+[[package]]
+name = "nagi-loanword"
+version = "0.1.6"
+dependencies = [
+ "flate2",
+ "fst",
+ "memmap2",
+ "nagi-rewriter",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "nagi-profile"
@@ -964,6 +980,7 @@ dependencies = [
  "nagi-fuzzy",
  "nagi-infer",
  "nagi-learn",
+ "nagi-loanword",
  "nagi-profile",
  "nagi-protocol",
  "nagi-rewriter",

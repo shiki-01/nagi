@@ -15,8 +15,13 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 # update-check（ureq/rustls/ring）を外す: docs/ios-release.md §0.2
+nagi-english = { path = "../english" }
+nagi-loanword = { path = "../loanword" }
 nagi-server = { path = "../server", default-features = false }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+flate2 = "1.1"
 
 [features]
 # LLM 推論（zenz）を含む。llama.cpp の C++ ビルドが必要

@@ -535,6 +535,13 @@ pub fn definitions() -> Vec<SettingDef> {
             SettingKind::Bool,
         ),
         def(
+            "convert.loanword.enabled",
+            "表記の候補",
+            "カタカナ語の原語候補",
+            "「コンピューター」に computer、「アルバイト」に Arbeit のような、カタカナ語の原語（英語・ドイツ語・フランス語など）を変換候補に加えます。原語のデータをダウンロードしてあるときだけ働きます。",
+            SettingKind::Bool,
+        ),
+        def(
             "userdict.enabled",
             "ユーザー辞書",
             "ユーザー辞書を使う",
@@ -645,6 +652,7 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         "rewriter.emoji" => Some(Bool(config.rewriter.emoji)),
         "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
         "convert.calculator" => Some(Bool(config.convert.calculator)),
+        "convert.loanword.enabled" => Some(Bool(config.convert.loanword.enabled)),
         "userdict.enabled" => Some(Bool(config.userdict.enabled)),
         "snippet.enabled" => Some(Bool(config.snippet.enabled)),
         "learning.enabled" => Some(Bool(config.learning.enabled)),
@@ -1235,6 +1243,31 @@ mod tests {
         let (c, issues) = crate::parse(&r.source).unwrap();
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.convert.calculator);
+    }
+
+    #[test]
+    fn convert_loanword_definition() {
+        let defs = definitions();
+        let d = defs
+            .iter()
+            .find(|d| d.key == "convert.loanword.enabled")
+            .unwrap();
+        assert_eq!(d.level, SettingLevel::Detail);
+        assert!(crate::Config::default().convert.loanword.enabled);
+        let r = apply_changes(
+            None,
+            &[set("convert.loanword.enabled", SettingValue::Bool(false))],
+        )
+        .unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(!c.convert.loanword.enabled);
+        let (_, issues) = crate::parse("[convert.loanword]\nbogus = 1\n").unwrap();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("convert.loanword.bogus"))
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+flate2 = "1.1"
 fst = "0.4.7"
 nagi-romaji.workspace = true
 thiserror = { workspace = true }

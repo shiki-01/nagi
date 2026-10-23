@@ -49,7 +49,12 @@ final class SettingsModel: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                self.statusLines = StatusMessages.statusLines(for: try await self.supervisor.getStatus())
+                var lines = StatusMessages.statusLines(for: try await self.supervisor.getStatus())
+                if let context = NagiIMEContext.shared {
+                    lines += StatusMessages.dataLines(
+                        hasEnglish: context.hasEnglishLexicon, hasLoanword: context.hasLoanwordIndex)
+                }
+                self.statusLines = lines
             } catch {
                 self.statusLines = [StatusMessages.unavailable]
             }

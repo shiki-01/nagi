@@ -112,6 +112,8 @@ pub struct Pipeline {
     fuzzy: OnceLock<FuzzyEngine>,
     /// 英語の自動判定（語彙は `data/english/words.fst`。無ければ特徴量だけの劣化動作）
     english: nagi_english::Judge,
+    /// カタカナ語の原語の候補（索引は `data/loanword/loanword.fst`。無ければ出さない）
+    loanword: Option<nagi_loanword::LoanwordRewriter>,
 }
 
 /// dict・LLM の有無からバックエンド名を決める（`Pipeline::new` と `name()` の重複を1箇所にまとめる）
@@ -169,12 +171,18 @@ impl Pipeline {
             rewriter: RewriterChain::default_chain(),
             fuzzy: OnceLock::new(),
             english: nagi_english::Judge::standard(None),
+            loanword: None,
         }
     }
 
     /// 英単語の語彙を取り付ける（英語の自動判定）。`None` なら特徴量だけで判定する（劣化動作）
     pub fn set_english_lexicon(&mut self, lexicon: Option<Arc<nagi_english::Lexicon>>) {
         self.english = nagi_english::Judge::standard(lexicon);
+    }
+
+    /// カタカナ語の原語の索引を取り付ける。`None` なら原語の候補を出さない
+    pub fn set_loanword_index(&mut self, index: Option<Arc<nagi_loanword::LoanwordIndex>>) {
+        self.loanword = index.map(nagi_loanword::LoanwordRewriter::new);
     }
 
     /// 英語の語彙を取り付けているか
@@ -960,6 +968,19 @@ impl ConversionBackend for Pipeline {
             &[nagi_rewriter::SIMPLE_CALCULATOR_ID]
         };
         let mut rewriter_candidates = self.rewriter.candidates_excluding(reading, excluded);
+        // カタカナ語の原語: 記号などの Rewriter の候補の後ろ・絵文字の前（形式の変換は engine が末尾に足す）
+        if eff.loanword
+            && let Some(loanword) = &self.loanword
+        {
+            let surfaces = groups
+                .iter()
+                .flat_map(|(_, items)| items.iter().map(String::as_str));
+            for spelling in loanword.candidates(surfaces, reading) {
+                if !rewriter_candidates.contains(&spelling) {
+                    rewriter_candidates.push(spelling);
+                }
+            }
+        }
         // 絵文字・顔文字は Rewriter の末尾（読みが表に完全一致するときだけ）
         rewriter_candidates.extend(
             EmojiRewriter {

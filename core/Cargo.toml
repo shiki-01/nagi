@@ -7,6 +7,7 @@ members = [
     "profile",
     "romaji",
     "english",
+    "loanword",
     "fuzzy",
     "dict",
     "infer",
@@ -32,6 +33,7 @@ authors = ["shiki"]
 nagi-engine = { path = "engine" }
 nagi-romaji = { path = "romaji" }
 nagi-english = { path = "english" }
+nagi-loanword = { path = "loanword" }
 nagi-fuzzy = { path = "fuzzy" }
 nagi-dict = { path = "dict" }
 nagi-datafetch = { path = "datafetch" }

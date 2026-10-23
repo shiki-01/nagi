@@ -182,6 +182,8 @@ targets:
       - path: Shared/DataPaths.swift
       - path: Shared/ModelRecommendation.swift
       - path: Shared/LayoutGeometry.swift
+      # 任意データ（英語の語彙・原語）の取得元の解釈。コアに依存しない
+      - path: Shared/OptionalData.swift
       # ProductSession / コアに依存しない純粋な処理（Mozc TSV の解析、nagi://layout の URL）
       - path: Shared/MozcTSV.swift
       - path: Shared/LayoutURL.swift

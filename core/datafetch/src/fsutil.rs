@@ -83,7 +83,8 @@ pub(crate) fn download_verified(
             return Err(e);
         }
     };
-    if actual != expected_sha256 {
+    // 空の期待値は検証しない（SHA-256 を固定する前の下見用。`fetch_loanword_unpinned`）
+    if !expected_sha256.is_empty() && actual != expected_sha256 {
         let _ = fs::remove_file(&temp);
         return Err(format!(
             "{name} の SHA-256 が不一致\n  期待: {expected_sha256}\n  実際: {actual}"

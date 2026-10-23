@@ -1,0 +1,239 @@
+# 外来語の原語候補の評価（自作・正解つき）。列: 種別<TAB>カタカナ表記<TAB>期待する原語（大文字小文字は区別しない）
+# pos = 原語が候補に出るべき / wasei = 和製英語なので何も出さない / neg = 外来語でないので何も出さない
+pos	コンピューター	computer
+pos	コンピュータ	computer
+pos	ラジオ	radio
+pos	カメラ	camera
+pos	ホテル	hotel
+pos	コーヒー	coffee
+pos	ケーキ	cake
+pos	サンドイッチ	sandwich
+pos	チョコレート	chocolate
+pos	ニュース	news
+pos	テーブル	table
+pos	ドア	door
+pos	ベッド	bed
+pos	ナイフ	knife
+pos	フォーク	fork
+pos	スプーン	spoon
+pos	ペン	pen
+pos	バス	bus
+pos	タクシー	taxi
+pos	トラック	truck
+pos	エンジン	engine
+pos	ブレーキ	brake
+pos	ガソリン	gasoline
+pos	エレベーター	elevator
+pos	エスカレーター	escalator
+pos	トイレ	toilet
+pos	シャワー	shower
+pos	タオル	towel
+pos	ソファー	sofa
+pos	カーテン	curtain
+pos	カーペット	carpet
+pos	ドライバー	driver
+pos	ハンマー	hammer
+pos	ロボット	robot
+pos	スマートフォン	smartphone
+pos	インターネット	internet
+pos	メール	mail
+pos	ソフトウェア	software
+pos	ハードウェア	hardware
+pos	プログラム	program
+pos	データ	data
+pos	ファイル	file
+pos	フォルダー	folder
+pos	ネットワーク	network
+pos	サーバー	server
+pos	キーボード	keyboard
+pos	マウス	mouse
+pos	モニター	monitor
+pos	プリンター	printer
+pos	スキャナー	scanner
+pos	ゲーム	game
+pos	パーティー	party
+pos	ミーティング	meeting
+pos	スケジュール	schedule
+pos	プロジェクト	project
+pos	マネージャー	manager
+pos	サービス	service
+pos	システム	system
+pos	メニュー	menu
+pos	カレンダー	calendar
+pos	アイデア	idea
+pos	イメージ	image
+pos	デザイン	design
+pos	ファッション	fashion
+pos	スカート	skirt
+pos	ズボン	jupon
+pos	ジャケット	jacket
+pos	コート	coat
+pos	セーター	sweater
+pos	シャツ	shirt
+pos	ネクタイ	necktie
+pos	ハンカチ	handkerchief
+pos	ボタン	botão
+pos	ガラス	glas
+pos	パン	pão
+pos	カステラ	pão de Castella
+pos	テンプラ	tempura
+pos	タバコ	tabaco
+pos	カルタ	carta
+pos	コンペイトウ	confeito
+pos	ビスケット	biscuit
+pos	ピアノ	piano
+pos	ギター	guitar
+pos	バイオリン	violin
+pos	ドラム	drum
+pos	トランペット	trumpet
+pos	フルート	flute
+pos	オーケストラ	orchestra
+pos	コンサート	concert
+pos	ミュージック	music
+pos	ダンス	dance
+pos	ドラマ	drama
+pos	アニメ	animation
+pos	ヒーロー	hero
+pos	ヒロイン	heroine
+pos	ファン	fan
+pos	チーム	team
+pos	コーチ	coach
+pos	スタジアム	stadium
+pos	サッカー	soccer
+pos	テニス	tennis
+pos	ゴルフ	golf
+pos	バスケットボール	basketball
+pos	ボール	ball
+pos	ラケット	racket
+pos	マラソン	marathon
+pos	スキー	ski
+pos	スケート	skate
+pos	プール	pool
+pos	アルバイト	Arbeit
+pos	テーマ	Thema
+pos	エネルギー	Energie
+pos	ゲレンデ	Gelände
+pos	ワクチン	Vakzin
+pos	ノイローゼ	Neurose
+pos	カルテ	Karte
+pos	ルンゲ	Lunge
+pos	アレルギー	Allergie
+pos	ホルモン	Hormon
+pos	ガーゼ	Gaze
+pos	メルヘン	Märchen
+pos	ヒュッテ	Hütte
+pos	リュックサック	Rucksack
+pos	ザイル	Seil
+pos	シュノーケル	Schnorchel
+pos	アトリエ	atelier
+pos	アンケート	enquête
+pos	エチケット	étiquette
+pos	オムレツ	omelette
+pos	クレヨン	crayon
+pos	グラタン	gratin
+pos	コロッケ	croquette
+pos	シルエット	silhouette
+pos	デッサン	dessin
+pos	ブティック	boutique
+pos	ペンション	pension
+pos	マドレーヌ	madeleine
+pos	ルージュ	rouge
+pos	レストラン	restaurant
+pos	パンツ	pants
+pos	ラーメン	lāmiàn
+pos	ランドセル	ransel
+pos	ブリキ	blik
+pos	コンロ	komfoor
+pos	ポンプ	pomp
+pos	ペンキ	pek
+pos	ガス	gas
+pos	カバン	kabas
+pos	オルゴール	orgel
+pos	ビール	bier
+pos	コルク	kurk
+pos	ゴム	gom
+pos	レンズ	lens
+pos	メス	mes
+pos	ピンセット	pincet
+pos	ドンタク	zondag
+pos	スイッチ	switch
+pos	パスタ	pasta
+pos	ピザ	pizza
+pos	スパゲッティ	spaghetti
+pos	リゾット	risotto
+pos	ティラミス	tiramisù
+pos	オペラ	opera
+pos	ソプラノ	soprano
+pos	テノール	tenore
+pos	ピアニッシモ	pianissimo
+pos	クレッシェンド	crescendo
+pos	ビスコッティ	biscotti
+pos	ヨーグルト	Yoghurt
+pos	ケチャップ	ketchup
+pos	マヨネーズ	mayonnaise
+pos	ソース	sauce
+pos	ジャム	jam
+pos	バター	butter
+pos	チーズ	cheese
+pos	ミルク	milk
+pos	ジュース	juice
+pos	ワイン	wine
+pos	ウイスキー	whisky
+pos	ビタミン	vitamin
+pos	カロリー	calorie
+pos	ダイエット	diet
+pos	サプリメント	supplement
+pos	ヴァイオリン	violin
+pos	ヴィーナス	Venus
+pos	ウィンドウ	window
+pos	ウインドウ	window
+pos	フィルム	film
+pos	シュミレーション	simulation
+pos	シミュレーション	simulation
+pos	ミュージカル	musical
+pos	コンピュタ	computer
+pos	パーテイー	party
+pos	ディスプレイ	display
+pos	ティッシュ	tissue
+pos	キャンディー	candy
+pos	ジェットコースター	roller coaster
+wasei	サラリーマン	
+wasei	マンション	
+wasei	ガソリンスタンド	
+wasei	ナイター	
+wasei	ノートパソコン	
+wasei	コンセント	
+wasei	フリーダイヤル	
+wasei	アフターサービス	
+wasei	ペットボトル	
+wasei	ガッツポーズ	
+wasei	バックミラー	
+wasei	ハイタッチ	
+wasei	スキンシップ	
+wasei	オーダーメイド	
+wasei	ベビーカー	
+wasei	ホッチキス	
+wasei	シール	
+wasei	クーラー	
+wasei	テレビゲーム	
+wasei	ワンピース	
+neg	ピカチュウ	
+neg	ドラえもん	
+neg	ヤクルト	
+neg	ニンジン	
+neg	カタカナ	
+neg	ワクワク	
+neg	ドキドキ	
+neg	ペラペラ	
+neg	ガタガタ	
+neg	ゴロゴロ	
+neg	シャキシャキ	
+neg	ツルツル	
+neg	トヨタ	
+neg	ホンダ	
+neg	サントリー	
+neg	タカハシ	
+neg	スズキ	
+neg	ヤマダ	
+neg	クマモン	
+neg	アキヒト	

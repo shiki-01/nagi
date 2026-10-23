@@ -107,6 +107,28 @@ const char *nagi_version(void);
 ///         handle が NULL の場合は、空文字列を返す。
 char *nagi_last_notes(NagiServerHandle handle);
 
+// ---- 任意データ（英語の語彙・カタカナ語の原語）----
+//
+// 取得（ネットワーク）は本体アプリが行い、ここは取得元の一覧と、取得済みアーカイブからの
+// 索引の組み立てだけを提供する。
+
+/// 任意データの取得元の一覧（JSON）を返す。
+///
+/// {"english": {"dir","file","url","sha256","index_file"}, "loanword": {...}}。
+/// sha256 が null のデータは、配布元のハッシュを固定していないので取得してはいけない。
+///
+/// @return UTF-8 C 文字列。nagi_string_free で解放必須。
+char *nagi_optional_data_sources(void);
+
+/// 取得済みのアーカイブから、任意データの索引を組み立てる。
+///
+/// @param kind "english"（SCOWL の tar.gz → words.fst）または "loanword"（JMdict の gz → loanword.fst）
+/// @param archive_path 取得済みのアーカイブのパス（UTF-8）
+/// @param out_path 出力する索引のパス（UTF-8。一時ファイル経由で置き換える）
+///
+/// @return 成功なら NULL。失敗なら理由（nagi_string_free で解放必須）。
+char *nagi_build_optional_index(const char *kind, const char *archive_path, const char *out_path);
+
 #ifdef __cplusplus
 }
 #endif

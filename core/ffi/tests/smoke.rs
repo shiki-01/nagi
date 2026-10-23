@@ -187,3 +187,57 @@ fn key_table_and_model_unload_via_handle_line() {
         nagi_server_free(handle);
     }
 }
+
+#[test]
+fn optional_data_sources_and_index_build() {
+    use std::ffi::CString;
+
+    let p = nagi_ffi::nagi_optional_data_sources();
+    let json = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_string();
+    unsafe { nagi_ffi::nagi_string_free(p) };
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["english"]["index_file"], "words.fst");
+    assert_eq!(v["english"]["sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(v["loanword"]["index_file"], "loanword.fst");
+
+    // 組み立ての失敗は理由を返し、成功は NULL
+    let dir = std::env::temp_dir().join(format!("nagi-ffi-opt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing = CString::new(dir.join("none.gz").to_str().unwrap()).unwrap();
+    let out = CString::new(dir.join("out.fst").to_str().unwrap()).unwrap();
+    let kind = CString::new("loanword").unwrap();
+    let err = unsafe {
+        nagi_ffi::nagi_build_optional_index(kind.as_ptr(), missing.as_ptr(), out.as_ptr())
+    };
+    assert!(!err.is_null());
+    unsafe { nagi_ffi::nagi_string_free(err) };
+    let bad = CString::new("other").unwrap();
+    let err = unsafe {
+        nagi_ffi::nagi_build_optional_index(bad.as_ptr(), missing.as_ptr(), out.as_ptr())
+    };
+    assert!(!err.is_null());
+    unsafe { nagi_ffi::nagi_string_free(err) };
+    let err = unsafe {
+        nagi_ffi::nagi_build_optional_index(std::ptr::null(), missing.as_ptr(), out.as_ptr())
+    };
+    assert!(!err.is_null());
+    unsafe { nagi_ffi::nagi_string_free(err) };
+
+    // 本物の最小の JMdict（gzip）から組み立てる
+    use std::io::Write;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(
+        "<JMdict><entry><r_ele><reb>アルバイト</reb></r_ele><sense><lsource xml:lang=\"ger\">Arbeit</lsource></sense></entry></JMdict>".as_bytes(),
+    )
+    .unwrap();
+    let archive = dir.join("JMdict_e.gz");
+    std::fs::write(&archive, gz.finish().unwrap()).unwrap();
+    let archive_c = CString::new(archive.to_str().unwrap()).unwrap();
+    let err = unsafe {
+        nagi_ffi::nagi_build_optional_index(kind.as_ptr(), archive_c.as_ptr(), out.as_ptr())
+    };
+    assert!(err.is_null());
+    let index = nagi_loanword::LoanwordIndex::load(&dir.join("out.fst")).unwrap();
+    assert_eq!(index.lookup("アルバイト", true)[0].spelling, "Arbeit");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -2,9 +2,20 @@
 import AppKit
 import NagiClient
 
-/// 辞書とモデルの取得（同梱の `imserver --install-data` を実行する）。取得・検証・組み立てはコアが行い、
+/// 辞書・モデル・語彙の取得（同梱の `imserver --install-data` を実行する）。取得・検証・組み立てはコアが行い、
 /// ここは起動・進捗の表示・エンジンの再起動だけを担う。データは配布元から利用者の手元へ直接取得する（再配布しない）
 extension NagiIMEContext {
+    /// 英語の語彙・カタカナ語の原語データが置かれているか（無くても変換は動くが、該当の機能は働かない）
+    var hasEnglishLexicon: Bool {
+        guard let dataDir else { return true }
+        return FileManager.default.fileExists(atPath: dataDir + "/english/words.fst")
+    }
+
+    var hasLoanwordIndex: Bool {
+        guard let dataDir else { return true }
+        return FileManager.default.fileExists(atPath: dataDir + "/loanword/loanword.fst")
+    }
+
     /// 辞書が置かれているか（無ければ読みがそのまま入力される）
     var hasDictionary: Bool {
         guard let dataDir else { return true }
@@ -58,6 +69,7 @@ extension NagiIMEContext {
         var quarter = -1
         var finished = false
         var changed = false
+        var warningMessage: String?
         do {
             for try await line in pipe.fileHandleForReading.bytes.lines {
                 guard let progress = DataInstallProgress.parse(line) else { continue }
@@ -65,7 +77,14 @@ extension NagiIMEContext {
                     finished = true
                     changed = c
                 }
-                if let message = progress.message(lastModelQuarter: &quarter) { toast.show(message) }
+                var message = progress.message(lastModelQuarter: &quarter)
+                if case .warning = progress {
+                    // 最後の「入れました」で上書きされないよう、完了時にまとめて知らせる
+                    warningMessage = message
+                    continue
+                }
+                if case .done = progress, let warningMessage { message = warningMessage }
+                if let message { toast.show(message) }
             }
         } catch {
             // 読み取りの失敗は終了コードで判断する

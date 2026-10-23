@@ -38,6 +38,18 @@ public enum StatusMessages {
         return lines
     }
 
+    /// 任意のデータ（英語の語彙・カタカナ語の原語）の導入状況。未導入なら入れ方を案内する（OS 非依存）
+    public static func dataLines(hasEnglish: Bool, hasLoanword: Bool) -> [String] {
+        var lines: [String] = []
+        if !hasEnglish {
+            lines.append("英語の語彙: 未導入（英語の自動判定が弱くなります。入力メニューの「辞書とモデルをダウンロード…」で入れられます）")
+        }
+        if !hasLoanword {
+            lines.append("カタカナ語の原語データ: 未導入（原語の候補が出ません。入力メニューの「辞書とモデルをダウンロード…」で入れられます）")
+        }
+        return lines
+    }
+
     /// ユーザー辞書の取り込み結果（件数とスキップの理由）。入力内容は含めない
     public static func importSummary(for result: ImportUserDictResult) -> String {
         var text = "\(result.imported) 件を取り込みました"

@@ -23,6 +23,7 @@ path = "src/bin/nagi_eval.rs"
 [dependencies]
 nagi-engine.workspace = true
 nagi-english.workspace = true
+nagi-loanword.workspace = true
 nagi-romaji.workspace = true
 nagi-fuzzy.workspace = true
 nagi-protocol.workspace = true

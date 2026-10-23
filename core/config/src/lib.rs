@@ -609,13 +609,36 @@ impl Default for RewriterSection {
 pub struct ConvertSection {
     /// 電卓候補（`1+2` → `3`）を出すかどうか。既定: true。
     pub calculator: bool,
+    /// カタカナ語の原語の候補（`[convert.loanword]`）。
+    pub loanword: LoanwordSection,
 }
 
 impl Default for ConvertSection {
     fn default() -> Self {
-        ConvertSection { calculator: true }
+        ConvertSection {
+            calculator: true,
+            loanword: LoanwordSection::default(),
+        }
     }
 }
+
+/// カタカナ語の原語の候補（`[convert.loanword]`。`docs/plan-loanword-translation.md`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoanwordSection {
+    /// カタカナ語の原語（コンピューター → computer、アルバイト → Arbeit）を変換候補に出すか。
+    /// 既定: true。データ（`data/loanword/loanword.fst`）が無ければ出ない。
+    pub enabled: bool,
+}
+
+impl Default for LoanwordSection {
+    fn default() -> Self {
+        LoanwordSection { enabled: true }
+    }
+}
+
+/// `[convert.loanword]` の既知キー。
+const LOANWORD_KEYS: &[&str] = &["enabled"];
 
 /// アプリの種類（`[apps]` の分類）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1132,7 +1155,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         ],
         "predict" => &["enabled", "min_chars", "next_word", "next_word_count"],
         "rewriter" => &["emoji", "kaomoji"],
-        "convert" => &["calculator"],
+        "convert" => &["calculator", "loanword"],
         "userdict" | "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
@@ -1162,6 +1185,15 @@ fn find_unknown_keys(table: &toml::Table) -> Vec<String> {
             for sub in section.keys() {
                 if !known.contains(&sub.as_str()) {
                     unknown.push(format!("{key}.{sub}"));
+                }
+            }
+            if key == "convert"
+                && let Some(table) = section.get("loanword").and_then(|v| v.as_table())
+            {
+                for sub in table.keys() {
+                    if !LOANWORD_KEYS.contains(&sub.as_str()) {
+                        unknown.push(format!("convert.loanword.{sub}"));
+                    }
                 }
             }
             // 入れ子のテーブル（`[input.fuzzy]` `[input.auto_english]`）

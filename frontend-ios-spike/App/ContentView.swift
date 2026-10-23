@@ -32,6 +32,9 @@ struct ContentView: View {
                     // 辞書・モデル・メモリ・LLM の見込み（取り込みは下の「取り込み」）
                     NagiDataStatusSections(reloadToken: dataReloadToken)
 
+                    // 英語の語彙・カタカナ語の原語データ（任意。入れると英語の自動判定・原語の候補が働く）
+                    NagiOptionalDataSection(onChanged: { dataReloadToken += 1 })
+
                     Section("ユーザー辞書") {
                         NavigationLink("ユーザー辞書・スニペット") { NagiUserDictionaryView() }
                     }

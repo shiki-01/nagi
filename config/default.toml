@@ -246,6 +246,17 @@ kaomoji = true
 # 既定: true
 calculator = true
 
+[convert.loanword]
+# カタカナ語の原語を変換候補に出す（コンピューター → computer、アルバイト → Arbeit）
+# 原語は JMdict の外来語データにある言語・綴りのまま（英語は英語、ドイツ語はドイツ語）。
+# 和製英語（サラリーマンなど）は出さず、複合語は初期は出さない。読みの揺れ（コンピュータ、ヴァイオリン、
+# ウィンドウ/ウインドウなど）は同じ語として引き、辞書に載っていない綴りは近い語を低い順位で出す
+# 候補は記号などの Rewriter と同じ位置（形式の変換より前）。最大 3 件
+# データ（data/loanword/loanword.fst）は「辞書とモデルをダウンロード…」または
+# imserver --install-data で入る。無ければ出ない
+# 既定: true
+enabled = true
+
 [apps]
 # アプリの種類ごとの既定モードと、記号で始まる語の素通し
 # アプリは、フロントが伝えるアプリ識別子（macOS: bundle id、Windows: 実行ファイル名）で
