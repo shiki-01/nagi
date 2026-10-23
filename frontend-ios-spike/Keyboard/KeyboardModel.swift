@@ -48,6 +48,8 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var selectedCandidate = -1
     /// 表示中のレイアウト（JSON から読んだもの。`Shared/KeyboardLayout.swift`）
     @Published private(set) var layoutDef: KeyboardLayoutDef
+    /// 日本語入力の流れか（かなから数字・記号へ切り替えて来た間は true。数字・記号をコアに通すかの判定に使う）
+    private var japaneseContext = true
     /// 英字のシフト（1 回で次の 1 文字、2 回連続で Caps Lock）
     @Published private(set) var shiftState: ShiftState = .off
     /// 画面に出すメッセージ（辞書が無いなど）
@@ -468,6 +470,10 @@ final class KeyboardModel: ObservableObject {
             insertReading(text, touch: touch)
             return
         }
+        if composesNumbers {
+            insertReading(text)
+            return
+        }
         let output: String
         switch shiftState {
         case .off: output = text
@@ -475,6 +481,15 @@ final class KeyboardModel: ObservableObject {
         }
         hostInsert(output)
         if shiftState == .once { shiftState = .off }
+    }
+
+    /// 数字・記号のレイアウトの文字を、入力中の文字列（コアの composing）に入れるか。
+    /// 設定 `input.compose_numbers` がオン、パスワード欄でなく、日本語入力の流れ（かなから切り替えた・入力中）のときだけ
+    private var composesNumbers: Bool {
+        NumberCompose.shouldCompose(
+            mode: layoutDef.mode, setting: ios.composeNumbers, isSecure: host?.hostIsSecure() ?? false,
+            japaneseContext: japaneseContext, hasPreedit: hasPreedit
+        )
     }
 
     /// かなモードの文字入力: かな直接 / ASCII（ローマ字）はコアが解決する。コアが無い・消費しないときはそのまま入れる
@@ -525,7 +540,7 @@ final class KeyboardModel: ObservableObject {
         DiagLog.log("toggle key=\(keyId) index=\(index) continued=\(continued) hadState=\(toggleState != nil) timeout=\(ios.toggleTimeoutMs)")
         let base = cycle[index]
         let text = (layoutDef.mode != .kana && upper) ? base.uppercased() : base
-        if layoutDef.mode == .kana {
+        if layoutDef.mode == .kana || composesNumbers {
             for _ in 0..<replaceCount {
                 if !send("backspace(toggle)", { $0.perform(.backspace) }) { hostDeleteBackward(1) }
             }
@@ -748,6 +763,9 @@ final class KeyboardModel: ObservableObject {
         if hasPreedit, let session = session, let result = session.perform(.commit) {
             apply(result, origin: "response(commit before layout switch)")
         }
+        japaneseContext = NumberCompose.nextContext(
+            previousMode: layoutDef.mode, previousContext: japaneseContext, nextMode: next.mode
+        )
         layoutDef = next
         shiftState = .off
         lastShiftTap = nil
@@ -783,7 +801,11 @@ final class KeyboardModel: ObservableObject {
                 DiagLog.log("input traits keyboardType=\(typeName) -> \(preferred.target) (already)")
                 return
             }
-            if changeLayout(target: preferred.target) { autoSelectedLayout = true }
+            if changeLayout(target: preferred.target) {
+                autoSelectedLayout = true
+                // 入力欄の種類による自動選択は日本語入力の流れではない（電話番号などの数字欄で変換候補を出さない）
+                japaneseContext = false
+            }
             DiagLog.log("input traits keyboardType=\(typeName) -> \(preferred.target)")
         } else if autoSelectedLayout {
             autoSelectedLayout = false

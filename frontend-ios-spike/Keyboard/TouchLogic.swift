@@ -147,3 +147,31 @@ enum HapticMapping {
         }
     }
 }
+
+/// 数字・記号のレイアウトの文字を、コアの入力中の文字列（Literal）に通すかの判定（設定 `input.compose_numbers`）。
+/// 英字のレイアウトは対象外（従来どおり直接入力）
+enum NumberCompose {
+    static func isNumberOrSymbol(_ mode: LayoutMode) -> Bool {
+        mode == .number || mode == .symbol
+    }
+
+    /// - setting: 設定 `input.compose_numbers`
+    /// - isSecure: パスワード欄など（常に直接入力。学習・候補を避ける）
+    /// - japaneseContext: かなから切り替えて来た流れか
+    /// - hasPreedit: 入力中の文字列が既にあるか
+    static func shouldCompose(mode: LayoutMode, setting: Bool, isSecure: Bool, japaneseContext: Bool, hasPreedit: Bool) -> Bool {
+        guard setting, !isSecure, isNumberOrSymbol(mode) else { return false }
+        return japaneseContext || hasPreedit
+    }
+
+    /// レイアウトを切り替えたあとの「日本語入力の流れ」。かなは true、英字・絵文字・カスタムは false、
+    /// 数字・記号は、かなから来たか、数字・記号の間で切り替えた場合に前の流れを引き継ぐ
+    static func nextContext(previousMode: LayoutMode, previousContext: Bool, nextMode: LayoutMode) -> Bool {
+        switch nextMode {
+        case .kana: return true
+        case .number, .symbol:
+            return previousMode == .kana || (previousContext && isNumberOrSymbol(previousMode))
+        case .alpha, .emoji, .custom: return false
+        }
+    }
+}
