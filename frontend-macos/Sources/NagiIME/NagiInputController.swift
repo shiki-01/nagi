@@ -89,13 +89,17 @@ final class NagiInputController: IMKInputController {
         let id = sessionId
         // secure input / アプリ識別子 / 直前のテキストを先に伝える（学習停止の判断はコア）
         reportContext()
+        // focus_in の応答にモードが含まれるとき（アプリごとの既定・記憶）は、OS 側の入力ソースがまだ
+        // 切り替わっていないため、OS の現在値を取り込むと元に戻ってしまう。取り込みを省く
+        var coreChoseMode = false
         if case .success(let result) = SyncBridge.wait(
             timeout: context.keyTimeout, { try await supervisor.focusIn(sessionId: id) })
         {
+            coreChoseMode = result.mode != nil
             apply(result)
         }
         isActive = true
-        adoptSelectedMode()
+        if !coreChoseMode { adoptSelectedMode() }
         // 辞書が無ければ取得を勧める（activate の処理を終えてから出す）
         Task { @MainActor [weak context] in context?.offerDataInstallIfNeeded() }
     }
