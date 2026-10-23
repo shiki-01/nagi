@@ -1,0 +1,75 @@
+name: jmdict-pin
+
+# 原語候補（カタカナ語の原語）の元データ JMdict を、版が不変な配布元（scriptin/jmdict-simplified の
+# リリース資産）から取得し、版・URL・SHA-256 とデータ構造の抜粋をログに出す。
+# 出力された値を core/loanword/src/archive.rs に固定する（取得環境が配布元に接続できないときの手段）。
+#
+# 手動実行: gh workflow run jmdict-pin.yml --ref main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 最新リリースの jmdict-eng を取得して SHA-256 を計算
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo scriptin/jmdict-simplified --json tagName -q .tagName)
+          echo "tag=$tag"
+          gh release view --repo scriptin/jmdict-simplified --json assets -q '.assets[].name' | sort
+          name=$(gh release view --repo scriptin/jmdict-simplified --json assets -q '.assets[].name' \
+            | grep -E '^jmdict-eng-[0-9][0-9.]*\.json\.zip$' | head -n 1)
+          [ -n "$name" ] || { echo "::error::jmdict-eng-<版>.json.zip が見つかりません"; exit 1; }
+          url="https://github.com/scriptin/jmdict-simplified/releases/download/${tag}/${name}"
+          curl -fsSL "$url" -o "$RUNNER_TEMP/$name"
+          echo "PIN_TAG=$tag"
+          echo "PIN_FILE=$name"
+          echo "PIN_URL=$url"
+          echo "PIN_SIZE=$(stat -c %s "$RUNNER_TEMP/$name")"
+          echo "PIN_SHA256=$(sha256sum "$RUNNER_TEMP/$name" | cut -d' ' -f1)"
+          mkdir -p "$RUNNER_TEMP/x"
+          unzip -q -o "$RUNNER_TEMP/$name" -d "$RUNNER_TEMP/x"
+          ls -la "$RUNNER_TEMP/x"
+          json=$(ls "$RUNNER_TEMP"/x/*.json | head -n 1)
+          python3 - "$json" <<'PY'
+          import json, sys, collections
+          d = json.load(open(sys.argv[1], encoding="utf-8"))
+          print("top-level keys:", list(d.keys()))
+          for k in ("version", "languages", "dictDate", "dictRevisions", "commonOnly"):
+              if k in d:
+                  print(k, "=", d[k])
+          words = d["words"]
+          print("words:", len(words))
+          langs = collections.Counter()
+          wasei = full_false = with_text = total = 0
+          samples = []
+          for w in words:
+              for s in w.get("sense", []):
+                  for ls in s.get("languageSource", []):
+                      total += 1
+                      langs[ls.get("lang")] += 1
+                      wasei += bool(ls.get("wasei"))
+                      full_false += (ls.get("full") is False)
+                      with_text += bool(ls.get("text"))
+                      if len(samples) < 12 and ls.get("text") and w.get("kana"):
+                          samples.append({"kana": [k["text"] for k in w["kana"]][:2],
+                                          "kanji": [k["text"] for k in w.get("kanji", [])][:2],
+                                          "common": [k.get("common") for k in w["kana"]][:2],
+                                          "languageSource": s["languageSource"]})
+          print("languageSource entries:", total, "with text:", with_text, "wasei:", wasei, "full=false:", full_false)
+          print("langs:", langs.most_common(12))
+          for s in samples:
+              print(json.dumps(s, ensure_ascii=False))
+          # カタカナ語の代表例
+          for w in words:
+              ks = [k["text"] for k in w["kana"]]
+              if any(k in ("コンピューター", "コンピュータ", "アルバイト", "マンション", "バス", "テンプラ", "ガード", "チーズ") for k in ks):
+                  print(json.dumps({"kana": ks, "sense": [s.get("languageSource") for s in w["sense"]]}, ensure_ascii=False))
+          PY
