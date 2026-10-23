@@ -25,10 +25,10 @@ jobs:
           echo "tag=$tag"
           gh release view --repo scriptin/jmdict-simplified --json assets -q '.assets[].name' | sort
           name=$(gh release view --repo scriptin/jmdict-simplified --json assets -q '.assets[].name' \
-            | grep -E '^jmdict-eng-[0-9][0-9.]*\.json\.zip$' | head -n 1)
+            | grep -E '^jmdict-eng-[0-9][0-9.+]*\.json\.zip$' | head -n 1)
           [ -n "$name" ] || { echo "::error::jmdict-eng-<版>.json.zip が見つかりません"; exit 1; }
-          url="https://github.com/scriptin/jmdict-simplified/releases/download/${tag}/${name}"
-          curl -fsSL "$url" -o "$RUNNER_TEMP/$name"
+          url="https://github.com/scriptin/jmdict-simplified/releases/download/${tag//+/%2B}/${name//+/%2B}"
+          gh release download "$tag" --repo scriptin/jmdict-simplified --pattern "$name" --dir "$RUNNER_TEMP"
           echo "PIN_TAG=$tag"
           echo "PIN_FILE=$name"
           echo "PIN_URL=$url"
