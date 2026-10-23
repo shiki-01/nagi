@@ -28,6 +28,8 @@ pub mod method {
     pub const GET_SETTINGS: &str = "get_settings";
     /// `update_settings` メソッド（設定の書き込み）
     pub const UPDATE_SETTINGS: &str = "update_settings";
+    /// `import_user_dict` メソッド（他の IME のユーザー辞書の取り込み）
+    pub const IMPORT_USER_DICT: &str = "import_user_dict";
     /// `get_key_table` メソッド（タッチ入力: 12 キーの文字表と濁点・小書きの循環）
     pub const GET_KEY_TABLE: &str = "get_key_table";
     /// `unload_model` メソッド（変換モデルだけをメモリから解放し、辞書のみで動く状態にする）
@@ -738,4 +740,65 @@ pub struct KeyTableResult {
     /// 「゛゜小」キーの循環（`variant`）。各要素が 1 つの循環で、末尾の次は先頭に戻る
     /// （例：`["は", "ば", "ぱ"]`）。循環に含まれない文字は変化しない
     pub variants: Vec<Vec<String>>,
+}
+
+// ---- 他の IME のユーザー辞書の取り込み（`import_user_dict`） ----
+
+/// 取り込む辞書の形式（`import_user_dict` のヒント・結果）
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserDictFormat {
+    /// Mozc / Google 日本語入力の TSV
+    Mozc,
+    /// Microsoft IME のテキスト
+    MsIme,
+    /// ATOK のテキスト
+    Atok,
+    /// macOS 標準のユーザ辞書（XML plist）
+    MacPlist,
+    /// `読み<TAB>単語` の 2 列テキスト
+    TwoColumn,
+}
+
+/// `import_user_dict` メソッドの要求パラメータ
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportUserDictParams {
+    /// ファイルの中身（バイト列そのものを base64 で。文字コードの判定はコアが行う）
+    pub data_base64: String,
+    /// 形式のヒント。省略するとファイルの先頭の行と構造から自動判定する
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<UserDictFormat>,
+}
+
+/// 取り込みをスキップした理由ごとの件数
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportSkipReason {
+    /// 理由の識別子（`missing_columns` / `invalid_reading` / `empty_surface` /
+    /// `duplicate_in_file` / `duplicate_existing`）
+    pub reason: String,
+    /// 表示用の説明（日本語）
+    pub message: String,
+    /// 件数
+    pub count: u32,
+    /// 最初に見つかった行番号（plist では辞書の通し番号）
+    pub first_line: u32,
+}
+
+/// `import_user_dict` メソッドの応答
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportUserDictResult {
+    /// 判定（または指定）された形式
+    pub format: UserDictFormat,
+    /// 読み取った項目の総数
+    pub total: u32,
+    /// 取り込んだ件数
+    pub imported: u32,
+    /// スキップした件数
+    pub skipped: u32,
+    /// スキップの理由ごとの内訳
+    pub skipped_reasons: Vec<ImportSkipReason>,
 }

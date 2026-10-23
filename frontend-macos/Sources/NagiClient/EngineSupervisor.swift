@@ -418,6 +418,15 @@ public final class EngineSupervisor: @unchecked Sendable {
             timeout: configuration.initializeTimeout)
     }
 
+    /// 他の IME のユーザー辞書（ファイルの中身そのもの）を取り込む。形式・文字コードの判定と
+    /// 重複の除外はコアが行う。書き込み後のホットリロードを含むため、長めのタイムアウトで待つ
+    public func importUserDict(data: Data, format: UserDictFormat? = nil) async throws -> ImportUserDictResult {
+        try await connectedClient().request(
+            RpcMethod.importUserDict,
+            params: ImportUserDictParams(data_base64: data.base64EncodedString(), format: format),
+            timeout: configuration.initializeTimeout)
+    }
+
     public func clearLearning() async throws {
         let _: EmptyResult = try await connectedClient().request(
             RpcMethod.clearLearning, params: EmptyParams())

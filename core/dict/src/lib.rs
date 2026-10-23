@@ -15,6 +15,7 @@ pub mod bunsetsu;
 pub mod convert;
 pub mod dictionary;
 pub mod error;
+pub mod import;
 mod nbest;
 pub mod overlay;
 pub mod pos;
@@ -27,6 +28,10 @@ pub use builder::{
 pub use convert::{ConvertedSegment, SegmentCandidate};
 pub use dictionary::{Dictionary, Entry};
 pub use error::DictError;
+pub use import::{
+    ImportError, ImportFormat, ImportOutcome, ImportSkip, SkipReason, decode_import,
+    import_user_dict,
+};
 pub use nbest::SentenceCandidate;
 pub use overlay::{Overlay, OverlayEntry};
 pub use user::{SNIPPET_POS, UserDictIssue, UserDictionary, UserEntry, decode_text};

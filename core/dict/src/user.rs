@@ -57,7 +57,7 @@ pub(crate) fn to_hiragana(s: &str) -> String {
         .collect()
 }
 
-fn unescape(s: &str) -> String {
+pub(crate) fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {

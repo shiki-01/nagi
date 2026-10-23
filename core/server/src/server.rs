@@ -4,18 +4,19 @@
 use crate::learning::LearningObserver;
 use crate::runtime::Runtime;
 use crate::setup::{Built, Reloadable, engine_config_from, issue_events, user_dict_events};
-use nagi_dict::UserDictionary;
+use nagi_dict::{ImportFormat, UserDictionary, import_user_dict};
 use nagi_engine::{ConversionBackend, Engine, EngineConfig};
 use nagi_protocol::PROTOCOL_VERSION;
 use nagi_protocol::jsonrpc::{
     ErrorObject, Notification, Request, Response, error_code, parse_message,
 };
 use nagi_protocol::methods::{
-    ConfigError, EmptyResult, InitializeParams, InitializeResult, InsertReadingTouchParams,
-    NotifyParams, PerformActionParams, ProcessKeyParams, ReconvertParams, ReloadConfigResult,
+    ConfigError, EmptyResult, ImportSkipReason, ImportUserDictParams, ImportUserDictResult,
+    InitializeParams, InitializeResult, InsertReadingTouchParams, NotifyParams,
+    PerformActionParams, ProcessKeyParams, ReconvertParams, ReloadConfigResult,
     RestoreSessionParams, SelectCandidateParams, ServerCapabilities, SessionParams,
     SetContextParams, SetEnvironmentParams, SetLayoutGeometryParams, UpdateCandidatesParams,
-    UpdatePreeditParams, method,
+    UpdatePreeditParams, UserDictFormat, method,
 };
 use nagi_protocol::settings::{UpdateSettingsParams, UpdateSettingsResult};
 use nagi_protocol::view::InputMode;
@@ -25,6 +26,9 @@ use serde_json::Value;
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// 他 IME から取り込んだ語の追記先（ユーザー辞書ディレクトリ内の Mozc TSV）
+const IMPORTED_FILE: &str = "imported.tsv";
 
 /// 設定ファイル・ユーザー辞書の変更を確認する最短の間隔
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -380,6 +384,89 @@ impl Server {
         ReloadConfigResult { ok, errors }
     }
 
+    /// 他の IME のユーザー辞書を取り込み、ユーザー辞書ディレクトリの `imported.tsv`（Mozc TSV）に追記する。
+    /// 重複は既存の登録を優先する。追記したら辞書を読み直して即座に反映する
+    fn import_user_dict(
+        &mut self,
+        p: &ImportUserDictParams,
+    ) -> Result<ImportUserDictResult, ErrorObject> {
+        use base64::Engine as _;
+        let invalid = |m: &str| ErrorObject::new(error_code::INVALID_PARAMS, m);
+        let Some(dir) = self.reload.user_dict_dir.clone() else {
+            return Err(ErrorObject::new(
+                error_code::ENGINE_FAILURE,
+                "ユーザー辞書の保存先がありません",
+            ));
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(p.data_base64.trim())
+            .map_err(|_| invalid("data_base64 が不正です"))?;
+        let hint = p.format.map(|f| match f {
+            UserDictFormat::Mozc => ImportFormat::MozcTsv,
+            UserDictFormat::MsIme => ImportFormat::MsIme,
+            UserDictFormat::Atok => ImportFormat::Atok,
+            UserDictFormat::MacPlist => ImportFormat::MacPlist,
+            UserDictFormat::TwoColumn => ImportFormat::TwoColumn,
+        });
+        let (existing, _) = UserDictionary::load_dir(&dir);
+        let outcome =
+            import_user_dict(&bytes, hint, &existing).map_err(|e| invalid(&e.to_string()))?;
+        if !outcome.entries.is_empty() {
+            let io_error = |what: &str| {
+                ErrorObject::new(
+                    error_code::ENGINE_FAILURE,
+                    format!("ユーザー辞書に書き込めません（{what}）"),
+                )
+            };
+            std::fs::create_dir_all(&dir).map_err(|_| io_error("フォルダを作れません"))?;
+            let path = dir.join(IMPORTED_FILE);
+            let mut text = String::new();
+            // 既存の末尾が改行でなければ、行が連結しないよう改行から始める
+            if std::fs::read(&path).is_ok_and(|b| !b.is_empty() && !b.ends_with(b"\n")) {
+                text.push('\n');
+            }
+            text.push_str(
+                &UserDictionary {
+                    entries: outcome.entries.clone(),
+                }
+                .to_mozc_tsv(),
+            );
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, text.as_bytes()))
+                .map_err(|_| io_error("ファイルに追記できません"))?;
+            self.reload_all();
+        }
+        let mut reasons: Vec<ImportSkipReason> = Vec::new();
+        for s in &outcome.skipped {
+            if let Some(r) = reasons.iter_mut().find(|r| r.reason == s.reason.code()) {
+                r.count += 1;
+            } else {
+                reasons.push(ImportSkipReason {
+                    reason: s.reason.code().to_string(),
+                    message: s.reason.message().to_string(),
+                    count: 1,
+                    first_line: s.line as u32,
+                });
+            }
+        }
+        Ok(ImportUserDictResult {
+            format: match outcome.format {
+                ImportFormat::MozcTsv => UserDictFormat::Mozc,
+                ImportFormat::MsIme => UserDictFormat::MsIme,
+                ImportFormat::Atok => UserDictFormat::Atok,
+                ImportFormat::MacPlist => UserDictFormat::MacPlist,
+                ImportFormat::TwoColumn => UserDictFormat::TwoColumn,
+            },
+            total: outcome.total as u32,
+            imported: outcome.entries.len() as u32,
+            skipped: outcome.skipped.len() as u32,
+            skipped_reasons: reasons,
+        })
+    }
+
     /// `engine` のロックを取る。ポイズン（他スレッドでのパニック中の取得）でも中身を使って継続する
     /// （IME サーバーは動き続けることを優先し、パニックで全体を落とさない方針）
     fn engine_lock(&self) -> std::sync::MutexGuard<'_, Engine> {
@@ -573,6 +660,11 @@ impl Server {
                     errors: outcome.errors,
                     snapshot: crate::settings::snapshot(self.reload.config_path.as_deref()),
                 })
+            }
+            method::IMPORT_USER_DICT => {
+                self.require_initialized()?;
+                let p: ImportUserDictParams = params(req)?;
+                self.import_user_dict(&p).and_then(to_value)
             }
             method::RELOAD_CONFIG => {
                 self.require_initialized()?;

@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 fst = "0.4.7"
+encoding_rs = "0.8"
 thiserror = { workspace = true }
 
 # 非 Windows ではマップ中のファイルの置換に制約が無いため mmap を使う（dictionary.rs 先頭の注意）

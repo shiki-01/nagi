@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import Foundation
 import NagiClient
 import SwiftUI
@@ -13,6 +14,8 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var loaded = false
     /// 現在の状態（プロファイルと理由・LLM の有無・学習件数など。`get_status`）。取得できなければ未接続の 1 行
     @Published private(set) var statusLines: [String] = []
+    /// ユーザー辞書の取り込みの結果（取り込み中・件数・失敗の理由）
+    @Published private(set) var importMessage: String?
 
     private let supervisor: EngineSupervisor
     private var flushTask: Task<Void, Never>?
@@ -50,6 +53,30 @@ final class SettingsModel: ObservableObject {
             } catch {
                 self.statusLines = [StatusMessages.unavailable]
             }
+        }
+    }
+
+    /// 他の IME のユーザー辞書のファイルを選んで取り込む。形式と文字コードの判定・重複の除外はコアが行う
+    func importUserDict() {
+        let panel = NSOpenPanel()
+        panel.message = "取り込むユーザー辞書のファイルを選んでください（Mozc・Microsoft IME・ATOK のテキスト、macOS のユーザ辞書）"
+        panel.prompt = "取り込む"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importMessage = "取り込んでいます…"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let data = try Data(contentsOf: url)
+                let result = try await self.supervisor.importUserDict(data: data)
+                self.importMessage = StatusMessages.importSummary(for: result)
+            } catch {
+                self.importMessage = StatusMessages.importFailure(error)
+            }
+            self.loadStatus()
         }
     }
 
@@ -142,6 +169,14 @@ struct SettingsView: View {
                         ForEach(model.statusLines, id: \.self) { line in
                             Text(line).textSelection(.enabled)
                         }
+                    }
+                }
+                Section(header: Text("ユーザー辞書")) {
+                    Button("取り込み…") { model.importUserDict() }
+                    Text("他の IME（Mozc・Microsoft IME・ATOK・macOS のユーザ辞書）の単語登録を取り込みます。すでに登録済みの語は取り込まれません")
+                        .font(.caption).foregroundColor(.secondary)
+                    if let message = model.importMessage {
+                        Text(message).textSelection(.enabled)
                     }
                 }
                 ForEach(model.state.groups, id: \.title) { group in

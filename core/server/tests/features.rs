@@ -564,6 +564,63 @@ fn broken_user_dictionary_lines_are_reported_but_do_not_break_loading() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 他 IME のユーザー辞書の取り込み: MS-IME（UTF-16 LE・BOM）を `imported.tsv` に追記して即座に反映し、
+/// 重複は既存優先でスキップ、不正な入力は INVALID_PARAMS
+#[test]
+fn import_user_dict_appends_dedupes_and_reloads() {
+    use base64::Engine as _;
+    let dir = temp_dir("userdict-import");
+    let ud = dir.join("user_dict");
+    std::fs::create_dir_all(&ud).unwrap();
+    std::fs::write(ud.join("mine.txt"), "こうえん\t公苑\t名詞\n").unwrap();
+    let mut s = server_in(&dir);
+    initialize(&mut s);
+    assert_eq!(status(&mut s)["user_dict_entries"], 1);
+
+    let text = "!Microsoft IME Dictionary Tool\r\nこうえん\t公苑\t名詞\r\nこうえん\t後援\t名詞\r\n漢字\t不正\t名詞\r\nひなた\t日向\t地名\r\n";
+    let mut bytes = vec![0xff, 0xfe];
+    for u in text.encode_utf16() {
+        bytes.extend(u.to_le_bytes());
+    }
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let r = send(&mut s, "import_user_dict", json!({"data_base64": data}));
+    let result = &r.response["result"];
+    assert_eq!(result["format"], "ms_ime", "{:?}", r.response);
+    assert_eq!(result["total"], 4);
+    assert_eq!(result["imported"], 2);
+    assert_eq!(result["skipped"], 2);
+    let reasons: Vec<&str> = result["skipped_reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["reason"].as_str().unwrap())
+        .collect();
+    assert_eq!(reasons, ["duplicate_existing", "invalid_reading"]);
+    let written = std::fs::read_to_string(ud.join("imported.tsv")).unwrap();
+    assert_eq!(written, "こうえん\t後援\t名詞\t\nひなた\t日向\t地名\t\n");
+    // 即座に反映される
+    assert_eq!(status(&mut s)["user_dict_entries"], 3);
+
+    // 同じ内容をもう一度: すべて既存と重複で、何も書き足さない
+    let r = send(
+        &mut s,
+        "import_user_dict",
+        json!({"data_base64": data, "format": "ms_ime"}),
+    );
+    assert_eq!(r.response["result"]["imported"], 0);
+    assert_eq!(
+        std::fs::read_to_string(ud.join("imported.tsv")).unwrap(),
+        written
+    );
+
+    // 不正な入力
+    let r = send(&mut s, "import_user_dict", json!({"data_base64": "!!!"}));
+    assert_eq!(r.response["error"]["code"], -32602);
+    let r = send(&mut s, "import_user_dict", json!({"data_base64": ""}));
+    assert_eq!(r.response["error"]["code"], -32602);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `userdict.enabled` / `snippet.enabled` を設定で切り替える（登録内容は消さない）
 #[test]
 fn userdict_and_snippet_can_be_disabled_by_config() {

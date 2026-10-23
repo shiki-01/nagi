@@ -122,6 +122,20 @@ final class SupportTests: XCTestCase {
         XCTAssertNotNil(StatusMessages.toast(for: .enteredMinimalMode(restarts: 5)))
     }
 
+    func testImportSummary() {
+        let ok = ImportUserDictResult(
+            format: .msIme, total: 3, imported: 3, skipped: 0, skipped_reasons: [])
+        XCTAssertEqual(StatusMessages.importSummary(for: ok), "3 件を取り込みました")
+        let partial = ImportUserDictResult(
+            format: .mozc, total: 4, imported: 2, skipped: 2,
+            skipped_reasons: [
+                ImportSkipReason(reason: "duplicate_existing", message: "既に登録されています", count: 2, first_line: 1)
+            ])
+        XCTAssertEqual(
+            StatusMessages.importSummary(for: partial),
+            "2 件を取り込みました（スキップ 2 件 — 既に登録されています: 2 件）")
+    }
+
     func testStatusMenuLines() {
         let status = StatusResult(
             profile: "balanced", profile_reason: "既定", backend: "x", llm: false, learning: true,

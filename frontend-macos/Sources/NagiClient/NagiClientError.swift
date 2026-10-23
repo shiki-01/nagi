@@ -48,6 +48,7 @@ public enum RpcMethod {
     public static let reloadConfig = "reload_config"
     public static let getSettings = "get_settings"
     public static let updateSettings = "update_settings"
+    public static let importUserDict = "import_user_dict"
     public static let ping = "ping"
     public static let shutdown = "shutdown"
     public static let updatePreedit = "update_preedit"

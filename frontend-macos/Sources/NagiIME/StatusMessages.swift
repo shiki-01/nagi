@@ -38,6 +38,24 @@ public enum StatusMessages {
         return lines
     }
 
+    /// ユーザー辞書の取り込み結果（件数とスキップの理由）。入力内容は含めない
+    public static func importSummary(for result: ImportUserDictResult) -> String {
+        var text = "\(result.imported) 件を取り込みました"
+        if result.skipped > 0 {
+            let reasons = result.skipped_reasons.map { "\($0.message): \($0.count) 件" }
+            text += "（スキップ \(result.skipped) 件 — " + reasons.joined(separator: "、") + "）"
+        }
+        return text
+    }
+
+    /// 取り込みに失敗したときの文言（コアが理由を返していればそれを添える）
+    public static func importFailure(_ error: Error) -> String {
+        if case NagiClientError.rpc(_, let message) = error {
+            return "取り込めませんでした: \(message)"
+        }
+        return "取り込めませんでした"
+    }
+
     /// 状態を取得できなかったときの行
     public static let unavailable = "変換エンジンに接続していません"
 }

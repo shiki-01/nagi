@@ -210,6 +210,75 @@ public struct FloatRange: Codable {
 	}
 }
 
+/// 取り込みをスキップした理由ごとの件数
+public struct ImportSkipReason: Codable {
+	/// 理由の識別子（`missing_columns` / `invalid_reading` / `empty_surface` /
+	/// `duplicate_in_file` / `duplicate_existing`）
+	public let reason: String
+	/// 表示用の説明（日本語）
+	public let message: String
+	/// 件数
+	public let count: UInt32
+	/// 最初に見つかった行番号（plist では辞書の通し番号）
+	public let first_line: UInt32
+
+	public init(reason: String, message: String, count: UInt32, first_line: UInt32) {
+		self.reason = reason
+		self.message = message
+		self.count = count
+		self.first_line = first_line
+	}
+}
+
+/// 取り込む辞書の形式（`import_user_dict` のヒント・結果）
+public enum UserDictFormat: String, Codable {
+	/// Mozc / Google 日本語入力の TSV
+	case mozc
+	/// Microsoft IME のテキスト
+	case msIme = "ms_ime"
+	/// ATOK のテキスト
+	case atok
+	/// macOS 標準のユーザ辞書（XML plist）
+	case macPlist = "mac_plist"
+	/// `読み<TAB>単語` の 2 列テキスト
+	case twoColumn = "two_column"
+}
+
+/// `import_user_dict` メソッドの要求パラメータ
+public struct ImportUserDictParams: Codable {
+	/// ファイルの中身（バイト列そのものを base64 で。文字コードの判定はコアが行う）
+	public let data_base64: String
+	/// 形式のヒント。省略するとファイルの先頭の行と構造から自動判定する
+	public let format: UserDictFormat?
+
+	public init(data_base64: String, format: UserDictFormat?) {
+		self.data_base64 = data_base64
+		self.format = format
+	}
+}
+
+/// `import_user_dict` メソッドの応答
+public struct ImportUserDictResult: Codable {
+	/// 判定（または指定）された形式
+	public let format: UserDictFormat
+	/// 読み取った項目の総数
+	public let total: UInt32
+	/// 取り込んだ件数
+	public let imported: UInt32
+	/// スキップした件数
+	public let skipped: UInt32
+	/// スキップの理由ごとの内訳
+	public let skipped_reasons: [ImportSkipReason]
+
+	public init(format: UserDictFormat, total: UInt32, imported: UInt32, skipped: UInt32, skipped_reasons: [ImportSkipReason]) {
+		self.format = format
+		self.total = total
+		self.imported = imported
+		self.skipped = skipped
+		self.skipped_reasons = skipped_reasons
+	}
+}
+
 /// `initialize` メソッドの要求パラメータ
 public struct InitializeParams: Codable {
 	/// プロトコルバージョン
