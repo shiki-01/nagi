@@ -14,6 +14,8 @@ final class NagiInputController: IMKInputController {
     private var hasMarked = false
     private var lastCandidates: CandidatePage?
     private var isActive = false
+    /// 画面へ反映済みの revision（確定のあとに、それより前の非同期更新が反映されるのを防ぐ）
+    private var applied = AppliedRevision()
     /// コアのこのセッションの入力モード（応答の `mode` で更新する。nil = 未受信で初期モードのまま）
     private var coreMode: InputMode?
     /// 次にマークテキストを置くときに置き換える範囲（再変換の対象として選ばれていたテキスト）
@@ -143,6 +145,7 @@ final class NagiInputController: IMKInputController {
 
     /// エンジンの起動・再起動後: コアのセッションは初期モードに戻るため、使用中なら OS のモードに合わせ直す
     func engineStarted() {
+        applied.reset()
         coreMode = nil
         if isActive { adoptSelectedMode() }
     }
@@ -268,6 +271,7 @@ final class NagiInputController: IMKInputController {
 
     /// 応答（描画差分）を反映する。順序: 削除 → 確定 → preedit → 候補 → モード
     func apply(_ result: ProcessKeyResult) {
+        applied.applied(sync: result.revision)
         if let n = result.delete_before, n > 0 { deleteBeforeCaret(Int(n)) }
         let committed = result.commit.map { !$0.isEmpty } ?? false
         if let commit = result.commit, committed {
@@ -314,14 +318,16 @@ final class NagiInputController: IMKInputController {
         }
     }
 
-    /// `update_preedit` 通知（ライブ変換等）
-    func applyAsyncPreedit(_ preedit: PreeditView) {
+    /// `update_preedit` 通知（ライブ変換等）。確定・取消のあとに遅れて届いた古いものは反映しない
+    func applyAsyncPreedit(_ preedit: PreeditView, revision: UInt32) {
+        guard applied.accept(async: revision) else { return }
         renderPreedit(preedit)
         if lastCandidates != nil { showCandidates(lastCandidates) }
     }
 
     /// `update_candidates` 通知。入力中の文字列が無いのに届いた候補（確定・取消のあとに遅れて届いたもの）は表示しない
-    func applyAsyncCandidates(_ candidates: CandidatesView) {
+    func applyAsyncCandidates(_ candidates: CandidatesView, revision: UInt32) {
+        guard applied.accept(async: revision) else { return }
         guard let preedit = context?.store.preedit(for: sessionId), !preedit.text.isEmpty else {
             hideCandidates()
             return

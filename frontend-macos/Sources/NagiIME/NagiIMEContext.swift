@@ -79,9 +79,9 @@ public final class NagiIMEContext {
         if let message = StatusMessages.toast(for: event) { toast.show(message) }
         switch event {
         case .updatePreedit(let p):
-            controllers[p.session_id]?.value?.applyAsyncPreedit(p.preedit)
+            controllers[p.session_id]?.value?.applyAsyncPreedit(p.preedit, revision: p.revision)
         case .updateCandidates(let p):
-            controllers[p.session_id]?.value?.applyAsyncCandidates(p.candidates)
+            controllers[p.session_id]?.value?.applyAsyncCandidates(p.candidates, revision: p.revision)
         case .restored(let sessionId, let result):
             controllers[sessionId]?.value?.apply(result)
         case .restoreFailed(let sessionId, _):
