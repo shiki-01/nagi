@@ -19,7 +19,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::client::{ClientError, JsonRpcClient, Transport};
+use crate::client::{ClientDiagnostic, ClientError, ExitReport, JsonRpcClient, Transport};
 use crate::revision::RevisionGate;
 
 /// 接続の生成器。再起動のたびに新しい接続を作る
@@ -106,6 +106,33 @@ impl BackoffPolicy {
     }
 }
 
+/// エンジンが落ちたのが `initialize` の前か後か
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitPhase {
+    /// `initialize` に成功する前（起動失敗・即時終了・応答なし）
+    BeforeInitialize,
+    /// `initialize` に成功した後（稼働中のクラッシュ）
+    AfterInitialize,
+}
+
+/// エンジンの起動失敗・停止 1 回分の記録（原因の切り分け用。入力内容は含まない）
+#[derive(Debug, Clone, PartialEq)]
+pub struct FailureRecord {
+    /// 連続再起動の回数（1 始まり）
+    pub attempt: u32,
+    /// minimal プロファイル（`--no-llm`）での起動だったか
+    pub minimal: bool,
+    /// `initialize` の前後どちらで落ちたか
+    pub phase: ExitPhase,
+    /// 子プロセスの終了コードと生存時間（起動できなかった・こちらから終了させた場合は `None`）
+    pub exit: Option<ExitReport>,
+    /// 起動・初期化のエラー（稼働中の切断は `None`）
+    pub error: Option<ClientError>,
+}
+
+/// 記録を残す最大件数（連続失敗の一覧）
+const MAX_FAILURE_RECORDS: usize = 50;
+
 /// スーパーバイザーが通知するイベント
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
@@ -150,6 +177,15 @@ pub enum EngineEvent {
     Notify(NotifyParams),
     /// 起動または初期化に失敗した（再起動は自動で予約される）
     LaunchFailed(ClientError),
+    /// エンジンが停止・起動失敗した 1 回分の詳細（`Crashed` の直前に通知される）
+    ProcessExited(FailureRecord),
+    /// minimal へ切り替えた。通常起動での連続失敗の一覧（LLM が原因かの切り分け用）
+    MinimalSwitchReport {
+        /// 通常（LLM あり）起動での失敗の記録
+        failures: Vec<FailureRecord>,
+    },
+    /// 通信路の診断（捨てた行など。内容は含まない）
+    Diagnostic(ClientDiagnostic),
 }
 
 /// スーパーバイザーの設定
@@ -198,6 +234,10 @@ struct State {
     launched_at: Instant,
     stopped: bool,
     has_started_once: bool,
+    /// 起動中に落ちた子プロセスの終了記録（次の `handle_failure` が取り出す）
+    last_exit: Option<ExitReport>,
+    /// 連続失敗のうち、通常（LLM あり）起動でのもの
+    normal_failures: Vec<FailureRecord>,
 }
 
 struct Inner {
@@ -254,6 +294,8 @@ impl EngineSupervisor {
                     launched_at: now,
                     stopped: false,
                     has_started_once: false,
+                    last_exit: None,
+                    normal_failures: Vec::new(),
                 }),
                 on_event: Mutex::new(None),
                 restore_provider: Mutex::new(None),
@@ -498,6 +540,14 @@ impl Inner {
                 i.handle_notification(method, params, gen_);
             }
         }));
+        let weak: Weak<Inner> = Arc::downgrade(self);
+        rpc.set_on_diagnostic(Arc::new(move |diagnostic| {
+            if let Some(i) = weak.upgrade()
+                && i.current_generation() == gen_
+            {
+                i.emit(EngineEvent::Diagnostic(diagnostic));
+            }
+        }));
         // on_close は初期化に成功して client を登録した後で設定する。
         // 初期化中の切断は request のエラーとして呼び出し元（start / 再起動処理）が扱う
         rpc.start()?;
@@ -516,6 +566,8 @@ impl Inner {
         ) {
             Ok(r) => r,
             Err(e) => {
+                // 閉じる前に終了コードを控える（`handle_failure` が記録に使う）
+                lock(&self.state).last_exit = rpc.exit_report();
                 rpc.close();
                 return Err(e);
             }
@@ -584,7 +636,7 @@ impl Inner {
 
     /// 通信路が閉じた・起動に失敗した: 世代が古ければ無視し、バックオフ後に再起動を予約する
     fn handle_failure(self: &Arc<Self>, error: ClientError, gen_: u64) {
-        let (old, attempt, entered_minimal) = {
+        let (old, attempt, entered_minimal, record, report) = {
             let mut st = lock(&self.state);
             if st.generation != gen_ || st.stopped {
                 return;
@@ -595,14 +647,40 @@ impl Inner {
             let uptime = self.clock.now().saturating_duration_since(st.launched_at);
             if old.is_some() && uptime >= self.config.backoff.stable_uptime {
                 st.restart_count = 0;
+                st.normal_failures.clear();
             }
             st.restart_count += 1;
             let attempt = st.restart_count;
+            let was_minimal = st.minimal_mode;
             let entered = attempt >= self.config.backoff.minimal_after_restarts && !st.minimal_mode;
             if entered {
                 st.minimal_mode = true;
             }
-            (old, attempt, entered)
+            // 接続済みだった（= initialize 後）か、起動中に落ちたか
+            let exit = old
+                .as_ref()
+                .and_then(|c| c.exit_report())
+                .or_else(|| st.last_exit.take());
+            st.last_exit = None;
+            let record = FailureRecord {
+                attempt,
+                minimal: was_minimal,
+                phase: if old.is_some() {
+                    ExitPhase::AfterInitialize
+                } else {
+                    ExitPhase::BeforeInitialize
+                },
+                exit,
+                error: (error != ClientError::ConnectionClosed).then(|| error.clone()),
+            };
+            if !was_minimal {
+                if st.normal_failures.len() >= MAX_FAILURE_RECORDS {
+                    st.normal_failures.remove(0);
+                }
+                st.normal_failures.push(record.clone());
+            }
+            let report = entered.then(|| st.normal_failures.clone());
+            (old, attempt, entered, record, report)
         };
 
         if let Some(c) = old {
@@ -612,9 +690,13 @@ impl Inner {
         if error != ClientError::ConnectionClosed {
             self.emit(EngineEvent::LaunchFailed(error));
         }
+        self.emit(EngineEvent::ProcessExited(record));
         self.emit(EngineEvent::Crashed { attempt, delay });
         if entered_minimal {
             self.emit(EngineEvent::EnteredMinimalMode { restarts: attempt });
+            if let Some(failures) = report {
+                self.emit(EngineEvent::MinimalSwitchReport { failures });
+            }
         }
 
         let weak: Weak<Inner> = Arc::downgrade(self);
@@ -867,6 +949,93 @@ mod tests {
             count(&log, |e| matches!(
                 e,
                 EngineEvent::EnteredMinimalMode { restarts: 3 }
+            )),
+            1
+        );
+    }
+
+    #[test]
+    fn failure_records_distinguish_phase_and_exit_code() {
+        let launcher = MockLauncher::new();
+        launcher.set_configure(|n, minimal, c| {
+            let exit = |code| ExitReport {
+                code: Some(code),
+                lifetime: Duration::from_millis(50),
+            };
+            if n == 1 {
+                c.set_responder(standard_responder(0));
+                c.set_exit_report(exit(-1));
+            } else if minimal {
+                c.set_responder(standard_responder(0));
+            } else {
+                // initialize に応答せず終了コード 101 で落ちる
+                c.set_exit_report(exit(101));
+                let conn = c.clone();
+                c.set_responder(move |_| {
+                    conn.simulate_close();
+                    None
+                });
+            }
+        });
+        let backoff = BackoffPolicy {
+            minimal_after_restarts: 3,
+            stable_uptime: Duration::from_secs(1000),
+            ..BackoffPolicy::default()
+        };
+        let (sup, log) = make(
+            &launcher,
+            ImmediateScheduler::new(),
+            MockClock::new(),
+            backoff,
+        );
+        sup.start().unwrap();
+        launcher.connections()[0].simulate_close();
+        assert!(sup.is_minimal_mode());
+
+        let events = log.lock().unwrap();
+        let records: Vec<&FailureRecord> = events
+            .iter()
+            .filter_map(|e| match e {
+                EngineEvent::ProcessExited(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].phase, ExitPhase::AfterInitialize);
+        assert_eq!(records[0].exit.unwrap().code, Some(-1));
+        assert_eq!(records[0].error, None);
+        assert_eq!(records[1].phase, ExitPhase::BeforeInitialize);
+        assert_eq!(records[1].exit.unwrap().code, Some(101));
+        assert_eq!(records[2].attempt, 3);
+        assert!(records.iter().all(|r| !r.minimal));
+        let summary = events.iter().find_map(|e| match e {
+            EngineEvent::MinimalSwitchReport { failures } => Some(failures.clone()),
+            _ => None,
+        });
+        assert_eq!(summary.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn malformed_engine_line_is_forwarded_as_diagnostic() {
+        let launcher = MockLauncher::new();
+        launcher.set_configure(|_, _, c| {
+            let inner = standard_responder(0);
+            c.set_responder(move |req| {
+                let mut lines = inner(req)?;
+                lines.insert(0, "garbage".into());
+                Some(lines)
+            });
+        });
+        let (sup, log, _) = simple(&launcher);
+        sup.start().unwrap();
+        assert_eq!(
+            count(&log, |e| matches!(
+                e,
+                EngineEvent::Diagnostic(ClientDiagnostic::MalformedLine {
+                    len: 7,
+                    first: "alpha",
+                    count: 1
+                })
             )),
             1
         );

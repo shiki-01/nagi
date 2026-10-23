@@ -18,21 +18,21 @@ fn main() -> ExitCode {
             return match install_data::run(&args) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(message) => {
-                    eprintln!("imserver: {message}");
+                    nagi_server::elog!("imserver: {message}");
                     ExitCode::FAILURE
                 }
             };
         }
         Ok(None) => {}
         Err(message) => {
-            eprintln!("imserver: {message}");
+            nagi_server::elog!("imserver: {message}");
             return ExitCode::from(2);
         }
     }
     let mut options = match parse_args(std::env::args().skip(1)) {
         Ok(o) => o,
         Err(message) => {
-            eprintln!("imserver: {message}");
+            nagi_server::elog!("imserver: {message}");
             return ExitCode::from(2);
         }
     };
@@ -40,9 +40,9 @@ fn main() -> ExitCode {
     options.async_model_load = true;
     let built = build(&options);
     for note in &built.notes {
-        eprintln!("imserver: {note}");
+        nagi_server::elog!("imserver: {note}");
     }
-    eprintln!(
+    nagi_server::elog!(
         "imserver: プロファイル {}（{}）",
         built.runtime.profile().as_str(),
         built.runtime.profile_reason()
@@ -56,7 +56,7 @@ fn main() -> ExitCode {
     match server.run(BufReader::new(std::io::stdin()), &mut output) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("imserver: 入出力エラー: {e}");
+            nagi_server::elog!("imserver: 入出力エラー: {e}");
             ExitCode::FAILURE
         }
     }

@@ -19,6 +19,7 @@
 //! - [`toast`] — 通知パネルの配置
 //! - [`icon`] — 入力方式アイコン（.ico）の生成
 //! - [`diag`] — 診断ログ（tsf.log）の整形・ローテーション判断・イベントの文言（入力内容は含めない）
+//! - [`engine_log`] — imserver の stderr の保存先（ホスト pid ごとのファイル）と古いファイルの掃除
 //! - [`process`]: 子プロセス（imserver）の stdin/stdout を通信路にする実装
 
 #![warn(missing_docs)]
@@ -28,6 +29,7 @@ pub mod candidates;
 pub mod client;
 pub mod context;
 pub mod diag;
+pub mod engine_log;
 pub mod environment;
 pub mod icon;
 pub mod keynorm;

@@ -59,6 +59,49 @@ pub type LineHandler = Arc<dyn Fn(&str) + Send + Sync>;
 pub type CloseHandler = Arc<dyn Fn() + Send + Sync>;
 /// サーバー通知のハンドラ `(method, params)`。任意のスレッドから呼ばれうる
 pub type NotificationHandler = Arc<dyn Fn(&str, Option<Value>) + Send + Sync>;
+/// 診断イベントのハンドラ。任意のスレッドから呼ばれうる
+pub type DiagnosticHandler = Arc<dyn Fn(ClientDiagnostic) + Send + Sync>;
+
+/// 子プロセスが自発的に終了したときの記録（終了コードと生存時間）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExitReport {
+    /// 終了コード（シグナル終了など取得できない場合は `None`。Windows の NTSTATUS は負数になりうる）
+    pub code: Option<i32>,
+    /// 起動してから通信路が閉じるまでの時間
+    pub lifetime: Duration,
+}
+
+/// クライアントが上位へ知らせる診断（**行の内容は含めない**。長さ・先頭バイトの種別・件数のみ）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientDiagnostic {
+    /// JSON オブジェクトとして読めない行を受け取って捨てた
+    MalformedLine {
+        /// 行のバイト数
+        len: usize,
+        /// 先頭バイトの種別（[`first_byte_kind`]）
+        first: &'static str,
+        /// これまでに捨てた行の累計（この接続）
+        count: u64,
+    },
+}
+
+/// 先頭バイトの種別（内容を残さずに「何が混ざったか」だけ分かるようにする）
+pub fn first_byte_kind(line: &str) -> &'static str {
+    match line.bytes().next() {
+        None => "empty",
+        Some(b'{') => "open-brace",
+        Some(b'[') => "open-bracket",
+        Some(b'0'..=b'9') => "digit",
+        Some(b) if b.is_ascii_alphabetic() => "alpha",
+        Some(b) if b.is_ascii() => "other-ascii",
+        Some(_) => "non-ascii",
+    }
+}
+
+/// 捨てた行の累計 `count` 件目を上位に知らせるか（1, 2, 4, 8, … 件目。大量に混ざってもログを溢れさせない）
+pub fn should_report_malformed(count: u64) -> bool {
+    count.is_power_of_two()
+}
 
 /// エンジンとの通信路（1 接続 = 1 プロセス）。テストではモックに差し替える。
 ///
@@ -72,6 +115,11 @@ pub trait Transport: Send + Sync {
     fn send(&self, line: &str) -> Result<(), ClientError>;
     /// 通信路を閉じ、プロセスなら終了させる。呼び出し後の `on_close` は呼んでも呼ばなくてもよい
     fn terminate(&self);
+    /// 子プロセスが自発的に終了していれば、その終了コードと生存時間（`on_close` より前に確定する）。
+    /// プロセスでない通信路・こちらから終了させた場合は `None`
+    fn exit_report(&self) -> Option<ExitReport> {
+        None
+    }
 }
 
 /// 受信バイト列を改行区切りの行に分割する。チャンク境界をまたぐ行・複数行を扱う
@@ -114,6 +162,8 @@ struct State {
     closed: bool,
     on_notification: Option<NotificationHandler>,
     on_close: Option<CloseHandler>,
+    on_diagnostic: Option<DiagnosticHandler>,
+    malformed_lines: u64,
 }
 
 struct Inner {
@@ -136,7 +186,9 @@ impl Inner {
 
     fn handle_line(&self, line: &str) {
         let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(line) else {
-            return; // 壊れた行は捨てる（後続の行は処理する）
+            // 壊れた行は捨てる（後続の行は処理する）。内容は残さず、長さ・種別・件数だけ上位に知らせる
+            self.report_malformed(line);
+            return;
         };
 
         if let Some(method) = obj.get("method").and_then(Value::as_str) {
@@ -173,6 +225,23 @@ impl Inner {
                     "result も error も無い応答".into(),
                 )),
             );
+        }
+    }
+
+    fn report_malformed(&self, line: &str) {
+        let (count, handler) = {
+            let mut st = self.state();
+            st.malformed_lines += 1;
+            (st.malformed_lines, st.on_diagnostic.clone())
+        };
+        if let Some(h) = handler
+            && should_report_malformed(count)
+        {
+            h(ClientDiagnostic::MalformedLine {
+                len: line.len(),
+                first: first_byte_kind(line),
+                count,
+            });
         }
     }
 
@@ -242,6 +311,16 @@ impl JsonRpcClient {
     /// 通信路が閉じたときのハンドラを設定する（高々 1 回呼ばれる）
     pub fn set_on_close(&self, handler: CloseHandler) {
         self.inner.state().on_close = Some(handler);
+    }
+
+    /// 診断イベント（捨てた行など）のハンドラを設定する
+    pub fn set_on_diagnostic(&self, handler: DiagnosticHandler) {
+        self.inner.state().on_diagnostic = Some(handler);
+    }
+
+    /// 子プロセスの終了コードと生存時間（自発的に終了した場合のみ）
+    pub fn exit_report(&self) -> Option<ExitReport> {
+        self.inner.transport.exit_report()
     }
 
     /// 通信路が閉じ済みか
@@ -449,6 +528,50 @@ mod tests {
         assert_eq!(got[0].1.as_ref().unwrap()["message"], "hi");
         assert_eq!(got[1].1, None);
         assert_eq!(got[2].1, None);
+    }
+
+    #[test]
+    fn malformed_lines_are_reported_without_content() {
+        let t = MockTransport::new();
+        let c = client(&t);
+        let got: Arc<Mutex<Vec<ClientDiagnostic>>> = Arc::default();
+        let g = got.clone();
+        c.set_on_diagnostic(Arc::new(move |d| g.lock().unwrap().push(d)));
+        for line in ["secret text", "[1]", "12", "あ", "{broken"] {
+            t.receive(line);
+        }
+        // 1, 2, 4 件目だけ通知される（3, 5 件目は間引く）
+        let got = got.lock().unwrap();
+        assert_eq!(
+            *got,
+            vec![
+                ClientDiagnostic::MalformedLine {
+                    len: 11,
+                    first: "alpha",
+                    count: 1
+                },
+                ClientDiagnostic::MalformedLine {
+                    len: 3,
+                    first: "open-bracket",
+                    count: 2
+                },
+                ClientDiagnostic::MalformedLine {
+                    len: 3,
+                    first: "non-ascii",
+                    count: 4
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn first_byte_kinds_and_report_schedule() {
+        assert_eq!(first_byte_kind(""), "empty");
+        assert_eq!(first_byte_kind("{x"), "open-brace");
+        assert_eq!(first_byte_kind("7"), "digit");
+        assert_eq!(first_byte_kind("-"), "other-ascii");
+        let reported: Vec<u64> = (1..=9).filter(|&n| should_report_malformed(n)).collect();
+        assert_eq!(reported, vec![1, 2, 4, 8]);
     }
 
     #[test]

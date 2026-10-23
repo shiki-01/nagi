@@ -483,7 +483,7 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
                         let started = Instant::now();
                         match loader() {
                             Ok(m) => {
-                                eprintln!(
+                                crate::elog!(
                                     "imserver: モデル読み込み完了 ({} ms)",
                                     started.elapsed().as_millis()
                                 );
@@ -679,17 +679,17 @@ fn spawn_model_loader(loader: ModelLoader, pipeline: Arc<Pipeline>) {
             let started = Instant::now();
             match loader() {
                 Ok(model) => {
-                    eprintln!(
+                    crate::elog!(
                         "imserver: モデル読み込み完了 ({} ms)",
                         started.elapsed().as_millis()
                     );
                     pipeline.attach_model(model);
                 }
-                Err(e) => eprintln!("imserver: {e}（辞書のみで動作を続けます）"),
+                Err(e) => crate::elog!("imserver: {e}（辞書のみで動作を続けます）"),
             }
         });
     if let Err(e) = spawned {
-        eprintln!(
+        crate::elog!(
             "imserver: モデル読み込みスレッドを開始できませんでした: {e}（辞書のみで動作します）"
         );
     }

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::client::{ClientError, CloseHandler, LineHandler, Transport};
+use crate::client::{ClientError, CloseHandler, ExitReport, LineHandler, Transport};
 use crate::supervisor::{Clock, EngineLauncher, Scheduler};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -23,6 +23,7 @@ struct MockState {
     sent: Vec<String>,
     responder: Option<Responder>,
     closed: bool,
+    exit: Option<ExitReport>,
 }
 
 /// 送られた要求を記録し、`responder` があれば同期的に応答する通信路。
@@ -40,6 +41,11 @@ impl MockTransport {
 
     pub fn set_responder(&self, f: impl Fn(&Value) -> Option<Vec<String>> + Send + Sync + 'static) {
         lock(&self.state).responder = Some(Arc::new(f));
+    }
+
+    /// `simulate_close` で報告される終了コード・生存時間を設定する
+    pub fn set_exit_report(&self, exit: ExitReport) {
+        lock(&self.state).exit = Some(exit);
     }
 
     pub fn set_fail_send(&self, v: bool) {
@@ -119,6 +125,10 @@ impl Transport for MockTransport {
 
     fn terminate(&self) {
         self.simulate_close();
+    }
+
+    fn exit_report(&self) -> Option<ExitReport> {
+        lock(&self.state).exit
     }
 }
 

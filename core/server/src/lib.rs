@@ -9,6 +9,7 @@
 //! - [`runtime`] — 環境プロファイル・学習・ユーザー辞書・ランキング設定・通知の共有状態
 //! - [`learning`] — 確定を学習に記録する observer
 //! - [`server`] — JSON-RPC ループ
+//! - [`stderr_log`] — stderr への診断出力（書き込み失敗で panic しない `elog!`）
 //! - [`settings`] — GUI 設定画面向けの設定 RPC（`get_settings` / `update_settings`）
 //! - [`calibration`] — キャリブレーション推論の実測結果のファイルへの永続化
 //! - [`install_data`] — `imserver --install-data`（辞書・モデルの取得と組み立て。feature `data-install`）
@@ -23,6 +24,7 @@ pub mod runtime;
 pub mod server;
 pub mod settings;
 pub mod setup;
+pub mod stderr_log;
 pub mod update_check;
 
 pub use pipeline::Pipeline;

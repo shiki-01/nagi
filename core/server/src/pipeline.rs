@@ -337,7 +337,7 @@ impl Pipeline {
                 if let Some(ms) = nagi_profile::median_ms(&samples) {
                     runtime.finish_calibration(ms);
                 }
-                eprintln!(
+                crate::elog!(
                     "imserver: ウォームアップ/キャリブレーション完了 ({} ms)",
                     started_at.elapsed().as_millis()
                 );

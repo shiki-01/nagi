@@ -18,7 +18,7 @@ use nagi_protocol::{
     SetContextParams, SetEnvironmentParams, TouchAction,
 };
 use nagi_windows::client::ClientError;
-use nagi_windows::process::{ProcessEngineConfiguration, ProcessEngineLauncher};
+use nagi_windows::process::{ProcessEngineConfiguration, ProcessEngineLauncher, StderrLog};
 use nagi_windows::session::SessionStore;
 use nagi_windows::supervisor::{Configuration, EngineEvent, EngineSupervisor};
 
@@ -77,7 +77,10 @@ pub fn route(event: &EngineEvent) -> Route<'_> {
         | EngineEvent::Crashed { .. }
         | EngineEvent::EnteredMinimalMode { .. }
         | EngineEvent::Notify(_)
-        | EngineEvent::LaunchFailed(_) => Route::Broadcast,
+        | EngineEvent::LaunchFailed(_)
+        | EngineEvent::ProcessExited(_)
+        | EngineEvent::MinimalSwitchReport { .. }
+        | EngineEvent::Diagnostic(_) => Route::Broadcast,
     }
 }
 
@@ -126,6 +129,11 @@ impl EngineHost {
     pub fn new(location: &EngineLocation, client_version: &str) -> Self {
         let mut process = ProcessEngineConfiguration::new(&location.executable);
         process.arguments = engine_arguments(location);
+        // imserver の stderr は親から継承せず、ホストごとのファイル（imserver-<pid>.log）へ向ける
+        process.stderr_log = crate::tsf_log::log_dir().map(|dir| StderrLog {
+            dir,
+            host_pid: std::process::id(),
+        });
         let launcher = Arc::new(ProcessEngineLauncher::new(process));
 
         let mut config = Configuration::new(client_version);

@@ -23,6 +23,11 @@ fn default_path() -> Option<&'static PathBuf> {
     .as_ref()
 }
 
+/// ログのディレクトリ（`tsf.log` と同じ場所。imserver の stderr もここへ置く）。`LOCALAPPDATA` が無ければ `None`
+pub fn log_dir() -> Option<PathBuf> {
+    default_path()?.parent().map(Path::to_path_buf)
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

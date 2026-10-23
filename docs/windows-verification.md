@@ -350,12 +350,13 @@ Stop-Process -Name imserver -Force
 #### ログ
 
 - `imserver` のログは **stderr のみ**で、入力内容は出力しません（`core/server/src/main.rs`）。プロファイルの判定理由などが起動時に出ます。
-- TSF の DLL から起動された `imserver` の stderr は親（ホストアプリ）から継承する設計（`frontend-windows/src/process.rs`）です。GUI アプリでは標準エラーが見えないため、**ホスト経由ではログを取れない可能性が高い**（要確認）。DLL 側のログは下記の tsf.log に出ます（`OutputDebugString` は使っていません）。
+- TSF の DLL から起動された `imserver` の stderr は、**親（ホストアプリ）から継承せず**、`%LOCALAPPDATA%\Nagi\logs\imserver-<ホストpid>.log` へ保存する（H-55。ファイルを開けなければ捨てる）。起動のたびに `[launch] imserver launch minimal=…` の区切り行が入り、その後ろにその起動の stderr が続く。直近 20 ファイル・7 日を超えた古いファイルは次のホスト起動時に消える。入力内容は出力されない。
 - そのため不具合の再現は、可能なものから順に次のいずれかで行います。
   1. 下記「imserver を単体で動かす」で、エンジン単体の問題か切り分ける。
   2. エンジンが起動しているか（`Get-Process imserver`）、DLL が読み込まれているか（`tasklist /m nagi_windows_tsf.dll`）を見る。
   3. Sysinternals の Process Monitor（`imserver.exe` / `nagi_windows_tsf.dll` のレジストリ・ファイルアクセス）、Process Explorer（DLL の読み込み先）、DebugView（`OutputDebugString` があれば。無い場合は何も出ない）を使う。
 - **tsf.log（フロントの診断ログ。H-54）**: `%LOCALAPPDATA%\Nagi\logs\tsf.log`（256KB を超えると `tsf.log.1` へ 1 世代回る）。ホストプロセスごとに `pid=` 付きで追記される。入力内容（キー・テキスト・preedit）は書かない。記録するのは、DLL の Activate / Deactivate、エンジンの場所（`exe=… exists=…`）、起動の成否と失敗理由（`launch failed: spawn failed` / `initialize timeout` / `initialize failed` / `start failed: connection closed (engine exited)`）、クラッシュと再起動、minimal への切り替え、言語バーの登録結果（HRESULT）。書けない環境では黙って記録しない。
+- **tsf.log の `[engine]` 行の見方（H-55）**: エンジンが落ちるたびに `exited attempt=N minimal=<bool> phase=before-initialize|after-initialize exit_code=<10進>(0x<16進>|unknown) uptime_ms=… [cause=…]`、続けて `stopped (crash or start failure) attempt=N …`。`phase=before-initialize` は `initialize` に応答する前に落ちた（起動直後の panic・DLL 不足・モデル読み込み前の異常）、`after-initialize` は稼働後のクラッシュ。`exit_code=101` は Rust の panic、`0xC0000135`（STATUS_DLL_NOT_FOUND）は DLL 不足、`0xC0000005` はアクセス違反、`unknown` はこちらから終了させた（initialize タイムアウト等）か取得できなかった。minimal へ切り替わった時は `normal (LLM) launch failures=5 [#1 pre-init code=… up_ms=…; …]` の 1 行に、通常起動の失敗の一覧が出る（全部同じ終了コードで即死なら起動経路の問題、`--no-llm` で起動できて通常だけ落ちるならモデル/LLM 側の問題）。`dropped non-JSON line from engine stdout len=… first=… total=…` は imserver の stdout に JSON ではない行が混ざって捨てたことを示す（内容は記録しない）。
 - **トレイのアイコンが出ない場合**: まず tsf.log を見る。`[tsf] Activate` が無い → DLL が読み込まれていない。`[langbar] AddItem failed hr=…` → その HRESULT を報告。`AddItem ok` なのに出ない → チェックリスト §8.5d の 3〜4（TIPCAP の再登録・サインアウト・入力インジケーターの設定）。エンジンの起動失敗とは独立（エンジンが無くてもアイコンは出る想定）。
 - 「ログを残す機能が足りない」場合は検証結果として報告してください。
 
@@ -383,6 +384,45 @@ Get-Content .\requests.jsonl | & "C:\Program Files\Nagi\imserver.exe" --data-dir
 ```
 
 メソッド一覧（`get_status` を含む）は設計書 §3.2 を参照してください。この手順書では、`get_status` のパラメータを確認できていません（要確認）。
+
+#### imserver の起動失敗（「起動に N 回失敗したので辞書のみで起動します」）の切り分け（H-55）
+
+1. **ログを見る**: `%LOCALAPPDATA%\Nagi\logs\tsf.log` の `[engine]` 行（終了コード・`phase`・生存時間）と、同じ場所の `imserver-<ホストpid>.log`（`tsf.log` の `pid=` と同じ番号。imserver の stderr）。
+2. **imserver を単体で起動し、`initialize` を手で送って 5 秒生存を確認する**（ホストの環境に左右されないよう、`--user-dir` は検証用。標準エラーも捕まえる）:
+
+```powershell
+$exe  = 'C:\Program Files\Nagi\imserver.exe'      # インストール先に合わせる
+$data = Join-Path $env:APPDATA 'Nagi\data'          # tsf.log の [engine] location data_dir=… の値
+$user = Join-Path $env:TEMP 'nagi-verify-user'
+New-Item -ItemType Directory -Force $user | Out-Null
+
+function Test-Imserver([string[]]$extra) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $exe
+  $psi.Arguments = (@('--data-dir', "`"$data`"", '--user-dir', "`"$user`"") + $extra) -join ' '
+  $psi.RedirectStandardInput = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $p = [System.Diagnostics.Process]::Start($psi)
+  $p.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client_name":"nagi-verify","client_version":"0","os":"windows"}}')
+  $p.StandardInput.Flush()
+  $line = $p.StandardOutput.ReadLineAsync()
+  if ($line.Wait(10000)) { "initialize 応答: $($line.Result)" } else { 'initialize 応答なし (10s)' }
+  Start-Sleep -Seconds 5
+  if ($p.HasExited) { "5 秒以内に終了: ExitCode=$($p.ExitCode) (0x{0:X8})" -f $p.ExitCode } else { '5 秒後も生存' }
+  "--- stderr ---"
+  if ($p.HasExited) { $p.StandardError.ReadToEnd() } else { $p.Kill(); $p.StandardError.ReadToEnd() }
+}
+Test-Imserver @()              # 通常（LLM あり）
+Test-Imserver @('--no-llm')    # 辞書のみ
+```
+
+   - 通常だけ落ちる／応答しない → モデル（GGUF の読み込み・llama.cpp の DLL・メモリ）側。`--no-llm` でも落ちる → 起動経路（DLL 不足・引数・データディレクトリ・stderr）側。どちらも単体では正常なのにホスト経由で落ちる → ホスト環境（stderr・環境変数・作業ディレクトリ・セキュリティ製品）側（H-55 の仮説 A は stderr が壊れたハンドルだった場合。この版では stderr を継承しないので解消しているはず）。
+   - 終了コードの読み方: `101` = Rust の panic（stderr の出力に `panicked at` が出る）、`-1073741515`(`0xC0000135`) = DLL が見つからない、`-1073741819`(`0xC0000005`) = アクセス違反。
+3. **イベントビューアー**: `eventvwr.msc` > Windows ログ > アプリケーション で、`imserver.exe` のエラー（ソース: Application Error / Windows Error Reporting）。例外コードと障害モジュール（`llama.dll` / `ggml*.dll` / `KERNELBASE.dll` など）が分かれば原因を絞れる。ホストアプリ側（例: `explorer.exe`、`notepad.exe`）のエラーが同時刻にある場合は DLL 側の問題。
+4. 報告に添えるもの: `tsf.log`（`[engine]` 行）、該当する `imserver-<pid>.log`、上記スクリプトの出力（通常と `--no-llm`）、イベントビューアーのエラーの詳細。
 
 ### 段階 F: 更新・アンインストール（8.7）
 

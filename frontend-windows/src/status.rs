@@ -38,7 +38,10 @@ pub fn toast_for(event: &EngineEvent) -> Option<String> {
         EngineEvent::Started { .. }
         | EngineEvent::Restored { .. }
         | EngineEvent::UpdatePreedit(_)
-        | EngineEvent::UpdateCandidates(_) => None,
+        | EngineEvent::UpdateCandidates(_)
+        | EngineEvent::ProcessExited(_)
+        | EngineEvent::MinimalSwitchReport { .. }
+        | EngineEvent::Diagnostic(_) => None,
     }
 }
 

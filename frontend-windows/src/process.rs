@@ -1,12 +1,29 @@
 //! 子プロセス（imserver）を stdin/stdout の JSON-RPC 通信路として扱う実装。
 
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::client::{ClientError, CloseHandler, LineBuffer, LineHandler, Transport};
+use crate::client::{ClientError, CloseHandler, ExitReport, LineBuffer, LineHandler, Transport};
+use crate::engine_log::{self, LogEntry};
 use crate::supervisor::EngineLauncher;
+
+/// EOF の後、終了コードが取れるまで待つ上限
+const EXIT_WAIT: Duration = Duration::from_millis(1000);
+const EXIT_POLL: Duration = Duration::from_millis(10);
+
+/// imserver の stderr の保存先
+#[derive(Debug, Clone)]
+pub struct StderrLog {
+    /// ログのディレクトリ（`%LOCALAPPDATA%\Nagi\logs`）
+    pub dir: PathBuf,
+    /// ホストプロセスの pid（ファイル名 `imserver-<pid>.log` になる）
+    pub host_pid: u32,
+}
 
 /// 子プロセスの起動設定
 #[derive(Debug, Clone)]
@@ -19,6 +36,9 @@ pub struct ProcessEngineConfiguration {
     pub minimal_extra_arguments: Vec<String>,
     /// 子プロセスの環境変数の追加分（None なら親を継承するだけ）
     pub environment: Option<Vec<(String, String)>>,
+    /// 子プロセスの stderr の保存先。`None`、またはファイルを開けないときは捨てる（`Stdio::null()`）。
+    /// 親の stderr は継承しない（GUI ホストでは壊れていることがあるため）
+    pub stderr_log: Option<StderrLog>,
 }
 
 impl ProcessEngineConfiguration {
@@ -29,6 +49,7 @@ impl ProcessEngineConfiguration {
             arguments: Vec::new(),
             minimal_extra_arguments: vec!["--no-llm".into()],
             environment: None,
+            stderr_log: None,
         }
     }
 }
@@ -37,13 +58,70 @@ impl ProcessEngineConfiguration {
 #[derive(Debug, Clone)]
 pub struct ProcessEngineLauncher {
     configuration: ProcessEngineConfiguration,
+    /// 古いログの掃除を済ませたか（ホストごとに 1 回）
+    cleaned: Arc<AtomicBool>,
 }
 
 impl ProcessEngineLauncher {
     /// 設定を受け取って作る
     pub fn new(configuration: ProcessEngineConfiguration) -> Self {
-        Self { configuration }
+        Self {
+            configuration,
+            cleaned: Arc::new(AtomicBool::new(false)),
+        }
     }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// 古い `imserver-*.log` を消す（失敗は無視）
+fn clean_old_logs(log: &StderrLog) {
+    let Ok(read) = fs::read_dir(&log.dir) else {
+        return;
+    };
+    let entries: Vec<LogEntry> = read
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let modified = e.metadata().ok()?.modified().ok()?;
+            let secs = modified.duration_since(UNIX_EPOCH).ok()?.as_secs();
+            Some(LogEntry {
+                name,
+                modified_unix_secs: secs,
+            })
+        })
+        .collect();
+    let current = engine_log::file_name(log.host_pid);
+    for name in engine_log::files_to_delete(
+        &entries,
+        &current,
+        unix_now(),
+        engine_log::KEEP_FILES,
+        engine_log::MAX_AGE_SECS,
+    ) {
+        let _ = fs::remove_file(log.dir.join(name));
+    }
+}
+
+/// stderr の保存先を開く（追記。上限超えなら作り直す）。開けなければ `None`
+fn open_stderr_file(log: &StderrLog, minimal: bool) -> Option<File> {
+    fs::create_dir_all(&log.dir).ok()?;
+    let path: PathBuf = log.dir.join(engine_log::file_name(log.host_pid));
+    let recreate = fs::metadata(&path).is_ok_and(|m| engine_log::should_recreate(m.len()));
+    let mut options = OpenOptions::new();
+    options.create(true);
+    if recreate {
+        options.write(true).truncate(true);
+    } else {
+        options.append(true);
+    }
+    let mut file = options.open(&path).ok()?;
+    let _ = file.write_all(engine_log::launch_header(unix_now(), log.host_pid, minimal).as_bytes());
+    Some(file)
 }
 
 impl EngineLauncher for ProcessEngineLauncher {
@@ -57,7 +135,13 @@ impl EngineLauncher for ProcessEngineLauncher {
         if let Some(env) = &c.environment {
             command.envs(env.iter().map(|(k, v)| (k, v)));
         }
-        Ok(Box::new(ProcessTransport::new(command)))
+        let stderr = c.stderr_log.as_ref().and_then(|log| {
+            if !self.cleaned.swap(true, Ordering::SeqCst) {
+                clean_old_logs(log);
+            }
+            open_stderr_file(log, minimal)
+        });
+        Ok(Box::new(ProcessTransport::with_stderr(command, stderr)))
     }
 }
 
@@ -73,6 +157,13 @@ struct Inner {
     child: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
     handlers: Mutex<Handlers>,
+    /// stderr の保存先（`None` なら捨てる）
+    stderr: Mutex<Option<File>>,
+    started_at: Mutex<Option<Instant>>,
+    /// 自発的な終了の記録（`notify_close` より前に確定する）
+    exit: Mutex<Option<ExitReport>>,
+    /// こちらから終了させている（終了コードを記録しない）
+    terminating: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -80,6 +171,33 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Inner {
+    /// 通信路が EOF になった子プロセスの終了コードと生存時間を記録する（こちらから終了させた場合を除く）
+    fn record_exit(&self) {
+        let deadline = Instant::now() + EXIT_WAIT;
+        loop {
+            if self.terminating.load(Ordering::SeqCst) {
+                return;
+            }
+            let status = match lock(&self.child).as_mut() {
+                Some(child) => child.try_wait(),
+                None => return,
+            };
+            match status {
+                Ok(Some(status)) => {
+                    let lifetime = lock(&self.started_at).map_or(Duration::ZERO, |t| t.elapsed());
+                    *lock(&self.exit) = Some(ExitReport {
+                        code: status.code(),
+                        lifetime,
+                    });
+                    return;
+                }
+                // stdout だけ閉じて生きている・取得に失敗: 待ち切ったら諦める
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(EXIT_POLL),
+                Ok(None) | Err(_) => return,
+            }
+        }
+    }
+
     fn notify_close(&self) {
         let handler = {
             let mut h = lock(&self.handlers);
@@ -103,12 +221,21 @@ pub struct ProcessTransport {
 impl ProcessTransport {
     /// 起動前のコマンドを受け取る。stdin/stdout は [`start`](Transport::start) でパイプにする
     pub fn new(command: Command) -> Self {
+        Self::with_stderr(command, None)
+    }
+
+    /// stderr の保存先つきで作る。`None` なら子の stderr は捨てる（継承しない）
+    pub fn with_stderr(command: Command, stderr: Option<File>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 command: Mutex::new(Some(command)),
                 child: Mutex::new(None),
                 stdin: Mutex::new(None),
                 handlers: Mutex::default(),
+                stderr: Mutex::new(stderr),
+                started_at: Mutex::new(None),
+                exit: Mutex::new(None),
+                terminating: AtomicBool::new(false),
             }),
         }
     }
@@ -125,11 +252,15 @@ impl Transport for ProcessTransport {
         let mut command = lock(&self.inner.command)
             .take()
             .ok_or_else(|| ClientError::SendFailed("既に起動済みです".into()))?;
-        // stderr は親から継承する（サーバーは入力内容をログに出さない方針）
+        // stderr は継承しない（GUI ホストの stderr は壊れていることがあり、子の最初のログ出力で
+        // 落ちうる）。保存先のファイルへ、無ければ捨てる。サーバーは入力内容をログに出さない方針
+        let stderr = lock(&self.inner.stderr)
+            .take()
+            .map_or_else(Stdio::null, Stdio::from);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(stderr);
         platform::configure_command(&mut command);
         let mut child = command
             .spawn()
@@ -140,6 +271,7 @@ impl Transport for ProcessTransport {
         };
         *lock(&self.inner.stdin) = Some(stdin);
         *lock(&self.inner.child) = Some(child);
+        *lock(&self.inner.started_at) = Some(Instant::now());
 
         let inner = self.inner.clone();
         std::thread::spawn(move || {
@@ -159,6 +291,7 @@ impl Transport for ProcessTransport {
                     }
                 }
             }
+            inner.record_exit();
             inner.notify_close();
         });
         Ok(())
@@ -178,12 +311,17 @@ impl Transport for ProcessTransport {
 
     fn terminate(&self) {
         // stdin を閉じてから終了させる（子が EOF で自発終了する場合に備える）
+        self.inner.terminating.store(true, Ordering::SeqCst);
         drop(lock(&self.inner.stdin).take());
         if let Some(mut child) = lock(&self.inner.child).take() {
             let _ = child.kill();
             let _ = child.wait();
         }
         self.inner.notify_close();
+    }
+
+    fn exit_report(&self) -> Option<ExitReport> {
+        *lock(&self.inner.exit)
     }
 }
 
@@ -246,6 +384,119 @@ mod tests {
         client.start().unwrap();
         crx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(client.is_closed());
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nagi-process-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn sh(script: &str) -> Command {
+        let mut c = Command::new("sh");
+        c.args(["-c", script]);
+        c
+    }
+
+    fn wait_closed(client: &JsonRpcClient) {
+        for _ in 0..500 {
+            if client.is_closed() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("close が通知されない");
+    }
+
+    #[test]
+    fn exit_code_and_lifetime_are_reported_before_close() {
+        let transport = ProcessTransport::new(sh("sleep 0.1; exit 7"));
+        let client = JsonRpcClient::new(Box::new(transport), Duration::from_millis(500));
+        client.start().unwrap();
+        wait_closed(&client);
+        let report = client.exit_report().expect("終了コードが記録される");
+        assert_eq!(report.code, Some(7));
+        assert!(report.lifetime >= Duration::from_millis(90), "{report:?}");
+    }
+
+    #[test]
+    fn terminated_by_us_has_no_exit_report() {
+        let transport = ProcessTransport::new(sh("sleep 30"));
+        let client = JsonRpcClient::new(Box::new(transport), Duration::from_millis(500));
+        client.start().unwrap();
+        client.close();
+        assert_eq!(client.exit_report(), None);
+    }
+
+    #[test]
+    fn stderr_goes_to_the_per_host_file_and_not_to_the_parent() {
+        let dir = temp_dir("stderr");
+        let mut configuration = ProcessEngineConfiguration::new("sh");
+        configuration.arguments = vec!["-c".into(), "echo boom >&2; exit 3".into()];
+        configuration.stderr_log = Some(StderrLog {
+            dir: dir.join("logs"),
+            host_pid: 4242,
+        });
+        let launcher = ProcessEngineLauncher::new(configuration);
+        let t = launcher.make_connection(true).unwrap();
+        let client = JsonRpcClient::new(t, Duration::from_millis(500));
+        client.start().unwrap();
+        wait_closed(&client);
+        let text = fs::read_to_string(dir.join("logs").join("imserver-4242.log")).unwrap();
+        assert!(
+            text.contains("[launch]") && text.contains("minimal=true"),
+            "{text}"
+        );
+        assert!(text.contains("boom"), "{text}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unwritable_log_dir_falls_back_to_null_stderr() {
+        let dir = temp_dir("fallback");
+        fs::create_dir_all(&dir).unwrap();
+        // ディレクトリの場所にファイルがあるので作れない
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, "x").unwrap();
+        let mut configuration = ProcessEngineConfiguration::new("sh");
+        configuration.arguments = vec!["-c".into(), "echo boom >&2; exit 0".into()];
+        configuration.stderr_log = Some(StderrLog {
+            dir: blocker.join("logs"),
+            host_pid: 1,
+        });
+        let launcher = ProcessEngineLauncher::new(configuration);
+        let client = JsonRpcClient::new(
+            launcher.make_connection(false).unwrap(),
+            Duration::from_millis(500),
+        );
+        client.start().unwrap();
+        wait_closed(&client);
+        assert_eq!(client.exit_report().unwrap().code, Some(0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_logs_are_cleaned_once_per_launcher() {
+        let dir = temp_dir("clean");
+        fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("imserver-1.log");
+        fs::write(&old, "old").unwrap();
+        let file = File::options().write(true).open(&old).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(1000))
+            .unwrap();
+        drop(file);
+        fs::write(dir.join("tsf.log"), "keep").unwrap();
+        let mut configuration = ProcessEngineConfiguration::new("true");
+        configuration.stderr_log = Some(StderrLog {
+            dir: dir.clone(),
+            host_pid: 2,
+        });
+        let launcher = ProcessEngineLauncher::new(configuration);
+        launcher.make_connection(false).unwrap();
+        assert!(!old.exists());
+        assert!(dir.join("tsf.log").exists());
+        assert!(dir.join("imserver-2.log").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

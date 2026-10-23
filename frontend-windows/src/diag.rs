@@ -7,8 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::client::ClientError;
-use crate::supervisor::EngineEvent;
+use crate::client::{ClientDiagnostic, ClientError, ExitReport};
+use crate::supervisor::{EngineEvent, ExitPhase, FailureRecord};
 
 /// ログファイルの上限（超えたら 1 世代前へローテーションする）
 pub const MAX_LOG_BYTES: u64 = 256 * 1024;
@@ -99,6 +99,70 @@ fn launch_failure_kind(error: &ClientError) -> &'static str {
     }
 }
 
+/// 終了コードの表記（`101(0x00000065)`。取得できなければ `unknown`）
+pub fn exit_code_text(exit: Option<&ExitReport>) -> String {
+    match exit.and_then(|e| e.code) {
+        Some(code) => format!("{code}({})", hresult_text(code)),
+        None => "unknown".into(),
+    }
+}
+
+fn phase_text(phase: ExitPhase) -> &'static str {
+    match phase {
+        ExitPhase::BeforeInitialize => "before-initialize",
+        ExitPhase::AfterInitialize => "after-initialize",
+    }
+}
+
+/// 失敗 1 回分の詳細（`ProcessExited` の本文）
+fn describe_failure(f: &FailureRecord) -> String {
+    let mut text = format!(
+        "exited attempt={} minimal={} phase={} exit_code={}",
+        f.attempt,
+        f.minimal,
+        phase_text(f.phase),
+        exit_code_text(f.exit.as_ref())
+    );
+    if let Some(exit) = &f.exit {
+        text.push_str(&format!(" uptime_ms={}", exit.lifetime.as_millis()));
+    }
+    if let Some(error) = &f.error {
+        text.push_str(&format!(" cause={}", launch_failure_kind(error)));
+    }
+    text
+}
+
+/// minimal へ切り替えたときの、通常起動の失敗の一覧（1 行。直近の数件）
+fn describe_failure_summary(failures: &[FailureRecord]) -> String {
+    const SHOWN: usize = 6;
+    let skipped = failures.len().saturating_sub(SHOWN);
+    let items: Vec<String> = failures
+        .iter()
+        .skip(skipped)
+        .map(|f| {
+            let up = f
+                .exit
+                .as_ref()
+                .map_or("?".into(), |e| e.lifetime.as_millis().to_string());
+            format!(
+                "#{} {} code={} up_ms={up}",
+                f.attempt,
+                match f.phase {
+                    ExitPhase::BeforeInitialize => "pre-init",
+                    ExitPhase::AfterInitialize => "post-init",
+                },
+                exit_code_text(f.exit.as_ref())
+            )
+        })
+        .collect();
+    format!(
+        "normal (LLM) launch failures={} [{}]{}",
+        failures.len(),
+        items.join("; "),
+        if skipped > 0 { " (older omitted)" } else { "" }
+    )
+}
+
 /// エンジンのイベントのログ文言。記録しないイベント（preedit・候補の更新）は `None`
 pub fn describe_event(event: &EngineEvent) -> Option<(&'static str, String)> {
     Some(match event {
@@ -139,6 +203,16 @@ pub fn describe_event(event: &EngineEvent) -> Option<(&'static str, String)> {
                 "notify level={:?} code={}",
                 params.level,
                 params.code.as_deref().unwrap_or("-")
+            ),
+        ),
+        EngineEvent::ProcessExited(f) => ("engine", describe_failure(f)),
+        EngineEvent::MinimalSwitchReport { failures } => {
+            ("engine", describe_failure_summary(failures))
+        }
+        EngineEvent::Diagnostic(ClientDiagnostic::MalformedLine { len, first, count }) => (
+            "engine",
+            format!(
+                "dropped non-JSON line from engine stdout len={len} first={first} total={count}"
             ),
         ),
         EngineEvent::UpdatePreedit(_) | EngineEvent::UpdateCandidates(_) => return None,
@@ -216,6 +290,84 @@ mod tests {
         assert!(
             text.contains("code=-32001") && !text.contains("secret"),
             "{text}"
+        );
+    }
+
+    fn record(attempt: u32, phase: ExitPhase, code: Option<i32>) -> FailureRecord {
+        FailureRecord {
+            attempt,
+            minimal: false,
+            phase,
+            exit: code.map(|code| ExitReport {
+                code: Some(code),
+                lifetime: Duration::from_millis(120),
+            }),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn process_exit_is_described_with_code_phase_and_uptime() {
+        let before = record(1, ExitPhase::BeforeInitialize, Some(101));
+        let text = describe_event(&EngineEvent::ProcessExited(before))
+            .unwrap()
+            .1;
+        assert!(
+            text.contains("phase=before-initialize")
+                && text.contains("exit_code=101(0x00000065)")
+                && text.contains("uptime_ms=120")
+                && text.contains("minimal=false"),
+            "{text}"
+        );
+        let crash = record(2, ExitPhase::AfterInitialize, Some(0xC000_0005_u32 as i32));
+        let text = describe_event(&EngineEvent::ProcessExited(crash))
+            .unwrap()
+            .1;
+        assert!(
+            text.contains("after-initialize") && text.contains("0xC0000005"),
+            "{text}"
+        );
+        // 終了コードが取れない（こちらから終了させた・起動できなかった）
+        let mut none = record(3, ExitPhase::BeforeInitialize, None);
+        none.error = Some(ClientError::Timeout);
+        let text = describe_event(&EngineEvent::ProcessExited(none)).unwrap().1;
+        assert!(
+            text.contains("exit_code=unknown") && text.contains("cause=initialize timeout"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn minimal_switch_summary_lists_failures() {
+        let failures: Vec<FailureRecord> = (1..=5)
+            .map(|i| record(i, ExitPhase::BeforeInitialize, Some(101)))
+            .collect();
+        let text = describe_event(&EngineEvent::MinimalSwitchReport { failures })
+            .unwrap()
+            .1;
+        assert!(text.contains("failures=5") && text.contains("#1 pre-init code=101"));
+        assert!(text.contains("#5"), "{text}");
+        assert!(!text.contains("omitted"));
+        let many: Vec<FailureRecord> = (1..=9)
+            .map(|i| record(i, ExitPhase::AfterInitialize, None))
+            .collect();
+        let text = describe_failure_summary(&many);
+        assert!(text.contains("failures=9") && text.contains("omitted") && !text.contains("#1 "));
+        assert!(text.contains("post-init code=unknown"));
+    }
+
+    #[test]
+    fn malformed_line_diagnostic_has_no_content() {
+        let text = describe_event(&EngineEvent::Diagnostic(ClientDiagnostic::MalformedLine {
+            len: 11,
+            first: "alpha",
+            count: 2,
+        }))
+        .unwrap()
+        .1;
+        assert_eq!(
+            text,
+            "dropped non-JSON line from engine stdout len=11 first=alpha total=2"
         );
     }
 

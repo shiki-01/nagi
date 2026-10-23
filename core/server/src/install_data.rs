@@ -102,11 +102,11 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
         let fetch = format!("{prefix}_fetch");
         match p {
             Progress::Skipped { file, .. } => {
-                eprintln!("imserver: スキップ: {file} (SHA-256 一致)");
+                crate::elog!("imserver: スキップ: {file} (SHA-256 一致)");
                 emit(json!({"stage": fetch, "skipped": true}));
             }
             Progress::Download { file, .. } => {
-                eprintln!("imserver: ダウンロード中: {file}");
+                crate::elog!("imserver: ダウンロード中: {file}");
                 *last = 0;
                 emit(json!({"stage": fetch, "bytes": 0}));
             }
@@ -118,7 +118,7 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
             }
             Progress::BuildStart => emit(json!({"stage": format!("{prefix}_build")})),
             Progress::BuildDone { bytes, seconds, .. } => {
-                eprintln!(
+                crate::elog!(
                     "imserver: {prefix} の索引を組み立てました ({bytes} bytes, {seconds:.1}s)"
                 );
             }
@@ -135,7 +135,7 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
         let mut downloaded = false;
         nagi_datafetch::fetch_mozc(&mozc_dir, &mut |p| match p {
             Progress::Skipped { file, index, count } => {
-                eprintln!("imserver: スキップ: {file} (SHA-256 一致)");
+                crate::elog!("imserver: スキップ: {file} (SHA-256 一致)");
                 emit(
                     json!({"stage": "dict_fetch", "file": file, "index": index, "count": count, "skipped": true}),
                 );
@@ -144,7 +144,7 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
                 file, index, count, ..
             } => {
                 downloaded = true;
-                eprintln!("imserver: ダウンロード中: {file} ({index}/{count})");
+                crate::elog!("imserver: ダウンロード中: {file} ({index}/{count})");
                 emit(json!({"stage": "dict_fetch", "file": file, "index": index, "count": count}));
             }
             _ => {}
@@ -157,11 +157,11 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
             emit(json!({"stage": "dict_build"}));
             nagi_datafetch::build_mozc_dict(&mozc_dir, &dict_path, &mut |p| {
                 if let Progress::BuildDone { bytes, seconds, .. } = p {
-                    eprintln!("imserver: 辞書を組み立てました ({bytes} bytes, {seconds:.1}s)");
+                    crate::elog!("imserver: 辞書を組み立てました ({bytes} bytes, {seconds:.1}s)");
                 }
             })?;
         } else {
-            eprintln!("imserver: 辞書は最新のため組み立てをスキップ");
+            crate::elog!("imserver: 辞書は最新のため組み立てをスキップ");
         }
 
         // 3. モデルの取得
@@ -174,18 +174,18 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
             let mut last_emitted = 0u64;
             nagi_datafetch::fetch_model(kind, &args.data_dir.join("models"), &mut |p| match p {
                 Progress::Skipped { file, .. } => {
-                    eprintln!("imserver: スキップ: {file} (SHA-256 一致)");
+                    crate::elog!("imserver: スキップ: {file} (SHA-256 一致)");
                     let total = kind.info().size;
                     emit(
                         json!({"stage": "model_fetch", "bytes": total, "total": total, "skipped": true}),
                     );
                 }
                 Progress::Mismatched { file } => {
-                    eprintln!("imserver: {file} は SHA-256 が不一致のため再取得します");
+                    crate::elog!("imserver: {file} は SHA-256 が不一致のため再取得します");
                 }
                 Progress::Download { file, .. } => {
                     changed = true;
-                    eprintln!("imserver: ダウンロード中: {file}");
+                    crate::elog!("imserver: ダウンロード中: {file}");
                     last_emitted = 0;
                     emit(json!({"stage": "model_fetch", "bytes": 0, "total": kind.info().size}));
                 }
@@ -214,7 +214,7 @@ pub fn run(args: &InstallArgs) -> Result<(), String> {
         }) {
             Ok(c) => changed |= c,
             Err(message) => {
-                eprintln!("imserver: 警告: 原語データを入れられませんでした: {message}");
+                crate::elog!("imserver: 警告: 原語データを入れられませんでした: {message}");
                 emit(json!({"stage": "warning", "message": message}));
             }
         }

@@ -207,6 +207,13 @@ ed25519の実装（`ed25519-dalek`）はOS依存のCライブラリを使わな�
 - [ ] 右クリックでメニュー（ひらがな / 英数・状態・「設定ファイルを開く…」）、左クリックでひらがな ⇄ 英数。エンジン起動に失敗している環境（`imserver.exe` が無い・初期化失敗）でもアイコンとメニューは出る（メニューは「変換エンジンに接続していません」）
 - [ ] tsf.log の内容: `[engine] location exe=… exists=…`（imserver の置き場）、`starting` / `started …` / `launch failed: spawn failed|initialize timeout|initialize failed|…` / `stopped (crash or start failure)` / `entering minimal profile`。複数のホストプロセスが同時に書いても行が壊れない
 
+### 8.5e imserver の起動失敗（「起動に N 回失敗したので辞書のみで起動します」）の診断（H-55。実機で一度も動かしていない）
+- [ ] 修正後の版で、通常のホスト（メモ帳・エクスプローラー・Office 等）から Nagi を選んでも、起動失敗のトーストが出ずに LLM 付きで起動する（`tsf.log` に `started … profile=…` が出て `entering minimal profile` が無い）
+- [ ] `%LOCALAPPDATA%\Nagi\logs\imserver-<ホストpid>.log` が作られ、`[launch] imserver launch minimal=false` の後ろに `imserver: プロファイル …` などの stderr が出ている（入力内容が出ていない）。pid は `tsf.log` の `pid=` と一致する
+- [ ] それでも失敗する場合: `tsf.log` の `exited … phase=… exit_code=…` と `normal (LLM) launch failures=…` の一覧、`imserver-<pid>.log` を採取する。`docs/windows-verification.md` の「imserver の起動失敗の切り分け」の PowerShell（通常と `--no-llm` の比較、5 秒生存確認）とイベントビューアーも実施する
+- [ ] ログの掃除: 21 個以上の `imserver-*.log` があるとき、古いものから消えて 20 個になる（現在のホストのファイルは消えない）。7 日より古いものは消える
+- [ ] stdout に JSON 以外の行が混ざる環境では `dropped non-JSON line … len=… first=… total=…` が tsf.log に出る（内容は出ない）
+
 ### 8.6 設計の再検討事項
 - ホストプロセスごとに imserver を起動する方式のメモリ・起動時間。名前付きパイプ + 常駐ブローカーへの変更要否（H-39）。**判断に必要な実測項目と設計案は decisions.md H-43 §4**（ホスト 1/5/10 個のメモリ合計、`initialize` の所要、パイプ往復の増分、`learning.tsv` の取りこぼし、AppContainer からの接続可否、再接続の所要）
 
