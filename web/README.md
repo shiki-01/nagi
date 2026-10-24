@@ -9,7 +9,15 @@
   （TypeScript 型と検証は `src/lib/keyboard/types.ts` / `validate.ts`。`keyboard.test.ts` が ajv でスキーマと突き合わせる）
 - プリセットは `../config/keyboard/presets/*.json` をビルド時に取り込む（無ければサンプル 1 つ）
 - 見た目の指定（`look` ほか。仕様は `../docs/keyboard-style-spec.md`）の解決は `src/lib/keyboard/look-resolve.ts`。iOS の `KeyLookResolver.swift` と、
-  `../config/keyboard/test-looks/*.json` の共有テストベクタで同じ結果になることを確かめる（`look.test.ts`）。編集 GUI は未実装（フェーズ 5）
+  `../config/keyboard/test-looks/*.json` の共有テストベクタで同じ結果になることを確かめる（`look.test.ts`）。編集 GUI はインスペクタの「詳細設定」タブ（下記）
+- **エディタの使い方（`/custom-keyboard` のインスペクタ「詳細設定」タブ）**:
+  - 範囲: 「全体」「行」「キー」（キャンバスで選ぶと「キー」に追従。複数選択は全部に同じ値を書く）。その下の状態タブ（通常 / 押下 / 離した直後 / 長押し / 移動中 / フリック中 / 入力中 / Shift / Caps）で、その状態の間だけの見た目を編集する。「全体」の状態タブは `rules`（対象: 全キー / 他のキー（移動中のみ）/ 指定キー / 役割 / 操作。「対象を追加」で複数、下の指定が勝つ）、「キー」の状態タブはそのキーの `states`
+  - プロパティ行: 左のチェックで「指定する」（外すと省略＝継承。継承される値を薄く表示）、右端の「リセット」でその指定を消す。範囲外の数値は書き込まずエラー表示（クランプしない）。色は #hex / @トークン、「ライト／ダークを分ける」で別の色。`label` / `icon` は状態の中だけ
+  - 「全体」の「通常」: 全キー共通・役割ごと・`metrics`・`background`・画像（PNG / JPEG。長辺 1024px 以内に縮小して data URI で JSON に埋め込む。1 枚 256KB・合計 768KB・4 枚まで）。画像を含むレイアウトは URL では渡せない
+  - プレビューの状態（キャンバス上部）: 押下などをオンにすると、選択中のキー（無ければ全キー）／全キーにその状態の見た目を CSS で近似して表示（実機とは細部が異なる）。外観（ライト/ダーク）も切り替えられる
+  - リセット: プロパティ単位（行の「リセット」）・キー/行/状態単位・「すべての見た目をリセット」
+  - JSON パネルのテキストは直接編集でき、フォームとプレビューに即反映される（構文エラーの間は反映されず、直前の内容が書き出し対象）。検証は error（書き出しをブロック）と warning（無視される値。書き出せる）に分けて表示し、「その場所を開く」で該当のタブへ移る
+  - 実装: ops は `look-ops.ts`、プレビュー変換は `look-css.ts`、画像の計算は `look-assets.ts`（canvas は `look-image.ts`）、UI は `LookInspector` / `LookField` / `RulesEditor` / `ImageAssets` ほか
 - レイアウト JSON の schema 1 → 2 の移行: `node scripts/migrate-layout-v2.mjs <ファイル or ディレクトリ>...`（冪等）
 
 ## デザイン
