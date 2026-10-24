@@ -74,6 +74,18 @@ enum LayoutGeometry {
         )
     }
 
+    /// 行だけの高さ。行の高さは高さの比（`row.height`）× キー 1 行の高さ、行同士の間隔は `rowSpacing`
+    static func rowsHeight(layout: KeyboardLayoutDef, keyHeight: Double, rowSpacing: Double) -> Double {
+        let rows = layout.rows.reduce(0.0) { $0 + keyHeight * $1.height }
+        return rows + rowSpacing * Double(max(layout.rows.count - 1, 0))
+    }
+
+    /// キー領域の高さ。絵文字は一覧を含め、キー 4 行分に揃える
+    static func padHeight(layout: KeyboardLayoutDef, keyHeight: Double, rowSpacing: Double) -> Double {
+        if layout.mode == .emoji { return keyHeight * 4 + rowSpacing * 3 }
+        return rowsHeight(layout: layout, keyHeight: keyHeight, rowSpacing: rowSpacing)
+    }
+
     /// `text` キーの文字が英字 1 文字ならその小文字。シフト時の表示（大文字）には依存しない
     static func letterLabel(_ key: LayoutKeyDef) -> String? {
         guard key.kind == .text, let text = key.text ?? key.label else { return nil }

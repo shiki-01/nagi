@@ -71,9 +71,10 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 ## 見た目の指定（`look` / `roles` / `rules` / `states` / `metrics` / `background` / `assets`）
 
 キーの色・文字・角丸・影・透明度・背景画像、押している間などの状態ごとの見た目をレイアウトから指定できる。仕様は `docs/keyboard-style-spec.md`
-（決定は `docs/decisions.md` H-65）。**実装は段階的**: 現在は schema 2 の項目・検証・解決関数（Swift `Shared/KeyLookResolver.swift` と
-web `look-resolve.ts`。共有テストベクタ `config/keyboard/test-looks/`）まで。iOS の描画への反映（フェーズ 2〜4）とサイトの編集 GUI（フェーズ 5）は未実装で、
-指定しても現時点では見た目は変わらない。
+（決定は `docs/decisions.md` H-65・H-66）。**実装は段階的**: schema 2 の項目・検証・解決関数（Swift `Shared/KeyLookResolver.swift` と
+web `look-resolve.ts`。共有テストベクタ `config/keyboard/test-looks/`）に加え、iOS の描画への反映（フェーズ 2: 全体 / 行 / 役割 / キーの `look`、
+`metrics`、`background` の色）まで実装済み。状態トリガー（フェーズ 3）・背景画像（フェーズ 4）・サイトの編集 GUI（フェーズ 5）は未実装で、
+`states` / `rules` / `fillImage` を指定しても現時点では見た目は変わらない（`pressed` の組み込み既定 `fillOpacity` 0.6 だけ効く）。
 
 - 見た目の値の不正（範囲外・型違い・不正な色・未知の名前）は、そのプロパティだけ無視して下位の値（最終的には現行の見た目）に落ちる。レイアウト全体は無効にしない（サイトのエディタは警告として出す）
 - 資源の上限はエラーにして取り込みを拒否する: `assets` は 4 枚・1 枚 256KB・合計 768KB・PNG/JPEG の data URI、`rules` は 32 個まで、`rules[].target.keys` は 24 個まで

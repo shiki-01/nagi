@@ -1753,3 +1753,20 @@ H-41・H-42 の残件のうち、実機なしで作れるものを実装し、�
   9. 長押しポップアップの項目は `role` / `look` を持たない（web の検証は未知のフィールドとしてエラー。Swift は従来どおり読み飛ばす）。仕様 §12.1 の「popup の `style`→`role`（あれば）」は、移行スクリプトが防御的に変換するだけ
 - **テスト**: Swift `KeyLookTests`（decode・色・範囲・既定値）/ `KeyLookVectorTests`（共有ベクタ）/ `PresetLayoutTests` / `LayoutValidationTests`（assets・rules の上限）/ `LayoutGeometryTests`（間隔の分離）。web `look.test.ts`（ベクタ・色・範囲・検証・スキーマ一致・移行スクリプト・同梱レイアウト）/ `keyboard.test.ts`
 - **未確認**: Swift は未コンパイル（CI の `ios-test` / `ios-testflight` で確認）。実機での既存レイアウトの表示は未変更のはずだが、`role` 改名と `KeyboardLayoutDef` の `Decodable` 化（`Codable` から変更。エンコードは使っていない）の影響を実機で確認する。作者の手元のユーザーレイアウト（App Group の `keyboard/layouts/*.json`）は書き出し → 移行スクリプト → 取り込み直しが必要（schema 1 は読まれず同梱の既定にフォールバックする）
+
+### H-66. キーボードの「スタイルとトリガー」: iOS の描画（フェーズ 2〜4。2026-10-24、ユーザー要望、要実機確認・要 CI 確認）
+
+H-65 の続き。仕様は `docs/keyboard-style-spec.md`（§7、§9 ②〜④）。
+
+- **フェーズ 2（描画）**:
+  - `KeyFace` を削除し、描画を `StyledKeyFace`（`Keyboard/KeyLookRenderer.swift`）の 1 経路にした。`KeyFaceHost` が `LookResolver.resolve` の結果を `KeyRenderParams`（`Shared/KeyRenderParams.swift`。解決結果 → 具体的な描画値の純粋関数。指定が無いプロパティは `LookDefaults`＝現行の値）に変換して渡す。`StyledKeyFace` は `Equatable`（`.equatable()`）
+  - 描画順は影つきの背景色 → 枠線（内側）→ 文字 / アイコン。`inset` で縮めた領域に描き、全体に `opacity` / `scaleEffect` / `offset` を掛ける。**当たり判定**は、透明な層（`Color.clear` + `contentShape(Rectangle())`）がセル全体で持ち、見た目の層は `allowsHitTesting(false)` にして `scale` / `offset` / `inset` が当たり判定へ影響しないようにした（SwiftUI は `scaleEffect` / `offset` の後の位置で当たり判定をするため）
+  - `fontSize` を指定するとアイコンの大きさも同じになる。未指定のアイコンは 17pt（現行）
+  - 押下中の背景 0.6 は `LookResolver` の組み込み `pressed` 既定として再現（各キー View は `isPressed` 等を `local: [.pressed]` で渡す）
+  - `metrics`: `KeyboardModel.metrics`（`ResolvedMetrics`＝レイアウトの `metrics` が設定 `keyboard.key_spacing_pt` と外周 6pt を項目ごとに上書き）を `LayoutPad` / `RowView` / `ExpandedCandidates` / 外周の `padding` / コアへ渡すキー矩形（`sendLayoutGeometry`）に使う。高さ計算は `LayoutGeometry.padHeight` / `rowsHeight`（`rowSpacing` を受ける純粋関数）へ移した
+  - `background`: ルートの最背面に `KeyboardBackgroundView`（`fill` × `fillOpacity`。指定が無ければ塗らない）
+- **迷った判断（フェーズ 2）**:
+  1. 当たり判定を保つため、見た目を `overlay` に分ける構造にした（`ZStack` の背景 + `.contentShape` だけだと `scaleEffect` / `offset` で当たり判定が動くため）。ポップアップ（長押し・フリックの案内）は外側の `overlay` のままなので影響を受けない
+  2. `metrics` の `keySpacing` / `rowSpacing` が設定より大きいとキー領域がキーボード全体の高さ（設定の倍率で決まる固定値）を超え得る。行の高さは固定のまま（縮めない）なので、`metrics` を大きくするときは作者が行の高さの比を下げる前提にした。自動で縮める処理は入れていない
+  3. `background` は候補バーの背面にも敷く（仕様 §6.4）が、候補バー自身が不透明な `systemGray5` を塗るので、候補バーの部分は見えない
+  4. 片手モードでは `padding` がキー領域の外周にだけ掛かる（従来の `padding(6)` と同じ位置）

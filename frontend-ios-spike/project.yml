@@ -178,6 +178,7 @@ targets:
       # 見た目（look）の型・解決。UIKit / SwiftUI に依存しない純粋な部分
       - path: Shared/KeyLook.swift
       - path: Shared/KeyLookResolver.swift
+      - path: Shared/KeyRenderParams.swift
       - path: Shared/IOSSettings.swift
       - path: Shared/DiagLog.swift
       - path: Shared/SharedStore.swift

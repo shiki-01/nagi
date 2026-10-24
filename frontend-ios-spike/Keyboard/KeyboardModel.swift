@@ -48,6 +48,10 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var selectedCandidate = -1
     /// 表示中のレイアウト（JSON から読んだもの。`Shared/KeyboardLayout.swift`）
     @Published private(set) var layoutDef: KeyboardLayoutDef
+    /// キー間・行間・外周の余白。設定 `keyboard.key_spacing_pt` を、レイアウトの `metrics` が上書きする
+    var metrics: ResolvedMetrics {
+        ResolvedMetrics.make(layoutDef.metrics, settingSpacing: NagiKeyMetrics.keySpacing)
+    }
     /// 日本語入力の流れか（かなから数字・記号へ切り替えて来た間は true。数字・記号をコアに通すかの判定に使う）
     private var japaneseContext = true
     /// 英字のシフト（1 回で次の 1 文字、2 回連続で Caps Lock）
@@ -1002,8 +1006,9 @@ final class KeyboardModel: ObservableObject {
 
     private func sendLayoutGeometry() {
         guard let session = session, let size = layoutGeometrySize else { return }
+        let spacing = metrics
         guard let snapshot = LayoutGeometry.snapshot(
-            layout: layoutDef, size: size, keySpacing: NagiKeyMetrics.keySpacing, rowSpacing: NagiKeyMetrics.keySpacing
+            layout: layoutDef, size: size, keySpacing: spacing.keySpacing, rowSpacing: spacing.rowSpacing
         ),
               snapshot != lastSentGeometry else { return }
         lastSentGeometry = snapshot

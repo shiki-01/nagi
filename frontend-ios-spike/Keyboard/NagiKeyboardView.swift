@@ -13,22 +13,23 @@ struct NagiKeyboardView: View {
             CandidateBar(model: model, onShowProbes: onShowProbes)
             if model.ios.oneHanded == "off" {
                 padArea
-                    .padding(6)
+                    .padding(CGFloat(model.metrics.padding))
             } else {
                 // 片手モード: キー部分を左または右に寄せる（候補バーは全幅のまま）
                 GeometryReader { geo in
                     HStack(spacing: 0) {
                         if model.ios.oneHanded == "right" { OneHandedButtons(model: model) }
                         padArea
-                            .padding(6)
+                            .padding(CGFloat(model.metrics.padding))
                             .frame(width: geo.size.width * CGFloat(model.ios.oneHandedWidth))
                         if model.ios.oneHanded == "left" { OneHandedButtons(model: model) }
                     }
                 }
             }
         }
-        // 背景は塗らない。システムのキーボードの背景（フッターの地球儀・マイクの帯と同じ）がそのまま見えて、
-        // キーボード本体とフッターが一体に見える
+        // 背景は、レイアウトの `background` が無ければ塗らない。システムのキーボードの背景（フッターの地球儀・マイクの帯と
+        // 同じ）がそのまま見えて、キーボード本体とフッターが一体に見える
+        .background(KeyboardBackgroundView(background: model.layoutDef.background))
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -104,8 +105,8 @@ private struct OneHandedButtons: View {
     }
 }
 
-/// キーの間隔と高さ（設定 `keyboard.key_spacing_pt` / 高さの倍率。`NagiKeyMetrics`）
-private var keySpacing: CGFloat { CGFloat(NagiKeyMetrics.keySpacing) }
+/// キー 1 行の高さ（設定の高さの倍率。`NagiKeyMetrics`）。キー間・行間・外周の余白は `KeyboardModel.metrics`
+/// （設定 `keyboard.key_spacing_pt` を、レイアウトの `metrics` が上書きする）
 private var keyHeight: CGFloat { CGFloat(NagiKeyMetrics.keyHeight) }
 /// アクセントカラー（設定 `keyboard.accent`）
 private var themeAccent: Color { Color(NagiTheme.accentUIColor(NagiKeyMetrics.current.accent)) }
@@ -113,17 +114,17 @@ private var themeAccent: Color { Color(NagiTheme.accentUIColor(NagiKeyMetrics.cu
 private var keyCorner: CGFloat { CGFloat(NagiKeyMetrics.current.keyCornerPt) }
 
 /// キー領域の高さ。絵文字は一覧を含め、キー 4 行分に揃える
-private func padHeight(_ def: KeyboardLayoutDef) -> CGFloat {
-    let base = keyHeight * 4 + keySpacing * 3
-    if def.mode == .emoji { return base }
-    let rows = def.rows.reduce(CGFloat(0)) { $0 + keyHeight * CGFloat($1.height) }
-    return rows + keySpacing * CGFloat(max(def.rows.count - 1, 0))
+private func padHeight(_ model: KeyboardModel) -> CGFloat {
+    CGFloat(LayoutGeometry.padHeight(
+        layout: model.layoutDef, keyHeight: NagiKeyMetrics.keyHeight, rowSpacing: model.metrics.rowSpacing
+    ))
 }
 
 /// キー領域の高さ（行だけ）
-private func rowsHeight(_ def: KeyboardLayoutDef) -> CGFloat {
-    let rows = def.rows.reduce(CGFloat(0)) { $0 + keyHeight * CGFloat($1.height) }
-    return rows + keySpacing * CGFloat(max(def.rows.count - 1, 0))
+private func rowsHeight(_ model: KeyboardModel) -> CGFloat {
+    CGFloat(LayoutGeometry.rowsHeight(
+        layout: model.layoutDef, keyHeight: NagiKeyMetrics.keyHeight, rowSpacing: model.metrics.rowSpacing
+    ))
 }
 
 // MARK: - レイアウトの描画
@@ -135,11 +136,11 @@ private struct LayoutPad: View {
     @State private var pressedKey: String?
 
     var body: some View {
-        VStack(spacing: keySpacing) {
+        VStack(spacing: CGFloat(model.metrics.rowSpacing)) {
             if model.layoutDef.mode == .emoji {
                 EmojiGrid(
                     model: model,
-                    height: padHeight(model.layoutDef) - rowsHeight(model.layoutDef) - keySpacing
+                    height: padHeight(model) - rowsHeight(model) - CGFloat(model.metrics.rowSpacing)
                 )
             }
             ForEach(Array(model.layoutDef.rows.enumerated()), id: \.offset) { rowIndex, row in
@@ -172,7 +173,7 @@ private struct RowView: View {
             HStack(spacing: keySpacing) {
                 ForEach(Array(row.keys.enumerated()), id: \.offset) { index, key in
                     KeyCell(
-                        key: key, model: model, height: rowHeight,
+                        key: key, rowIndex: rowIndex, model: model, height: rowHeight,
                         originX: originX(index, total: geo.size.width), rowWidth: geo.size.width
                     ) { pressed in
                         pressedKey = pressed ? "\(rowIndex):\(index)" : nil
@@ -189,6 +190,8 @@ private struct RowView: View {
     private var rowHeight: CGFloat {
         keyHeight * CGFloat(row.height)
     }
+
+    private var keySpacing: CGFloat { CGFloat(model.metrics.keySpacing) }
 
     /// 行内で index 番目のキーの左端の位置（長押しのポップアップを行からはみ出さないようにするため）
     private func originX(_ index: Int, total: CGFloat) -> CGFloat {
@@ -210,6 +213,7 @@ private struct RowView: View {
 /// キー 1 つ。種類ごとに描き分ける。`longPress` を持つキー（flick 以外）は長押しでポップアップを出す
 private struct KeyCell: View {
     let key: LayoutKeyDef
+    let rowIndex: Int
     @ObservedObject var model: KeyboardModel
     let height: CGFloat
     let originX: CGFloat
@@ -223,23 +227,20 @@ private struct KeyCell: View {
         case .flick:
             FlickKeyView(
                 key: key,
-                content: KeyFaceContent(text: key.label ?? key.kana ?? key.center?.text, icon: key.icon),
+                face: face(KeyFaceContent(text: key.label ?? key.kana ?? key.center?.text, icon: key.icon)),
                 chars: FlickChars(key: key),
                 onPress: onPress,
                 onGesture: { gesture, detail in model.flick(key, gesture, detail: detail) }
             )
         case .action where key.action == "backspace":
             RepeatKeyView(
-                content: faceContent(key, model),
-                role: key.role,
+                face: face(faceContent(key, model)),
                 action: { model.backspace() },
                 swipeWord: model.ios.backspaceSwipe ? { model.deleteWordBackward() } : nil
             )
         case .action where key.action == "space" && model.ios.spaceSwipe && (key.longPress ?? []).isEmpty:
             SpaceKeyView(
-                content: faceContent(key, model),
-                role: key.role,
-                fontSize: fontSize(key),
+                face: face(faceContent(key, model)),
                 step: model.ios.spaceSwipeStepPt,
                 tap: { activate(key, model) },
                 move: { model.spaceSwipeMove($0) }
@@ -248,10 +249,7 @@ private struct KeyCell: View {
             if let popup = key.longPress, !popup.isEmpty {
                 LongPressKeyView(
                     popup: popup,
-                    content: faceContent(key, model),
-                    role: key.role,
-                    active: key.action == "shift" && model.shiftState == .caps,
-                    fontSize: fontSize(key),
+                    face: face(faceContent(key, model)),
                     height: height,
                     originX: originX,
                     rowWidth: rowWidth,
@@ -261,10 +259,7 @@ private struct KeyCell: View {
                 )
             } else {
                 TapKeyView(
-                    content: faceContent(key, model),
-                    role: key.role,
-                    active: key.action == "shift" && model.shiftState == .caps,
-                    fontSize: fontSize(key),
+                    face: face(faceContent(key, model)),
                     action: { touch in activate(key, model, touch: touch) }
                 )
             }
@@ -272,16 +267,14 @@ private struct KeyCell: View {
     }
 }
 
-/// キーの表示（文字か SF Symbols）
-private struct KeyFaceContent {
-    var text: String?
-    var icon: String?
-}
-
-private func fontSize(_ key: LayoutKeyDef) -> CGFloat {
-    let count = (key.label ?? key.text ?? key.cycle?.first ?? "").count
-    if count > 2 { return 16 }
-    return (key.kind == .text) ? 20 : 17
+extension KeyCell {
+    /// 描画の入力。Caps Lock 中の Shift キーは accent の色（現行の見た目）
+    fileprivate func face(_ content: KeyFaceContent) -> KeyFaceInput {
+        KeyFaceInput(
+            layout: model.layoutDef, rowIndex: rowIndex, key: key, content: content,
+            active: key.action == "shift" && model.shiftState == .caps
+        )
+    }
 }
 
 /// 状態（変換中か・シフトか）に応じて表示を決める
@@ -331,56 +324,9 @@ private func activate(_ key: LayoutKeyDef, _ model: KeyboardModel, touch: TouchP
     }
 }
 
-/// キーの見た目
-private struct KeyFace: View {
-    let content: KeyFaceContent
-    let role: KeyRole
-    let active: Bool
-    let pressed: Bool
-    let fontSize: CGFloat
-
-    var body: some View {
-        label
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: keyCorner).fill(fill.opacity(pressed ? 0.6 : 1)))
-            .contentShape(Rectangle())
-    }
-
-    @ViewBuilder
-    private var label: some View {
-        if let icon = content.icon, KeyIconView.isAvailable(icon) {
-            KeyIconView(raw: icon, size: 17)
-                .foregroundColor(foreground)
-        } else {
-            Text(content.text ?? "")
-                .font(.system(size: fontSize))
-                .foregroundColor(foreground)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-        }
-    }
-
-    private var isAccent: Bool { active || role == .accent }
-
-    private var fill: Color {
-        if isAccent { return themeAccent }
-        switch role {
-        case .function: return Color(UIColor.systemGray4)
-        default: return Color(UIColor.systemBackground)
-        }
-    }
-
-    private var foreground: Color {
-        isAccent ? Color.white : Color(UIColor.label)
-    }
-}
-
 /// タップだけのキー
 private struct TapKeyView: View {
-    let content: KeyFaceContent
-    let role: KeyRole
-    let active: Bool
-    let fontSize: CGFloat
+    let face: KeyFaceInput
     /// 引数は、指が触れた位置のキー内の相対位置（曖昧入力の手がかり）
     let action: (TouchPoint?) -> Void
 
@@ -388,7 +334,7 @@ private struct TapKeyView: View {
 
     var body: some View {
         GeometryReader { geo in
-            KeyFace(content: content, role: role, active: active, pressed: isPressed, fontSize: fontSize)
+            KeyFaceHost(input: face, local: isPressed ? [.pressed] : [])
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .updating($isPressed) { _, state, _ in state = true }
@@ -419,10 +365,7 @@ private func touchPoint(_ location: CGPoint, in size: CGSize) -> TouchPoint? {
 /// （そのときポップアップは半透明になり「取り消し」と表示する）
 private struct LongPressKeyView: View {
     let popup: [LayoutKeyDef]
-    let content: KeyFaceContent
-    let role: KeyRole
-    let active: Bool
-    let fontSize: CGFloat
+    let face: KeyFaceInput
     let height: CGFloat
     let originX: CGFloat
     let rowWidth: CGFloat
@@ -441,7 +384,7 @@ private struct LongPressKeyView: View {
 
     var body: some View {
         GeometryReader { geo in
-            KeyFace(content: content, role: role, active: active, pressed: isDown, fontSize: fontSize)
+            KeyFaceHost(input: face, local: isDown ? [.pressed] : [])
                 .overlay(alignment: .topLeading) {
                     if popupShown {
                         popupView(keyWidth: geo.size.width)
@@ -593,8 +536,7 @@ private struct LongPressKeyView: View {
 /// ⌫ のキー: 押した瞬間に 1 文字消し、押し続けると連打（時間とともに加速）、離すと止まる。
 /// 1 回ごとに `action`（入力中ならコアの backspace、そうでなければホストの 1 文字削除）を呼ぶ
 private struct RepeatKeyView: View {
-    let content: KeyFaceContent
-    let role: KeyRole
+    let face: KeyFaceInput
     let action: () -> Void
     /// 左スワイプで単語を削除する（設定 `touch.backspace_swipe`。nil なら無効）
     var swipeWord: (() -> Void)?
@@ -616,7 +558,7 @@ private struct RepeatKeyView: View {
     private static let swipeDistance: CGFloat = 40
 
     var body: some View {
-        KeyFace(content: content, role: role, active: false, pressed: isPressed, fontSize: 17)
+        KeyFaceHost(input: face, local: isPressed ? [.pressed] : [])
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
@@ -682,9 +624,7 @@ private struct RepeatKeyView: View {
 /// スペースキー: タップはスペース（または変換）。押したまま左右に `step` 以上動かすとカーソル移動モードに入り、
 /// ドラッグ距離に比例してカーソルを動かす。このモードで離したときはスペースを入力しない
 private struct SpaceKeyView: View {
-    let content: KeyFaceContent
-    let role: KeyRole
-    let fontSize: CGFloat
+    let face: KeyFaceInput
     let step: Double
     let tap: () -> Void
     /// カーソルを動かす文字数（右が正）
@@ -694,7 +634,7 @@ private struct SpaceKeyView: View {
     @State private var tracker: SpaceSwipeTracker?
 
     var body: some View {
-        KeyFace(content: content, role: role, active: false, pressed: isPressed, fontSize: fontSize)
+        KeyFaceHost(input: face, local: isPressed ? [.pressed] : [])
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .updating($isPressed) { _, state, _ in state = true }
@@ -759,7 +699,7 @@ private struct FlickChars {
 /// 取り消しは表示を出さずに静かに行い、その範囲にいる間はポップアップのどのセルも選択色にしない
 private struct FlickKeyView: View {
     let key: LayoutKeyDef
-    let content: KeyFaceContent
+    let face: KeyFaceInput
     let chars: FlickChars
     let onPress: (Bool) -> Void
     /// 操作と、方向のあるフリックならその角度・距離（曖昧入力の手がかり）
@@ -787,13 +727,7 @@ private struct FlickKeyView: View {
     }
 
     private func keyBody(keySize: CGSize, keyFrame: CGRect) -> some View {
-        KeyFace(
-            content: content,
-            role: key.role,
-            active: false,
-            pressed: drag != nil,
-            fontSize: (content.text ?? "").count > 2 ? 16 : 22
-        )
+        KeyFaceHost(input: face, local: drag != nil ? [.pressed] : [])
         .overlay(
             GeometryReader { geo in
                 if let drag = drag {
@@ -1105,7 +1039,10 @@ private struct ExpandedCandidates: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: keySpacing)], spacing: keySpacing) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 84), spacing: CGFloat(model.metrics.keySpacing))],
+                spacing: CGFloat(model.metrics.rowSpacing)
+            ) {
                 ForEach(model.candidates) { item in
                     Button(action: { model.selectCandidate(item.id) }) {
                         VStack(spacing: 0) {
@@ -1134,6 +1071,6 @@ private struct ExpandedCandidates: View {
             }
         }
         // 現在のレイアウトのキー領域の高さに合わせる
-        .frame(height: padHeight(model.layoutDef))
+        .frame(height: padHeight(model))
     }
 }

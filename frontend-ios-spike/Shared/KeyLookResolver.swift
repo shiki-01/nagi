@@ -58,8 +58,29 @@ enum LookDefaults {
     static let pressedLook = KeyLook(values: ["fillOpacity": .number(pressedFillOpacity)])
     /// 角丸の既定（設定 `keyboard.key_corner_pt` の既定値）
     static let cornerRadius = 6.0
-    /// アイコンの大きさの既定（pt）
+    /// アイコンの大きさの既定（pt）。`fontSize` を指定したときは、アイコンも同じ大きさになる
     static let iconSize = 17.0
+    static let fontWeight = "regular"
+    static let fontDesign = "system"
+    static let fillOpacity = 1.0
+    static let fillImageFit = "fill"
+    static let fillImageOpacity = 1.0
+    static let borderWidth = 0.0
+    static let borderColor: ResolvedColor = .token("separator")
+    static let shadowColor: ResolvedColor = .rgba(r: 0, g: 0, b: 0, a: 255)
+    static let shadowRadius = 0.0
+    static let shadowX = 0.0
+    static let shadowY = 0.0
+    static let shadowOpacity = 0.3
+    static let opacity = 1.0
+    static let scale = 1.0
+    static let offsetX = 0.0
+    static let offsetY = 0.0
+    static let inset = 0.0
+    static let padding = 0.0
+    static let animationMs = 0.0
+    /// 外周の余白の既定（pt。現行の `padding(6)`）
+    static let metricsPadding = 6.0
 
     /// 背景色の既定（役割ごと）
     static func fill(role: KeyRole) -> ResolvedColor {
@@ -101,16 +122,7 @@ enum LookResolver {
         var result: [String: LookValue] = [:]
 
         func apply(_ look: KeyLook?, allowsContent: Bool) {
-            guard let look = look else { return }
-            let clean = LookSanitizer.sanitize(look, allowsContent: allowsContent)
-            for (name, value) in clean.values {
-                if case .color(let color) = value {
-                    // 片方の外観だけ指定した色は、書いていない側では未指定扱い（下位の値を残す）
-                    if let solid = color.resolved(for: context.scheme) { result[name] = .color(.solid(solid)) }
-                } else {
-                    result[name] = value
-                }
-            }
+            merge(look, allowsContent: allowsContent, scheme: context.scheme, into: &result)
         }
 
         apply(layout.look, allowsContent: false)
@@ -129,6 +141,33 @@ enum LookResolver {
             apply(key.states?.byState[state]?.look, allowsContent: true)
         }
         // "none" は下位で指定された画像を外す指定。結果には画像なしとして残さない
+        if let image = result["fillImage"], image == LookValue.string("none") {
+            result.removeValue(forKey: "fillImage")
+        }
+        return ResolvedLook(values: result)
+    }
+
+    /// 見た目 1 つを範囲検査して `result` に重ねる。色は外観で解決し、片方の外観だけ指定した色は、
+    /// 書いていない側では未指定扱い（下位の値を残す）
+    private static func merge(
+        _ look: KeyLook?, allowsContent: Bool, scheme: LookScheme, into result: inout [String: LookValue]
+    ) {
+        guard let look = look else { return }
+        let clean = LookSanitizer.sanitize(look, allowsContent: allowsContent)
+        for (name, value) in clean.values {
+            if case .color(let color) = value {
+                if let solid = color.resolved(for: scheme) { result[name] = .color(.solid(solid)) }
+            } else {
+                result[name] = value
+            }
+        }
+    }
+
+    /// キーボード全体の背景（`background`）の解決。`fill` / `fillOpacity` / `fillImage` / `fillImageFit` /
+    /// `fillImageOpacity` だけを持つ。`fillImage: "none"` は画像なし
+    static func resolveBackground(_ background: LayoutBackground?, scheme: LookScheme) -> ResolvedLook {
+        var result: [String: LookValue] = [:]
+        merge(background?.look, allowsContent: false, scheme: scheme, into: &result)
         if let image = result["fillImage"], image == LookValue.string("none") {
             result.removeValue(forKey: "fillImage")
         }
