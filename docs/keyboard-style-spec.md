@@ -6,6 +6,16 @@ iOS キーボードのキーの見た目を、レイアウト JSON から細か�
 - 対象: レイアウト JSON（`docs/ios-keyboard-layout.md`）の拡張、iOS 描画（`frontend-ios-spike/Keyboard/`、`Shared/`）、サイトのエディタ（`web/src/lib/keyboard/`、`web/src/lib/components/`）
 - **方針（ユーザー指示）**: まだ作者本人しか使っていないため、レイアウト JSON の後方互換は取らない。設計が素直になるなら既存の項目名・構造を変える（破壊的変更可）。新旧の併存・互換コードは作らず、既存データは §12 の手順で一括移行する。ただし「既定の見た目は現行と同じ」は維持する
 - この文書は仕様のみ。実装は別の担当が段階ごとに行う（§9）。判断はすべてここで断定し、理由を 1 行ずつ添える
+
+### 進捗
+
+| フェーズ | 状況 |
+| --- | --- |
+| ①スキーマ ＋ 解決関数 ＋ 単体テスト | **フェーズ 1 実装済み**（ローカルの web テスト・型検査は通過。iOS の `ios-test` / `ios-testflight` は未実行＝CI で確認する）。実装メモは `docs/decisions.md` H-65 |
+| ②iOS の描画（全体／個別の `look`） | 未着手 |
+| ③状態トリガー | 未着手 |
+| ④背景画像 | 未着手 |
+| ⑤Web エディタ | 未着手 |
 - 実装が完了したら `docs/ios-keyboard-layout.md`（構造・kind の節に `look` / `states` / `rules` / `assets` / `metrics` を追記）と `config/keyboard/layout.schema.json` を更新する
 
 ## 0. 現状の整理（この仕様が前提にしていること）

@@ -1725,3 +1725,31 @@ H-41・H-42 の残件のうち、実機なしで作れるものを実装し、�
 - **迷った判断**: (1) `keyboard.commit_method` は、開発者モードがオフの間、保存済みの値があっても既定（`insert`）として動かす（`NagiIOSSettings.commitMethod`。値は消さずオンに戻せば復活）。見えない設定が裏で効くのを避けるため。(2) TestFlight で診断ログが既定 ON のまま、無効化の切り替えが開発者モードの奥になる（依頼どおり）。プライバシーの案内（About）でたどり方を示した。(3) タブは増やさない（6 つ目は「その他」に隠れるため）。入口は設定の「開発者」セクション。(4) ホームの「メモリ状況」を開発者へ寄せたのは「計測」にあたると判断したため（LLM の見込みの判定自体は残す）。
 - **テスト**: `IOSSettingsTests`（既定オフ・保存/読込・開発者向け項目の集合・`commitMethod` の扱い）、`TouchLogicTests`（commit_method の既存テストを開発者モードに合わせて修正）。
 - **未確認（実機）**: 設定の「開発者」セクションの導線、オフ/オンの切り替えで各画面の表示が即時に変わるか（`NagiDeveloperMode.shared` を `@ObservedObject` で参照）、キーボードの「検証」ボタンの出入り（拡張は focusIn で設定を読み直す）。
+
+### H-65. キーボードの「スタイルとトリガー」: レイアウト JSON を schema 2 にし、`look` / `states` / `rules` / `assets` と解決関数を入れる（フェーズ 1。2026-10-24、ユーザー要望、要実機確認・要 CI 確認）
+
+- **要望**: スペースのドラッグ移動中だけ見た目（薄く・ラベル「移動」）を変えたい。キーの高さ・幅・位置だけでなく、文字サイズ・色・角丸・ドロップシャドウ・透明度・背景画像まで
+  レイアウトで指定でき、サイトのエディタ（`/custom-keyboard`）の「詳細設定」で全体・キーごとに編集できるようにしたい。
+- **決定**: 仕様は `docs/keyboard-style-spec.md`（進捗欄に段階の状況）。要点 —
+  - 後方互換は取らず `schema` を 2 に（2 のみ受理。`schema: 1` は「未対応のスキーマ 1（schema 2 に移行してください）」）。`style`→`role` に改名、新しい見た目は `look`（`roles` は役割ごとの look）。追加項目は省略可能で、省略時の見た目は現行と同じ。既存データは `web/scripts/migrate-layout-v2.mjs`（冪等。手書きの整形を保つ文字列置換＋構造の検算）で一括変換
+  - 見た目の値の不正は無視（レイアウトは無効にしない。web は警告）、資源の上限（assets の個数・サイズ、rules の個数、`target.keys`）だけ取り込みエラー
+  - 状態: pressed / released / longPress / flicking（局所）、spaceDrag / shift / capsLock / composing（大域）。優先順位 composing < capsLock < shift < released < pressed < spaceDrag < flicking < longPress
+  - 背景画像は JSON に base64 data URI（PNG/JPEG、1 枚 256KB・合計 768KB・4 枚まで）。拡張では遅延ダウンサンプリング＋12MB 上限のキャッシュ（フェーズ 4）
+  - 解決関数は純粋関数で Swift（`Shared/KeyLookResolver.swift`）と TypeScript（`web/src/lib/keyboard/look-resolve.ts`）の二重実装、共有テストベクタ `config/keyboard/test-looks/*.json`（形式は同フォルダの README.md）で一致を保証
+- **実装段階**: ①スキーマ＋解決関数＋テスト（**実装済み**）②iOS 描画（全体／個別）③状態トリガー ④背景画像 ⑤Web エディタ
+- **フェーズ 1 の実装内容**:
+  - 移行: `config/keyboard/presets/*.json`（8）・`test-layouts/*.json`（11）・Swift の組み込み JSON・Tests のリテラルを schema 2 / `role` に。`KeyStyle`→`KeyRole`、`localStorage` のキーを `nagi.custom-keyboard.v2` に（旧キーは読まない）、ホストの取り込み上限 `NagiLayoutStore.maxBytes` を 512KB→1.5MB、web の読み込み上限も 1.5MB（`LAYOUT_FILE_MAX_BYTES`）
+  - Swift: `Shared/KeyLook.swift`（型・寛容な decode・色・範囲の表 `KeyLookLimits`）、`Shared/KeyLookResolver.swift`（`LookResolver.resolve` / `releasedHoldMs` / `transitionMs` / `content`、`LookSanitizer`、`LookDefaults`＝現行の見た目の定数）、`KeyboardLayout.swift`（`look`/`roles`/`rules`/`metrics`/`background`/`assets`、`assets`・`rules` の上限検査）、`LayoutGeometry`（`keySpacing` と `rowSpacing` を別に受ける。呼び出しは同じ値を渡すので結果は従来どおり）。**描画（`KeyFace` ほか）は未変更**で、`role` の改名に追従しただけ
+  - web: `types.ts`（`LOOK_PROPS` 表・`LOOK_LIMITS`・`ASSET_LIMITS`・`STATE_PRECEDENCE` ほか）、`validate.ts`（`severity: 'error' | 'warning'`。`validateLayout` は両方を返し、`errorsOf` / `warningsOf` で分ける。`isValidLayout` / `parseLayoutJSON` / `store.errors` は error のみで判定、`store.warnings` を追加）、`look-resolve.ts` / `look-color.ts` / `look-assets.ts`、`layout.schema.json`（`$id` を `keyboard-layout-2.json` に）
+- **迷った判断**:
+  1. Swift の `KeyLook` は、仕様の「プロパティごとの Optional フィールド」ではなく**プロパティ名 → 値の辞書**（`values: [String: LookValue]`）にした。部分上書き（辞書のマージ）・範囲の表による検査・TypeScript 版との対応が表 1 つで済み、Swift をローカルでコンパイルできない環境でコード量と取り違えを減らせるため。型付きのアクセサ（`number("fontSize")` など）はフェーズ 2 の描画で必要な分だけ足す
+  2. 色の `{light, dark}` は、**片側でも不正な値・`light`/`dark` 以外のキー・空のオブジェクト**ならプロパティ全体を無視する（仕様 §2.2 の「不正な文字列は無視」の厳しい読み）。片方だけ書いた有効な指定は、書いていない側の外観では未指定扱い
+  3. `look.icon` の書式違いは、仕様 §7.1 の「`LayoutValidation` に icon 書式の検査」ではなく §1.4・§5.5 に合わせて**エラーにせず無視**（`LookSanitizer`）。web は警告
+  4. `target.keys` の 25 個以上は、資源の上限（§5.1）としてエラー。`target` の形が不正な rule は、全キーに効かせる事故を避けるため**その rule ごと無視**（web は警告）。`rules[].look` が無い rule は何も変えない扱い
+  5. `holdMs` は `rules[].holdMs` と `states.<状態>.holdMs`（どの状態に書いても受理し、`released` でだけ使う）。複数あれば範囲内の最後のものが勝つ（`LookResolver.releasedHoldMs`）
+  6. 複数の状態の `label` / `icon` は、プロパティ単位で重なった結果に対して「`label` だけ・`icon` なし」ならキー本来のアイコンを隠す（`LookResolver.content`）。`label` と `icon` が別の状態から来ても `icon` が優先
+  7. ホストの取り込みと `iconify:` の走査（`look.icon` / `states.*.icon` / `rules[].look.icon`）はフェーズ 3 の作業として未着手。`assets` の取り込み時エラー表示はフェーズ 4
+  8. `project.yml` のテストターゲットは `Shared/` のファイルを個別に列挙しているため、`KeyLook.swift` / `KeyLookResolver.swift` と `config/keyboard/test-looks`（フォルダ参照）を追加した（仕様 §7.1 は「追加設定なし」としていたが、実際は必要だった）
+  9. 長押しポップアップの項目は `role` / `look` を持たない（web の検証は未知のフィールドとしてエラー。Swift は従来どおり読み飛ばす）。仕様 §12.1 の「popup の `style`→`role`（あれば）」は、移行スクリプトが防御的に変換するだけ
+- **テスト**: Swift `KeyLookTests`（decode・色・範囲・既定値）/ `KeyLookVectorTests`（共有ベクタ）/ `PresetLayoutTests` / `LayoutValidationTests`（assets・rules の上限）/ `LayoutGeometryTests`（間隔の分離）。web `look.test.ts`（ベクタ・色・範囲・検証・スキーマ一致・移行スクリプト・同梱レイアウト）/ `keyboard.test.ts`
+- **未確認**: Swift は未コンパイル（CI の `ios-test` / `ios-testflight` で確認）。実機での既存レイアウトの表示は未変更のはずだが、`role` 改名と `KeyboardLayoutDef` の `Decodable` 化（`Codable` から変更。エンコードは使っていない）の影響を実機で確認する。作者の手元のユーザーレイアウト（App Group の `keyboard/layouts/*.json`）は書き出し → 移行スクリプト → 取り込み直しが必要（schema 1 は読まれず同梱の既定にフォールバックする）

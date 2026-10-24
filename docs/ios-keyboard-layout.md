@@ -1,4 +1,4 @@
-# キーボードレイアウト仕様（v0 draft）
+# キーボードレイアウト仕様（schema 2）
 
 iOS のキーボードの配置とキーの動作を、データ（JSON）で定義する。既定のレイアウトも同じ形式で持ち、
 サイト（`nagi.shiki-01.com/custom-keyboard`）の編集 GUI とキーボード拡張が同じファイルを読み書きする。
@@ -13,7 +13,7 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,                  // 受理するのは 2 のみ（旧 1 は `web/scripts/migrate-layout-v2.mjs` で移行）
   "id": "qwerty-ja",
   "name": "QWERTY（かな）",
   "mode": "kana",               // kana | alpha | number | symbol | emoji | custom（変換エンジンの扱いが変わる）
@@ -34,10 +34,11 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 | `id` | レイアウト内で一意 |
 | `width` | 行内の幅の比（既定 1）。`height` は行側 |
 | `label` / `icon` | 表示。`label` は文字列、`icon` は下の「アイコン」の書式（SF Symbols または Iconify）。両方あるときは `icon` を優先し、Iconify のアイコンを取得できていなければ `label` を出す |
-| `style` | `normal` / `function` / `accent`（色はテーマ側） |
+| `role` | 色の役割。`normal` / `function` / `accent`（既定 `normal`。色はテーマ側。schema 1 の `style` を改名） |
 | `kind` | 下表 |
 | `longPress` | 長押しで出るポップアップ（`[{ "label", "kind"... }]` のキー定義の配列） |
 | `visible` | 条件（`{"field":"returnKeyType","in":["search"]}` 等。v1 では省略可） |
+| `look` / `states` | 見た目の指定（下の「見た目の指定」）。省略可 |
 
 #### アイコン（`icon`）
 
@@ -67,8 +68,20 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 | `layout` | `target` | 別レイアウトへ切り替え |
 | `spacer` | — | 空白（幅のみ） |
 
+## 見た目の指定（`look` / `roles` / `rules` / `states` / `metrics` / `background` / `assets`）
+
+キーの色・文字・角丸・影・透明度・背景画像、押している間などの状態ごとの見た目をレイアウトから指定できる。仕様は `docs/keyboard-style-spec.md`
+（決定は `docs/decisions.md` H-65）。**実装は段階的**: 現在は schema 2 の項目・検証・解決関数（Swift `Shared/KeyLookResolver.swift` と
+web `look-resolve.ts`。共有テストベクタ `config/keyboard/test-looks/`）まで。iOS の描画への反映（フェーズ 2〜4）とサイトの編集 GUI（フェーズ 5）は未実装で、
+指定しても現時点では見た目は変わらない。
+
+- 見た目の値の不正（範囲外・型違い・不正な色・未知の名前）は、そのプロパティだけ無視して下位の値（最終的には現行の見た目）に落ちる。レイアウト全体は無効にしない（サイトのエディタは警告として出す）
+- 資源の上限はエラーにして取り込みを拒否する: `assets` は 4 枚・1 枚 256KB・合計 768KB・PNG/JPEG の data URI、`rules` は 32 個まで、`rules[].target.keys` は 24 個まで
+- 取り込む JSON 全体の上限は 1.5MB（`assets` を含められるように）。`assets` を含むレイアウトは URL スキーム（上限 1MB）では渡せない
+
 ## 検証（スキーマ）で保証すること
 
+- `schema` は 2 のみ（それ以外は読み込まない）
 - `rows` は 1〜8 行、1 行あたり幅の合計が 1〜20、`id` の重複なし、`layout.target` は存在するレイアウトまたは組み込み名
 - 行の高さ比の合計は 4.5 以下（キーボード全体の高さに収めるため）
 - `flick` の方向は 4 方向以内、`toggle.cycle` は 1〜16 要素
