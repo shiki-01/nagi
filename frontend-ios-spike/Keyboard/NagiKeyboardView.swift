@@ -5,6 +5,8 @@ struct NagiKeyboardView: View {
     @ObservedObject var model: KeyboardModel
     /// 検証用の画面（Probe）を開く
     var onShowProbes: () -> Void
+    /// キーボード全体の大きさ（フリックの案内を view の枠内に収めるのに使う）
+    @State private var rootSize = CGSize.zero
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,7 +27,17 @@ struct NagiKeyboardView: View {
                 }
             }
         }
-        .background(Color(UIColor.systemGray6))
+        // 背景は塗らない。システムのキーボードの背景（フッターの地球儀・マイクの帯と同じ）がそのまま見えて、
+        // キーボード本体とフッターが一体に見える
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { rootSize = geo.size }
+                    .onChange(of: geo.size) { size in rootSize = size }
+            }
+        )
+        .coordinateSpace(name: NagiKeyboardSpace.name)
+        .environment(\.nagiKeyboardSize, rootSize)
         // 設定 `keyboard.accent` / `keyboard.theme`。テーマが変わったときは子のビューも作り直して新しい色を見せる
         // （子のビューは入力が変わらないと再評価されないため）。外観の上書きは KeyboardViewController が行う
         .tint(themeAccent)
@@ -41,6 +53,22 @@ struct NagiKeyboardView: View {
                 LayoutPad(model: model)
             }
         }
+    }
+}
+
+/// キーボード全体の座標空間の名前と大きさ（環境値）。フリックの案内の位置を view の枠内に収めるために使う
+enum NagiKeyboardSpace {
+    static let name = "nagiKeyboard"
+}
+
+private struct NagiKeyboardSizeKey: EnvironmentKey {
+    static let defaultValue = CGSize.zero
+}
+
+extension EnvironmentValues {
+    var nagiKeyboardSize: CGSize {
+        get { self[NagiKeyboardSizeKey.self] }
+        set { self[NagiKeyboardSizeKey.self] = newValue }
     }
 }
 
@@ -740,14 +768,25 @@ private struct FlickKeyView: View {
     /// 押している間の移動量（押していなければ nil）
     @GestureState private var drag: CGSize? = nil
     @State private var reported = false
+    @Environment(\.nagiKeyboardSize) private var rootSize
 
     var body: some View {
         GeometryReader { keyGeo in
-            keyBody(keySize: keyGeo.size)
+            keyBody(keySize: keyGeo.size, keyFrame: keyGeo.frame(in: .named(NagiKeyboardSpace.name)))
         }
     }
 
-    private func keyBody(keySize: CGSize) -> some View {
+    /// 案内を view の枠内に収める移動量（最下段の下方向のセルなど、枠の外へ出るものを内側へ寄せる）
+    private func popupShift(keySize: CGSize, keyFrame: CGRect) -> CGSize {
+        let bounds = CGRect(x: -keyFrame.minX, y: -keyFrame.minY, width: rootSize.width, height: rootSize.height)
+        return PopupClamp.flickShift(
+            keySize: keySize, spacing: FlickPopup.cellSpacing,
+            left: chars.left != nil, up: chars.up != nil, right: chars.right != nil, down: chars.down != nil,
+            bounds: bounds
+        )
+    }
+
+    private func keyBody(keySize: CGSize, keyFrame: CGRect) -> some View {
         KeyFace(
             content: content,
             style: key.style,
@@ -762,7 +801,10 @@ private struct FlickKeyView: View {
                     let selected: KeyGesture? = Self.isCancelled(drag, keySize: keySize) ? nil : Self.gesture(for: drag)
                     ZStack {
                         if chars.hasAny, NagiKeyMetrics.current.flickPopup {
-                            FlickPopup(chars: chars, selected: selected, size: geo.size)
+                            FlickPopup(
+                                chars: chars, selected: selected, size: geo.size,
+                                shift: popupShift(keySize: keySize, keyFrame: keyFrame)
+                            )
                         }
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
@@ -843,6 +885,10 @@ private struct FlickPopup: View {
     /// 選択色にするセル。nil はどれも選ばない（フリックの取り消しの範囲）
     let selected: KeyGesture?
     let size: CGSize
+    /// view の枠内に収めるための移動量（`PopupClamp.flickShift`）
+    var shift = CGSize.zero
+    /// セルとセルのあいだ（pt）
+    static let cellSpacing: CGFloat = 2
 
     var body: some View {
         ZStack {
@@ -869,8 +915,8 @@ private struct FlickPopup: View {
                 )
                 .overlay(RoundedRectangle(cornerRadius: keyCorner).stroke(Color(UIColor.separator), lineWidth: 0.5))
                 .position(
-                    x: size.width / 2 + dx * (size.width + 2),
-                    y: size.height / 2 + dy * (size.height + 2)
+                    x: size.width / 2 + dx * (size.width + Self.cellSpacing) + shift.width,
+                    y: size.height / 2 + dy * (size.height + Self.cellSpacing) + shift.height
                 )
         }
     }

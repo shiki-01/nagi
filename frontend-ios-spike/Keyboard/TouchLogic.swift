@@ -134,6 +134,53 @@ enum LongPressCancel {
     }
 }
 
+/// ポップアップ（フリックの案内）を、キーボードの view の範囲内に収める。
+/// キーボード拡張は view の外（システムのフッター: 地球儀・マイクの帯）には描けないので、最下段のキーの下方向のセルなど、
+/// 枠からはみ出すものは、案内の全体をはみ出した分だけ動かして枠内に収める（セル同士は重ならない）
+enum PopupClamp {
+    /// `rect` を `bounds` の中に収めるのに必要な移動量。`rect` が `bounds` より大きい方向は、上・左の端を揃える。
+    /// `bounds` が空（まだ大きさを測れていない）なら動かさない
+    static func shift(of rect: CGRect, in bounds: CGRect) -> CGSize {
+        guard bounds.width > 0, bounds.height > 0, rect.width.isFinite, rect.height.isFinite,
+              rect.minX.isFinite, rect.minY.isFinite else { return .zero }
+        func axis(_ low: CGFloat, _ high: CGFloat, _ boundsLow: CGFloat, _ boundsHigh: CGFloat) -> CGFloat {
+            if high - low > boundsHigh - boundsLow || low < boundsLow { return boundsLow - low }
+            if high > boundsHigh { return boundsHigh - high }
+            return 0
+        }
+        return CGSize(
+            width: axis(rect.minX, rect.maxX, bounds.minX, bounds.maxX),
+            height: axis(rect.minY, rect.maxY, bounds.minY, bounds.maxY)
+        )
+    }
+
+    /// `rect` を `bounds` の中に収めた矩形
+    static func clamped(_ rect: CGRect, in bounds: CGRect) -> CGRect {
+        let moved = shift(of: rect, in: bounds)
+        return rect.offsetBy(dx: moved.width, dy: moved.height)
+    }
+
+    /// フリックの案内全体の矩形（キー内の座標。キーは原点・`keySize`）。中央のセルはキーと同じ位置で、
+    /// 左右上下のセルは `spacing` を挟んで隣に並ぶ。ある方向だけを数える
+    static func flickClusterRect(keySize: CGSize, spacing: CGFloat, left: Bool, up: Bool, right: Bool, down: Bool) -> CGRect {
+        let minX = left ? -(keySize.width + spacing) : 0
+        let maxX = keySize.width + (right ? keySize.width + spacing : 0)
+        let minY = up ? -(keySize.height + spacing) : 0
+        let maxY = keySize.height + (down ? keySize.height + spacing : 0)
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// フリックの案内を `bounds`（キー内の座標で表したキーボードの view の範囲）に収める移動量
+    static func flickShift(
+        keySize: CGSize, spacing: CGFloat, left: Bool, up: Bool, right: Bool, down: Bool, bounds: CGRect
+    ) -> CGSize {
+        shift(
+            of: flickClusterRect(keySize: keySize, spacing: spacing, left: left, up: up, right: right, down: down),
+            in: bounds
+        )
+    }
+}
+
 /// 触覚の互換モード（システムサウンドで振動を鳴らす）の対応表
 enum HapticMapping {
     /// 触覚の強さ（`keyboard.haptic`）に対応するシステムサウンド ID。`off` や未知の値は nil。

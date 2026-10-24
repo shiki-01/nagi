@@ -78,6 +78,72 @@ final class FeedbackAndPopupLogicTests: XCTestCase {
         XCTAssertNil(HapticMapping.systemSoundID(for: "x"))
     }
 
+    // MARK: PopupClamp（フリックの案内を view の枠内に収める）
+
+    private let keySize = CGSize(width: 60, height: 46)
+
+    func testShiftIsZeroWhenInside() {
+        let bounds = CGRect(x: 0, y: 0, width: 390, height: 260)
+        XCTAssertEqual(PopupClamp.shift(of: CGRect(x: 100, y: 100, width: 60, height: 46), in: bounds), .zero)
+    }
+
+    func testShiftMovesBackFromEachEdge() {
+        let bounds = CGRect(x: 0, y: 0, width: 390, height: 260)
+        XCTAssertEqual(PopupClamp.shift(of: CGRect(x: 350, y: 240, width: 60, height: 46), in: bounds), CGSize(width: -20, height: -26))
+        XCTAssertEqual(PopupClamp.shift(of: CGRect(x: -10, y: -5, width: 60, height: 46), in: bounds), CGSize(width: 10, height: 5))
+    }
+
+    func testClampedRectEndsInsideBounds() {
+        let bounds = CGRect(x: 0, y: 0, width: 390, height: 260)
+        let clamped = PopupClamp.clamped(CGRect(x: 380, y: 300, width: 60, height: 46), in: bounds)
+        XCTAssertEqual(clamped, CGRect(x: 330, y: 214, width: 60, height: 46))
+        XCTAssertTrue(bounds.contains(clamped))
+    }
+
+    func testShiftAlignsToTopLeftWhenLargerThanBounds() {
+        let bounds = CGRect(x: 0, y: 0, width: 100, height: 50)
+        XCTAssertEqual(PopupClamp.shift(of: CGRect(x: 20, y: 30, width: 200, height: 80), in: bounds), CGSize(width: -20, height: -30))
+    }
+
+    func testShiftIgnoresUnmeasuredBounds() {
+        XCTAssertEqual(PopupClamp.shift(of: CGRect(x: 0, y: 500, width: 60, height: 46), in: .zero), .zero)
+    }
+
+    func testFlickClusterRectCountsOnlyPresentDirections() {
+        let all = PopupClamp.flickClusterRect(keySize: keySize, spacing: 2, left: true, up: true, right: true, down: true)
+        XCTAssertEqual(all, CGRect(x: -62, y: -48, width: 184, height: 142))
+        let onlyCenter = PopupClamp.flickClusterRect(keySize: keySize, spacing: 2, left: false, up: false, right: false, down: false)
+        XCTAssertEqual(onlyCenter, CGRect(origin: .zero, size: keySize))
+    }
+
+    func testBottomRowDownCellIsPulledInsideView() {
+        // 最下段のキー（キー下端から view の下端まで 6pt）。下のセルは view の外へ出るので、全体を上へ寄せる
+        let keyFrame = CGRect(x: 100, y: 200, width: 60, height: 46)
+        let root = CGSize(width: 390, height: 252)
+        let bounds = CGRect(x: -keyFrame.minX, y: -keyFrame.minY, width: root.width, height: root.height)
+        let moved = PopupClamp.flickShift(keySize: keySize, spacing: 2, left: true, up: true, right: true, down: true, bounds: bounds)
+        XCTAssertEqual(moved, CGSize(width: 0, height: -42))
+        let cluster = PopupClamp.flickClusterRect(keySize: keySize, spacing: 2, left: true, up: true, right: true, down: true)
+            .offsetBy(dx: moved.width, dy: moved.height)
+        XCTAssertTrue(bounds.contains(cluster))
+    }
+
+    func testLeftmostKeyLeftCellIsPulledInsideView() {
+        let keyFrame = CGRect(x: 6, y: 100, width: 60, height: 46)
+        let bounds = CGRect(x: -keyFrame.minX, y: -keyFrame.minY, width: 390, height: 252)
+        let moved = PopupClamp.flickShift(keySize: keySize, spacing: 2, left: true, up: true, right: true, down: true, bounds: bounds)
+        XCTAssertEqual(moved, CGSize(width: 56, height: 0))
+    }
+
+    func testMiddleKeyIsNotMoved() {
+        let keyFrame = CGRect(x: 160, y: 100, width: 60, height: 46)
+        let bounds = CGRect(x: -keyFrame.minX, y: -keyFrame.minY, width: 390, height: 252)
+        XCTAssertEqual(
+            PopupClamp.flickShift(keySize: keySize, spacing: 2, left: true, up: true, right: true, down: true, bounds: bounds),
+            .zero
+        )
+    }
+
     // MARK: 設定
 
     func testHapticEngineSetting() {
