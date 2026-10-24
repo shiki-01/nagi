@@ -256,7 +256,7 @@ struct KeyboardRoot: View {
     let probeView: KeyboardSwiftUIView
 
     var body: some View {
-        if screen.showProbes && DiagLog.isTestBuild {
+        if screen.showProbes && DiagLog.isTestBuild && model.ios.developerMode {
             ZStack(alignment: .topTrailing) {
                 probeView
                 Button("閉じる") { screen.showProbes = false }

@@ -1,15 +1,9 @@
 import SwiftUI
 
 // About タブ。バージョン、プライバシー方針の要約、ライセンス表示、サイト、フィードバックの案内。
-// 検証用の画面（Probes・結果）は「開発者向け」からたどる（呼び出し側が developer で渡す）。
+// 検証用の画面（Probes・結果・診断ログ）は、設定の「開発者モード」をオンにすると出る「開発者」画面にある。
 
-struct NagiAboutView<Developer: View>: View {
-    private let developer: Developer
-
-    init(@ViewBuilder developer: () -> Developer) {
-        self.developer = developer()
-    }
-
+struct NagiAboutView: View {
     private static var siteURL: URL { URL(string: "https://nagi.shiki-01.com")! }
 
     private var versionText: String {
@@ -39,7 +33,7 @@ struct NagiAboutView<Developer: View>: View {
                         Text("・フルアクセスは、辞書とモデルの共有領域をキーボードが読むためだけに使います。許可しない場合の機能は端末により異なる場合があり、辞書とモデルの利用に許可が必要になる場合があります。")
                         Text("・パスワード欄などでは学習を止め、ログにも入力内容を残しません。")
                         if DiagLog.isTestBuild {
-                            Text("・このビルド（TestFlight・開発用）では、不具合の調査用に診断ログを端末内にだけ記録します。既定で有効で、入力した文字を含む場合があります。外部には送信されません。「入力テスト」タブの記録スイッチで無効にでき、「消去」で削除できます。")
+                            Text("・このビルド（TestFlight・開発用）では、不具合の調査用に診断ログを端末内にだけ記録します。既定で有効で、入力した文字を含む場合があります。外部には送信されません。設定の詳細モードで「開発者モード」をオンにすると出る「開発者」画面で、記録の無効化と消去ができます。")
                         } else {
                             Text("・診断ログは既定で無効です。")
                         }
@@ -82,18 +76,6 @@ struct NagiAboutView<Developer: View>: View {
                     Text("不具合や要望は、TestFlight のフィードバック機能（スクリーンショットを撮って共有）か、サイトからお知らせください。診断ログには入力内容が含まれるため、共有前に内容を確認してください。")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                }
-
-                // 検証用の画面（Probes・結果）は TestFlight・開発用ビルドだけ（App Store 版では隠す。H-22）
-                if DiagLog.isTestBuild {
-                    Section("開発者向け") {
-                        NavigationLink("端末情報・App Group・Probes・結果") {
-                            developer
-                        }
-                        NavigationLink("ファイル確認（config.toml・学習・辞書）") {
-                            NagiFileInspectorView()
-                        }
-                    }
                 }
             }
             .navigationTitle("About")

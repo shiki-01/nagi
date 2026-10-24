@@ -1,8 +1,9 @@
 import SwiftUI
 import UIKit
 
-// 実機での確認作業用の画面部品（入力テストタブの診断ログ・入力欄の種類、ファイル確認）。
-// 入力欄の種類とファイル確認は `DiagLog.isTestBuild`（DEBUG または TestFlight）のときだけ表示する。
+// 実機での確認作業用の画面部品（診断ログ・入力欄の種類、ファイル確認）。設定の「開発者モード」をオンにすると出る
+// 「開発者」画面（DeveloperView.swift）に置く。入力欄の種類とファイル確認は `DiagLog.isTestBuild`（DEBUG または
+// TestFlight）のときだけ表示する。
 
 // MARK: - 診断ログ
 

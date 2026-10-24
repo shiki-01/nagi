@@ -171,7 +171,10 @@ final class ThemeTests: XCTestCase {
         s.set(NagiIOSSettings.Key.keyboardSound, .string("system"))
         XCTAssertEqual(s.soundMode, "compat")
         XCTAssertTrue(s.soundEnabled)
+        // 確定の方式は開発者向けの項目。開発者モードがオフの間は保存されていても既定
         s.set(NagiIOSSettings.Key.keyboardCommitMethod, .string("delete"))
+        XCTAssertEqual(s.commitMethod, "insert")
+        s.set(NagiIOSSettings.Key.developerMode, .bool(true))
         XCTAssertEqual(s.commitMethod, "delete")
         s.set(NagiIOSSettings.Key.keyboardCommitMethod, .string("replace"))
         XCTAssertEqual(s.commitMethod, "insert")

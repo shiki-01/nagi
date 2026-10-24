@@ -74,6 +74,8 @@ struct NagiIOSSettingDef {
     /// true ならシンプルモードにも出す（false は詳細モードのみ）
     let isSimple: Bool
     let defaultValue: NagiJSONValue
+    /// 開発者向け（診断・デバッグ）の項目か。開発者モード（`developer.mode`）がオフのとき、設定画面に出さない
+    var isDeveloper = false
 
     /// 保存された値を検証して返す。型違い・範囲外は既定に丸める（数値は範囲内に収め、刻みに揃える）
     func normalize(_ raw: NagiJSONValue?) -> NagiJSONValue {
@@ -279,7 +281,11 @@ struct NagiIOSSettings: Codable, Equatable {
             kind: NagiIOSSettings.choice([
                 ("insert", "置き換え（既定）"), ("mark", "確定文字列を下線付きにしてから確定"), ("delete", "消してから入れる（旧方式）"),
             ]),
-            isSimple: false, defaultValue: .string("insert")),
+            isSimple: false, defaultValue: .string("insert"), isDeveloper: true),
+        NagiIOSSettingDef(
+            key: Key.developerMode, group: "開発者", label: "開発者モード",
+            description: "診断ログ・実機計測・動作テスト用の画面など、開発者向けの機能を表示します。通常の使い方には要りません。オフでも診断ログの記録は、TestFlight・開発用ビルドでは従来どおり既定で有効です（記録するかどうかの切り替えは、オンにすると出る「開発者」の画面でできます）。",
+            kind: .bool, isSimple: false, defaultValue: .bool(false)),
     ]
 
     private static let definitionsByKey: [String: NagiIOSSettingDef] =
@@ -321,6 +327,7 @@ struct NagiIOSSettings: Codable, Equatable {
         static let keyboardHapticEngine = "keyboard.haptic_engine"
         static let keyboardSound = "keyboard.sound"
         static let keyboardCommitMethod = "keyboard.commit_method"
+        static let developerMode = "developer.mode"
     }
 
     // MARK: 読み書き
@@ -411,8 +418,11 @@ struct NagiIOSSettings: Codable, Equatable {
     var soundMode: String { string(Key.keyboardSound) }
     /// 入力欄の種類（`keyboardType` / `returnKeyType`）でレイアウトと改行キーの表示を切り替えるか
     var layoutByField: Bool { bool(Key.keyboardLayoutByField) }
-    /// 確定の方式（`insert` / `mark` / `delete`。`HostCompositionApplier.CommitMethod`）
-    var commitMethod: String { string(Key.keyboardCommitMethod) }
+    /// 確定の方式（`insert` / `mark` / `delete`。`HostCompositionApplier.CommitMethod`）。
+    /// 開発者モードがオフのときは、設定画面に出ない項目なので常に既定（`insert`）
+    var commitMethod: String { developerMode ? string(Key.keyboardCommitMethod) : "insert" }
+    /// 開発者モード（診断ログの切り替え・実機計測・動作テスト用の画面などを出す。既定オフ。H-64）
+    var developerMode: Bool { bool(Key.developerMode) }
     var spaceSwipe: Bool { bool(Key.spaceSwipe) }
     var spaceSwipeStepPt: Double { double(Key.spaceSwipeStepPt) }
     var backspaceSwipe: Bool { bool(Key.backspaceSwipe) }

@@ -310,6 +310,7 @@ private struct NagiUserDictEditTarget: Identifiable {
 
 struct NagiUserDictionaryView: View {
     @StateObject private var model = NagiUserDictModel()
+    @ObservedObject private var developer = NagiDeveloperMode.shared
     @State private var editing: NagiUserDictEditTarget?
     @State private var showingImporter = false
     // テスト用（テストビルドのみ）
@@ -375,8 +376,8 @@ struct NagiUserDictionaryView: View {
                 Text("取り込みは \(NagiUserDictStore.ownFileName) に追記します（同じ読み・単語は除外）。書き出しはこのアプリで編集できる登録だけです。品詞が「スニペット」の行は定型文（本文の改行は \\n）として扱います。")
             }
 
-            // 実機での確認用（TestFlight・開発用ビルドのみ。App Store 版には出さない）
-            if DiagLog.isTestBuild {
+            // 実機での確認用（TestFlight・開発用ビルドで、開発者モードがオンのときだけ。App Store 版には出さない）
+            if developer.showsTestTools {
                 testSamplesSection
                 testToolsSection
             }
@@ -398,7 +399,7 @@ struct NagiUserDictionaryView: View {
         }
         .onAppear {
             model.start()
-            if DiagLog.isTestBuild { prepareSampleFiles() }
+            if developer.showsTestTools { prepareSampleFiles() }
         }
         .fileImporter(
             isPresented: $showingImporter,

@@ -73,6 +73,8 @@ struct NagiDataStatusSections: View {
     /// LLM を読み込める最低限のメモリ上限（MB）の目安
     private static let llmMinBudgetMB: UInt64 = 150
 
+    /// メモリ状況（計測）は開発者モードがオンのときだけ出す
+    @ObservedObject private var developer = NagiDeveloperMode.shared
     @State private var snapshot = NagiDataSnapshot.load()
     @State private var stats = MemoryProbe.getStats()
     @State private var budgetMB = MemoryProbe.processBudgetMB()
@@ -81,7 +83,7 @@ struct NagiDataStatusSections: View {
         Group {
             dictSection
             modelSection
-            memorySection
+            if developer.isEnabled { memorySection }
             llmSection
         }
         .onAppear { reload() }

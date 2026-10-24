@@ -119,7 +119,7 @@ struct ContentView: View {
                 .tag(3)
 
             // Tab 3: 設定
-            SettingsView()
+            SettingsView { developerView }
                 .tabItem {
                     Label("設定", systemImage: "gearshape")
                 }
@@ -128,8 +128,8 @@ struct ContentView: View {
             // Tab 4: レイアウト
             LayoutManagerView().tabItem { Label("レイアウト", systemImage: "square.grid.2x2") }.tag(22)
 
-            // Tab 5: About（端末情報・App Group・Probes・結果は「開発者向け」から）
-            NagiAboutView { developerView }
+            // Tab 5: About（端末情報・App Group・Probes・結果は、設定の「開発者」から）
+            NagiAboutView()
                 .tabItem {
                     Label("About", systemImage: "info.circle")
                 }
@@ -154,7 +154,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - 検証（Probes・結果。About の「開発者向け」から開く）
+    // MARK: - 検証（Probes・結果。設定の「開発者」から開く。開発者モードがオンのときだけ）
 
     private var developerView: some View {
         List {

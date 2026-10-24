@@ -10,7 +10,7 @@ enum NagiUIMode: String {
     case detail
 }
 
-/// 設定画面の 1 行（コアの項目・iOS 固有の項目・レイアウトの割り当て・診断ログのいずれか）
+/// 設定画面の 1 行（コアの項目・iOS 固有の項目・レイアウトの割り当てのいずれか）
 struct NagiSettingRow: Identifiable {
     enum Origin {
         /// コアの `config.toml`（`update_settings`）
@@ -19,8 +19,6 @@ struct NagiSettingRow: Identifiable {
         case ios
         /// かな・英字モードのレイアウトの割り当て（`LayoutAssignment`）
         case layout
-        /// 診断ログの記録（`DiagLog`）
-        case diag
     }
 
     struct Option {
@@ -48,6 +46,8 @@ struct NagiSettingRow: Identifiable {
     let isSimple: Bool
     /// 反映にキーボードの開き直し（エンジンの再起動）が要る
     let requiresRestart: Bool
+    /// 開発者向けの項目（開発者モードがオフのときは出さない）
+    var isDeveloper = false
 
     var id: String { key }
 }
@@ -64,8 +64,9 @@ struct NagiSettingSection: Identifiable {
 final class NagiSettingsModel: ObservableObject {
     private static let uiModeKey = "ui.mode"
     private static let learningGroup = "学習"
+    static let developerGroup = "開発者"
     /// セクションの並び（無い名前は最後に、出てきた順で並ぶ）
-    private static let groupOrder = ["入力", "変換", "動作モード", "予測変換", "学習", "キーボード", "診断", "アップデート"]
+    private static let groupOrder = ["入力", "変換", "動作モード", "予測変換", "学習", "キーボード", "アップデート", "開発者"]
     /// コアの項目のうち、iOS では出さないもの。`conversion.model` はモデルのファイルのパスで、
     /// キーボードが配置済みのモデルから自動で決める（手で書き換えると読み込めなくなる）
     private static let hiddenCoreKeys: Set<String> = ["conversion.model"]
@@ -87,7 +88,6 @@ final class NagiSettingsModel: ObservableObject {
     @Published private(set) var fieldErrors: [String: String] = [:]
     @Published private(set) var ios = NagiIOSSettings()
     @Published private(set) var layoutRows: [NagiSettingRow] = []
-    @Published private(set) var diagEnabled = DiagLog.isEnabled
     @Published private(set) var iosSaveError: String?
     @Published private(set) var learningNotice: String?
 
@@ -108,7 +108,7 @@ final class NagiSettingsModel: ObservableObject {
     /// 画面を開いたときに呼ぶ。キーボードや他の操作で変わった値を読み直す
     func start() {
         ios = NagiIOSSettingsStore.load()
-        diagEnabled = DiagLog.isEnabled
+        NagiDeveloperMode.shared.update(ios.developerMode)
         layoutRows = buildLayoutRows()
         reloadCore()
     }
@@ -160,14 +160,18 @@ final class NagiSettingsModel: ObservableObject {
     // MARK: - 表示する行
 
     var sections: [NagiSettingSection] {
-        let all = (coreRows() + iosRows() + layoutRows + [diagRow()])
+        let all = (coreRows() + iosRows() + layoutRows)
             .filter { mode == .detail || $0.isSimple }
+            // 開発者向けの項目は、開発者モードがオンのときだけ
+            .filter { !$0.isDeveloper || ios.developerMode }
         var titles: [String] = []
         for row in all where !titles.contains(row.group) {
             titles.append(row.group)
         }
         // 学習データの削除ボタンの置き場として、項目が無くても学習セクションは出す
         if !titles.contains(Self.learningGroup) { titles.append(Self.learningGroup) }
+        // 開発者モードがオンなら、シンプルモードでも「開発者」画面への入口を出す
+        if ios.developerMode && !titles.contains(Self.developerGroup) { titles.append(Self.developerGroup) }
         let ranked = titles.enumerated()
             .map { (offset, title) -> (Int, Int, String) in (Self.groupOrder.firstIndex(of: title) ?? Self.groupOrder.count, offset, title) }
             .sorted { ($0.0, $0.1) < ($1.0, $1.1) }
@@ -217,15 +221,8 @@ final class NagiSettingsModel: ObservableObject {
             return NagiSettingRow(
                 key: def.key, origin: .ios, group: def.group, label: def.label,
                 description: def.description, control: control,
-                isSimple: def.isSimple, requiresRestart: false)
+                isSimple: def.isSimple, requiresRestart: false, isDeveloper: def.isDeveloper)
         }
-    }
-
-    private func diagRow() -> NagiSettingRow {
-        NagiSettingRow(
-            key: "diag.log_enabled", origin: .diag, group: "診断", label: "診断ログを記録",
-            description: "キーボードの動作を記録します。入力した文字を含むので、TestFlight での確認期間だけ使ってください。内容は「入力テスト」タブで見られます。",
-            control: .toggle, isSimple: false, requiresRestart: false)
     }
 
     /// かな・英字モードのレイアウトの選択肢（同梱の既定とユーザーのレイアウトから、そのモードのもの）
@@ -270,7 +267,6 @@ final class NagiSettingsModel: ObservableObject {
             return false
         case .ios: return ios.bool(row.key)
         case .layout: return false
-        case .diag: return diagEnabled
         }
     }
 
@@ -301,7 +297,6 @@ final class NagiSettingsModel: ObservableObject {
             return ""
         case .ios: return ios.string(row.key)
         case .layout: return LayoutAssignment.id(for: layoutMode(row))
-        case .diag: return ""
         }
     }
 
@@ -334,7 +329,6 @@ final class NagiSettingsModel: ObservableObject {
         case .core: return coreItem(row.key)?.explicit ?? false
         case .ios: return ios.isExplicit(row.key)
         case .layout: return LayoutAssignment.isExplicit(for: layoutMode(row))
-        case .diag: return Self.defaults?.object(forKey: DiagLog.enabledKey) != nil
         }
     }
 
@@ -349,9 +343,6 @@ final class NagiSettingsModel: ObservableObject {
         case .core: editCore(row.key, .bool(value))
         case .ios: editIOS(row.key, .bool(value))
         case .layout: break
-        case .diag:
-            DiagLog.isEnabled = value
-            diagEnabled = value
         }
     }
 
@@ -400,7 +391,6 @@ final class NagiSettingsModel: ObservableObject {
         case .layout:
             LayoutAssignment.set(id: value, for: layoutMode(row))
             objectWillChange.send()
-        case .diag: break
         }
     }
 
@@ -416,9 +406,6 @@ final class NagiSettingsModel: ObservableObject {
         case .layout:
             LayoutAssignment.set(id: nil, for: layoutMode(row))
             objectWillChange.send()
-        case .diag:
-            Self.defaults?.removeObject(forKey: DiagLog.enabledKey)
-            diagEnabled = DiagLog.isEnabled
         }
     }
 
@@ -433,6 +420,7 @@ final class NagiSettingsModel: ObservableObject {
             iosSaveError = "設定を保存できませんでした: \(error.localizedDescription)"
         }
         ios = latest
+        NagiDeveloperMode.shared.update(latest.developerMode)
     }
 
     /// コアの設定を書く（`update_settings`）。画面にはすぐ反映し、結果で確定（範囲外などは項目の下に出す）
@@ -511,9 +499,15 @@ final class NagiSettingsModel: ObservableObject {
 
 // MARK: - 画面
 
-struct SettingsView: View {
+struct SettingsView<Developer: View>: View {
     @StateObject private var model = NagiSettingsModel()
     @State private var confirmingClear = false
+    /// 「開発者」画面の中の、端末情報・Probes・結果の画面（開発者モードがオンのときだけ開ける）
+    private let developer: Developer
+
+    init(@ViewBuilder developer: () -> Developer) {
+        self.developer = developer()
+    }
 
     var body: some View {
         NavigationStack {
@@ -545,6 +539,11 @@ struct SettingsView: View {
                     Section(header: Text(section.title)) {
                         ForEach(section.rows) { row in
                             NagiSettingRowView(model: model, row: row)
+                        }
+                        if section.title == NagiSettingsModel.developerGroup && model.ios.developerMode {
+                            NavigationLink("開発者ツール（診断ログ・計測・テスト）") {
+                                NagiDeveloperView { developer }
+                            }
                         }
                         if section.title == "学習" {
                             Button("学習データをすべて削除", role: .destructive) {
@@ -754,5 +753,5 @@ private struct NagiTextSettingRow: View {
 }
 
 #Preview {
-    SettingsView()
+    SettingsView { EmptyView() }
 }

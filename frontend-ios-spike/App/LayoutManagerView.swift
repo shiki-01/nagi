@@ -332,6 +332,7 @@ private func loadRows(ids: [String], isUser: Bool, presetIds: Set<String>) -> [N
 
 struct LayoutManagerView: View {
     @ObservedObject private var inbox = NagiLayoutURLInbox.shared
+    @ObservedObject private var developer = NagiDeveloperMode.shared
 
     @State private var userRows: [NagiLayoutRow] = []
     @State private var presetRows: [NagiLayoutRow] = []
@@ -391,8 +392,8 @@ struct LayoutManagerView: View {
                 } footer: {
                     Text("レイアウトのアイコンに Iconify（iconify:）を使うと、取り込み時にアイコンを取得します。取得したアイコンセットのライセンスはここで確認できます。")
                 }
-                // 実機での確認用（TestFlight・開発用ビルドのみ。App Store 版には出さない）
-                if DiagLog.isTestBuild {
+                // 実機での確認用（TestFlight・開発用ビルドで、開発者モードがオンのときだけ。App Store 版には出さない）
+                if developer.showsTestTools {
                     testSection
                 }
             }

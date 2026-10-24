@@ -153,7 +153,7 @@
 | `keyboard.haptic` | キー入力の触覚 | choice: `off` / `light` / `medium` / `heavy` | `light` | S | kbd | 既存(iOS)・確認済み（2026-10-22） | 触覚の発生にフルアクセスが要るかは、`ios-device-checklist.md` §2 設定タブの確認項目（「フルアクセスなし・ありの両方で振動するか」。2026-10-22 問題なし）。結論（要否）は文書に記録がない（`UIFeedbackGenerator` は拡張では制限あり） |
 | `keyboard.sound` | キー入力の音 | choice: `off` / `compat`（表示名「クリック音」） | `compat` | S | kbd | 既存(iOS)・確認済み（2026-10-22） | `compat` はシステムのキーボードのクリック音（`AudioServicesPlaySystemSound(1104)`）を直接鳴らす（端末の「キーボードのクリック」設定には従わず、消音スイッチに従う）。以前あった `system`（`UIDevice.playInputClick`。端末の「キーボードのクリック」設定に従う）は実機で鳴らなかったので廃止した。保存済みの `system` は読むときに既定の `compat` に丸める。独自音源は持たない。**既定は `compat`**（実装 `IOSSettings.swift` の `defaultValue`） |
 | `keyboard.haptic_engine` | 触覚の方式（互換モード） | choice: `standard` / `compat` | `standard` | D | kbd | 実装済み(iOS・要実機確認) | `standard` は `UIImpactFeedbackGenerator`、`compat` は「標準」が働かない端末向けで、システムサウンド（Peek など）の振動で知らせる（`AudioServicesPlaySystemSound`）。`keyboard.haptic` が `off` のときは働かない |
-| `keyboard.commit_method` | 確定の方式（診断用） | choice: `insert` / `mark` / `delete` | `insert` | D | kbd | 実装済み(iOS)・確認済み（2026-10-22。既定 `insert` は H-31 でも確認。`mark` / `delete` の確認記録は文書にない） | 変換中の文字列がある状態での確定の手順（`HostCompositionApplier.CommitMethod`）。`insert` は `insertText` だけで変換中の範囲を置き換える（失敗しても手前の本文を消さない）。`mark` は確定文字列を `setMarkedText` してから `unmarkText`。`delete` は旧方式（`unmarkText` → `deleteBackward`×N → `insertText`。実機で手前の本文を消すことがあった）。不具合の切り分け用 |
+| `keyboard.commit_method` | 確定の方式（診断用） | choice: `insert` / `mark` / `delete` | `insert` | D（開発者モード） | kbd | 実装済み(iOS)・確認済み（2026-10-22。既定 `insert` は H-31 でも確認。`mark` / `delete` の確認記録は文書にない） | 変換中の文字列がある状態での確定の手順（`HostCompositionApplier.CommitMethod`）。`insert` は `insertText` だけで変換中の範囲を置き換える（失敗しても手前の本文を消さない）。`mark` は確定文字列を `setMarkedText` してから `unmarkText`。`delete` は旧方式（`unmarkText` → `deleteBackward`×N → `insertText`。実機で手前の本文を消すことがあった）。不具合の切り分け用 H-64: 開発者モードがオンのときだけ設定画面に出る（オフの間は保存値があっても `insert` として動く） |
 | `keyboard.sound_volume` | 音量 | float 0–1 | 0.5 | - | kbd | 新規(iOS) | システムサウンド（`compat`）は OS が音量を決めるため、独自音源を持つまでは不要 |
 | `keyboard.theme` | テーマ | choice: `system` / `light` / `dark`（ユーザー定義は未実装） | `system` | S | kbd | 実装済み(iOS)・確認済み（2026-10-22） | 拡張のビューの `overrideUserInterfaceStyle` で上書き |
 | `keyboard.accent` | アクセントカラー | choice: `blue` / `green` / `orange` / `pink` / `gray` | `blue` | S | kbd | 実装済み(iOS)・確認済み（2026-10-22） | 確定キー・選択中の候補・シフト等の色。任意色（sRGB 16 進）は未実装。旧 ID `keyboard.accent_color` |
@@ -219,14 +219,21 @@
 | `a11y.reduce_motion` | アニメーションを減らす | choice: `system` / `on` / `off` | `system` | D | kbd | 新規(iOS) | |
 | `a11y.haptic_notifications` | 状態変化を触覚で知らせる（変換開始・確定失敗など） | bool | false | D | kbd | 新規(iOS) | |
 
-### 2.9 診断（`diag`）
+### 2.9 診断（`diag`）と開発者モード（`developer`）
+
+診断ログ・実機計測・動作テスト用の画面など、コアの機能に関係しない項目は、`developer.mode`（開発者モード）をオンにしたときだけ設定の「開発者」から開ける（H-64）。`diag.*` の項目（状態表示・応答時間・メモリ・ログの切り替え/書き出し/消去）はすべて「開発者」画面にあり、診断ログの既定の ON/OFF（TestFlight・開発用ビルドは ON）は変えない。
+
+| ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `developer.mode` | 開発者モード | bool | false | D | kbd+app | 実装済み(iOS)・実機未確認（H-64） | オフのとき、診断ログの切り替え・閲覧・共有、入力欄の種類のテスト、Probes・実機計測、ファイル確認、メモリ状況、動作テスト用のレイアウト/辞書サンプル、キーボードの「検証」ボタン、`keyboard.commit_method`（確定の方式）を出さない。値は `ios-settings.json`（拡張も読む）。`keyboard.commit_method` はオフの間、保存済みの値があっても既定（`insert`）として動く |
+
 
 | ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `diag.status` | 状態表示（プロファイル・LLM の有無・メモリ・辞書の有無） | 表示 | - | S | app | 既存(iOS) | 実機計測画面の簡略版。入力内容は含めない |
 | `diag.latency_view` | 応答時間の表示（直近 N 回の p50/p95） | 表示 | - | D | app | 既存(iOS) | 現状はホストアプリの実機計測（H 節）。常用の画面に整理する |
 | `diag.memory_view` | 拡張のメモリ使用量の表示 | 表示 | - | D | app | 既存(iOS) | `MemoryProbe` 相当 |
-| `diag.log_enabled` | 診断ログを記録 | bool | TestFlight・開発用ビルドは true、App Store 配布は false | D | kbd+core | 既存(iOS) | TestFlight 配布期間中は既定 ON で入力内容を含める（パスワード欄は伏せる）。App Store 配布版は既定 OFF・内容を含めない（`decisions.md` H-22(a)、CLAUDE.md の例外。判定は `DiagLog.isTestBuild`） |
+| `diag.log_enabled` | 診断ログを記録 | bool | TestFlight・開発用ビルドは true、App Store 配布は false | D（開発者モード） | kbd+core | 既存(iOS)。H-64 で設定画面から「開発者」画面（`NagiDiagLogSection`）へ移した | TestFlight 配布期間中は既定 ON で入力内容を含める（パスワード欄は伏せる）。App Store 配布版は既定 OFF・内容を含めない（`decisions.md` H-22(a)、CLAUDE.md の例外。判定は `DiagLog.isTestBuild`） |
 | `diag.log_level` | ログのレベル | choice: `error` / `warn` / `info` / `debug` | `warn` | D | kbd+core | 新規(iOS) | `debug` はデバッグビルドのみ |
 | `diag.log_export` | ログの書き出し | 操作 | - | D | app | 新規(iOS) | 共有シート。書き出し前に内容の種類を表示 |
 | `diag.log_clear` | ログの削除 | 操作 | - | D | app | 新規(iOS) | |

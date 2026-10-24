@@ -1009,8 +1009,9 @@ private struct CandidateBar: View {
                     }
                 }
             }
-            // 検証用の画面は DEBUG / TestFlight のビルドだけ（App Store 版では出さない）
-            if DiagLog.isTestBuild {
+            // 検証用の画面は DEBUG / TestFlight のビルドで、開発者モード（設定 `developer.mode`）がオンのときだけ
+            // （App Store 版では出さない）
+            if DiagLog.isTestBuild && model.ios.developerMode {
                 Button("検証", action: onShowProbes)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)

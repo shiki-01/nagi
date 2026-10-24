@@ -269,4 +269,51 @@ final class IOSSettingsTests: XCTestCase {
         let data = try JSONEncoder().encode(value)
         XCTAssertEqual(try JSONDecoder().decode(NagiJSONValue.self, from: data), value)
     }
+
+    // MARK: 開発者モード
+
+    func testDeveloperModeIsOffByDefault() {
+        XCTAssertFalse(NagiIOSSettings().developerMode)
+        let def = NagiIOSSettings.definition(for: K.developerMode)
+        XCTAssertEqual(def?.defaultValue, NagiJSONValue.bool(false))
+        XCTAssertEqual(def?.isSimple, false)
+        // 開発者モード自体は、オフのときにも設定画面に出る（開発者向けの項目ではない）
+        XCTAssertEqual(def?.isDeveloper, false)
+    }
+
+    func testDeveloperModeSaveAndLoad() throws {
+        var s = NagiIOSSettings()
+        s.set(K.developerMode, .bool(true))
+        XCTAssertTrue(s.developerMode)
+        let data = try JSONEncoder().encode(s)
+        let loaded = try JSONDecoder().decode(NagiIOSSettings.self, from: data)
+        XCTAssertTrue(loaded.developerMode)
+        var off = loaded
+        off.set(K.developerMode, .bool(false))
+        XCTAssertFalse(off.developerMode)
+        // 型違いは既定（オフ）
+        off.set(K.developerMode, .string("true"))
+        XCTAssertFalse(off.developerMode)
+        // 既定に戻す
+        s.set(K.developerMode, nil)
+        XCTAssertFalse(s.developerMode)
+        XCTAssertFalse(s.isExplicit(K.developerMode))
+    }
+
+    func testDeveloperOnlyItemsAreTheDiagnosticOnes() {
+        let keys = NagiIOSSettings.definitions.filter { $0.isDeveloper }.map { $0.key }
+        XCTAssertEqual(keys, [K.keyboardCommitMethod])
+    }
+
+    func testCommitMethodIsIgnoredWithoutDeveloperMode() {
+        var s = NagiIOSSettings()
+        s.set(K.keyboardCommitMethod, .string("mark"))
+        XCTAssertEqual(s.commitMethod, "insert")
+        s.set(K.developerMode, .bool(true))
+        XCTAssertEqual(s.commitMethod, "mark")
+        s.set(K.developerMode, .bool(false))
+        XCTAssertEqual(s.commitMethod, "insert")
+        // 値そのものは消えずに残る（オンに戻せば復活する）
+        XCTAssertEqual(s.string(K.keyboardCommitMethod), "mark")
+    }
 }

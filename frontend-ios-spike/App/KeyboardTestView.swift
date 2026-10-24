@@ -45,12 +45,7 @@ struct KeyboardTestView: View {
                     }
                 }
 
-                NagiDiagLogSection()
-
-                // 入力欄の種類（パスワード欄など）を試す欄。App Store 版には出さない
-                if DiagLog.isTestBuild {
-                    NagiInputKindsSection()
-                }
+                // 診断ログ・入力欄の種類のテストは、設定の「開発者モード」をオンにすると出る「開発者」画面にある
             }
             .navigationTitle("入力テスト")
             .toolbar {
