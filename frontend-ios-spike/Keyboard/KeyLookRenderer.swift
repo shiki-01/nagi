@@ -293,16 +293,6 @@ struct KeyboardBackgroundView: View {
                     KeyImageLayer(assetId: image, fit: params.fillImageFit, opacity: params.fillImageOpacity * params.fillOpacity)
                 }
             }
-        } else {
-            // 指定が無いとき: システムのキーボード（フッターの帯）に近い色で塗る。塗らないと拡張の領域が黒く抜けることがある
-            Rectangle().fill(Color(Self.systemLike))
         }
-    }
-
-    /// システムのキーボードの背景に近い色（ライト / ダーク）
-    private static let systemLike = UIColor { trait in
-        trait.userInterfaceStyle == .dark
-            ? UIColor(red: 0.16, green: 0.16, blue: 0.17, alpha: 1)
-            : UIColor(red: 0.82, green: 0.84, blue: 0.86, alpha: 1)
     }
 }
