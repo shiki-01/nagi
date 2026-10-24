@@ -173,7 +173,8 @@
 | `candbar.show_segments` | 文節列（注目文節の表示）を出す | bool | true | D | kbd | 新規(iOS) | iOS は marked text に属性を付けられないため主手段（`mobile-design.md` §5.1）。OFF は非推奨 |
 | `candbar.auto_hide` | 入力が無いときの候補バーの扱い | choice: `always` / `hide_when_empty` | `always` | D | kbd | 新規(iOS) | 非表示にすると高さが変わるため既定は常時表示 |
 | `candbar.tap_commit` | 候補のタップで即確定 | bool | true | D | kbd | 新規(iOS) | OFF なら 1 回目で選択、2 回目で確定 |
-| `candbar.paste_button` | 「貼り付け」ボタンを候補バーの左端に出す | bool | true | D | kbd | 実装済み(iOS)・確認済み（2026-10-22） | 表示判定は `UIPasteboard.hasStrings` のみ（中身は読まない）、入力中は非表示。中身はタップ時だけ読む（iOS 16 の貼り付け許可が出うる）。旧 ID `candbar.clipboard_paste`（既定は旧 false → true）。`privacy.clipboard_access` とは独立 |
+| `candbar.paste_button` | ツールバーに「貼り付け」を出す | bool | true | D | kbd | 実装済み(iOS)・確認済み（2026-10-22） | H-62 でツールバーの項目（`toolbar.items`）の 1 つになった。これがオフなら項目に入れていても出さない。表示判定は `UIPasteboard.hasStrings` のみ（中身は読まない）、入力中は非表示。中身はタップ時だけ読む（iOS 16 の貼り付け許可が出うる）。旧 ID `candbar.clipboard_paste`（既定は旧 false → true）。`privacy.clipboard_access` とは独立 |
+| `toolbar.items` | ツールバーの項目と並び順 | list（`dismiss` / `paste` / `cursorLeft` / `cursorRight` / `newline` / `space` / `deleteWord` / `emoji` / `nextKeyboard` の部分集合を順序つきで） | `[dismiss, paste, cursorLeft, cursorRight]` | D | kbd | 実装済み(iOS)・実機未確認（H-62） | 入力中でなく候補が無いときに候補バーの場所に出す（候補が来たら候補バーに切り替わる。高さは同じ）。知らない名前・重複は捨て、空配列は「何も出さない」。貼り付けはクリップボードに文字があるときだけ。undo / やり直し・全選択・ホストアプリを開く、は拡張から安全に行える API が無く未対応（H-62）。型 `NagiIOSSettingDef.Kind.list` |
 
 ### 2.6 プライバシー・フルアクセス（`privacy`）
 

@@ -33,6 +33,8 @@ struct NagiSettingRow: Identifiable {
         case intStepper(min: Int, max: Int, step: Int)
         case floatStepper(min: Double, max: Double, step: Double)
         case choice([Option])
+        /// 選択肢の部分集合を順序つきで選ぶ（ツールバーの項目など）
+        case list([Option])
         case text
     }
 
@@ -209,6 +211,8 @@ final class NagiSettingsModel: ObservableObject {
                 control = .floatStepper(min: lo, max: hi, step: step)
             case .choice(let choices):
                 control = .choice(choices.map { NagiSettingRow.Option(value: $0.value, label: $0.label) })
+            case .list(let choices):
+                control = .list(choices.map { NagiSettingRow.Option(value: $0.value, label: $0.label) })
             }
             return NagiSettingRow(
                 key: def.key, origin: .ios, group: def.group, label: def.label,
@@ -299,6 +303,15 @@ final class NagiSettingsModel: ObservableObject {
         case .layout: return LayoutAssignment.id(for: layoutMode(row))
         case .diag: return ""
         }
+    }
+
+    /// 順序つきの選択（`.list`）の現在の値
+    func listValue(_ row: NagiSettingRow) -> [String] {
+        row.origin == .ios ? ios.stringList(row.key) : []
+    }
+
+    func setList(_ row: NagiSettingRow, _ values: [String]) {
+        if row.origin == .ios { editIOS(row.key, .array(values.map { .string($0) })) }
     }
 
     func textValue(_ row: NagiSettingRow) -> String {
@@ -643,9 +656,69 @@ private struct NagiSettingRowView: View {
                 }
             }
             .pickerStyle(.menu)
+        case .list(let options):
+            NavigationLink {
+                NagiListSettingEditor(model: model, row: row, options: options)
+            } label: {
+                HStack {
+                    Text(row.label)
+                    Spacer()
+                    Text("\(model.listValue(row).count) 項目").foregroundColor(.secondary)
+                }
+            }
         case .text:
             NagiTextSettingRow(model: model, row: row)
         }
+    }
+}
+
+/// 順序つきの選択の編集画面: 上に今の項目（並べ替え・削除）、下に追加できる項目
+private struct NagiListSettingEditor: View {
+    @ObservedObject var model: NagiSettingsModel
+    let row: NagiSettingRow
+    let options: [NagiSettingRow.Option]
+
+    private var selected: [String] { model.listValue(row) }
+
+    private func label(_ value: String) -> String {
+        options.first { $0.value == value }?.label ?? value
+    }
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(selected, id: \.self) { value in
+                    Text(label(value))
+                }
+                .onMove { from, to in
+                    var values = selected
+                    values.move(fromOffsets: from, toOffset: to)
+                    model.setList(row, values)
+                }
+                .onDelete { offsets in
+                    var values = selected
+                    values.remove(atOffsets: offsets)
+                    model.setList(row, values)
+                }
+            } header: {
+                Text("表示する項目（上から順）")
+            } footer: {
+                Text("右端のつまみで並べ替え、左の − で外します。")
+            }
+            Section("追加できる項目") {
+                ForEach(options.filter { !selected.contains($0.value) }, id: \.value) { option in
+                    Button {
+                        model.setList(row, selected + [option.value])
+                    } label: {
+                        Label(option.label, systemImage: "plus.circle")
+                    }
+                }
+            }
+        }
+        // 並べ替えのつまみと削除ボタンを常に出す
+        .environment(\.editMode, .constant(.active))
+        .navigationTitle(row.label)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

@@ -669,6 +669,25 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
+    /// ツールバーの操作（`ToolbarAction`）。ツールバーは入力中でないときだけ出るが、押す直前に入力が始まっていた場合に
+    /// 備えて、文字を入れる操作は入力中の文字列を確定してから行う。既存のキー操作・機能をそのまま呼ぶ
+    func perform(toolbar action: ToolbarAction) {
+        toggleState = nil
+        switch action {
+        case .dismiss: perform(action: "dismiss")
+        case .paste: pasteFromClipboard()
+        case .cursorLeft: arrow(.left)
+        case .cursorRight: arrow(.right)
+        case .newline: perform(action: "enter")
+        case .space:
+            commitPreedit()
+            hostInsert(" ")
+        case .deleteWord: deleteWordBackward()
+        case .emoji: switchLayout(target: "emoji")
+        case .nextKeyboard: nextKeyboard()
+        }
+    }
+
     // MARK: - キー操作（コアへ）
 
     func key(_ key: KanaKey, _ gesture: KeyGesture, flick: FlickDetail? = nil) {

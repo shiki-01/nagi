@@ -61,6 +61,8 @@ struct NagiIOSSettingDef {
         case int(min: Int, max: Int, step: Int)
         case float(min: Double, max: Double, step: Double)
         case choice([Choice])
+        /// 選択肢の部分集合を順序つきで持つ（ツールバーの項目など）。値は文字列の配列
+        case list([Choice])
     }
 
     let key: String
@@ -102,6 +104,17 @@ struct NagiIOSSettingDef {
                 return .string(text)
             }
             return defaultValue
+        case .list(let choices):
+            guard case .array(let items)? = raw else { return defaultValue }
+            // 知らない名前・重複は捨てる（並びは保つ）。空の配列は「何も出さない」という明示の指定
+            var seen = Set<String>()
+            var result: [NagiJSONValue] = []
+            for item in items {
+                guard case .string(let text) = item, choices.contains(where: { $0.value == text }),
+                      seen.insert(text).inserted else { continue }
+                result.append(.string(text))
+            }
+            return .array(result)
         }
     }
 }
@@ -252,9 +265,14 @@ struct NagiIOSSettings: Codable, Equatable {
             ]),
             isSimple: true, defaultValue: .string("blue")),
         NagiIOSSettingDef(
-            key: Key.candbarPasteButton, group: "キーボード", label: "候補バーに「貼り付け」を出す",
-            description: "入力中でなく、クリップボードに文字があるときだけ、候補バーの左端に出します。押したときだけクリップボードを読みます（iOS の貼り付け許可の確認が出ることがあります）。",
+            key: Key.candbarPasteButton, group: "キーボード", label: "ツールバーに「貼り付け」を出す",
+            description: "ツールバーの項目に「貼り付け」を入れていても、これがオフなら出しません。クリップボードに文字があるときだけ出します。押したときだけクリップボードを読みます（iOS の貼り付け許可の確認が出ることがあります）。",
             kind: .bool, isSimple: false, defaultValue: .bool(true)),
+        NagiIOSSettingDef(
+            key: Key.toolbarItems, group: "キーボード", label: "ツールバーの項目",
+            description: "入力中でなく、候補が無いときに候補バーの場所に出す操作です。表示する項目と並び順を選べます（入力中の候補が出ると候補バーに切り替わります）。",
+            kind: .list(ToolbarAction.allCases.map { NagiIOSSettingDef.Choice(value: $0.rawValue, label: $0.title) }),
+            isSimple: false, defaultValue: .array(ToolbarAction.defaultItems.map { .string($0.rawValue) })),
         NagiIOSSettingDef(
             key: Key.keyboardCommitMethod, group: "キーボード", label: "確定の方式（診断用）",
             description: "変換中の文字列を確定するときの、入力欄への反映の手順です。確定で手前の文字が消えるなどの不具合を切り分けるときだけ変えてください。",
@@ -291,6 +309,7 @@ struct NagiIOSSettings: Codable, Equatable {
         static let keyboardTheme = "keyboard.theme"
         static let keyboardAccent = "keyboard.accent"
         static let candbarPasteButton = "candbar.paste_button"
+        static let toolbarItems = "toolbar.items"
         static let keyboardHeight = "keyboard.height"
         static let keyboardHeightScale = "keyboard.height_scale"
         static let keyboardOneHanded = "keyboard.one_handed"
@@ -324,6 +343,15 @@ struct NagiIOSSettings: Codable, Equatable {
 
     func int(_ key: String) -> Int {
         Int(double(key).rounded())
+    }
+
+    /// 文字列の配列の項目（`.list`）。未指定・不正は既定
+    func stringList(_ key: String) -> [String] {
+        guard case .array(let items) = value(key) else { return [] }
+        return items.compactMap { item in
+            if case .string(let text) = item { return text }
+            return nil
+        }
     }
 
     func string(_ key: String) -> String {
@@ -391,6 +419,8 @@ struct NagiIOSSettings: Codable, Equatable {
     var theme: String { string(Key.keyboardTheme) }
     var accent: String { string(Key.keyboardAccent) }
     var pasteButton: Bool { bool(Key.candbarPasteButton) }
+    /// ツールバーに出す項目（表示順）
+    var toolbarItems: [ToolbarAction] { ToolbarLogic.actions(from: stringList(Key.toolbarItems)) }
 
     /// フリックと判定する移動量（pt）。感度が高いほど短い
     var flickThresholdPoints: Double {

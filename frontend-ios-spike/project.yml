@@ -191,6 +191,8 @@ targets:
       - path: Shared/LayoutURL.swift
       - path: Shared/KeyboardIcon.swift
       - path: Shared/TestAids.swift
+      # 候補バーのツールバーの操作の定義（IOSSettings.swift が参照する）
+      - path: Shared/ToolbarAction.swift
       - path: Keyboard/KanaKeyTable.swift
       - path: Keyboard/CandidateKind.swift
       - path: Keyboard/TouchLogic.swift

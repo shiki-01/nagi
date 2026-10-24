@@ -958,23 +958,12 @@ private struct CandidateBar: View {
                     .lineLimit(2)
                 Spacer(minLength: 0)
             } else {
-                // 左端の「貼り付け」: クリップボードに文字列があり、入力中でないときだけ（設定 `candbar.paste_button`）。
-                // 表示の判定は `hasStrings` のみ。クリップボードの中身はタップしたときに初めて読む
-                if model.clipboardHasText && !model.hasPreedit {
-                    Button(action: {
-                        NagiKeyFeedback.keyDown()
-                        model.pasteFromClipboard()
-                    }) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "doc.on.clipboard").font(.system(size: 13))
-                            Text("貼り付け").font(.system(size: 13)).lineLimit(1)
-                        }
-                        .foregroundColor(Color(UIColor.label))
-                        .padding(.horizontal, 8)
-                        .frame(height: 32)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(UIColor.systemBackground)))
-                    }
-                    .buttonStyle(.plain)
+                // 入力中でなく候補も無いときは、候補バーの場所にツールバー（設定 `toolbar.items`）を出す。
+                // 候補が来たら候補バーに切り替わる（バーの高さは変わらない）
+                if ToolbarLogic.shouldShow(
+                    hasPreedit: model.hasPreedit, candidatesEmpty: model.candidates.isEmpty, hasMessage: false
+                ) {
+                    ToolbarButtons(model: model)
                 }
                 if let warning = model.warning, !model.hasPreedit, model.candidates.isEmpty {
                     Text(warning)
@@ -1039,6 +1028,34 @@ private struct CandidateBar: View {
                 ? Text(verbatim: part.text).bold().foregroundColor(themeAccent)
                 : Text(verbatim: part.text).foregroundColor(.secondary)
             return result + piece
+        }
+    }
+}
+
+/// ツールバーのボタン列。貼り付けは、クリップボードに文字があるときだけ出す
+/// （表示の判定は `hasStrings` のみで、中身はタップしたときに初めて読む。フルアクセスが無い・許可されなければ隠れる）
+private struct ToolbarButtons: View {
+    @ObservedObject var model: KeyboardModel
+
+    var body: some View {
+        ForEach(ToolbarLogic.visible(model.ios.toolbarItems, clipboardHasText: model.clipboardHasText), id: \.rawValue) { action in
+            Button(action: {
+                NagiKeyFeedback.keyDown()
+                model.perform(toolbar: action)
+            }) {
+                HStack(spacing: 3) {
+                    Image(systemName: action.systemImage).font(.system(size: 14))
+                    if action.showsTitle {
+                        Text(action.title).font(.system(size: 13)).lineLimit(1)
+                    }
+                }
+                .foregroundColor(Color(UIColor.label))
+                .padding(.horizontal, action.showsTitle ? 8 : 0)
+                .frame(minWidth: 36, minHeight: 32)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color(UIColor.systemBackground)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(action.title)
         }
     }
 }
