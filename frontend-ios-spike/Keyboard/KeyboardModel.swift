@@ -1002,7 +1002,9 @@ final class KeyboardModel: ObservableObject {
 
     private func sendLayoutGeometry() {
         guard let session = session, let size = layoutGeometrySize else { return }
-        guard let snapshot = LayoutGeometry.snapshot(layout: layoutDef, size: size, spacing: NagiKeyMetrics.keySpacing),
+        guard let snapshot = LayoutGeometry.snapshot(
+            layout: layoutDef, size: size, keySpacing: NagiKeyMetrics.keySpacing, rowSpacing: NagiKeyMetrics.keySpacing
+        ),
               snapshot != lastSentGeometry else { return }
         lastSentGeometry = snapshot
         let ok = session.setLayoutGeometry(snapshot)

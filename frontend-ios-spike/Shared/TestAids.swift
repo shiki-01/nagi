@@ -210,7 +210,7 @@ enum NagiTestLayouts {
     ]
 
     /// 巨大 data の期待結果（ファイル / 貼り付け経由と、URL 経由で文言が違う）
-    static let hugeExpectationImport = "エラー: JSON が大きすぎます（512 KB まで）"
+    static let hugeExpectationImport = "エラー: JSON が大きすぎます（1536 KB まで）"
     static let hugeExpectationURL = "エラー: data が大きすぎます（1024 KB まで）"
 
     static func url(for testCase: NagiTestLayoutCase, in bundle: Bundle = .main) -> URL? {
@@ -219,8 +219,8 @@ enum NagiTestLayouts {
 
     /// 巨大な JSON を作る。有効なレイアウトに、未知の項目 `padding` を足して `bytes` バイト以上にする
     /// （未知の項目は無視されるので、大きさの検査だけが働く）
-    static func hugeLayoutJSON(bytes: Int = 800 * 1024) -> Data {
-        let head = #"{"schema":1,"id":"test-huge","name":"巨大","mode":"kana","rows":[{"keys":[{"id":"a","kind":"text","text":"a"}]}],"padding":""#
+    static func hugeLayoutJSON(bytes: Int = 1700 * 1024) -> Data {
+        let head = #"{"schema":2,"id":"test-huge","name":"巨大","mode":"kana","rows":[{"keys":[{"id":"a","kind":"text","text":"a"}]}],"padding":""#
         let tail = #""}"#
         let fill = String(repeating: "x", count: max(0, bytes - head.utf8.count - tail.utf8.count))
         return Data((head + fill + tail).utf8)

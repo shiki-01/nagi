@@ -1,6 +1,6 @@
 import Foundation
 
-// キーボードレイアウトのデータモデル（docs/ios-keyboard-layout.md、スキーマ v1）。
+// キーボードレイアウトのデータモデル（docs/ios-keyboard-layout.md、スキーマ v2。見た目の指定は docs/keyboard-style-spec.md）。
 // レイアウトは「どのキーが何を送るか」だけを持ち、かな変換・トグル・フリックの解決はコアが行う。
 // 段階 2 で toggle / longPress / shortcut も描画・実行する（Keyboard/ 側）。flick キーの longPress は未対応（無視する）。
 
@@ -12,7 +12,8 @@ enum LayoutKeyKind: String, Codable {
     case text, flick, toggle, action, shortcut, layout, spacer
 }
 
-enum KeyStyle: String, Codable {
+/// キーの色の役割（`role`）
+enum KeyRole: String, Codable {
     case normal, function, accent
 }
 
@@ -38,14 +39,14 @@ struct VisibleCondition: Codable {
     }
 }
 
-struct LayoutKeyDef: Codable {
+struct LayoutKeyDef: Decodable {
     var id: String
     /// 行内の幅の比（既定 1）
     var width: Double
     var label: String?
     /// アイコン。`sf:<SF Symbols 名>` / `iconify:<prefix>:<name>` / 接頭辞なし（従来どおり SF Symbols 名）
     var icon: String?
-    var style: KeyStyle
+    var role: KeyRole
     var kind: LayoutKeyKind
     // text
     var text: String?
@@ -68,13 +69,17 @@ struct LayoutKeyDef: Codable {
     var target: String?
     var longPress: [LayoutKeyDef]?
     var visible: VisibleCondition?
+    /// このキーの見た目（`look`）。省略可
+    var look: KeyLook?
+    /// このキー自身の状態ごとの見た目（`states`）。省略可
+    var states: LookStates?
     /// JSON で id が指定されていたか（省略時は補った id。検証では「指定あり」のものだけ形式を見る）
     var idGiven = true
 
     enum CodingKeys: String, CodingKey {
-        case id, width, label, icon, style, kind, text, shift
+        case id, width, label, icon, role, kind, text, shift
         case center, up, down, left, right, kana
-        case cycle, action, steps, target, longPress, visible
+        case cycle, action, steps, target, longPress, visible, look, states
     }
 
     init(from decoder: Decoder) throws {
@@ -87,7 +92,7 @@ struct LayoutKeyDef: Codable {
         width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 1
         label = try c.decodeIfPresent(String.self, forKey: .label)
         icon = try c.decodeIfPresent(String.self, forKey: .icon)
-        style = try c.decodeIfPresent(KeyStyle.self, forKey: .style) ?? .normal
+        role = try c.decodeIfPresent(KeyRole.self, forKey: .role) ?? .normal
         text = try c.decodeIfPresent(String.self, forKey: .text)
         shift = try c.decodeIfPresent(String.self, forKey: .shift)
         center = try c.decodeIfPresent(FlickChar.self, forKey: .center)
@@ -103,15 +108,18 @@ struct LayoutKeyDef: Codable {
         longPress = try c.decodeIfPresent([LayoutKeyDef].self, forKey: .longPress)
         // 条件の形が想定と違っても、レイアウト全体は無効にしない（v1 では使わない）
         visible = (try? c.decodeIfPresent(VisibleCondition.self, forKey: .visible)) ?? nil
+        // 見た目の指定は形が違っても無視する（レイアウト全体は無効にしない。仕様 §1.4）
+        look = (try? c.decodeIfPresent(KeyLook.self, forKey: .look)) ?? nil
+        states = (try? c.decodeIfPresent(LookStates.self, forKey: .states)) ?? nil
     }
 
     /// コードから作る最小のキー（最後の砦のレイアウト用）
-    init(id: String, kind: LayoutKeyKind, label: String?, action: String?, width: Double = 1, style: KeyStyle = .normal) {
+    init(id: String, kind: LayoutKeyKind, label: String?, action: String?, width: Double = 1, role: KeyRole = .normal) {
         self.id = id
         self.width = width
         self.label = label
         self.icon = nil
-        self.style = style
+        self.role = role
         self.kind = kind
         self.text = nil
         self.shift = nil
@@ -127,39 +135,58 @@ struct LayoutKeyDef: Codable {
         self.target = nil
         self.longPress = nil
         self.visible = nil
+        self.look = nil
+        self.states = nil
     }
 }
 
-struct LayoutRow: Codable {
+struct LayoutRow: Decodable {
     /// 行の高さの比（既定 1）
     var height: Double
     var keys: [LayoutKeyDef]
+    /// この行の全キーの見た目（`look`）。省略可
+    var look: KeyLook?
 
     enum CodingKeys: String, CodingKey {
-        case height, keys
+        case height, keys, look
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         height = try c.decodeIfPresent(Double.self, forKey: .height) ?? 1
         keys = try c.decode([LayoutKeyDef].self, forKey: .keys)
+        look = (try? c.decodeIfPresent(KeyLook.self, forKey: .look)) ?? nil
     }
 
-    init(height: Double, keys: [LayoutKeyDef]) {
+    init(height: Double, keys: [LayoutKeyDef], look: KeyLook? = nil) {
         self.height = height
         self.keys = keys
+        self.look = look
     }
 }
 
-struct KeyboardLayoutDef: Codable {
+struct KeyboardLayoutDef: Decodable {
     var schema: Int
     var id: String
     var name: String
     var mode: LayoutMode
     var rows: [LayoutRow]
+    /// 全キー共通の見た目
+    var look: KeyLook?
+    /// 役割（role）ごとの見た目
+    var roles: LookRoles?
+    /// 状態の見た目（全キー / 指定キー対象）。読めなかった要素は含まない
+    var rules: [LookRule] = []
+    /// JSON に書かれていた rules の個数（読めなかったものを含む。個数の上限の検査用）
+    var rulesRawCount = 0
+    var metrics: LayoutMetrics?
+    var background: LayoutBackground?
+    /// 画像 id → data URI（デコードは描画時。形式・大きさは `LayoutValidation.assetsError`）
+    var assets: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
         case schema, id, name, mode, rows
+        case look, roles, rules, metrics, background, assets
     }
 
     init(from decoder: Decoder) throws {
@@ -170,10 +197,21 @@ struct KeyboardLayoutDef: Codable {
         name = try c.decode(String.self, forKey: .name)
         mode = try c.decode(LayoutMode.self, forKey: .mode)
         rows = try c.decode([LayoutRow].self, forKey: .rows)
+        // 見た目の指定は形が違っても無視する（レイアウト全体は無効にしない。仕様 §1.4）
+        look = (try? c.decodeIfPresent(KeyLook.self, forKey: .look)) ?? nil
+        roles = (try? c.decodeIfPresent(LookRoles.self, forKey: .roles)) ?? nil
+        if let list = (try? c.decodeIfPresent(LookRuleList.self, forKey: .rules)) ?? nil {
+            rules = list.rules
+            rulesRawCount = list.rawCount
+        }
+        metrics = (try? c.decodeIfPresent(LayoutMetrics.self, forKey: .metrics)) ?? nil
+        background = (try? c.decodeIfPresent(LayoutBackground.self, forKey: .background)) ?? nil
+        // assets は資源の上限の対象なので、形が違えば取り込みエラーにする
+        assets = try c.decodeIfPresent([String: String].self, forKey: .assets) ?? [:]
     }
 
     init(id: String, name: String, mode: LayoutMode, rows: [LayoutRow]) {
-        self.schema = 1
+        self.schema = LayoutValidation.schemaVersion
         self.id = id
         self.name = name
         self.mode = mode
@@ -186,7 +224,7 @@ struct KeyboardLayoutDef: Codable {
     ///   （実行時の読み込みでは、参照先が消えていてもレイアウト全体は無効にしない）
     func validationError(targets: [String]? = nil) -> String? {
         typealias V = LayoutValidation
-        if schema != 1 { return "未対応のスキーマ \(schema)" }
+        if schema != V.schemaVersion { return "未対応のスキーマ \(schema)（schema \(V.schemaVersion) に移行してください）" }
         if !V.matches(id, V.layoutIdPattern) {
             return "id は英小文字・数字・- _ で始まりが英小文字か数字、64 文字以内にしてください"
         }
@@ -213,12 +251,14 @@ struct KeyboardLayoutDef: Codable {
         if heightSum > V.rowHeightSumMax {
             return "行の高さの比の合計は \(V.rowHeightSumMax) 以下にしてください（現在 \(heightSum)）"
         }
-        return nil
+        return V.looksError(self)
     }
 }
 
 /// レイアウトの検証の規則（`web/src/lib/keyboard/types.ts` の LIMITS と同じ値。文字数はコードポイント数）
 enum LayoutValidation {
+    /// 受理するスキーマのバージョン（現行版のみ。旧版を読む分岐は持たない）
+    static let schemaVersion = 2
     static let rowsMax = 8
     static let keysPerRowMax = 24
     static let rowWidthMin = 1.0
@@ -262,6 +302,53 @@ enum LayoutValidation {
         guard let text = text else { return false }
         let n = length(text)
         return n >= min && n <= max
+    }
+
+    /// 見た目まわりの資源の上限（rules の個数・assets）。見た目の値の不正はエラーにしない（無視する）
+    static func looksError(_ layout: KeyboardLayoutDef) -> String? {
+        if layout.rulesRawCount > KeyLookLimits.rulesMax {
+            return "rules は \(KeyLookLimits.rulesMax) 個以内にしてください（\(layout.rulesRawCount)）"
+        }
+        for rule in layout.rules {
+            if case .keys(let ids) = rule.target, ids.count > KeyLookLimits.targetKeysMax {
+                return "rules の target.keys は \(KeyLookLimits.targetKeysMax) 個以内にしてください（\(ids.count)）"
+            }
+        }
+        return assetsError(layout.assets)
+    }
+
+    /// `assets` の個数・id・形式・大きさ（§5.5、§6.2）
+    static func assetsError(_ assets: [String: String]) -> String? {
+        if assets.count > KeyLookLimits.assetsMax {
+            return "assets は \(KeyLookLimits.assetsMax) 枚以内にしてください（\(assets.count)）"
+        }
+        var total = 0
+        for id in assets.keys.sorted() {
+            if !matches(id, KeyLookLimits.assetIdPattern) {
+                return "assets の id「\(id)」は英小文字・数字・- _ で始まり 32 文字以内にしてください"
+            }
+            guard let uri = assets[id], let size = dataURIBytes(uri) else {
+                return "assets「\(id)」は image/png か image/jpeg の base64 data URI にしてください"
+            }
+            if size > KeyLookLimits.assetBytesMax {
+                return "assets「\(id)」は \(KeyLookLimits.assetBytesMax / 1024) KB 以内にしてください（\(size / 1024) KB）"
+            }
+            total += size
+        }
+        if total > KeyLookLimits.assetsTotalMax {
+            return "assets の合計は \(KeyLookLimits.assetsTotalMax / 1024) KB 以内にしてください（\(total / 1024) KB）"
+        }
+        return nil
+    }
+
+    /// data URI（image/png か image/jpeg の base64）のデコード後のバイト数。形式が違う・空・base64 が不正なら nil
+    static func dataURIBytes(_ uri: String) -> Int? {
+        for prefix in ["data:image/png;base64,", "data:image/jpeg;base64,"] where uri.hasPrefix(prefix) {
+            let payload = String(uri.dropFirst(prefix.count))
+            guard !payload.isEmpty, let data = Data(base64Encoded: payload) else { return nil }
+            return data.count
+        }
+        return nil
     }
 
     /// 1 つのキー（行内のキー）の検証
@@ -507,27 +594,27 @@ enum LayoutLoader {
     }
 
     private static let builtinKanaJSON = #"""
-    {"schema":1,"id":"builtin-kana","name":"builtin","mode":"kana","rows":[
-    {"keys":[{"id":"l","width":0.7,"label":"←","kind":"action","action":"moveLeft","style":"function"},
+    {"schema":2,"id":"builtin-kana","name":"builtin","mode":"kana","rows":[
+    {"keys":[{"id":"l","width":0.7,"label":"←","kind":"action","action":"moveLeft","role":"function"},
     {"id":"a","kind":"flick","kana":"あ","label":"あ"},{"id":"ka","kind":"flick","kana":"か","label":"か"},{"id":"sa","kind":"flick","kana":"さ","label":"さ"},
-    {"id":"bs","width":0.85,"label":"⌫","kind":"action","action":"backspace","style":"function"}]},
-    {"keys":[{"id":"r","width":0.7,"label":"→","kind":"action","action":"moveRight","style":"function"},
+    {"id":"bs","width":0.85,"label":"⌫","kind":"action","action":"backspace","role":"function"}]},
+    {"keys":[{"id":"r","width":0.7,"label":"→","kind":"action","action":"moveRight","role":"function"},
     {"id":"ta","kind":"flick","kana":"た","label":"た"},{"id":"na","kind":"flick","kana":"な","label":"な"},{"id":"ha","kind":"flick","kana":"は","label":"は"},
-    {"id":"sp","width":0.85,"label":"空白","kind":"action","action":"space","style":"function"}]},
-    {"keys":[{"id":"mode","width":0.7,"label":"A","kind":"action","action":"modeSwitch","style":"function"},
+    {"id":"sp","width":0.85,"label":"空白","kind":"action","action":"space","role":"function"}]},
+    {"keys":[{"id":"mode","width":0.7,"label":"A","kind":"action","action":"modeSwitch","role":"function"},
     {"id":"ma","kind":"flick","kana":"ま","label":"ま"},{"id":"ya","kind":"flick","kana":"や","label":"や"},{"id":"ra","kind":"flick","kana":"ら","label":"ら"},
-    {"id":"en","width":0.85,"label":"改行","kind":"action","action":"enter","style":"function"}]},
-    {"keys":[{"id":"gl","width":0.7,"label":"🌐","kind":"action","action":"globe","style":"function"},
+    {"id":"en","width":0.85,"label":"改行","kind":"action","action":"enter","role":"function"}]},
+    {"keys":[{"id":"gl","width":0.7,"label":"🌐","kind":"action","action":"globe","role":"function"},
     {"id":"dk","label":"゛゜小","kind":"action","action":"dakuten"},{"id":"wa","kind":"flick","kana":"わ","label":"わ"},{"id":"pu","kind":"flick","kana":"、","label":"、。？！"},
     {"id":"sp2","width":0.85,"kind":"spacer"}]}]}
     """#
 
     private static let builtinAlphaJSON = #"""
-    {"schema":1,"id":"builtin-alpha","name":"builtin","mode":"alpha","rows":[
+    {"schema":2,"id":"builtin-alpha","name":"builtin","mode":"alpha","rows":[
     {"keys":[{"id":"q","kind":"text","text":"q","shift":"Q"},{"id":"w","kind":"text","text":"w","shift":"W"},{"id":"e","kind":"text","text":"e","shift":"E"},{"id":"r","kind":"text","text":"r","shift":"R"},{"id":"t","kind":"text","text":"t","shift":"T"},{"id":"y","kind":"text","text":"y","shift":"Y"},{"id":"u","kind":"text","text":"u","shift":"U"},{"id":"i","kind":"text","text":"i","shift":"I"},{"id":"o","kind":"text","text":"o","shift":"O"},{"id":"p","kind":"text","text":"p","shift":"P"}]},
     {"keys":[{"id":"sl","width":0.5,"kind":"spacer"},{"id":"a","kind":"text","text":"a","shift":"A"},{"id":"s","kind":"text","text":"s","shift":"S"},{"id":"d","kind":"text","text":"d","shift":"D"},{"id":"f","kind":"text","text":"f","shift":"F"},{"id":"g","kind":"text","text":"g","shift":"G"},{"id":"h","kind":"text","text":"h","shift":"H"},{"id":"j","kind":"text","text":"j","shift":"J"},{"id":"k","kind":"text","text":"k","shift":"K"},{"id":"l","kind":"text","text":"l","shift":"L"},{"id":"sr","width":0.5,"kind":"spacer"}]},
-    {"keys":[{"id":"sh","width":1.4,"icon":"shift","kind":"action","action":"shift","style":"function"},{"id":"z","kind":"text","text":"z","shift":"Z"},{"id":"x","kind":"text","text":"x","shift":"X"},{"id":"c","kind":"text","text":"c","shift":"C"},{"id":"v","kind":"text","text":"v","shift":"V"},{"id":"b","kind":"text","text":"b","shift":"B"},{"id":"n","kind":"text","text":"n","shift":"N"},{"id":"m","kind":"text","text":"m","shift":"M"},{"id":"bs","width":1.4,"label":"⌫","kind":"action","action":"backspace","style":"function"}]},
-    {"keys":[{"id":"mode","width":1.2,"label":"あ","kind":"action","action":"modeSwitch","style":"function"},{"id":"gl","width":1,"label":"🌐","kind":"action","action":"globe","style":"function"},{"id":"sp","width":4.4,"label":"空白","kind":"action","action":"space"},{"id":"en","width":1.6,"label":"改行","kind":"action","action":"enter","style":"function"}]}]}
+    {"keys":[{"id":"sh","width":1.4,"icon":"shift","kind":"action","action":"shift","role":"function"},{"id":"z","kind":"text","text":"z","shift":"Z"},{"id":"x","kind":"text","text":"x","shift":"X"},{"id":"c","kind":"text","text":"c","shift":"C"},{"id":"v","kind":"text","text":"v","shift":"V"},{"id":"b","kind":"text","text":"b","shift":"B"},{"id":"n","kind":"text","text":"n","shift":"N"},{"id":"m","kind":"text","text":"m","shift":"M"},{"id":"bs","width":1.4,"label":"⌫","kind":"action","action":"backspace","role":"function"}]},
+    {"keys":[{"id":"mode","width":1.2,"label":"あ","kind":"action","action":"modeSwitch","role":"function"},{"id":"gl","width":1,"label":"🌐","kind":"action","action":"globe","role":"function"},{"id":"sp","width":4.4,"label":"空白","kind":"action","action":"space"},{"id":"en","width":1.6,"label":"改行","kind":"action","action":"enter","role":"function"}]}]}
     """#
 }
 

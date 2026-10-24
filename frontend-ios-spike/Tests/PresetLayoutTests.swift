@@ -92,6 +92,35 @@ final class PresetLayoutTests: XCTestCase {
         }
     }
 
+    /// 移行後の同梱レイアウトは schema 2 で、見た目の指定を持たない（`LookDefaults` だけで描かれる）
+    func testPresetsAreSchema2WithoutLookStyling() throws {
+        for url in TestSupport.presetURLs() {
+            let def = try JSONDecoder().decode(KeyboardLayoutDef.self, from: Data(contentsOf: url))
+            XCTAssertEqual(def.schema, 2, def.id)
+            XCTAssertNil(def.look, def.id)
+            XCTAssertNil(def.roles, def.id)
+            XCTAssertTrue(def.rules.isEmpty, def.id)
+            XCTAssertNil(def.metrics, def.id)
+            XCTAssertNil(def.background, def.id)
+            XCTAssertTrue(def.assets.isEmpty, def.id)
+            for row in def.rows {
+                XCTAssertNil(row.look, def.id)
+                for key in row.keys {
+                    XCTAssertNil(key.look, "\(def.id)/\(key.id)")
+                    XCTAssertNil(key.states, "\(def.id)/\(key.id)")
+                }
+            }
+        }
+    }
+
+    /// 同梱のファイルに旧名 `style` が残っていない
+    func testPresetsDoNotUseTheOldStyleName() throws {
+        for url in TestSupport.presetURLs() {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertFalse(text.contains("\"style\""), url.lastPathComponent)
+        }
+    }
+
     func testBuiltinFallbacksAreValid() {
         let kana = LayoutLoader.builtin(mode: .kana)
         let alpha = LayoutLoader.builtin(mode: .alpha)

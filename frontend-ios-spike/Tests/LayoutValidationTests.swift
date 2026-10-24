@@ -11,9 +11,11 @@ final class LayoutValidationTests: XCTestCase {
         assertValid(LB.single(LB.text()))
     }
 
-    // web: schema は 1 のみ
-    func testSchemaMustBe1() {
-        assertInvalid(LB.layout([LB.row([LB.text()])], overrides: ["schema": 2]), contains: "スキーマ")
+    // web: schema は 2 のみ（旧版 1 は読まない。移行手順は web/scripts/migrate-layout-v2.mjs）
+    func testSchemaMustBe2() {
+        assertValid(LB.layout([LB.row([LB.text()])], overrides: ["schema": 2]))
+        assertInvalid(LB.layout([LB.row([LB.text()])], overrides: ["schema": 1]), contains: "スキーマ 1")
+        assertInvalid(LB.layout([LB.row([LB.text()])], overrides: ["schema": 3]), contains: "スキーマ")
         assertInvalid(LB.layout([LB.row([LB.text()])], overrides: ["schema": 0]), contains: "スキーマ")
     }
 
@@ -114,7 +116,7 @@ final class LayoutValidationTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: LB.single(LB.text()))
         let key = try JSONDecoder().decode(KeyboardLayoutDef.self, from: data).rows[0].keys[0]
         XCTAssertEqual(key.width, 1)
-        XCTAssertEqual(key.style, .normal)
+        XCTAssertEqual(key.role, .normal)
         XCTAssertTrue(key.idGiven)
     }
 
@@ -151,12 +153,76 @@ final class LayoutValidationTests: XCTestCase {
         assertInvalid(LB.single(LB.text("a", "a", ["icon": s("i", 65)])), contains: "icon")
     }
 
-    // web: style は normal / function / accent
-    func testStyleMustBeKnown() {
-        for style in ["normal", "function", "accent"] {
-            assertValid(LB.single(LB.text("a", "a", ["style": style])))
+    // web: role は normal / function / accent
+    func testRoleMustBeKnown() {
+        for role in ["normal", "function", "accent"] {
+            assertValid(LB.single(LB.text("a", "a", ["role": role])))
         }
-        assertInvalid(LB.single(LB.text("a", "a", ["style": "fancy"])), contains: "style")
+        assertInvalid(LB.single(LB.text("a", "a", ["role": "fancy"])), contains: "role")
+    }
+
+    // MARK: 見た目まわりの資源の上限（docs/keyboard-style-spec.md §5.5）
+
+    private let tinyPNG = "data:image/png;base64,iVBORw0KGgo="
+
+    private func dataURI(bytes: Int, mime: String = "image/png") -> String {
+        "data:\(mime);base64," + Data(count: bytes).base64EncodedString()
+    }
+
+    private func layoutWith(_ overrides: JSON) -> JSON {
+        LB.layout([LB.row([LB.text()])], overrides: overrides)
+    }
+
+    func testAssetsWithinLimitsAreValid() {
+        assertValid(layoutWith(["assets": ["wood": tinyPNG, "glow": dataURI(bytes: 1024, mime: "image/jpeg")]]))
+        assertValid(layoutWith(["assets": ["a": dataURI(bytes: 256 * 1024)]]))
+        assertValid(layoutWith(["assets": JSON()]))
+    }
+
+    func testAssetsCountIdFormatAndSizeAreErrors() {
+        let five = Dictionary(uniqueKeysWithValues: (1...5).map { ("a\($0)", tinyPNG) })
+        assertInvalid(layoutWith(["assets": five]), contains: "4 枚以内")
+        assertInvalid(layoutWith(["assets": ["Bad Id": tinyPNG]]), contains: "id")
+        assertInvalid(layoutWith(["assets": [String(repeating: "a", count: 33): tinyPNG]]), contains: "id")
+        assertInvalid(layoutWith(["assets": ["a": "data:image/gif;base64,R0lGODlh"]]), contains: "data URI")
+        assertInvalid(layoutWith(["assets": ["a": "data:image/png;base64,"]]), contains: "data URI")
+        assertInvalid(layoutWith(["assets": ["a": "data:image/png;base64,!!!!"]]), contains: "data URI")
+        assertInvalid(layoutWith(["assets": ["a": "https://example.com/a.png"]]), contains: "data URI")
+        assertInvalid(layoutWith(["assets": ["a": dataURI(bytes: 256 * 1024 + 1)]]), contains: "256 KB")
+    }
+
+    func testAssetsTotalIsLimited() {
+        let each = 200 * 1024
+        let four = Dictionary(uniqueKeysWithValues: (1...4).map { ("a\($0)", dataURI(bytes: each)) })
+        assertInvalid(layoutWith(["assets": four]), contains: "合計")
+        let three = Dictionary(uniqueKeysWithValues: (1...3).map { ("a\($0)", dataURI(bytes: each)) })
+        assertValid(layoutWith(["assets": three]))
+    }
+
+    func testRulesCountIsLimited() {
+        let rule: JSON = ["when": "pressed"]
+        assertValid(layoutWith(["rules": Array(repeating: rule, count: 32)]))
+        assertInvalid(layoutWith(["rules": Array(repeating: rule, count: 33)]), contains: "rules")
+        // 読めない要素（未知の when）も個数に数える
+        let unreadable: JSON = ["when": "nope"]
+        assertInvalid(layoutWith(["rules": Array(repeating: unreadable, count: 33)]), contains: "rules")
+    }
+
+    func testRuleTargetKeysAreLimited() {
+        let ids = (1...25).map { "k\($0)" }
+        let tooMany: JSON = ["when": "pressed", "target": ["keys": ids] as JSON]
+        let allowed: JSON = ["when": "pressed", "target": ["keys": Array(ids.prefix(24))] as JSON]
+        assertInvalid(layoutWith(["rules": [tooMany]]), contains: "target.keys")
+        assertValid(layoutWith(["rules": [allowed]]))
+    }
+
+    func testBadLookValuesDoNotInvalidateTheLayout() {
+        let look: JSON = ["fontSize": 999, "fill": "red", "mystery": 1, "icon": "iconify:mdi", "label": "x"]
+        assertValid(layoutWith(["look": look, "roles": ["function": look], "metrics": ["keySpacing": 99]]))
+        let key = LB.text("a", "a", ["look": look, "states": ["pressed": look, "nope": look]])
+        assertValid(LB.single(key))
+        let rule: JSON = ["when": "shift", "look": look]
+        assertValid(layoutWith(["rules": [rule]]))
     }
 
     func testUnknownKindFailsToDecode() {
@@ -409,19 +475,19 @@ final class LayoutValidationTests: XCTestCase {
     }
 
     func testDecodeReportsMissingRequiredKey() {
-        let message = loadError(#"{"schema":1,"id":"x","name":"n","mode":"kana","rows":[{"keys":[{"id":"a","text":"a"}]}]}"#)
+        let message = loadError(#"{"schema":2,"id":"x","name":"n","mode":"kana","rows":[{"keys":[{"id":"a","text":"a"}]}]}"#)
         XCTAssertTrue(message?.contains("必須") ?? false, message ?? "nil")
         XCTAssertTrue(message?.contains("kind") ?? false, message ?? "nil")
     }
 
     func testDecodeReportsTypeMismatch() {
-        let message = loadError(#"{"schema":1,"id":"x","name":"n","mode":"kana","rows":"oops"}"#)
+        let message = loadError(#"{"schema":2,"id":"x","name":"n","mode":"kana","rows":"oops"}"#)
         XCTAssertTrue(message?.contains("型") ?? false, message ?? "nil")
         XCTAssertTrue(message?.contains("rows") ?? false, message ?? "nil")
     }
 
     func testDecodeAppliesValidationAfterDecoding() {
-        let message = loadError(#"{"schema":1,"id":"x","name":"n","mode":"kana","rows":[{"keys":[{"id":"a","kind":"text","text":""}]}]}"#)
+        let message = loadError(#"{"schema":2,"id":"x","name":"n","mode":"kana","rows":[{"keys":[{"id":"a","kind":"text","text":""}]}]}"#)
         XCTAssertTrue(message?.contains("text") ?? false, message ?? "nil")
     }
 

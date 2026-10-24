@@ -4,7 +4,7 @@ import Foundation
 /// コアの `set_layout_geometry`（docs/decisions.md H-25）へ渡す。
 ///
 /// 矩形の計算は `NagiKeyboardView.swift` の描画（`RowView`）と同じ規則: 行の高さは高さの比（`row.height`）、
-/// キーの幅は幅の比（`key.width`）で、間隔（`spacing`）を除いた残りを按分する。座標は領域の左上が原点
+/// キーの幅は幅の比（`key.width`）で、間隔（キー間 `keySpacing`・行間 `rowSpacing`）を除いた残りを按分する。座標は領域の左上が原点
 enum LayoutGeometry {
     /// キー 1 つの矩形（キーボード領域のローカル座標）
     struct KeyRect: Equatable {
@@ -31,14 +31,15 @@ enum LayoutGeometry {
 
     /// 英字 1 文字のキー（`text` キーで、文字が ASCII の英字 1 文字）の矩形。それ以外のキーは含めない。
     /// - size: 行が並ぶ領域（キー領域）の大きさ
-    /// - spacing: キー同士・行同士の間隔（設定 `keyboard.key_spacing_pt`）
-    static func rects(layout: KeyboardLayoutDef, size: CGSize, spacing: Double) -> [KeyRect] {
+    /// - keySpacing: キー同士の間隔、rowSpacing: 行同士の間隔（既定はどちらも設定 `keyboard.key_spacing_pt`。
+    ///   レイアウトの `metrics` があればそれを優先する）
+    static func rects(layout: KeyboardLayoutDef, size: CGSize, keySpacing: Double, rowSpacing: Double) -> [KeyRect] {
         let width = Double(size.width)
         let height = Double(size.height)
         guard width > 0, height > 0, !layout.rows.isEmpty else { return [] }
         let heightWeights = layout.rows.reduce(0.0) { $0 + $1.height }
         guard heightWeights > 0 else { return [] }
-        let availableHeight = max(0, height - spacing * Double(layout.rows.count - 1))
+        let availableHeight = max(0, height - rowSpacing * Double(layout.rows.count - 1))
 
         var result: [KeyRect] = []
         var y = 0.0
@@ -46,26 +47,26 @@ enum LayoutGeometry {
             let rowHeight = availableHeight * row.height / heightWeights
             let weights = row.keys.reduce(0.0) { $0 + $1.width }
             if weights > 0 {
-                let availableWidth = max(0, width - spacing * Double(max(row.keys.count - 1, 0)))
+                let availableWidth = max(0, width - keySpacing * Double(max(row.keys.count - 1, 0)))
                 var x = 0.0
                 for key in row.keys {
                     let keyWidth = availableWidth * key.width / weights
                     if let label = letterLabel(key) {
                         result.append(KeyRect(id: key.id, label: label, x: x, y: y, w: keyWidth, h: rowHeight))
                     }
-                    x += keyWidth + spacing
+                    x += keyWidth + keySpacing
                 }
             }
-            y += rowHeight + spacing
+            y += rowHeight + rowSpacing
         }
         return result
     }
 
     /// コアへ送る内容。英字キーが `minLetterKeys` 個に満たない（12 キーのかな・数字・記号など）か、
     /// 絵文字・領域が空のときは nil（送らない）
-    static func snapshot(layout: KeyboardLayoutDef, size: CGSize, spacing: Double) -> Snapshot? {
+    static func snapshot(layout: KeyboardLayoutDef, size: CGSize, keySpacing: Double, rowSpacing: Double) -> Snapshot? {
         guard layout.mode != .emoji else { return nil }
-        let keys = rects(layout: layout, size: size, spacing: spacing)
+        let keys = rects(layout: layout, size: size, keySpacing: keySpacing, rowSpacing: rowSpacing)
         guard keys.count >= minLetterKeys else { return nil }
         return Snapshot(
             layoutId: layout.id, mode: "qwerty", keys: keys,

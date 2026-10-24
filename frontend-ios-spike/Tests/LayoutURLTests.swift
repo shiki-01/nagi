@@ -8,7 +8,7 @@ final class LayoutURLTests: XCTestCase {
 
     /// JSON → URL → JSON の往復で、元のバイト列に戻る（日本語・記号を含む）
     func testBase64URLRoundTrip() throws {
-        let json = #"{"schema":1,"id":"test","name":"テスト???>>>~~","mode":"kana","rows":[]}"#
+        let json = #"{"schema":2,"id":"test","name":"テスト???>>>~~","mode":"kana","rows":[]}"#
         let original = Data(json.utf8)
         let built = try XCTUnwrap(NagiLayoutURL.url(forJSON: original))
         let encoded = try XCTUnwrap(URLComponents(url: built, resolvingAgainstBaseURL: false)?.queryItems?.first?.value)

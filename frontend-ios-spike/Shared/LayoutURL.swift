@@ -10,7 +10,8 @@ struct NagiLayoutError: LocalizedError {
 
 enum NagiLayoutURL {
     /// URL の `data`（base64url 文字列）の長さの上限。デコード前に検査する
-    /// （JSON の上限 512KB が base64 で約 683K 文字になる分に余裕を持たせた 1MB）
+    /// （`assets` を含まない JSON は実質 512KB 以下なので、base64 で約 683K 文字になる分に余裕を持たせた 1MB。
+    /// `assets` を含むレイアウトはこの上限を超えうるので、URL ではなくファイル / コピーで渡す）
     static let maxDataChars = 1024 * 1024
 
     /// `nagi://layout?data=<base64url の JSON>` から JSON を取り出す

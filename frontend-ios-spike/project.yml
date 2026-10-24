@@ -175,6 +175,9 @@ targets:
       - path: Tests
       # テスト対象（外部リンクが要らないものだけ。SharedStore は AppGroupResolver / DataPaths に依存する）
       - path: Shared/KeyboardLayout.swift
+      # 見た目（look）の型・解決。UIKit / SwiftUI に依存しない純粋な部分
+      - path: Shared/KeyLook.swift
+      - path: Shared/KeyLookResolver.swift
       - path: Shared/IOSSettings.swift
       - path: Shared/DiagLog.swift
       - path: Shared/SharedStore.swift
@@ -208,6 +211,10 @@ targets:
         buildPhase: resources
       # 実機確認用のテストレイアウト（有効 / 無効の期待どおりに検証されることの確認用）
       - path: ../config/keyboard/test-layouts
+        type: folder
+        buildPhase: resources
+      # 見た目の解決の共有テストベクタ（web の look.test.ts と同じファイルを読む）
+      - path: ../config/keyboard/test-looks
         type: folder
         buildPhase: resources
 

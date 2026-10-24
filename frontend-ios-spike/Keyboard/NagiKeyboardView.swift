@@ -231,14 +231,14 @@ private struct KeyCell: View {
         case .action where key.action == "backspace":
             RepeatKeyView(
                 content: faceContent(key, model),
-                style: key.style,
+                role: key.role,
                 action: { model.backspace() },
                 swipeWord: model.ios.backspaceSwipe ? { model.deleteWordBackward() } : nil
             )
         case .action where key.action == "space" && model.ios.spaceSwipe && (key.longPress ?? []).isEmpty:
             SpaceKeyView(
                 content: faceContent(key, model),
-                style: key.style,
+                role: key.role,
                 fontSize: fontSize(key),
                 step: model.ios.spaceSwipeStepPt,
                 tap: { activate(key, model) },
@@ -249,7 +249,7 @@ private struct KeyCell: View {
                 LongPressKeyView(
                     popup: popup,
                     content: faceContent(key, model),
-                    style: key.style,
+                    role: key.role,
                     active: key.action == "shift" && model.shiftState == .caps,
                     fontSize: fontSize(key),
                     height: height,
@@ -262,7 +262,7 @@ private struct KeyCell: View {
             } else {
                 TapKeyView(
                     content: faceContent(key, model),
-                    style: key.style,
+                    role: key.role,
                     active: key.action == "shift" && model.shiftState == .caps,
                     fontSize: fontSize(key),
                     action: { touch in activate(key, model, touch: touch) }
@@ -334,7 +334,7 @@ private func activate(_ key: LayoutKeyDef, _ model: KeyboardModel, touch: TouchP
 /// キーの見た目
 private struct KeyFace: View {
     let content: KeyFaceContent
-    let style: KeyStyle
+    let role: KeyRole
     let active: Bool
     let pressed: Bool
     let fontSize: CGFloat
@@ -360,11 +360,11 @@ private struct KeyFace: View {
         }
     }
 
-    private var isAccent: Bool { active || style == .accent }
+    private var isAccent: Bool { active || role == .accent }
 
     private var fill: Color {
         if isAccent { return themeAccent }
-        switch style {
+        switch role {
         case .function: return Color(UIColor.systemGray4)
         default: return Color(UIColor.systemBackground)
         }
@@ -378,7 +378,7 @@ private struct KeyFace: View {
 /// タップだけのキー
 private struct TapKeyView: View {
     let content: KeyFaceContent
-    let style: KeyStyle
+    let role: KeyRole
     let active: Bool
     let fontSize: CGFloat
     /// 引数は、指が触れた位置のキー内の相対位置（曖昧入力の手がかり）
@@ -388,7 +388,7 @@ private struct TapKeyView: View {
 
     var body: some View {
         GeometryReader { geo in
-            KeyFace(content: content, style: style, active: active, pressed: isPressed, fontSize: fontSize)
+            KeyFace(content: content, role: role, active: active, pressed: isPressed, fontSize: fontSize)
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .updating($isPressed) { _, state, _ in state = true }
@@ -420,7 +420,7 @@ private func touchPoint(_ location: CGPoint, in size: CGSize) -> TouchPoint? {
 private struct LongPressKeyView: View {
     let popup: [LayoutKeyDef]
     let content: KeyFaceContent
-    let style: KeyStyle
+    let role: KeyRole
     let active: Bool
     let fontSize: CGFloat
     let height: CGFloat
@@ -441,7 +441,7 @@ private struct LongPressKeyView: View {
 
     var body: some View {
         GeometryReader { geo in
-            KeyFace(content: content, style: style, active: active, pressed: isDown, fontSize: fontSize)
+            KeyFace(content: content, role: role, active: active, pressed: isDown, fontSize: fontSize)
                 .overlay(alignment: .topLeading) {
                     if popupShown {
                         popupView(keyWidth: geo.size.width)
@@ -594,7 +594,7 @@ private struct LongPressKeyView: View {
 /// 1 回ごとに `action`（入力中ならコアの backspace、そうでなければホストの 1 文字削除）を呼ぶ
 private struct RepeatKeyView: View {
     let content: KeyFaceContent
-    let style: KeyStyle
+    let role: KeyRole
     let action: () -> Void
     /// 左スワイプで単語を削除する（設定 `touch.backspace_swipe`。nil なら無効）
     var swipeWord: (() -> Void)?
@@ -616,7 +616,7 @@ private struct RepeatKeyView: View {
     private static let swipeDistance: CGFloat = 40
 
     var body: some View {
-        KeyFace(content: content, style: style, active: false, pressed: isPressed, fontSize: 17)
+        KeyFace(content: content, role: role, active: false, pressed: isPressed, fontSize: 17)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
@@ -683,7 +683,7 @@ private struct RepeatKeyView: View {
 /// ドラッグ距離に比例してカーソルを動かす。このモードで離したときはスペースを入力しない
 private struct SpaceKeyView: View {
     let content: KeyFaceContent
-    let style: KeyStyle
+    let role: KeyRole
     let fontSize: CGFloat
     let step: Double
     let tap: () -> Void
@@ -694,7 +694,7 @@ private struct SpaceKeyView: View {
     @State private var tracker: SpaceSwipeTracker?
 
     var body: some View {
-        KeyFace(content: content, style: style, active: false, pressed: isPressed, fontSize: fontSize)
+        KeyFace(content: content, role: role, active: false, pressed: isPressed, fontSize: fontSize)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .updating($isPressed) { _, state, _ in state = true }
@@ -789,7 +789,7 @@ private struct FlickKeyView: View {
     private func keyBody(keySize: CGSize, keyFrame: CGRect) -> some View {
         KeyFace(
             content: content,
-            style: key.style,
+            role: key.role,
             active: false,
             pressed: drag != nil,
             fontSize: (content.text ?? "").count > 2 ? 16 : 22

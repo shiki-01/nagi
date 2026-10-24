@@ -9,8 +9,8 @@ import UniformTypeIdentifiers
 // MARK: - 保存・取り込み
 
 enum NagiLayoutStore {
-    /// 取り込むレイアウトの最大サイズ（バイト）
-    static let maxBytes = 512 * 1024
+    /// 取り込むレイアウトの最大サイズ（バイト）。`assets`（背景画像）を含められるよう 1.5MB（docs/keyboard-style-spec.md §5.5）
+    static let maxBytes = 1536 * 1024
 
     /// 検証済みで、まだ保存していないレイアウト（確認ダイアログの表示に使う）
     struct Preview {
@@ -956,8 +956,8 @@ private struct NagiLayoutPreview: View {
         } else {
             ZStack {
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(key.style == .function ? Color(UIColor.systemGray4) : Color(UIColor.secondarySystemBackground))
-                if key.style == .accent {
+                    .fill(key.role == .function ? Color(UIColor.systemGray4) : Color(UIColor.secondarySystemBackground))
+                if key.role == .accent {
                     RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.4))
                 }
                 if let icon = key.icon, key.label == nil, KeyIconView.isAvailable(icon) {

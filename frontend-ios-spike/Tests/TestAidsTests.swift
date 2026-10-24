@@ -154,7 +154,7 @@ final class TestAidsTests: XCTestCase {
 
     func testHugeLayoutExceedsBothLimits() {
         let data = NagiTestLayouts.hugeLayoutJSON()
-        XCTAssertGreaterThan(data.count, 512 * 1024)
+        XCTAssertGreaterThan(data.count, 1536 * 1024)
         let url = NagiLayoutURL.url(forJSON: data)
         XCTAssertNotNil(url)
         // base64 にすると URL の data の上限（1MB）も超える

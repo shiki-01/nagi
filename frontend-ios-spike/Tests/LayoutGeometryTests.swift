@@ -30,14 +30,14 @@ final class LayoutGeometryTests: XCTestCase {
     }
 
     func testOnlyLetterKeysAreIncluded() {
-        let rects = LayoutGeometry.rects(layout: qwerty(), size: CGSize(width: 400, height: 200), spacing: 0)
+        let rects = LayoutGeometry.rects(layout: qwerty(), size: CGSize(width: 400, height: 200), keySpacing: 0, rowSpacing: 0)
         XCTAssertEqual(rects.count, 26)
         XCTAssertEqual(Set(rects.map(\.label)).count, 26)
         XCTAssertFalse(rects.contains { $0.id == "sh" || $0.id == "bs" || $0.id == "sp" })
     }
 
     func testRectsWithoutSpacingFollowRatios() {
-        let rects = LayoutGeometry.rects(layout: qwerty(), size: CGSize(width: 400, height: 200), spacing: 0)
+        let rects = LayoutGeometry.rects(layout: qwerty(), size: CGSize(width: 400, height: 200), keySpacing: 0, rowSpacing: 0)
         let byLabel = Dictionary(uniqueKeysWithValues: rects.map { ($0.label, $0) })
         // 1 行目: 幅 400 を 10 等分、高さは 200 / 4
         XCTAssertEqual(byLabel["q"]?.x ?? -1, 0, accuracy: 0.001)
@@ -54,7 +54,7 @@ final class LayoutGeometryTests: XCTestCase {
 
     func testSpacingIsSubtractedLikeTheRenderer() {
         // 描画（RowView）は、間隔を除いた幅・高さを比で按分し、キーの間に間隔を入れる
-        let rects = LayoutGeometry.rects(layout: qwerty(), size: CGSize(width: 409, height: 206), spacing: 4)
+        let rects = LayoutGeometry.rects(layout: qwerty(), size: CGSize(width: 409, height: 206), keySpacing: 4, rowSpacing: 4)
         let byLabel = Dictionary(uniqueKeysWithValues: rects.map { ($0.label, $0) })
         // 1 行目: (409 - 4*9) / 10 = 37.3
         XCTAssertEqual(byLabel["q"]?.w ?? -1, 37.3, accuracy: 0.001)
@@ -65,10 +65,34 @@ final class LayoutGeometryTests: XCTestCase {
         XCTAssertEqual(byLabel["z"]?.y ?? -1, (48.5 + 4) * 2, accuracy: 0.001)
     }
 
+    func testKeySpacingAndRowSpacingAreIndependent() {
+        let rects = LayoutGeometry.rects(layout: qwerty(), size: CGSize(width: 409, height: 206), keySpacing: 4, rowSpacing: 10)
+        let byLabel = Dictionary(uniqueKeysWithValues: rects.map { ($0.label, $0) })
+        // 幅はキー間隔 4 だけで按分（行間隔は影響しない）: (409 - 4*9) / 10 = 37.3
+        XCTAssertEqual(byLabel["q"]?.w ?? -1, 37.3, accuracy: 0.001)
+        XCTAssertEqual(byLabel["w"]?.x ?? -1, 37.3 + 4, accuracy: 0.001)
+        // 高さは行間隔 10 だけで按分: (206 - 10*3) / 4 = 44
+        XCTAssertEqual(byLabel["q"]?.h ?? -1, 44, accuracy: 0.001)
+        XCTAssertEqual(byLabel["a"]?.y ?? -1, 44 + 10, accuracy: 0.001)
+        XCTAssertEqual(byLabel["z"]?.y ?? -1, (44 + 10) * 2, accuracy: 0.001)
+    }
+
+    func testSameSpacingGivesTheSameResultAsBefore() {
+        let size = CGSize(width: 400, height: 200)
+        XCTAssertEqual(
+            LayoutGeometry.rects(layout: qwerty(), size: size, keySpacing: 6, rowSpacing: 6),
+            LayoutGeometry.rects(layout: qwerty(), size: size, keySpacing: 6, rowSpacing: 6)
+        )
+        let a = LayoutGeometry.snapshot(layout: qwerty(), size: size, keySpacing: 4, rowSpacing: 4)
+        let b = LayoutGeometry.snapshot(layout: qwerty(), size: size, keySpacing: 4, rowSpacing: 5)
+        XCTAssertNotNil(a)
+        XCTAssertNotEqual(a, b)
+    }
+
     func testRowHeightRatio() {
         var def = qwerty()
         def.rows[0].height = 2
-        let rects = LayoutGeometry.rects(layout: def, size: CGSize(width: 100, height: 500), spacing: 0)
+        let rects = LayoutGeometry.rects(layout: def, size: CGSize(width: 100, height: 500), keySpacing: 0, rowSpacing: 0)
         let byLabel = Dictionary(uniqueKeysWithValues: rects.map { ($0.label, $0) })
         // 高さの比の合計は 5。1 行目は 200、2 行目はその下から 100
         XCTAssertEqual(byLabel["q"]?.h ?? -1, 200, accuracy: 0.001)
@@ -94,8 +118,8 @@ final class LayoutGeometryTests: XCTestCase {
         let kana = KeyboardLayoutDef(id: "k", name: "k", mode: .kana, rows: [
             LayoutRow(height: 1, keys: [textKey("a"), textKey("b"), textKey("c")]),
         ])
-        XCTAssertNil(LayoutGeometry.snapshot(layout: kana, size: CGSize(width: 300, height: 100), spacing: 4))
-        let snapshot = LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 400, height: 200), spacing: 4)
+        XCTAssertNil(LayoutGeometry.snapshot(layout: kana, size: CGSize(width: 300, height: 100), keySpacing: 4, rowSpacing: 4))
+        let snapshot = LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 400, height: 200), keySpacing: 4, rowSpacing: 4)
         XCTAssertEqual(snapshot?.layoutId, "t-qwerty")
         XCTAssertEqual(snapshot?.mode, "qwerty")
         XCTAssertEqual(snapshot?.keys.count, 26)
@@ -104,23 +128,23 @@ final class LayoutGeometryTests: XCTestCase {
     }
 
     func testSnapshotIsEquatableForDeduplication() {
-        let a = LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 400, height: 200), spacing: 4)
-        let b = LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 400, height: 200), spacing: 4)
-        let c = LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 400, height: 210), spacing: 4)
+        let a = LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 400, height: 200), keySpacing: 4, rowSpacing: 4)
+        let b = LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 400, height: 200), keySpacing: 4, rowSpacing: 4)
+        let c = LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 400, height: 210), keySpacing: 4, rowSpacing: 4)
         XCTAssertNotNil(a)
         XCTAssertEqual(a, b)
         XCTAssertNotEqual(a, c)
     }
 
     func testEmptyOrZeroSizeGivesNothing() {
-        XCTAssertTrue(LayoutGeometry.rects(layout: qwerty(), size: .zero, spacing: 4).isEmpty)
-        XCTAssertNil(LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 0, height: 100), spacing: 4))
+        XCTAssertTrue(LayoutGeometry.rects(layout: qwerty(), size: .zero, keySpacing: 4, rowSpacing: 4).isEmpty)
+        XCTAssertNil(LayoutGeometry.snapshot(layout: qwerty(), size: CGSize(width: 0, height: 100), keySpacing: 4, rowSpacing: 4))
     }
 
     func testEmojiLayoutIsSkipped() {
         var def = qwerty()
         def.mode = .emoji
-        XCTAssertNil(LayoutGeometry.snapshot(layout: def, size: CGSize(width: 400, height: 200), spacing: 4))
+        XCTAssertNil(LayoutGeometry.snapshot(layout: def, size: CGSize(width: 400, height: 200), keySpacing: 4, rowSpacing: 4))
     }
 
     // MARK: - タッチ座標

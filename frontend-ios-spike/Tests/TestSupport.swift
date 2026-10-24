@@ -23,6 +23,13 @@ enum TestSupport {
         }
         return []
     }
+
+    /// バンドルに同梱した `config/keyboard/test-looks/*.json`（見た目の解決の共有テストベクタ。フォルダ参照 `test-looks/`）
+    static func testLookURLs() -> [URL] {
+        guard let dir = bundle.resourceURL?.appendingPathComponent("test-looks", isDirectory: true),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
+        return names.filter { $0.hasSuffix(".json") }.sorted().map { dir.appendingPathComponent($0) }
+    }
 }
 
 /// レイアウト JSON を辞書で組み立てて検証にかける補助
@@ -47,7 +54,7 @@ enum LB {
 
     /// 既定は有効な最小のレイアウト。`overrides` で上書きし、`remove` のキーは取り除く
     static func layout(_ rows: [JSON], overrides: JSON = [:], remove: [String] = []) -> JSON {
-        var l: JSON = ["schema": 1, "id": "test", "name": "テスト", "mode": "kana", "rows": rows]
+        var l: JSON = ["schema": 2, "id": "test", "name": "テスト", "mode": "kana", "rows": rows]
         for (name, value) in overrides { l[name] = value }
         for name in remove { l.removeValue(forKey: name) }
         return l
