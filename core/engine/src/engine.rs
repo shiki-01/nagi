@@ -64,6 +64,20 @@ pub enum AutoEnglishMode {
     Aggressive,
 }
 
+/// 入力中の候補に出す記号（`かっこ` → `「」` など。H-60）の位置（`convert.symbol_position`。H-63）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SymbolPosition {
+    /// 候補の先頭（最良の変換より前）
+    First,
+    /// 最良の変換の直後（既定）
+    #[default]
+    AfterBest,
+    /// 候補の末尾（既にある同じ表記は動かさず、出所だけ足す）
+    Last,
+    /// 入力中の候補には出さない（Space の候補窓の Rewriter は従来どおり）
+    Off,
+}
+
 /// エンジンの設定（`config.toml` の `[input]` `[conversion]` に対応する部分）
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -87,6 +101,8 @@ pub struct EngineConfig {
     pub next_word_count: usize,
     /// 入力中の候補の最大件数（`convert.suggest_max`。接頭辞の候補を含めた総数の上限。H-58）
     pub suggest_max: usize,
+    /// 入力中の候補に出す記号の位置（`convert.symbol_position`。H-63）
+    pub symbol_position: SymbolPosition,
     /// ライブ変換のチャンク長（`conversion.composing_chunk_len`）。この文字数を超える
     /// Composing 中の1つの日本語入力は、この文字数ごとに分けて変換する
     pub composing_chunk_len: usize,
@@ -121,6 +137,7 @@ impl Default for EngineConfig {
             next_word_enabled: false,
             next_word_count: 5,
             suggest_max: 120,
+            symbol_position: SymbolPosition::default(),
             composing_chunk_len: 30,
             initial_view: InitialView::Sentence,
             beam_width: 3,
@@ -337,6 +354,11 @@ struct ComposingCands {
     /// 計算時点の左文脈。文脈が変わった（同じ読みの再入力でも）ら作り直す
     left_context: String,
     items: Vec<ComposingItem>,
+}
+
+/// Rewriter が通常の候補として出した記号か（出所が Rewriter だけで、記号の読みの候補に含まれる）
+fn is_rewriter_symbol(surface: &str, sources: &[CandidateSource], symbols: &[String]) -> bool {
+    sources == [CandidateSource::Rewriter] && symbols.iter().any(|s| s == surface)
 }
 
 /// 入力中の候補の最大件数
@@ -1091,9 +1113,15 @@ impl Engine {
                 self.insert_english_item(&mut items, raw, japanese, reading.chars().count());
             }
             self.insert_loanword_items(&mut items, reading);
-            self.insert_symbol_items(&mut items, reading);
+            // 末尾に置く設定のときは、接頭辞の候補まで並べたあとに足す
+            if self.config.symbol_position != SymbolPosition::Last {
+                self.insert_symbol_items(&mut items, reading);
+            }
             if self.partial_suggestions {
                 self.append_prefix_items(&mut items, sess, reading);
+            }
+            if self.config.symbol_position == SymbolPosition::Last {
+                self.insert_symbol_items(&mut items, reading);
             }
             items
         } else {
@@ -1193,19 +1221,35 @@ impl Engine {
         }
     }
 
-    /// 読み全体が記号の読みに一致するとき（`かっこ` → `「」` `『』` …）、その記号を読み全体の候補の
-    /// 先頭（最良の変換）の直後に足す。辞書の通常候補（括弧・格好）より後ろ・他の通常候補より前。
-    /// すでにある同じ表記は前へ動かして出所を併記する（H-60）
+    /// 読み全体が記号の読みに一致するとき（`かっこ` → `「」` `『』` …）、その記号を足す。位置は
+    /// `convert.symbol_position`（H-63）: 既定は読み全体の候補の先頭（最良の変換）の直後（辞書の通常候補
+    /// （括弧・格好）より後ろ・他の通常候補より前）、`first` は先頭、`last` は末尾、`off` は足さない。
+    /// すでにある同じ表記は、先頭・直後では前へ動かして出所を併記し、末尾では動かさず出所だけ併記する（H-60）
     fn insert_symbol_items(&self, items: &mut Vec<ComposingItem>, reading: &str) {
+        let position = self.config.symbol_position;
         let total = reading.chars().count();
         let symbols = self.backend.symbol_candidates(reading);
         if symbols.is_empty() {
             return;
         }
-        let mut pos = items
-            .iter()
-            .position(|i| i.covers == total)
-            .map_or(0, |p| p + 1);
+        // 末尾・出さない: Rewriter が通常の候補として出している同じ記号（出所が Rewriter だけ）も取り除く
+        // （末尾では下のループで改めて末尾に足す）
+        if matches!(position, SymbolPosition::Last | SymbolPosition::Off) {
+            items.retain(|i| {
+                !(i.covers == total && is_rewriter_symbol(&i.surface, &i.sources, &symbols))
+            });
+        }
+        if position == SymbolPosition::Off {
+            return;
+        }
+        let mut pos = match position {
+            SymbolPosition::First => 0,
+            SymbolPosition::Last => items.len(),
+            _ => items
+                .iter()
+                .position(|i| i.covers == total)
+                .map_or(0, |p| p + 1),
+        };
         for surface in symbols.into_iter().take(SYMBOL_WHOLE_LIMIT) {
             if surface == reading {
                 continue;
@@ -1214,6 +1258,12 @@ impl Engine {
                 .iter()
                 .position(|i| i.surface == surface && i.covers == total)
             {
+                if position == SymbolPosition::Last {
+                    if !items[at].sources.contains(&CandidateSource::Rewriter) {
+                        items[at].sources.push(CandidateSource::Rewriter);
+                    }
+                    continue;
+                }
                 let mut item = items.remove(at);
                 if !item.sources.contains(&CandidateSource::Rewriter) {
                     item.sources.push(CandidateSource::Rewriter);
@@ -1268,7 +1318,12 @@ impl Engine {
                     .map(|c| (c.surface, c.sources))
                     .collect();
                 let mut inserted = 0;
-                if len >= 2 {
+                let position = self.config.symbol_position;
+                if matches!(position, SymbolPosition::Last | SymbolPosition::Off) {
+                    let all = self.backend.symbol_candidates(&prefix);
+                    found.retain(|(s, src)| !is_rewriter_symbol(s, src, &all));
+                }
+                if len >= 2 && position != SymbolPosition::Off {
                     for surface in self
                         .backend
                         .symbol_candidates(&prefix)
@@ -1277,17 +1332,27 @@ impl Engine {
                         .take(SYMBOL_PREFIX_LIMIT)
                     {
                         let sources = vec![CandidateSource::Rewriter];
+                        // 先頭: その接頭辞の候補の先頭、直後: 先頭の次、末尾: その接頭辞の候補の末尾
+                        let base = usize::from(position == SymbolPosition::AfterBest);
                         match found.iter().position(|(s, _)| *s == surface) {
+                            Some(at) if position == SymbolPosition::Last => {
+                                if !found[at].1.contains(&CandidateSource::Rewriter) {
+                                    found[at].1.push(CandidateSource::Rewriter);
+                                }
+                            }
                             Some(at) => {
                                 let mut entry = found.remove(at);
                                 if !entry.1.contains(&CandidateSource::Rewriter) {
                                     entry.1.push(CandidateSource::Rewriter);
                                 }
-                                let to = (1 + inserted).min(found.len());
+                                let to = (base + inserted).min(found.len());
                                 found.insert(to, entry);
                             }
+                            None if position == SymbolPosition::Last => {
+                                found.push((surface, sources));
+                            }
                             None => {
-                                let to = (1 + inserted).min(found.len());
+                                let to = (base + inserted).min(found.len());
                                 found.insert(to, (surface, sources));
                             }
                         }

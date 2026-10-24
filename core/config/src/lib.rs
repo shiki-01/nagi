@@ -603,6 +603,38 @@ impl Default for RewriterSection {
     }
 }
 
+/// 入力中の候補に出す記号（`かっこ` → `「」` など）の位置（`convert.symbol_position`。H-63）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolPosition {
+    /// 候補の先頭。
+    First,
+    /// 最良の変換の直後（既定。従来どおり）。
+    AfterBest,
+    /// 候補の末尾。
+    Last,
+    /// 入力中の候補には出さない（Space の候補窓の Rewriter は従来どおり）。
+    Off,
+}
+
+impl SymbolPosition {
+    /// 文字列表現を返す。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SymbolPosition::First => "first",
+            SymbolPosition::AfterBest => "after_best",
+            SymbolPosition::Last => "last",
+            SymbolPosition::Off => "off",
+        }
+    }
+}
+
+impl fmt::Display for SymbolPosition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// 変換結果の表記に関するセクション（`docs/ios-settings.md` §2 の `convert.*`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -614,6 +646,8 @@ pub struct ConvertSection {
     /// 入力中の候補（サジェスト）の最大件数。読みの接頭辞だけを置き換える候補
     /// （フロントが対応を宣言したときだけ出る。H-58）の総数の上限。既定: 120。
     pub suggest_max: usize,
+    /// 入力中の候補に出す記号（`かっこ` → `「」` など）の位置。既定: `after_best`（最良の変換の直後）。
+    pub symbol_position: SymbolPosition,
 }
 
 impl Default for ConvertSection {
@@ -622,6 +656,7 @@ impl Default for ConvertSection {
             calculator: true,
             loanword: LoanwordSection::default(),
             suggest_max: 120,
+            symbol_position: SymbolPosition::AfterBest,
         }
     }
 }
@@ -1167,7 +1202,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         ],
         "predict" => &["enabled", "min_chars", "next_word", "next_word_count"],
         "rewriter" => &["emoji", "kaomoji"],
-        "convert" => &["calculator", "loanword", "suggest_max"],
+        "convert" => &["calculator", "loanword", "suggest_max", "symbol_position"],
         "userdict" | "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
@@ -1911,6 +1946,28 @@ min_chars = 3
         let (config, _) = parse(source).expect("should parse predict section");
         assert!(!config.predict.enabled);
         assert_eq!(config.predict.min_chars, 3);
+    }
+
+    #[test]
+    fn test_convert_symbol_position_default_and_values() {
+        assert_eq!(
+            Config::default().convert.symbol_position,
+            SymbolPosition::AfterBest
+        );
+        for (text, expected) in [
+            ("first", SymbolPosition::First),
+            ("after_best", SymbolPosition::AfterBest),
+            ("last", SymbolPosition::Last),
+            ("off", SymbolPosition::Off),
+        ] {
+            let (config, issues) =
+                parse(&format!("[convert]\nsymbol_position = \"{text}\"\n")).expect("parse");
+            assert!(issues.is_empty(), "{issues:?}");
+            assert_eq!(config.convert.symbol_position, expected);
+            assert_eq!(expected.as_str(), text);
+        }
+        // 知らない値は読み込みエラー
+        assert!(parse("[convert]\nsymbol_position = \"middle\"\n").is_err());
     }
 
     #[test]

@@ -542,6 +542,18 @@ pub fn definitions() -> Vec<SettingDef> {
             SettingKind::Bool,
         ),
         def(
+            "convert.symbol_position",
+            "表記の候補",
+            "記号の候補の位置",
+            "「かっこ」「まる」のように記号の読みになる入力で、入力中の候補（候補バー）に出す記号（「」『』 など）の位置です。「みぎ」「うえ」のように普通の語でもある読みで記号が邪魔なときは、末尾か「出さない」にします。Space で開く候補一覧の記号は、この設定に関わらず出ます。",
+            choice(&[
+                ("first", "先頭"),
+                ("after_best", "最良の変換の直後"),
+                ("last", "末尾"),
+                ("off", "出さない"),
+            ]),
+        ),
+        def(
             "userdict.enabled",
             "ユーザー辞書",
             "ユーザー辞書を使う",
@@ -653,6 +665,9 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
         "convert.calculator" => Some(Bool(config.convert.calculator)),
         "convert.loanword.enabled" => Some(Bool(config.convert.loanword.enabled)),
+        "convert.symbol_position" => {
+            Some(Text(config.convert.symbol_position.as_str().to_string()))
+        }
         "userdict.enabled" => Some(Bool(config.userdict.enabled)),
         "snippet.enabled" => Some(Bool(config.snippet.enabled)),
         "learning.enabled" => Some(Bool(config.learning.enabled)),
@@ -1051,6 +1066,41 @@ mod tests {
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.userdict.enabled && !c.snippet.enabled);
         assert_eq!(c.input.dakuten_cycle, crate::DakutenCycle::DakutenFirst);
+    }
+
+    #[test]
+    fn symbol_position_definition_and_editing() {
+        let defs = definitions();
+        let d = defs
+            .iter()
+            .find(|d| d.key == "convert.symbol_position")
+            .unwrap();
+        assert!(matches!(&d.kind, SettingKind::Choice { options } if options.len() == 4));
+        assert_eq!(d.platforms, SettingPlatforms::Both);
+        assert_eq!(
+            from_config(&Config::default(), "convert.symbol_position"),
+            Some(SettingValue::Text("after_best".into()))
+        );
+        let r = apply_changes(
+            None,
+            &[set(
+                "convert.symbol_position",
+                SettingValue::Text("last".into()),
+            )],
+        )
+        .unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.convert.symbol_position, crate::SymbolPosition::Last);
+        let bad = apply_changes(
+            None,
+            &[set(
+                "convert.symbol_position",
+                SettingValue::Text("middle".into()),
+            )],
+        )
+        .unwrap();
+        assert_eq!(bad.errors.len(), 1);
     }
 
     #[test]

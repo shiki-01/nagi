@@ -99,6 +99,7 @@
 | `convert.half_width_alnum` | 数字・英字を半角で確定 | choice: `half` / `full` / `follow_input` | `follow_input` | D | core:convert.half_width_alnum | 新規(core) | 全角/半角の相互変換（backlog 3 章）の基本設定 |
 | `convert.date_time` | 日付・時刻の候補（「きょう」「いま」） | bool | true | D | core:convert.date_time | 新規(core) | Rewriter の機能として実装 |
 | `convert.calculator` | 電卓候補（「1+2=」） | bool | true | D | core:convert.calculator | 新規(core) | |
+| `convert.symbol_position` | 入力中の候補に出す記号の位置 | choice: `first`（先頭）/ `after_best`（最良の変換の直後）/ `last`（末尾）/ `off`（出さない） | `after_best` | D | core:convert.symbol_position | 実装済み(core)・実機未確認（H-63） | 入力中の候補（候補バー）の記号（`かっこ` → `「」` など。H-60）の位置。`みぎ` `うえ` のように普通の語でもある読みで記号が 2 番目に出るのを避けるため。Space の候補窓の Rewriter には効かない。設定画面はコアの記述子から自動で出る |
 | `rewriter.emoji` | 読みからの絵文字候補（「わらう」→😄） | bool | true | D | core:rewriter.emoji | 実装済み(core) | Rewriter の機能。表は `config/emoji.tsv`（自作・バイナリ同梱）。候補の末尾側（出所 `rewriter`）。ユーザー辞書・変換結果が先。入力中の候補は先頭文節の読みが表に完全一致するときだけ |
 | `rewriter.kaomoji` | 読みからの顔文字候補（「えがお」→(^_^)） | bool | true | D | core:rewriter.kaomoji | 実装済み(core) | 同上。旧 ID `convert.emoji_candidates` を 2 項目に分けた |
 | `convert.emoji_skin_tone` | 絵文字の肌色 | choice: `none` / `1`–`5` | `none` | D | kbd | 新規(iOS) | 絵文字キーボードと候補に適用 |

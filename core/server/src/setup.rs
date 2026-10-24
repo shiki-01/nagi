@@ -13,7 +13,7 @@ use nagi_dict::{Dictionary, UserDictionary};
 use nagi_engine::InitialView;
 use nagi_engine::KeyContext;
 use nagi_engine::touch::DakutenOrder;
-use nagi_engine::{AppClass, AppsConfig, AutoEnglishMode, EngineConfig};
+use nagi_engine::{AppClass, AppsConfig, AutoEnglishMode, EngineConfig, SymbolPosition};
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_protocol::methods::NotifyLevel;
@@ -151,6 +151,12 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
             next_word_enabled: config.predict.next_word,
             next_word_count: config.predict.next_word_count,
             suggest_max: config.convert.suggest_max,
+            symbol_position: match config.convert.symbol_position {
+                nagi_config::SymbolPosition::First => SymbolPosition::First,
+                nagi_config::SymbolPosition::AfterBest => SymbolPosition::AfterBest,
+                nagi_config::SymbolPosition::Last => SymbolPosition::Last,
+                nagi_config::SymbolPosition::Off => SymbolPosition::Off,
+            },
             composing_chunk_len: config.conversion.composing_chunk_len,
             initial_view: match config.conversion.initial_view {
                 ConfigInitialView::Sentence => InitialView::Sentence,

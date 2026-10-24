@@ -4,7 +4,7 @@
 
 use nagi_engine::{
     BackendCandidate, BackendSegment, ConversionBackend, Engine, EngineConfig, KanaBackend,
-    MockBackend, parse_key,
+    MockBackend, SymbolPosition, parse_key,
 };
 use nagi_protocol::methods::ReadingInput;
 use nagi_protocol::view::{CandidateSource, CandidateView};
@@ -293,4 +293,118 @@ fn symbol_prefix_is_limited_and_only_for_declared_clients() {
     type_kana(&mut e, word);
     let items = suggestions(&mut e);
     assert!(items.iter().all(|i| i.covers.is_none()), "{items:?}");
+}
+
+// ---- 記号の位置の設定（H-63） ----
+
+fn engine_symbol(position: SymbolPosition, partial: bool) -> Engine {
+    let mut e = Engine::new(
+        symbol_backend(),
+        EngineConfig {
+            symbol_position: position,
+            ..EngineConfig::default()
+        },
+    );
+    e.set_partial_suggestions(partial);
+    e
+}
+
+fn surfaces_of(
+    position: SymbolPosition,
+    partial: bool,
+    reading: &str,
+) -> Vec<(String, Option<u32>)> {
+    let mut e = engine_symbol(position, partial);
+    type_kana(&mut e, reading);
+    suggestions(&mut e)
+        .into_iter()
+        .map(|i| (i.surface, i.covers))
+        .collect()
+}
+
+fn index_of(items: &[(String, Option<u32>)], surface: &str, covers: Option<u32>) -> Option<usize> {
+    items.iter().position(|(s, c)| s == surface && *c == covers)
+}
+
+#[test]
+fn symbol_position_default_is_after_best() {
+    assert_eq!(
+        EngineConfig::default().symbol_position,
+        SymbolPosition::AfterBest
+    );
+}
+
+#[test]
+fn symbol_position_first_puts_symbols_before_the_best_conversion() {
+    let items = surfaces_of(SymbolPosition::First, false, "かっこ");
+    assert_eq!(items[0].0, "「」", "{items:?}");
+    assert_eq!(items[1].0, "『』", "{items:?}");
+    assert!(index_of(&items, "括弧", None).unwrap() > 1, "{items:?}");
+}
+
+#[test]
+fn symbol_position_after_best_matches_the_previous_behavior() {
+    let items = surfaces_of(SymbolPosition::AfterBest, false, "かっこ");
+    assert_eq!(items[1].0, "「」", "{items:?}");
+    assert_eq!(items[2].0, "『』", "{items:?}");
+}
+
+#[test]
+fn symbol_position_last_puts_symbols_at_the_end() {
+    for partial in [false, true] {
+        let items = surfaces_of(SymbolPosition::Last, partial, "かっこ");
+        let symbol = index_of(&items, "「」", None).expect("末尾に出る");
+        let kanji = index_of(&items, "括弧", None).unwrap();
+        let other = index_of(&items, "格好", None).unwrap();
+        assert!(symbol > kanji && symbol > other, "{items:?}");
+        // 読み全体の記号は、接頭辞の候補を含めた全体の末尾側（16 件まで）
+        let last_symbol = index_of(&items, "『』", None).unwrap();
+        assert!(last_symbol > symbol, "{items:?}");
+    }
+    // 先頭の最良の変換は動かない
+    let items = surfaces_of(SymbolPosition::Last, true, "かっこ");
+    assert_eq!(items[0].0, "かっこ", "{items:?}");
+}
+
+#[test]
+fn symbol_position_off_hides_symbols_from_composing_candidates() {
+    for partial in [false, true] {
+        let items = surfaces_of(SymbolPosition::Off, partial, "かっこ");
+        assert!(
+            items.iter().all(|(s, _)| s != "「」" && s != "『』"),
+            "{items:?}"
+        );
+        assert!(index_of(&items, "括弧", None).is_some(), "{items:?}");
+        let items = surfaces_of(SymbolPosition::Off, partial, "かっこいい");
+        assert!(
+            items.iter().all(|(s, _)| s != "「」" && s != "『』"),
+            "接頭辞の記号も出ない: {items:?}"
+        );
+    }
+}
+
+#[test]
+fn symbol_position_applies_to_prefix_symbols() {
+    let word = "かっこいい";
+    let prefix = |position| -> Vec<(String, Option<u32>)> {
+        surfaces_of(position, true, word)
+            .into_iter()
+            .filter(|(_, c)| *c == Some(3))
+            .collect()
+    };
+    // 接頭辞（かっこ）の候補の並び: 先頭 / 先頭の次 / 末尾
+    let first = prefix(SymbolPosition::First);
+    assert_eq!(first[0].0, "「」", "{first:?}");
+    let after = prefix(SymbolPosition::AfterBest);
+    assert_eq!(after[1].0, "「」", "{after:?}");
+    let last = prefix(SymbolPosition::Last);
+    let n = last.len();
+    assert_eq!(
+        last[n - 3..]
+            .iter()
+            .map(|(s, _)| s.as_str())
+            .collect::<Vec<_>>(),
+        ["「」", "『』", "（）"],
+        "{last:?}"
+    );
 }
