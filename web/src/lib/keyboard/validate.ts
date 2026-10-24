@@ -1,7 +1,7 @@
 // config/keyboard/layout.schema.json を手書きで検証する（依存を増やさないため）。
 // JSON Schema で表せない規則（行内の幅の合計、id の一意性、layout.target の存在）もここで見る。
 
-import { dataUriBytes } from './look-assets'
+import { dataUriBytes, imageDimensions } from './look-assets'
 import { checkLookValue, iconFormatError, parseTarget } from './look-resolve'
 import {
   ACTION_PATTERN,
@@ -347,7 +347,12 @@ function validateAssets(c: Collector, v: unknown) {
     if (bytes === undefined) c.add(p, `画像は ${ASSET_LIMITS.mimeTypes.join(' か ')} の base64 data URI で指定してください`)
     else if (bytes > ASSET_LIMITS.bytesMax)
       c.add(p, `画像は 1 枚 ${ASSET_LIMITS.bytesMax / 1024} KB 以内にしてください（現在 ${Math.ceil(bytes / 1024)} KB）`)
-    else total += bytes
+    else {
+      total += bytes
+      const d = imageDimensions(v[id])
+      if (d && Math.max(d.width, d.height) > ASSET_LIMITS.longSideMax)
+        c.warn(p, `画像の長辺は ${ASSET_LIMITS.longSideMax}px 以内を推奨します（現在 ${Math.max(d.width, d.height)}px。アプリは警告を出しますが取り込めます）`)
+    }
   }
   if (total > ASSET_LIMITS.totalMax)
     c.add('assets', `画像の合計は ${ASSET_LIMITS.totalMax / 1024} KB 以内にしてください（現在 ${Math.ceil(total / 1024)} KB）`)

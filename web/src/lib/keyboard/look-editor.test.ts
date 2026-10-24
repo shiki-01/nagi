@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { readText } from '../../../scripts/read-text.mjs'
 import { cssColor, faceCss, metricsCss, PALETTES, paletteVars, resolveBackground, backgroundCss, spaceDragOrigin, statesForKey, toStyle } from './look-css'
 import { colorMode, hexToRgbAlpha, mergeColor, rgbAlphaToHex, splitColor } from './look-color-edit'
-import { assetByteBudget, assetIdFromName, assetsUsage, dataUriBytes, encodePlan, fitWithin, formatKB } from './look-assets'
+import { imageDimensions, assetByteBudget, assetIdFromName, assetsUsage, dataUriBytes, encodePlan, fitWithin, formatKB } from './look-assets'
 import { jumpTarget } from './look-jump'
 import {
   addAsset,
@@ -426,10 +426,27 @@ describe('画像の計算', () => {
   })
 })
 
+describe('画像の大きさ', () => {
+  // 1x1 PNG と、PNG ヘッダーだけの 2000x10
+  const png1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+  it('PNG のヘッダーから読み、長辺 1024px 超は警告（エラーではない）', () => {
+    expect(imageDimensions(png1)).toEqual({ width: 1, height: 1 })
+    const head = Uint8Array.from(atob(png1.split(',')[1]), (c) => c.charCodeAt(0))
+    head.set([0, 0, 7, 0xd0], 16)
+    const big = `data:image/png;base64,${btoa(String.fromCharCode(...head))}`
+    expect(imageDimensions(big)).toEqual({ width: 2000, height: 1 })
+    const l = { ...sampleLayout(), assets: { wide: big } }
+    expect(errorsOf(validateLayout(l))).toEqual([])
+    expect(warningsOf(validateLayout(l)).map((w) => w.path)).toEqual(['assets.wide'])
+    expect(warningsOf(validateLayout({ ...sampleLayout(), assets: { ok: png1 } }))).toEqual([])
+    expect(imageDimensions('data:image/png;base64,AAAA')).toBeUndefined()
+  })
+})
+
 describe('プレビューの CSS', () => {
   const light = PALETTES.light
   it('パレットは app.css の値と同じ', () => {
-    const css = readFileSync(new URL('../../app.css', import.meta.url), 'utf8')
+    const css: string = readText(new URL('../../app.css', import.meta.url).href)
     const lightBlock = css.slice(css.indexOf(':root {'), css.indexOf('@media (prefers-color-scheme: dark)'))
     const darkBlock = css.slice(css.indexOf('@media (prefers-color-scheme: dark)'))
     for (const [scheme, block] of [['light', lightBlock], ['dark', darkBlock]] as const) {

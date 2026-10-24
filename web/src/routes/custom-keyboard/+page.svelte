@@ -6,6 +6,9 @@
   import KeyForm from '$lib/components/KeyForm.svelte'
   import KeyboardCanvas from '$lib/components/KeyboardCanvas.svelte'
   import LayoutMetaForm from '$lib/components/LayoutMetaForm.svelte'
+  import LookInspector from '$lib/components/LookInspector.svelte'
+  import PreviewStateBar from '$lib/components/PreviewStateBar.svelte'
+  import { jumpTarget } from '$lib/keyboard/look-jump'
   import { presetResult } from '$lib/keyboard/presets'
   import { EditorStore, loadInitialState } from '$lib/keyboard/store.svelte'
 
@@ -19,6 +22,12 @@
 
   const selCount = $derived(store.selectedIds.length)
   const errors = $derived(store.errors)
+  const warnings = $derived(store.warnings)
+  const lookTab = $derived(store.inspectorTab === 'look')
+  const TABS = [
+    { id: 'basic', label: '基本' },
+    { id: 'look', label: '詳細設定' }
+  ] as const
 
   onMount(() => {
     store = new EditorStore(loadInitialState(presetResult.presets, localStorage))
@@ -39,11 +48,21 @@
     if (selCount > 0) sheetOpen = true
   })
 
+  // 検証メッセージの場所を開く（キー・行・rules・全体の見た目）。詳細設定のものは該当のタブへ。
   function jump(path: string) {
-    const m = /^rows\[(\d+)\]\.keys\[(\d+)\]/.exec(path)
-    if (!m) return
-    const key = store.layout.rows[Number(m[1])]?.keys[Number(m[2])]
-    if (key) store.selectedKeyId = key.id
+    const t = jumpTarget(store.layout, path)
+    if (!t) return
+    store.applyJump(t)
+    sheetOpen = true
+  }
+  const canJump = (path: string) => jumpTarget(store.layout, path) !== undefined
+
+  function onTabKey(e: KeyboardEvent) {
+    const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+    if (d === 0) return
+    e.preventDefault()
+    store.inspectorTab = store.inspectorTab === 'basic' ? 'look' : 'basic'
+    document.getElementById(`itab-${store.inspectorTab}`)?.focus()
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -119,7 +138,8 @@
       class:bad={errors.length > 0}
       aria-pressed={drawer === 'errors'}
       aria-expanded={drawer === 'errors'}
-      onclick={() => toggle('errors')}>{errors.length ? `検証エラー ${errors.length} 件` : '検証: エラーなし'}</button
+      onclick={() => toggle('errors')}
+      >{errors.length ? `検証エラー ${errors.length} 件` : '検証: エラーなし'}{warnings.length ? `・警告 ${warnings.length} 件` : ''}</button
     >
   </div>
 
@@ -130,7 +150,10 @@
 
   <div class="body">
     <div class="stage">
-      <KeyboardCanvas bind:this={canvas} {store} {ready} />
+      {#if lookTab}<PreviewStateBar {store} />{/if}
+      <div class="canvaswrap">
+        <KeyboardCanvas bind:this={canvas} {store} {ready} />
+      </div>
 
       {#if drawer}
         <section class="drawer" aria-label={drawer === 'json' ? 'JSON の書き出しと読み込み' : '検証エラー'}>
@@ -143,9 +166,10 @@
             <JsonPanel {store} />
           {:else}
             {#if errors.length}
-              <ErrorList {errors} onjump={jump} />
+              <ErrorList errors={[...errors, ...warnings]} onjump={jump} canjump={canJump} />
             {:else}
               <p class="valid" role="status">スキーマ検証: エラーなし</p>
+              {#if warnings.length}<ErrorList errors={warnings} onjump={jump} canjump={canJump} />{/if}
             {/if}
             {#if presetResult.problems.length}
               <ErrorList errors={presetResult.problems.map((m) => ({ path: '', message: m }))} title="読み込めなかったプリセット" />
@@ -160,8 +184,25 @@
         <h2>インスペクタ{selCount > 1 ? `（${selCount} 個のキーを選択中）` : selCount === 1 ? '（キー）' : '（レイアウト）'}</h2>
         <button type="button" class="btn small toggle" aria-expanded={sheetOpen} onclick={() => (sheetOpen = !sheetOpen)}>{sheetOpen ? '閉じる ▾' : '詳細 ▴'}</button>
       </div>
-      <div class="ibody">
-        {#if selCount === 0}
+      <div class="itabs" role="tablist" aria-label="インスペクタの種類" tabindex="-1" onkeydown={onTabKey}>
+        {#each TABS as t (t.id)}
+          <button
+            type="button"
+            role="tab"
+            id="itab-{t.id}"
+            class="itab"
+            class:on={store.inspectorTab === t.id}
+            aria-selected={store.inspectorTab === t.id}
+            aria-controls="ipanel"
+            tabindex={store.inspectorTab === t.id ? 0 : -1}
+            onclick={() => (store.inspectorTab = t.id)}>{t.label}</button
+          >
+        {/each}
+      </div>
+      <div class="ibody" role="tabpanel" id="ipanel" aria-labelledby="itab-{store.inspectorTab}">
+        {#if lookTab}
+          <LookInspector {store} />
+        {:else if selCount === 0}
           <LayoutMetaForm {store} />
         {:else if selCount === 1 && store.selectedKey}
           <KeyForm {store} />
@@ -248,6 +289,13 @@
     position: relative;
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .canvaswrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
   }
   .drawer {
     position: absolute;
@@ -309,6 +357,27 @@
   .toggle {
     display: none;
   }
+  .itabs {
+    display: flex;
+    border-bottom: 1px solid var(--line);
+  }
+  .itab {
+    flex: 1;
+    min-height: 36px;
+    padding: 4px 8px;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.9375rem;
+    cursor: pointer;
+  }
+  .itab.on {
+    color: var(--fg);
+    font-weight: 700;
+    border-bottom-color: var(--accent);
+  }
   .ibody {
     flex: 1;
     min-height: 0;
@@ -361,7 +430,8 @@
     .toggle {
       display: inline-flex;
     }
-    .inspector:not(.open) .ibody {
+    .inspector:not(.open) .ibody,
+    .inspector:not(.open) .itabs {
       display: none;
     }
     .drawer {

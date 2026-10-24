@@ -411,6 +411,8 @@
         {focusId}
         bind:el={boardEl}
         onactivate={(id) => (store.selectedIds = [id])}
+        previewStates={store.inspectorTab === 'look' ? store.previewStates : []}
+        scheme={store.previewScheme}
       />
     </div>
 

@@ -457,8 +457,37 @@ export interface InheritContext {
  */
 export function inheritedValue(layout: KeyboardLayout, loc: LookLoc, prop: string, ctx: InheritContext): string | number | undefined {
   if (loc.kind === 'background') return undefined
-  const cleared = clearLookProp(layout, loc, prop)
+  // resolveLook は assets を見ないので、複製のコスト（最大 1MB の data URI）を避けて外す
+  const cleared = clearLookProp({ ...layout, assets: undefined }, loc, prop)
   // キー自身の指定を外した後のキー（ctx.key は外す前のもの）で解決する
   const key = findKey(cleared, ctx.key.id)?.key ?? ctx.key
   return resolveLook(cleared, ctx.rowIndex, key, { states: ctx.states, origin: ctx.origin, scheme: ctx.scheme })[prop]
+}
+
+/** 「指定する」を入れたときの初期値（継承される値が無いとき）。現行の見た目に近い値。 */
+export const LOOK_INITIAL: Readonly<Record<string, number | string>> = {
+  fontSize: 17,
+  fontWeight: 'regular',
+  fontDesign: 'system',
+  color: '@label',
+  fill: '@key',
+  fillOpacity: 1,
+  fillImage: 'none',
+  fillImageFit: 'fill',
+  fillImageOpacity: 1,
+  cornerRadius: 6,
+  borderWidth: 1,
+  borderColor: '@separator',
+  shadowColor: '#000000',
+  shadowRadius: 4,
+  shadowX: 0,
+  shadowY: 1,
+  shadowOpacity: 0.3,
+  opacity: 1,
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0,
+  inset: 0,
+  padding: 0,
+  animationMs: 120
 }

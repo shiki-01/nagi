@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { EditorStore } from '$lib/keyboard/store.svelte'
+  import { parseDraft } from '$lib/keyboard/json-sync'
+  import { assetsUsage, formatKB } from '$lib/keyboard/look-assets'
   import { LAYOUT_FILE_MAX_BYTES } from '$lib/keyboard/types'
   import { parseLayoutJSON } from '$lib/keyboard/validate'
   import type { ValidationError } from '$lib/keyboard/validate'
@@ -8,12 +10,52 @@
   let { store }: { store: EditorStore } = $props()
 
   const json = $derived(JSON.stringify(store.layout, null, 2) + '\n')
+  // 書き出しをブロックするのは error だけ（warning は iOS がそのプロパティだけ無視するので書き出せる）
   const invalid = $derived(store.errors.length > 0)
+  const warningCount = $derived(store.warnings.length)
+  const assetBytes = $derived(assetsUsage(store.layout.assets && typeof store.layout.assets === 'object' ? (store.layout.assets as Record<string, unknown>) : {}))
 
   let pasted = $state('')
   let importErrors = $state<ValidationError[]>([])
   let message = $state('')
   let outputEl = $state<HTMLTextAreaElement>()
+
+  // 現在のレイアウトの JSON を直接編集できる（store.layout が唯一の正。編集は読める形なら即座に反映し、フォームも追従する）。
+  // 構文エラーなど反映できない間は、入力中の文字列を保ち、直前に反映できた内容が書き出し対象のまま。
+  let draft = $state('')
+  let draftError = $state('')
+  let editing = $state(false)
+  let lastId = ''
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  $effect(() => {
+    const id = store.state.currentId
+    if (id !== lastId) {
+      lastId = id
+      draft = json
+      draftError = ''
+    } else if (!editing && !draftError) draft = json
+  })
+
+  function applyDraft() {
+    clearTimeout(timer)
+    const r = parseDraft(draft)
+    if (!r.ok) {
+      draftError = r.error
+      return
+    }
+    draftError = ''
+    if (JSON.stringify(r.layout) !== JSON.stringify(store.layout)) store.replaceFromJson(r.layout)
+  }
+  function ondraft(e: Event & { currentTarget: HTMLTextAreaElement }) {
+    draft = e.currentTarget.value
+    clearTimeout(timer)
+    timer = setTimeout(applyDraft, 300)
+  }
+  function onblur() {
+    applyDraft()
+    editing = false
+  }
 
   function download() {
     const blob = new Blob([json], { type: 'application/json' })
@@ -57,7 +99,7 @@
     const file = e.currentTarget.files?.[0]
     if (!file) return
     if (file.size > LAYOUT_FILE_MAX_BYTES) {
-      importErrors = [{ path: '', message: 'ファイルが大きすぎます（1.5MB まで）' }]
+      importErrors = [{ path: '', message: `ファイルが大きすぎます（${LAYOUT_FILE_MAX_BYTES / 1024 / 1024}MB まで）` }]
       return
     }
     importText(await file.text(), file.name)
@@ -72,15 +114,39 @@
     <h4>書き出し（現在のレイアウト）</h4>
     {#if invalid}
       <p class="warn">検証エラーがあるため書き出せません。上のエラーを直してください。</p>
+    {:else if warningCount > 0}
+      <p class="hint">警告が {warningCount} 件あります（無視される値）。書き出しはできます。</p>
+    {/if}
+    {#if assetBytes > 0}
+      <p class="hint">
+        画像（assets）を含みます（画像 {formatKB(assetBytes)}、JSON 全体で約 {formatKB(new Blob([json]).size)}）。URL スキームでは渡せません。ダウンロードしたファイルかコピーした
+        JSON でお渡しください。
+      </p>
     {/if}
     <div class="btns">
-      <button type="button" class="btn primary" disabled={invalid} onclick={download}>JSON をダウンロード</button>
-      <button type="button" class="btn" disabled={invalid} onclick={copy}>コピー</button>
+      <button type="button" class="btn primary" disabled={invalid || !!draftError} onclick={download}>JSON をダウンロード</button>
+      <button type="button" class="btn" disabled={invalid || !!draftError} onclick={copy}>コピー</button>
     </div>
     <label>
-      <span class="sr-only">現在のレイアウトの JSON</span>
-      <textarea bind:this={outputEl} readonly rows="8" value={json} spellcheck="false"></textarea>
+      <span class="lbl">JSON（直接編集できます。編集は即座にフォームとプレビューへ反映されます）</span>
+      <textarea
+        bind:this={outputEl}
+        rows="8"
+        value={draft}
+        spellcheck="false"
+        aria-invalid={draftError ? 'true' : undefined}
+        aria-describedby={draftError ? 'json-draft-error' : undefined}
+        onfocus={() => (editing = true)}
+        oninput={ondraft}
+        {onblur}
+      ></textarea>
     </label>
+    {#if draftError}
+      <p class="warn" id="json-draft-error" role="alert">
+        {draftError}。反映されていません（直前の内容のままです）。
+        <button type="button" class="btn small" onclick={() => { draft = json; draftError = '' }}>編集前に戻す</button>
+      </p>
+    {/if}
   </div>
 
   <div class="block">

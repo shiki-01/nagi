@@ -92,3 +92,30 @@ export function assetIdFromName(filename: string, used: Iterable<string>): strin
 export function formatKB(bytes: number): string {
   return `${(bytes / 1024).toFixed(bytes >= 10 * 1024 ? 0 : 1)} KB`
 }
+
+/** PNG / JPEG の data URI から画像の大きさ（px）を読む（ヘッダーのみ。壊れていれば undefined）。 */
+export function imageDimensions(uri: unknown): { width: number; height: number } | undefined {
+  if (dataUriBytes(uri) === undefined) return undefined
+  let b: Uint8Array
+  try {
+    const bin = atob((uri as string).slice((uri as string).indexOf(',') + 1))
+    b = Uint8Array.from(bin, (ch) => ch.charCodeAt(0))
+  } catch {
+    return undefined
+  }
+  if (b.length > 24 && b[0] === 0x89 && b[1] === 0x50) {
+    const u32 = (i: number) => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0
+    return { width: u32(16), height: u32(20) }
+  }
+  if (b[0] === 0xff && b[1] === 0xd8) {
+    let i = 2
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xff) return undefined
+      const m = b[i + 1]
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc)
+        return { height: (b[i + 5] << 8) | b[i + 6], width: (b[i + 7] << 8) | b[i + 8] }
+      i += 2 + ((b[i + 2] << 8) | b[i + 3])
+    }
+  }
+  return undefined
+}
