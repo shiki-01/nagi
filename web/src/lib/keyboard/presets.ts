@@ -2,7 +2,7 @@
 // 無い間は sampleLayout() 1 つにフォールバックする。不正なプリセットは捨てて理由を返す。
 
 import { sampleLayout } from './ops'
-import { describePath, validateLayout } from './validate'
+import { describePath, errorsOf, validateLayout } from './validate'
 import type { KeyboardLayout } from './types'
 
 export interface PresetLoadResult {
@@ -24,7 +24,7 @@ export function loadPresets(modules: Record<string, unknown>): PresetLoadResult 
   const problems: string[] = []
   for (const { path, data } of raw) {
     const name = path.split('/').pop() ?? path
-    const errors = validateLayout(data, { knownLayoutIds: ids })
+    const errors = errorsOf(validateLayout(data, { knownLayoutIds: ids }))
     if (errors.length) {
       const e = errors[0]
       problems.push(`${name}: ${describePath(e.path)}: ${e.message}${errors.length > 1 ? `（ほか ${errors.length - 1} 件）` : ''}`)

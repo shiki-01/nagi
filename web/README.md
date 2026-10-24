@@ -8,6 +8,9 @@
 - レイアウト仕様: `../docs/ios-keyboard-layout.md`、スキーマ: `../config/keyboard/layout.schema.json`
   （TypeScript 型と検証は `src/lib/keyboard/types.ts` / `validate.ts`。`keyboard.test.ts` が ajv でスキーマと突き合わせる）
 - プリセットは `../config/keyboard/presets/*.json` をビルド時に取り込む（無ければサンプル 1 つ）
+- 見た目の指定（`look` ほか。仕様は `../docs/keyboard-style-spec.md`）の解決は `src/lib/keyboard/look-resolve.ts`。iOS の `KeyLookResolver.swift` と、
+  `../config/keyboard/test-looks/*.json` の共有テストベクタで同じ結果になることを確かめる（`look.test.ts`）。編集 GUI は未実装（フェーズ 5）
+- レイアウト JSON の schema 1 → 2 の移行: `node scripts/migrate-layout-v2.mjs <ファイル or ディレクトリ>...`（冪等）
 
 ## デザイン
 

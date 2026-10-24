@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nagi.shiki-01.com/schemas/keyboard-layout-1.json",
+  "$id": "https://nagi.shiki-01.com/schemas/keyboard-layout-2.json",
   "title": "Nagi キーボードレイアウト",
-  "description": "docs/ios-keyboard-layout.md (v0 draft) のスキーマ。JSON Schema だけでは表せない検証（行内の幅の合計 1〜20、キー id の一意性、layout.target の存在）は web/src/lib/keyboard/validate.ts と各実装が追加で行う。",
+  "description": "docs/ios-keyboard-layout.md と docs/keyboard-style-spec.md のスキーマ（schema 2）。JSON Schema だけでは表せない検証（行内の幅の合計 1〜20、キー id の一意性、layout.target の存在、assets の base64 の長さ・デコード後の大きさ）は web/src/lib/keyboard/validate.ts と各実装が追加で行う。look 系（look / roles / rules / metrics / background / states）は編集時の契約として厳格にしてあるが、iOS の実行時は範囲外・未知の値をそのプロパティだけ無視する（エラーにしない）。",
   "type": "object",
   "required": ["schema", "id", "name", "mode", "rows"],
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string", "description": "エディタ補完用。省略可。" },
-    "schema": { "const": 1, "description": "スキーマバージョン。" },
+    "schema": { "const": 2, "description": "スキーマバージョン。現行版（2）のみ受理する。" },
     "id": { "$ref": "#/$defs/layoutId" },
     "name": { "type": "string", "minLength": 1, "maxLength": 64, "description": "表示名。" },
     "mode": {
@@ -21,7 +21,18 @@
       "maxItems": 8,
       "items": { "$ref": "#/$defs/row" },
       "description": "行（1〜8）。"
-    }
+    },
+    "look": { "$ref": "#/$defs/look", "description": "全キー共通の見た目。" },
+    "roles": { "$ref": "#/$defs/roles", "description": "役割（role）ごとの見た目。" },
+    "rules": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/rule" },
+      "description": "状態の見た目（全キー／指定キー対象）。最大 32 個。後の rule が先の rule を上書きする。"
+    },
+    "metrics": { "$ref": "#/$defs/metrics" },
+    "background": { "$ref": "#/$defs/background" },
+    "assets": { "$ref": "#/$defs/assets" }
   },
   "$defs": {
     "layoutId": {
@@ -40,6 +51,7 @@
       "required": ["keys"],
       "additionalProperties": false,
       "properties": {
+        "look": { "$ref": "#/$defs/look", "description": "この行の全キーの見た目。" },
         "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 4, "default": 1, "description": "行の高さの比。" },
         "keys": {
           "type": "array",
@@ -51,7 +63,182 @@
       }
     },
     "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 20, "default": 1, "description": "行内の幅の比。" },
-    "style": { "enum": ["normal", "function", "accent"], "default": "normal", "description": "色はテーマ側で決める。" },
+    "color": {
+      "description": "色。#RGB / #RRGGBB / #RRGGBBAA、トークン（@label @secondaryLabel @key @function @accent @separator @clear）、または { light, dark }（片方だけも可）。",
+      "oneOf": [
+        { "$ref": "#/$defs/solidColor" },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": { "light": { "$ref": "#/$defs/solidColor" }, "dark": { "$ref": "#/$defs/solidColor" } }
+        }
+      ]
+    },
+    "solidColor": {
+      "type": "string",
+      "pattern": "^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|@(label|secondaryLabel|key|function|accent|separator|clear))$"
+    },
+    "fillImage": {
+      "type": "string",
+      "pattern": "^(none|[a-z0-9][a-z0-9_-]{0,31})$",
+      "description": "画像 id（assets のキー）。\"none\" は下位で指定された画像を外す。"
+    },
+    "lookBase": {
+      "type": "object",
+      "properties": {
+        "fontSize": { "type": "number", "minimum": 8, "maximum": 40 },
+        "fontWeight": { "enum": ["ultraLight", "thin", "light", "regular", "medium", "semibold", "bold", "heavy", "black"] },
+        "fontDesign": { "enum": ["system", "rounded", "monospaced", "serif"] },
+        "color": { "$ref": "#/$defs/color" },
+        "fill": { "$ref": "#/$defs/color" },
+        "fillOpacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "fillImage": { "$ref": "#/$defs/fillImage" },
+        "fillImageFit": { "enum": ["fill", "fit", "tile"] },
+        "fillImageOpacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "cornerRadius": { "type": "number", "minimum": 0, "maximum": 24 },
+        "borderWidth": { "type": "number", "minimum": 0, "maximum": 4 },
+        "borderColor": { "$ref": "#/$defs/color" },
+        "shadowColor": { "$ref": "#/$defs/color" },
+        "shadowRadius": { "type": "number", "minimum": 0, "maximum": 16 },
+        "shadowX": { "type": "number", "minimum": -8, "maximum": 8 },
+        "shadowY": { "type": "number", "minimum": -8, "maximum": 8 },
+        "shadowOpacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "scale": { "type": "number", "minimum": 0.5, "maximum": 1.5 },
+        "offsetX": { "type": "number", "minimum": -20, "maximum": 20 },
+        "offsetY": { "type": "number", "minimum": -20, "maximum": 20 },
+        "inset": { "type": "number", "minimum": 0, "maximum": 12 },
+        "padding": { "type": "number", "minimum": 0, "maximum": 16 },
+        "animationMs": { "type": "number", "minimum": 0, "maximum": 1000 }
+      }
+    },
+    "look": {
+      "description": "見た目の指定（平らなオブジェクト）。label / icon はここでは使えない（states / rules の中だけ）。",
+      "allOf": [{ "$ref": "#/$defs/lookBase" }],
+      "unevaluatedProperties": false
+    },
+    "contentProperties": {
+      "type": "object",
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 16, "description": "その状態の間だけ表示する文字。" },
+        "icon": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^(iconify:[a-z0-9]+(-[a-z0-9]+)*:[a-z0-9]+(-[a-z0-9]+)*|sf:[A-Za-z0-9._-]+|(?!iconify:|sf:)[\\s\\S]*)$",
+          "description": "その状態の間だけ表示するアイコン（key.icon と同じ書式）。"
+        }
+      }
+    },
+    "contentLook": {
+      "description": "states / rules の中の見た目。look に加えて label / icon が使える。",
+      "allOf": [{ "$ref": "#/$defs/lookBase" }, { "$ref": "#/$defs/contentProperties" }],
+      "unevaluatedProperties": false
+    },
+    "holdMs": { "type": "number", "minimum": 0, "maximum": 2000, "default": 200, "description": "released の保持時間（ms）。" },
+    "stateLook": {
+      "description": "states の 1 状態の見た目。holdMs は released のときだけ使われる。",
+      "allOf": [
+        { "$ref": "#/$defs/lookBase" },
+        { "$ref": "#/$defs/contentProperties" },
+        { "type": "object", "properties": { "holdMs": { "$ref": "#/$defs/holdMs" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "stateName": { "enum": ["pressed", "released", "longPress", "flicking", "spaceDrag", "shift", "capsLock", "composing"] },
+    "states": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pressed": { "$ref": "#/$defs/stateLook" },
+        "released": { "$ref": "#/$defs/stateLook" },
+        "longPress": { "$ref": "#/$defs/stateLook" },
+        "flicking": { "$ref": "#/$defs/stateLook" },
+        "spaceDrag": { "$ref": "#/$defs/stateLook" },
+        "shift": { "$ref": "#/$defs/stateLook" },
+        "capsLock": { "$ref": "#/$defs/stateLook" },
+        "composing": { "$ref": "#/$defs/stateLook" }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "normal": { "$ref": "#/$defs/look" },
+        "function": { "$ref": "#/$defs/look" },
+        "accent": { "$ref": "#/$defs/look" }
+      }
+    },
+    "target": {
+      "description": "rule の対象。省略は \"all\"。\"others\" は when が spaceDrag のときだけ起点以外の全キー（他では all と同じ）。",
+      "oneOf": [
+        { "enum": ["all", "others"] },
+        {
+          "type": "object",
+          "required": ["keys"],
+          "additionalProperties": false,
+          "properties": { "keys": { "type": "array", "maxItems": 24, "items": { "type": "string" } } }
+        },
+        {
+          "type": "object",
+          "required": ["roles"],
+          "additionalProperties": false,
+          "properties": { "roles": { "type": "array", "items": { "$ref": "#/$defs/role" } } }
+        },
+        {
+          "type": "object",
+          "required": ["actions"],
+          "additionalProperties": false,
+          "properties": { "actions": { "type": "array", "items": { "type": "string" } } }
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "required": ["when", "look"],
+      "additionalProperties": false,
+      "properties": {
+        "when": { "$ref": "#/$defs/stateName" },
+        "target": { "$ref": "#/$defs/target" },
+        "holdMs": { "$ref": "#/$defs/holdMs" },
+        "look": { "$ref": "#/$defs/contentLook" }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "キー間・行間・外周の余白（pt）。指定があれば設定 keyboard.key_spacing_pt より優先する。",
+      "properties": {
+        "keySpacing": { "type": "number", "minimum": 0, "maximum": 8 },
+        "rowSpacing": { "type": "number", "minimum": 0, "maximum": 8 },
+        "padding": { "type": "number", "minimum": 0, "maximum": 16 }
+      }
+    },
+    "background": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "キーボード全体の背景。省略時は塗らない（システムの背景が見える）。",
+      "properties": {
+        "fill": { "$ref": "#/$defs/color" },
+        "fillOpacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "fillImage": { "$ref": "#/$defs/fillImage" },
+        "fillImageFit": { "enum": ["fill", "fit", "tile"] },
+        "fillImageOpacity": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "maxProperties": 4,
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$" },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^data:image/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$",
+        "maxLength": 349528
+      },
+      "description": "画像 id → base64 data URI（PNG / JPEG）。最大 4 枚、1 枚はデコード後 256KB 以内、合計 768KB 以内（スキーマ外で検証）。maxLength は 256KB の base64 での長さ。"
+    },
+    "role": { "enum": ["normal", "function", "accent"], "default": "normal", "description": "色の役割。色はテーマ側で決める。" },
     "action": {
       "type": "string",
       "pattern": "^[a-zA-Z][a-zA-Z0-9]{0,31}$",
@@ -107,7 +294,9 @@
           "pattern": "^(iconify:[a-z0-9]+(-[a-z0-9]+)*:[a-z0-9]+(-[a-z0-9]+)*|sf:[A-Za-z0-9._-]+|(?!iconify:|sf:)[\\s\\S]*)$",
           "description": "アイコン。`sf:<SF Symbols 名>`、`iconify:<prefix>:<name>`（例 iconify:mdi:home。ホストアプリが取り込み時に取得する）、接頭辞なしは SF Symbols 名（従来どおり）。"
         },
-        "style": { "$ref": "#/$defs/style" },
+        "role": { "$ref": "#/$defs/role" },
+        "look": { "$ref": "#/$defs/look", "description": "このキーの見た目。" },
+        "states": { "$ref": "#/$defs/states", "description": "このキー自身の状態ごとの見た目。" },
         "longPress": {
           "type": "array",
           "minItems": 1,

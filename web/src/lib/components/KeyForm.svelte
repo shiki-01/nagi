@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { EditorStore } from '$lib/keyboard/store.svelte'
   import { findKey } from '$lib/keyboard/ops'
-  import { BUILTIN_LAYOUT_IDS, ICONIFY_ICON_PATTERN, FLICK_DIRECTIONS, KEY_KINDS, KEY_STYLES, KNOWN_ACTIONS, LIMITS, POPUP_KINDS } from '$lib/keyboard/types'
+  import { BUILTIN_LAYOUT_IDS, ICONIFY_ICON_PATTERN, FLICK_DIRECTIONS, KEY_KINDS, KEY_ROLES, KNOWN_ACTIONS, LIMITS, POPUP_KINDS } from '$lib/keyboard/types'
   import type { FlickDirection, Key, KeyKind, PopupKey, PopupKind, Step } from '$lib/keyboard/types'
   import StepsEditor from './StepsEditor.svelte'
 
@@ -16,7 +16,7 @@
     layout: 'layout: レイアウト切替',
     spacer: 'spacer: 空白'
   }
-  const STYLE_LABELS = { normal: 'normal（通常）', function: 'function（機能キー）', accent: 'accent（強調）' }
+  const ROLE_LABELS = { normal: 'normal（通常）', function: 'function（機能キー）', accent: 'accent（強調）' }
   const DIR_LABELS: Record<FlickDirection, string> = { up: '上', down: '下', left: '左', right: '右' }
   const POPUP_LABELS: Record<PopupKind, string> = { text: '文字', action: '操作', shortcut: 'ショートカット' }
 
@@ -57,11 +57,11 @@
       return next as unknown as Key
     }, 'width')
   }
-  function setStyle(v: string) {
+  function setRole(v: string) {
     update((k) => {
       const next = { ...k } as Record<string, unknown>
-      if (v === 'normal' || v === '') delete next.style
-      else next.style = v
+      if (v === 'normal' || v === '') delete next.role
+      else next.role = v
       return next as unknown as Key
     })
   }
@@ -189,9 +189,9 @@
           {/if}
         </label>
         <label class="field">
-          <span>スタイル (style)</span>
-          <select value={key.style ?? 'normal'} onchange={(e) => setStyle(e.currentTarget.value)}>
-            {#each KEY_STYLES as s (s)}<option value={s}>{STYLE_LABELS[s]}</option>{/each}
+          <span>色の役割 (role)</span>
+          <select value={key.role ?? 'normal'} onchange={(e) => setRole(e.currentTarget.value)}>
+            {#each KEY_ROLES as s (s)}<option value={s}>{ROLE_LABELS[s]}</option>{/each}
           </select>
         </label>
       {/if}

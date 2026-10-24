@@ -1,4 +1,4 @@
-{"schema": 1, "id": "test-invalid-height", "name": "無効: 高さ比の合計超過", "mode": "kana", "rows": [
+{"schema": 2, "id": "test-invalid-height", "name": "無効: 高さ比の合計超過", "mode": "kana", "rows": [
   {"height": 1, "keys": [{"id": "k1", "kind": "text", "text": "a"}]},
   {"height": 1, "keys": [{"id": "k2", "kind": "text", "text": "a"}]},
   {"height": 1, "keys": [{"id": "k3", "kind": "text", "text": "a"}]},

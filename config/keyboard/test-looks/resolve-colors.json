@@ -1,0 +1,46 @@
+{
+  "description": "色の書式（#RGB / #RRGGBB / #RRGGBBAA / トークン / {light,dark}）。片方だけの指定は反対の外観では未指定扱い",
+  "layout": {
+    "schema": 2, "id": "vec-colors", "name": "colors", "mode": "alpha",
+    "look": { "fill": "#000000" },
+    "rows": [
+      { "keys": [
+        { "id": "hex3", "kind": "text", "text": "a", "look": { "fill": "#f80" } },
+        { "id": "hex6", "kind": "text", "text": "a", "look": { "fill": "#1a2B3c" } },
+        { "id": "hex8", "kind": "text", "text": "a", "look": { "fill": "#11223344" } },
+        { "id": "token", "kind": "text", "text": "a", "look": { "fill": "@accent", "color": "@secondaryLabel", "borderColor": "@separator", "shadowColor": "@clear" } },
+        { "id": "pair", "kind": "text", "text": "a", "look": { "fill": { "light": "#FFFFFF", "dark": "#3A3A3C" } } },
+        { "id": "lightOnly", "kind": "text", "text": "a", "look": { "fill": { "light": "#FFFFFF" } } },
+        { "id": "darkOnly", "kind": "text", "text": "a", "look": { "fill": { "dark": "#FFFFFF" } } },
+        { "id": "mixed", "kind": "text", "text": "a", "look": { "fill": { "light": "@key", "dark": "#000" } } },
+        { "id": "bad1", "kind": "text", "text": "a", "look": { "fill": "#12" } },
+        { "id": "bad2", "kind": "text", "text": "a", "look": { "fill": "#GGGGGG" } },
+        { "id": "bad3", "kind": "text", "text": "a", "look": { "fill": "@unknown" } },
+        { "id": "bad4", "kind": "text", "text": "a", "look": { "fill": "" } },
+        { "id": "bad5", "kind": "text", "text": "a", "look": { "fill": { "light": "#fff", "dark": "nope" } } },
+        { "id": "bad6", "kind": "text", "text": "a", "look": { "fill": "#1234567" } }
+      ] }
+    ]
+  },
+  "cases": [
+    { "name": "#RGB", "key": "hex3", "expect": { "fill": "#FF8800FF" } },
+    { "name": "#RRGGBB（大文字小文字混在）", "key": "hex6", "expect": { "fill": "#1A2B3CFF" } },
+    { "name": "#RRGGBBAA", "key": "hex8", "expect": { "fill": "#11223344" } },
+    { "name": "トークン", "key": "token",
+      "expect": { "fill": "@accent", "color": "@secondaryLabel", "borderColor": "@separator", "shadowColor": "@clear" } },
+    { "name": "light/dark（ライト）", "key": "pair", "scheme": "light", "expect": { "fill": "#FFFFFFFF" } },
+    { "name": "light/dark（ダーク）", "key": "pair", "scheme": "dark", "expect": { "fill": "#3A3A3CFF" } },
+    { "name": "light だけ（ライトでは有効）", "key": "lightOnly", "scheme": "light", "expect": { "fill": "#FFFFFFFF" } },
+    { "name": "light だけ（ダークでは未指定 → 下位）", "key": "lightOnly", "scheme": "dark", "expect": { "fill": "#000000FF" } },
+    { "name": "dark だけ（ライトでは未指定 → 下位）", "key": "darkOnly", "scheme": "light", "expect": { "fill": "#000000FF" } },
+    { "name": "dark だけ（ダークでは有効）", "key": "darkOnly", "scheme": "dark", "expect": { "fill": "#FFFFFFFF" } },
+    { "name": "トークンと色の組み合わせ（ライト）", "key": "mixed", "scheme": "light", "expect": { "fill": "@key" } },
+    { "name": "トークンと色の組み合わせ（ダーク）", "key": "mixed", "scheme": "dark", "expect": { "fill": "#000000FF" } },
+    { "name": "桁数の違い", "key": "bad1", "expect": { "fill": "#000000FF" } },
+    { "name": "16 進でない文字", "key": "bad2", "expect": { "fill": "#000000FF" } },
+    { "name": "未知のトークン", "key": "bad3", "expect": { "fill": "#000000FF" } },
+    { "name": "空文字", "key": "bad4", "expect": { "fill": "#000000FF" } },
+    { "name": "片側が不正な light/dark は全体を無視", "key": "bad5", "scheme": "light", "expect": { "fill": "#000000FF" } },
+    { "name": "7 桁", "key": "bad6", "expect": { "fill": "#000000FF" } }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "description": "既定 → layout.look → roles → 行 → キー の重ね合わせ（プロパティ単位の部分上書き）",
+  "layout": {
+    "schema": 2, "id": "vec-hierarchy", "name": "hierarchy", "mode": "alpha",
+    "look": { "cornerRadius": 4, "fontSize": 18, "borderWidth": 1, "opacity": 0.9 },
+    "roles": {
+      "function": { "cornerRadius": 8, "fontWeight": "bold" },
+      "accent": { "fill": "#FF0000" },
+      "bogus": { "opacity": 0 }
+    },
+    "rows": [
+      { "look": { "cornerRadius": 10, "borderWidth": 2 }, "keys": [
+        { "id": "a", "kind": "text", "text": "a" },
+        { "id": "b", "kind": "text", "text": "b", "look": { "cornerRadius": 12, "fontSize": 30 } },
+        { "id": "f", "kind": "action", "action": "enter", "role": "function", "label": "F" },
+        { "id": "c", "kind": "action", "action": "shift", "role": "accent" }
+      ] },
+      { "keys": [
+        { "id": "d", "kind": "text", "text": "d" },
+        { "id": "fn2", "kind": "action", "action": "backspace", "role": "function", "look": { "fontWeight": "light" } },
+        { "id": "gap", "kind": "spacer" }
+      ] }
+    ]
+  },
+  "cases": [
+    { "name": "行の look が layout.look を部分的に上書き", "key": "a",
+      "expect": { "cornerRadius": 10, "fontSize": 18, "borderWidth": 2, "opacity": 0.9 } },
+    { "name": "キーの look が最後に勝つ", "key": "b",
+      "expect": { "cornerRadius": 12, "fontSize": 30, "borderWidth": 2, "opacity": 0.9 } },
+    { "name": "roles の後に行の look が来る", "key": "f",
+      "expect": { "cornerRadius": 10, "fontSize": 18, "borderWidth": 2, "opacity": 0.9, "fontWeight": "bold" } },
+    { "name": "accent の roles", "key": "c",
+      "expect": { "cornerRadius": 10, "fontSize": 18, "borderWidth": 2, "opacity": 0.9, "fill": "#FF0000FF" } },
+    { "name": "行の look が無い行", "key": "d",
+      "expect": { "cornerRadius": 4, "fontSize": 18, "borderWidth": 1, "opacity": 0.9 } },
+    { "name": "roles とキーの look（行の look なし）", "key": "fn2",
+      "expect": { "cornerRadius": 8, "fontSize": 18, "borderWidth": 1, "opacity": 0.9, "fontWeight": "light" } },
+    { "name": "spacer は何も持たない", "key": "gap", "expect": {} },
+    { "name": "押下の既定はキーの look より上（fillOpacity だけ足す）", "key": "b", "states": ["pressed"],
+      "expect": { "cornerRadius": 12, "fontSize": 30, "borderWidth": 2, "opacity": 0.9, "fillOpacity": 0.6 } }
+  ]
+}

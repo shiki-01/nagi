@@ -1,1 +1,1 @@
-{"schema": 1, "id": "test-invalid-label", "name": "無効: label 17 文字", "mode": "kana", "rows": [{"keys": [{"id": "a", "kind": "text", "text": "a", "label": "abcdefghijklmnopq"}]}]}
+{"schema": 2, "id": "test-invalid-label", "name": "無効: label 17 文字", "mode": "kana", "rows": [{"keys": [{"id": "a", "kind": "text", "text": "a", "label": "abcdefghijklmnopq"}]}]}

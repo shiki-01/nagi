@@ -1,28 +1,48 @@
 // config/keyboard/layout.schema.json を手書きで検証する（依存を増やさないため）。
 // JSON Schema で表せない規則（行内の幅の合計、id の一意性、layout.target の存在）もここで見る。
 
+import { dataUriBytes } from './look-assets'
+import { checkLookValue, iconFormatError, parseTarget } from './look-resolve'
 import {
   ACTION_PATTERN,
-  ICONIFY_ICON_PATTERN,
-  SF_ICON_PATTERN,
+  ASSET_ID_PATTERN,
+  ASSET_LIMITS,
+  BACKGROUND_PROPS,
   BUILTIN_LAYOUT_IDS,
   FLICK_DIRECTIONS,
   KEY_ID_PATTERN,
   KEY_KINDS,
-  KEY_STYLES,
+  KEY_ROLES,
   LAYOUT_ID_PATTERN,
   LAYOUT_MODES,
   LIMITS,
+  LOOK_CONTENT_PROPS,
+  LOOK_LIMITS,
+  LOOK_PROPS,
+  LOOK_STATES,
+  METRICS_PROPS,
   POPUP_KINDS,
   SCHEMA_VERSION
 } from './types'
 import type { KeyboardLayout } from './types'
 
+export type Severity = 'error' | 'warning'
+
 export interface ValidationError {
   /** 例: `rows[0].keys[2].text`。レイアウト全体なら空文字。 */
   path: string
   message: string
+  /**
+   * `error` は取り込み・書き出しをブロックする構造の破損と資源の上限。`warning` は iOS が無視する見た目の値の問題
+   * （書き出しはブロックしない）。省略時は `error`。docs/keyboard-style-spec.md §1.4
+   */
+  severity?: Severity
 }
+
+/** error だけを取り出す（省略は error）。 */
+export const errorsOf = (issues: readonly ValidationError[]): ValidationError[] => issues.filter((e) => e.severity !== 'warning')
+/** warning だけを取り出す。 */
+export const warningsOf = (issues: readonly ValidationError[]): ValidationError[] => issues.filter((e) => e.severity === 'warning')
 
 export interface ValidateOptions {
   /** layout.target として有効な、組み込み以外のレイアウト id（他のレイアウトなど）。 */
@@ -38,7 +58,11 @@ const len = (s: string) => [...s].length
 class Collector {
   errors: ValidationError[] = []
   add(path: string, message: string) {
-    this.errors.push({ path, message })
+    this.errors.push({ path, message, severity: 'error' })
+  }
+  /** 見た目の値の問題。iOS ではそのプロパティだけ無視される（書き出しはブロックしない）。 */
+  warn(path: string, message: string) {
+    this.errors.push({ path, message, severity: 'warning' })
   }
   /** 許可されていないフィールドを報告する。 */
   extra(o: Obj, allowed: readonly string[], path: string) {
@@ -65,10 +89,8 @@ function str(c: Collector, v: unknown, path: string, min: number, max: number, w
 /** icon の書式。`iconify:` / `sf:` で始まるものだけ検査し、それ以外は従来どおり SF Symbols 名として通す。 */
 function validateIcon(c: Collector, v: unknown, path: string) {
   if (!str(c, v, path, 0, LIMITS.iconMax, 'icon')) return
-  if (v.startsWith('iconify:') && !ICONIFY_ICON_PATTERN.test(v))
-    c.add(path, 'iconify: の書式は iconify:<prefix>:<name>（小文字英数字とハイフン。例 iconify:mdi:home）にしてください')
-  else if (v.startsWith('sf:') && !SF_ICON_PATTERN.test(v))
-    c.add(path, 'sf: の後ろは SF Symbols 名（英数字と . _ -）にしてください')
+  const reason = iconFormatError(v)
+  if (reason) c.add(path, reason)
 }
 
 function validateAction(c: Collector, v: unknown, path: string) {
@@ -106,8 +128,8 @@ function validateCommon(c: Collector, k: Obj, path: string, isPopup: boolean) {
     c.add(join(path, 'width'), `width は 0 より大きく ${LIMITS.widthMax} 以下の数にしてください`)
   if (k.label !== undefined) str(c, k.label, join(path, 'label'), 0, LIMITS.labelMax, 'label')
   if (k.icon !== undefined) validateIcon(c, k.icon, join(path, 'icon'))
-  if (k.style !== undefined && !(KEY_STYLES as readonly unknown[]).includes(k.style))
-    c.add(join(path, 'style'), `style は ${KEY_STYLES.join(' / ')} のいずれかにしてください`)
+  if (k.role !== undefined && !(KEY_ROLES as readonly unknown[]).includes(k.role))
+    c.add(join(path, 'role'), `role は ${KEY_ROLES.join(' / ')} のいずれかにしてください`)
   if (k.visible !== undefined) {
     const p = join(path, 'visible')
     const v = k.visible
@@ -131,7 +153,7 @@ function validateCommon(c: Collector, k: Obj, path: string, isPopup: boolean) {
   }
 }
 
-const COMMON_FIELDS = ['id', 'kind', 'width', 'label', 'icon', 'style', 'longPress', 'visible']
+const COMMON_FIELDS = ['id', 'kind', 'width', 'label', 'icon', 'role', 'longPress', 'visible', 'look', 'states']
 
 function validatePopup(c: Collector, pk: unknown, path: string) {
   if (!isObj(pk)) return c.add(path, '長押しの項目はオブジェクトで指定してください')
@@ -157,6 +179,7 @@ function validateKey(c: Collector, k: unknown, path: string, targets: readonly s
   if (!(KEY_KINDS as readonly unknown[]).includes(kind))
     return c.add(join(path, 'kind'), `kind は ${KEY_KINDS.join(' / ')} のいずれかにしてください`)
   validateCommon(c, k, path, false)
+  validateKeyLooks(c, k, path)
   switch (kind) {
     case 'text':
       c.extra(k, [...COMMON_FIELDS, 'text', 'shift'], path)
@@ -213,15 +236,150 @@ function validateKey(c: Collector, k: unknown, path: string, targets: readonly s
   }
 }
 
-/** レイアウトを検証してエラー一覧を返す。空配列なら有効。 */
+// ---- 見た目（look）の検証。docs/keyboard-style-spec.md §5.5 ----------------------------------------------------------
+// 見た目の値の問題は warning（iOS はそのプロパティだけ無視する）。資源の上限（assets・rules の個数）は error。
+
+const LAYOUT_LOOK_FIELDS = ['look', 'roles', 'rules', 'metrics', 'background', 'assets'] as const
+const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
+
+/** look の中身。allowed を渡すと、その名前のプロパティだけ受け付ける（background 用）。 */
+function validateLookObject(c: Collector, v: unknown, path: string, allowsContent: boolean, allowed?: readonly string[]) {
+  if (!isObj(v)) return c.warn(path, '見た目の指定はオブジェクトで指定してください（この項目は無視されます）')
+  for (const [name, value] of Object.entries(v)) {
+    const p = join(path, name)
+    if (!hasOwn(LOOK_PROPS, name)) {
+      c.warn(p, `未知のプロパティ「${name}」は無視されます`)
+      continue
+    }
+    if (allowed && !allowed.includes(name)) {
+      c.warn(p, `「${name}」は背景には使えません（無視されます）`)
+      continue
+    }
+    if (!allowsContent && (LOOK_CONTENT_PROPS as readonly string[]).includes(name)) {
+      c.warn(p, `「${name}」は states / rules の中だけで有効です（ここでは無視されます）`)
+      continue
+    }
+    const r = checkLookValue(name, value)
+    if (!r.ok) c.warn(p, `「${name}」は無視されます: ${r.reason}`)
+  }
+}
+
+/** states 内の見た目（look ＋ holdMs）。 */
+function validateStateLook(c: Collector, v: unknown, path: string) {
+  if (!isObj(v)) return c.warn(path, '状態の見た目はオブジェクトで指定してください（この項目は無視されます）')
+  const { holdMs, ...look } = v
+  if (holdMs !== undefined) validateHoldMs(c, holdMs, join(path, 'holdMs'))
+  validateLookObject(c, look, path, true)
+}
+
+function validateHoldMs(c: Collector, v: unknown, path: string) {
+  if (!(typeof v === 'number' && Number.isFinite(v) && v >= LOOK_LIMITS.holdMsMin && v <= LOOK_LIMITS.holdMsMax))
+    c.warn(path, `holdMs は ${LOOK_LIMITS.holdMsMin}〜${LOOK_LIMITS.holdMsMax} の数で指定してください（無視されます）`)
+}
+
+/** キーの look と states。 */
+function validateKeyLooks(c: Collector, k: Obj, path: string) {
+  if (k.look !== undefined) validateLookObject(c, k.look, join(path, 'look'), false)
+  if (k.states === undefined) return
+  const p = join(path, 'states')
+  if (!isObj(k.states)) return c.warn(p, 'states はオブジェクトで指定してください（この項目は無視されます）')
+  for (const [state, look] of Object.entries(k.states)) {
+    if (!(LOOK_STATES as readonly string[]).includes(state)) c.warn(join(p, state), `未知の状態「${state}」は無視されます`)
+    else validateStateLook(c, look, join(p, state))
+  }
+}
+
+function validateRules(c: Collector, v: unknown) {
+  if (!Array.isArray(v)) return c.warn('rules', 'rules は配列で指定してください（この項目は無視されます）')
+  if (v.length > LOOK_LIMITS.rulesMax) c.add('rules', `rules は ${LOOK_LIMITS.rulesMax} 個以内にしてください（現在 ${v.length}）`)
+  v.forEach((rule, i) => {
+    const p = `rules[${i}]`
+    if (!isObj(rule)) return c.warn(p, 'rule はオブジェクトで指定してください（無視されます）')
+    for (const k of Object.keys(rule)) {
+      if (!['when', 'target', 'holdMs', 'look'].includes(k)) c.warn(join(p, k), `未知のフィールド「${k}」は無視されます`)
+    }
+    if (!(LOOK_STATES as readonly unknown[]).includes(rule.when)) {
+      c.warn(join(p, 'when'), `when は ${LOOK_STATES.join(' / ')} のいずれかにしてください（この rule は無視されます）`)
+    }
+    if (rule.target !== undefined || hasOwn(rule, 'target')) {
+      if (!parseTarget(rule)) {
+        c.warn(join(p, 'target'), 'target は "all" / "others" / { keys } / { roles } / { actions } のいずれか 1 つにしてください（この rule は無視されます）')
+      } else if (isObj(rule.target) && Array.isArray(rule.target.keys) && rule.target.keys.length > LOOK_LIMITS.targetKeysMax) {
+        c.add(join(p, 'target.keys'), `target.keys は ${LOOK_LIMITS.targetKeysMax} 個以内にしてください（現在 ${rule.target.keys.length}）`)
+      } else if (isObj(rule.target) && Array.isArray(rule.target.roles)) {
+        for (const r of rule.target.roles) {
+          if (!(KEY_ROLES as readonly unknown[]).includes(r)) c.warn(join(p, 'target.roles'), `未知の役割「${String(r)}」は無視されます`)
+        }
+      }
+    }
+    if (rule.holdMs !== undefined) validateHoldMs(c, rule.holdMs, join(p, 'holdMs'))
+    if (rule.look === undefined) c.warn(join(p, 'look'), 'look がありません（この rule は何も変えません）')
+    else validateLookObject(c, rule.look, join(p, 'look'), true)
+  })
+}
+
+function validateMetrics(c: Collector, v: unknown) {
+  if (!isObj(v)) return c.warn('metrics', 'metrics はオブジェクトで指定してください（この項目は無視されます）')
+  for (const [name, value] of Object.entries(v)) {
+    const p = join('metrics', name)
+    if (!hasOwn(METRICS_PROPS, name)) {
+      c.warn(p, `未知のプロパティ「${name}」は無視されます`)
+      continue
+    }
+    const range = METRICS_PROPS[name as keyof typeof METRICS_PROPS]
+    if (!(typeof value === 'number' && Number.isFinite(value) && value >= range.min && value <= range.max))
+      c.warn(p, `「${name}」は ${range.min}〜${range.max} の数で指定してください（無視されます）`)
+  }
+}
+
+function validateAssets(c: Collector, v: unknown) {
+  if (!isObj(v)) return c.add('assets', 'assets は { "画像 id": "data URI" } のオブジェクトで指定してください')
+  const ids = Object.keys(v).sort()
+  if (ids.length > ASSET_LIMITS.countMax) c.add('assets', `画像は ${ASSET_LIMITS.countMax} 枚以内にしてください（現在 ${ids.length}）`)
+  let total = 0
+  for (const id of ids) {
+    const p = join('assets', id)
+    if (!ASSET_ID_PATTERN.test(id)) {
+      c.add(p, '画像 id は英小文字・数字・- _ で始まりが英小文字か数字、32 文字以内にしてください')
+      continue
+    }
+    const bytes = dataUriBytes(v[id])
+    if (bytes === undefined) c.add(p, `画像は ${ASSET_LIMITS.mimeTypes.join(' か ')} の base64 data URI で指定してください`)
+    else if (bytes > ASSET_LIMITS.bytesMax)
+      c.add(p, `画像は 1 枚 ${ASSET_LIMITS.bytesMax / 1024} KB 以内にしてください（現在 ${Math.ceil(bytes / 1024)} KB）`)
+    else total += bytes
+  }
+  if (total > ASSET_LIMITS.totalMax)
+    c.add('assets', `画像の合計は ${ASSET_LIMITS.totalMax / 1024} KB 以内にしてください（現在 ${Math.ceil(total / 1024)} KB）`)
+}
+
+/** レイアウト直下の look 系（look / roles / rules / metrics / background / assets）。 */
+function validateLayoutLooks(c: Collector, layout: Obj) {
+  if (layout.look !== undefined) validateLookObject(c, layout.look, 'look', false)
+  if (layout.roles !== undefined) {
+    if (!isObj(layout.roles)) c.warn('roles', 'roles はオブジェクトで指定してください（この項目は無視されます）')
+    else
+      for (const [role, look] of Object.entries(layout.roles)) {
+        if (!(KEY_ROLES as readonly string[]).includes(role)) c.warn(join('roles', role), `未知の役割「${role}」は無視されます`)
+        else validateLookObject(c, look, join('roles', role), false)
+      }
+  }
+  if (layout.rules !== undefined) validateRules(c, layout.rules)
+  if (layout.metrics !== undefined) validateMetrics(c, layout.metrics)
+  if (layout.background !== undefined) validateLookObject(c, layout.background, 'background', false, BACKGROUND_PROPS)
+  if (layout.assets !== undefined) validateAssets(c, layout.assets)
+}
+
+/** レイアウトを検証して問題の一覧（error と warning）を返す。error が無ければ有効（warning は書き出しをブロックしない）。 */
 export function validateLayout(value: unknown, options: ValidateOptions = {}): ValidationError[] {
   const c = new Collector()
   if (!isObj(value)) {
     c.add('', 'レイアウトは JSON オブジェクトである必要があります')
     return c.errors
   }
-  c.extra(value, ['$schema', 'schema', 'id', 'name', 'mode', 'rows'], '')
-  if (value.schema !== SCHEMA_VERSION) c.add('schema', `schema は ${SCHEMA_VERSION} にしてください`)
+  c.extra(value, ['$schema', 'schema', 'id', 'name', 'mode', 'rows', ...LAYOUT_LOOK_FIELDS], '')
+  if (value.schema !== SCHEMA_VERSION)
+    c.add('schema', `schema は ${SCHEMA_VERSION} にしてください${value.schema === 1 ? '（schema 1 は未対応です。web/scripts/migrate-layout-v2.mjs で移行してください）' : ''}`)
   if (typeof value.id !== 'string' || !LAYOUT_ID_PATTERN.test(value.id))
     c.add('id', 'id は英小文字・数字・- _ で始まりが英小文字か数字、64 文字以内にしてください')
   str(c, value.name, 'name', 1, LIMITS.nameMax, 'name')
@@ -234,6 +392,7 @@ export function validateLayout(value: unknown, options: ValidateOptions = {}): V
     c.add('rows', 'rows は配列で指定してください')
     return c.errors
   }
+  validateLayoutLooks(c, value)
   if (rows.length < 1 || rows.length > LIMITS.rowsMax) c.add('rows', `行数は 1〜${LIMITS.rowsMax} にしてください（現在 ${rows.length}）`)
 
   const heightSum = rows.reduce((a: number, r) => a + (isObj(r) && isNum(r.height) ? r.height : 1), 0)
@@ -244,7 +403,8 @@ export function validateLayout(value: unknown, options: ValidateOptions = {}): V
   rows.forEach((row, ri) => {
     const rp = `rows[${ri}]`
     if (!isObj(row)) return c.add(rp, '行はオブジェクトで指定してください')
-    c.extra(row, ['height', 'keys'], rp)
+    c.extra(row, ['height', 'keys', 'look'], rp)
+    if (row.look !== undefined) validateLookObject(c, row.look, join(rp, 'look'), false)
     if (row.height !== undefined && !(isNum(row.height) && row.height > 0 && row.height <= LIMITS.rowHeightMax))
       c.add(join(rp, 'height'), `height は 0 より大きく ${LIMITS.rowHeightMax} 以下の数にしてください`)
     if (!Array.isArray(row.keys)) return c.add(join(rp, 'keys'), 'keys は配列で指定してください')
@@ -271,12 +431,14 @@ export function validateLayout(value: unknown, options: ValidateOptions = {}): V
 
 const round = (n: number) => Math.round(n * 1000) / 1000
 
-/** 型ガードとして使う。 */
+/** 型ガードとして使う。error が無ければ有効（warning は問わない）。 */
 export function isValidLayout(value: unknown, options?: ValidateOptions): value is KeyboardLayout {
-  return validateLayout(value, options).length === 0
+  return errorsOf(validateLayout(value, options)).length === 0
 }
 
-export type ParseResult = { ok: true; layout: KeyboardLayout } | { ok: false; errors: ValidationError[] }
+export type ParseResult =
+  | { ok: true; layout: KeyboardLayout; warnings: ValidationError[] }
+  | { ok: false; errors: ValidationError[] }
 
 /** JSON 文字列を読み込んで検証する。構文エラーも ValidationError で返す。 */
 export function parseLayoutJSON(text: string, options?: ValidateOptions): ParseResult {
@@ -286,8 +448,9 @@ export function parseLayoutJSON(text: string, options?: ValidateOptions): ParseR
   } catch (e) {
     return { ok: false, errors: [{ path: '', message: `JSON として読み込めません: ${(e as Error).message}` }] }
   }
-  const errors = validateLayout(data, options)
-  return errors.length ? { ok: false, errors } : { ok: true, layout: data as KeyboardLayout }
+  const issues = validateLayout(data, options)
+  const errors = errorsOf(issues)
+  return errors.length ? { ok: false, errors } : { ok: true, layout: data as KeyboardLayout, warnings: warningsOf(issues) }
 }
 
 /** `rows[0].keys[2].text` のようなパスを「1 行目の 3 番目のキー」に読み替える。 */
@@ -299,4 +462,5 @@ export function describePath(path: string): string {
     .replace(/\.longPress\[(\d+)\]/g, (_, n) => ` の長押し ${Number(n) + 1} 番目`)
     .replace(/\.steps\[(\d+)\]/g, (_, n) => ` の手順 ${Number(n) + 1}`)
     .replace(/\.cycle\[(\d+)\]/g, (_, n) => ` の cycle ${Number(n) + 1}`)
+    .replace(/rules\[(\d+)\]/g, (_, n) => `rules ${Number(n) + 1} 番目`)
 }

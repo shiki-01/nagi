@@ -1,0 +1,28 @@
+{
+  "description": "見た目の指定が何も無いレイアウト。解決結果は空（既定のまま）。押下中だけ組み込みの fillOpacity 0.6",
+  "layout": {
+    "schema": 2, "id": "vec-defaults", "name": "defaults", "mode": "alpha",
+    "rows": [
+      { "keys": [
+        { "id": "a", "kind": "text", "text": "a" },
+        { "id": "f", "kind": "action", "action": "enter", "role": "function" },
+        { "id": "c", "kind": "action", "action": "shift", "role": "accent" },
+        { "id": "gap", "kind": "spacer" }
+      ] }
+    ]
+  },
+  "cases": [
+    { "name": "状態なしは空", "key": "a", "expect": {} },
+    { "name": "押下中は fillOpacity 0.6", "key": "a", "states": ["pressed"], "expect": { "fillOpacity": 0.6 } },
+    { "name": "機能キーも同じ", "key": "f", "states": ["pressed"], "expect": { "fillOpacity": 0.6 } },
+    { "name": "accent も同じ", "key": "c", "states": ["pressed"], "expect": { "fillOpacity": 0.6 } },
+    { "name": "押下以外の状態は何も足さない", "key": "a", "states": ["shift", "capsLock", "composing", "released", "longPress", "flicking", "spaceDrag"], "expect": {} },
+    { "name": "spacer は何も持たない", "key": "gap", "states": ["pressed"], "expect": {} }
+  ],
+  "transitions": [
+    { "name": "指定なしは 0", "from": null, "to": null, "reduceMotion": false, "expect": 0 },
+    { "name": "前後の大きいほう（後）", "from": 100, "to": 250, "reduceMotion": false, "expect": 250 },
+    { "name": "前後の大きいほう（前）", "from": 300, "to": null, "reduceMotion": false, "expect": 300 },
+    { "name": "視差効果を減らすと 0", "from": 300, "to": 250, "reduceMotion": true, "expect": 0 }
+  ]
+}

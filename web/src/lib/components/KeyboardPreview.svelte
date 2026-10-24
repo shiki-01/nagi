@@ -37,7 +37,7 @@
           <button
             type="button"
             data-key-id={key.id}
-            class="key {key.kind === 'spacer' ? 'spacer' : (key.style ?? 'normal')}"
+            class="key {key.kind === 'spacer' ? 'spacer' : (key.role ?? 'normal')}"
             class:selected={selected.has(key.id)}
             class:dragging={dragging.has(key.id)}
             style:flex-grow={key.width ?? 1}

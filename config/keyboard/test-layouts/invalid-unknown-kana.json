@@ -1,1 +1,1 @@
-{"schema": 1, "id": "test-invalid-kana", "name": "無効: 未知の kana", "mode": "kana", "rows": [{"keys": [{"id": "a", "kind": "flick", "kana": "ぬ"}]}]}
+{"schema": 2, "id": "test-invalid-kana", "name": "無効: 未知の kana", "mode": "kana", "rows": [{"keys": [{"id": "a", "kind": "flick", "kana": "ぬ"}]}]}

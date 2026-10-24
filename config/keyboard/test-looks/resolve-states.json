@@ -1,0 +1,67 @@
+{
+  "description": "状態の優先順位（composing < capsLock < shift < released < pressed < spaceDrag < flicking < longPress）、rules と states の順序、押下の既定、released の holdMs、label/icon の上書き",
+  "layout": {
+    "schema": 2, "id": "vec-states", "name": "states", "mode": "alpha",
+    "rules": [
+      { "when": "pressed", "look": { "scale": 0.9, "fillOpacity": 1 } },
+      { "when": "pressed", "target": { "keys": ["b"] }, "look": { "scale": 0.8 } },
+      { "when": "shift", "look": { "fill": "#AA0000" } },
+      { "when": "capsLock", "look": { "fill": "#00AA00", "borderWidth": 2 } },
+      { "when": "composing", "look": { "fill": "#0000AA", "opacity": 0.5 } },
+      { "when": "longPress", "look": { "scale": 1.2 } },
+      { "when": "flicking", "look": { "scale": 1.1, "opacity": 0.8 } },
+      { "when": "spaceDrag", "target": "others", "look": { "opacity": 0.35, "animationMs": 120 } },
+      { "when": "released", "holdMs": 150, "look": { "animationMs": 150 } },
+      { "when": "released", "target": { "keys": ["b"] }, "holdMs": 900, "look": {} },
+      { "when": "bogus", "look": { "opacity": 0 } },
+      { "when": "pressed", "target": { "keys": ["a"], "roles": ["function"] }, "look": { "borderWidth": 4 } }
+    ],
+    "rows": [
+      { "keys": [
+        { "id": "a", "kind": "text", "text": "a", "look": { "fillOpacity": 0.8, "fill": "#111111" } },
+        { "id": "b", "kind": "text", "text": "b", "states": { "pressed": { "scale": 0.7, "fillOpacity": 0.2 }, "released": { "holdMs": 2001 } } },
+        { "id": "sp", "kind": "action", "action": "space", "label": "空白", "states": { "spaceDrag": { "label": "移動", "opacity": 0.7, "animationMs": 120 } } },
+        { "id": "ic", "kind": "action", "action": "x", "icon": "sf:star", "states": { "pressed": { "label": "X" }, "longPress": { "icon": "sf:bolt" } } },
+        { "id": "c", "kind": "text", "text": "c", "states": { "composing": { "opacity": 0.9 }, "released": { "holdMs": 50 } } },
+        { "id": "gap", "kind": "spacer" }
+      ] }
+    ]
+  },
+  "cases": [
+    { "name": "状態なし", "key": "a", "expect": { "fillOpacity": 0.8, "fill": "#111111FF" } },
+    { "name": "押下: 組み込み 0.6 の後に rules が勝つ", "key": "a", "states": ["pressed"],
+      "expect": { "fillOpacity": 1, "fill": "#111111FF", "scale": 0.9 } },
+    { "name": "押下: 後の rule（target 指定）→ キーの states の順", "key": "b", "states": ["pressed"],
+      "expect": { "scale": 0.7, "fillOpacity": 0.2 } },
+    { "name": "target が当てはまらない rule は無視", "key": "sp", "states": ["pressed"],
+      "expect": { "fillOpacity": 1, "scale": 0.9 } },
+    { "name": "spaceDrag: others は起点以外に当てはまる", "key": "a", "states": ["spaceDrag"], "origin": "sp",
+      "expect": { "fillOpacity": 0.8, "fill": "#111111FF", "opacity": 0.35, "animationMs": 120 } },
+    { "name": "spaceDrag: 起点が無ければ others は全キー", "key": "a", "states": ["spaceDrag"],
+      "expect": { "fillOpacity": 0.8, "fill": "#111111FF", "opacity": 0.35, "animationMs": 120 } },
+    { "name": "spaceDrag: 起点キーは others から外れ、自身の states が効く", "key": "sp", "states": ["spaceDrag"], "origin": "sp",
+      "expect": { "label": "移動", "opacity": 0.7, "animationMs": 120 },
+      "expectContent": { "label": "移動", "icon": null, "hidesKeyIcon": true } },
+    { "name": "複数の状態は優先順位で重なる（指定の順序に依らない）", "key": "a",
+      "states": ["longPress", "pressed", "flicking", "spaceDrag"], "origin": "sp",
+      "expect": { "fillOpacity": 1, "fill": "#111111FF", "scale": 1.2, "opacity": 0.8, "animationMs": 120 } },
+    { "name": "持続する状態: shift が capsLock・composing より上", "key": "a", "states": ["shift", "composing", "capsLock"],
+      "expect": { "fillOpacity": 0.8, "fill": "#AA0000FF", "opacity": 0.5, "borderWidth": 2 } },
+    { "name": "rules の後にキーの states", "key": "c", "states": ["composing"],
+      "expect": { "fill": "#0000AAFF", "opacity": 0.9 } },
+    { "name": "released の rules", "key": "a", "states": ["released"], "expect": { "fillOpacity": 0.8, "fill": "#111111FF", "animationMs": 150 }, "expectHoldMs": 150 },
+    { "name": "released の holdMs: 後の rule が勝つ（キーの範囲外 2001 は無視）", "key": "b", "expectHoldMs": 900, "expect": {} },
+    { "name": "released の holdMs: キーの states が最後", "key": "c", "expectHoldMs": 50, "expect": {} },
+    { "name": "released の holdMs: 既定は rules の値", "key": "sp", "expectHoldMs": 150, "expect": {} },
+    { "name": "label だけの状態は key のアイコンを隠す", "key": "ic", "states": ["pressed"],
+      "expect": { "fillOpacity": 1, "scale": 0.9, "label": "X" },
+      "expectContent": { "label": "X", "icon": null, "hidesKeyIcon": true } },
+    { "name": "icon の状態", "key": "ic", "states": ["longPress"],
+      "expect": { "scale": 1.2, "icon": "sf:bolt" },
+      "expectContent": { "label": null, "icon": "sf:bolt", "hidesKeyIcon": false } },
+    { "name": "spacer は状態があっても空", "key": "gap", "states": ["pressed", "spaceDrag"], "expect": {} }
+  ],
+  "transitions": [
+    { "name": "離したときの戻りは押下中の指定が効く", "from": 80, "to": 150, "reduceMotion": false, "expect": 150 }
+  ]
+}

@@ -1,16 +1,16 @@
 {
-  "schema": 1,
+  "schema": 2,
   "id": "emoji",
   "name": "絵文字",
   "mode": "emoji",
   "rows": [
     {"keys": [
-      {"id": "kana", "kind": "layout", "target": "kana", "label": "あいう", "style": "function", "width": 1.5},
-      {"id": "alpha", "kind": "layout", "target": "alpha", "label": "ABC", "style": "function", "width": 1.5},
-      {"id": "num", "kind": "layout", "target": "numbers", "label": "☆123", "style": "function", "width": 1.5},
-      {"id": "globe", "kind": "action", "action": "globe", "style": "function", "label": "🌐"},
-      {"id": "space", "kind": "action", "action": "space", "style": "normal", "label": "空白", "width": 2.5},
-      {"id": "bs", "kind": "action", "action": "backspace", "style": "function", "label": "⌫", "width": 1.5}
+      {"id": "kana", "kind": "layout", "target": "kana", "label": "あいう", "role": "function", "width": 1.5},
+      {"id": "alpha", "kind": "layout", "target": "alpha", "label": "ABC", "role": "function", "width": 1.5},
+      {"id": "num", "kind": "layout", "target": "numbers", "label": "☆123", "role": "function", "width": 1.5},
+      {"id": "globe", "kind": "action", "action": "globe", "role": "function", "label": "🌐"},
+      {"id": "space", "kind": "action", "action": "space", "role": "normal", "label": "空白", "width": 2.5},
+      {"id": "bs", "kind": "action", "action": "backspace", "role": "function", "label": "⌫", "width": 1.5}
     ]}
   ]
 }

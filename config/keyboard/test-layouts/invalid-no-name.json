@@ -1,1 +1,1 @@
-{"schema": 1, "id": "test-invalid-noname", "mode": "kana", "rows": [{"keys": [{"id": "a", "kind": "text", "text": "a"}]}]}
+{"schema": 2, "id": "test-invalid-noname", "mode": "kana", "rows": [{"keys": [{"id": "a", "kind": "text", "text": "a"}]}]}

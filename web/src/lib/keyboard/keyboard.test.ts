@@ -5,10 +5,10 @@ import { History } from './history'
 import { addKey, addKeyInNewRow, addRow, changeKind, duplicateLayout, insertKey, moveKey, moveKeys, moveKeysChecked, navigateKey, nudgeKeys, removeKey, removeKeys, removeRow, moveRow, sampleLayout, shiftKey, uniqueId } from './ops'
 import { clampScale, computeDropTarget, dropIndicator, fitView, zoomAt } from './canvas-geometry'
 import type { RowGeom } from './canvas-geometry'
-import { LIMITS } from './types'
+import { LIMITS, SCHEMA_VERSION } from './types'
 import { loadPresets } from './presets'
 import { restoreState } from './store.svelte'
-import { ACTION_PATTERN, BUILTIN_LAYOUT_IDS, KEY_KINDS, KEY_STYLES, LAYOUT_MODES } from './types'
+import { ACTION_PATTERN, BUILTIN_LAYOUT_IDS, KEY_KINDS, KEY_ROLES, LAYOUT_MODES } from './types'
 import type { KeyboardLayout } from './types'
 import { parseLayoutJSON, validateLayout } from './validate'
 
@@ -48,12 +48,12 @@ describe('schema agreement with ajv', () => {
   const good: unknown[] = [
     sampleLayout(),
     {
-      schema: 1, id: 'f', name: 'f', mode: 'kana',
+      schema: 2, id: 'f', name: 'f', mode: 'kana',
       rows: [{ height: 1.2, keys: [
         { id: 'a', kind: 'flick', center: { text: 'あ' }, up: { text: 'う' }, kana: 'あ', longPress: [{ label: '1', kind: 'text', text: '1' }, { label: 's', kind: 'shortcut', steps: [{ text: 'x' }, { action: 'space' }] }] },
         { id: 'b', kind: 'toggle', cycle: ['a', 'b'] },
         { id: 'c', kind: 'shortcut', steps: [{ action: 'moveLeft' }], visible: { field: 'returnKeyType', in: ['search'] } },
-        { id: 'd', kind: 'layout', target: 'numbers', style: 'function' },
+        { id: 'd', kind: 'layout', target: 'numbers', role: 'function' },
         { id: 'e', kind: 'spacer', width: 0.5 },
         { id: 'i1', kind: 'action', action: 'space', icon: 'iconify:mdi:home' },
         { id: 'i2', kind: 'action', action: 'space', icon: 'iconify:material-symbols:arrow-back-2' },
@@ -66,7 +66,8 @@ describe('schema agreement with ajv', () => {
   const bad = (): unknown[] => {
     const mk = (f: (l: any) => void) => { const l = structuredClone(good[1]) as any; f(l); return l }
     return [
-      mk((l) => (l.schema = 2)),
+      mk((l) => (l.schema = 1)),
+      mk((l) => (l.schema = 3)),
       mk((l) => (l.mode = 'x')),
       mk((l) => (l.extra = 1)),
       mk((l) => (l.rows = [])),
@@ -76,7 +77,8 @@ describe('schema agreement with ajv', () => {
       mk((l) => { delete l.rows[0].keys[0].center; delete l.rows[0].keys[0].kana }),
       mk((l) => (l.rows[0].keys[1].cycle = [])),
       mk((l) => (l.rows[0].keys[2].steps = [{ action: 'a', text: 'b' }])),
-      mk((l) => (l.rows[0].keys[3].style = 'neon')),
+      mk((l) => (l.rows[0].keys[3].role = 'neon')),
+      mk((l) => (l.rows[0].keys[3].style = 'function')),
       mk((l) => (l.rows[0].keys[4].width = 0)),
       mk((l) => (l.rows[0].keys[0].longPress = [{ label: 'x', kind: 'layout', target: 'a' }])),
       mk((l) => (l.rows[0].keys[0].kind = 'bogus')),
@@ -100,7 +102,8 @@ describe('schema agreement with ajv', () => {
   it('constants match schema enums', () => {
     const s = schema as any
     expect(s.properties.mode.enum).toEqual([...LAYOUT_MODES])
-    expect(s.$defs.style.enum).toEqual([...KEY_STYLES])
+    expect(s.$defs.role.enum).toEqual([...KEY_ROLES])
+    expect(s.properties.schema.const).toBe(SCHEMA_VERSION)
     expect(s.$defs.key.oneOf).toHaveLength(KEY_KINDS.length)
     expect(new RegExp(s.$defs.action.pattern).source).toBe(ACTION_PATTERN.source)
     expect(BUILTIN_LAYOUT_IDS).toContain('flick-kana')
@@ -131,8 +134,8 @@ describe('ops', () => {
     expect(ids(removeKey(base, 'q'))[0]).not.toContain('q')
   })
   it('changeKind keeps common fields', () => {
-    const k = changeKind({ id: 'x', kind: 'text', text: 'a', width: 2, style: 'accent', label: 'A' }, 'action')
-    expect(k).toMatchObject({ id: 'x', kind: 'action', width: 2, style: 'accent' })
+    const k = changeKind({ id: 'x', kind: 'text', text: 'a', width: 2, role: 'accent', label: 'A' }, 'action')
+    expect(k).toMatchObject({ id: 'x', kind: 'action', width: 2, role: 'accent' })
     expect('text' in k).toBe(false)
   })
   it('duplicateLayout gets new id', () => {

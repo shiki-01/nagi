@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { EditorStore } from '$lib/keyboard/store.svelte'
+  import { LAYOUT_FILE_MAX_BYTES } from '$lib/keyboard/types'
   import { parseLayoutJSON } from '$lib/keyboard/validate'
   import type { ValidationError } from '$lib/keyboard/validate'
   import ErrorList from './ErrorList.svelte'
@@ -55,8 +56,8 @@
   async function onfile(e: Event & { currentTarget: HTMLInputElement }) {
     const file = e.currentTarget.files?.[0]
     if (!file) return
-    if (file.size > 1_000_000) {
-      importErrors = [{ path: '', message: 'ファイルが大きすぎます（1MB まで）' }]
+    if (file.size > LAYOUT_FILE_MAX_BYTES) {
+      importErrors = [{ path: '', message: 'ファイルが大きすぎます（1.5MB まで）' }]
       return
     }
     importText(await file.text(), file.name)
@@ -91,7 +92,7 @@
     </label>
     <label>
       <span class="lbl">貼り付けから</span>
-      <textarea bind:value={pasted} rows="5" placeholder={'{ "schema": 1, "id": "...", ... }'} spellcheck="false"></textarea>
+      <textarea bind:value={pasted} rows="5" placeholder={'{ "schema": 2, "id": "...", ... }'} spellcheck="false"></textarea>
     </label>
     <button
       type="button"

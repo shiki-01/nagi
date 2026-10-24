@@ -1,0 +1,40 @@
+{
+  "description": "rules の target（all / others / keys / roles / actions）。spacer は含めない。未知の role 名は無視",
+  "layout": {
+    "schema": 2, "id": "vec-rules", "name": "rules", "mode": "alpha",
+    "rules": [
+      { "when": "pressed", "target": "all", "look": { "opacity": 0.9 } },
+      { "when": "pressed", "target": "others", "look": { "borderWidth": 3 } },
+      { "when": "pressed", "target": { "keys": ["q", "nope"] }, "look": { "scale": 0.5 } },
+      { "when": "pressed", "target": { "roles": ["function", "bogus"] }, "look": { "cornerRadius": 1 } },
+      { "when": "pressed", "target": { "actions": ["enter", "space"] }, "look": { "padding": 5 } },
+      { "when": "pressed", "target": { "keys": [] }, "look": { "inset": 3 } },
+      { "when": "pressed", "target": "everyone", "look": { "offsetX": 7 } },
+      { "when": "pressed", "target": { "roles": ["accent"] } }
+    ],
+    "rows": [
+      { "keys": [
+        { "id": "q", "kind": "text", "text": "q" },
+        { "id": "w", "kind": "text", "text": "w" },
+        { "id": "shift", "kind": "action", "action": "shift", "role": "function" },
+        { "id": "enter", "kind": "action", "action": "enter", "role": "accent" },
+        { "id": "sp", "kind": "action", "action": "space" },
+        { "id": "gap", "kind": "spacer" }
+      ] }
+    ]
+  },
+  "cases": [
+    { "name": "keys に当てはまる", "key": "q", "states": ["pressed"],
+      "expect": { "fillOpacity": 0.6, "opacity": 0.9, "borderWidth": 3, "scale": 0.5 } },
+    { "name": "all と（spaceDrag 以外の）others だけ", "key": "w", "states": ["pressed"],
+      "expect": { "fillOpacity": 0.6, "opacity": 0.9, "borderWidth": 3 } },
+    { "name": "roles に当てはまる", "key": "shift", "states": ["pressed"],
+      "expect": { "fillOpacity": 0.6, "opacity": 0.9, "borderWidth": 3, "cornerRadius": 1 } },
+    { "name": "actions に当てはまる（accent の role は look の無い rule なので変化なし）", "key": "enter", "states": ["pressed"],
+      "expect": { "fillOpacity": 0.6, "opacity": 0.9, "borderWidth": 3, "padding": 5 } },
+    { "name": "actions: space", "key": "sp", "states": ["pressed"],
+      "expect": { "fillOpacity": 0.6, "opacity": 0.9, "borderWidth": 3, "padding": 5 } },
+    { "name": "spacer は含めない", "key": "gap", "states": ["pressed"], "expect": {} },
+    { "name": "状態が違えば rule は効かない", "key": "q", "expect": {} }
+  ]
+}

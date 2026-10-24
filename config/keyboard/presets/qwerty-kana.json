@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "id": "qwerty-kana",
   "name": "QWERTY（かな・ローマ字入力）",
   "mode": "kana",
@@ -165,7 +165,7 @@
           "id": "bs",
           "kind": "action",
           "action": "backspace",
-          "style": "function",
+          "role": "function",
           "label": "⌫",
           "width": 1.5
         }
@@ -177,7 +177,7 @@
           "id": "mode",
           "kind": "action",
           "action": "modeSwitch",
-          "style": "function",
+          "role": "function",
           "label": "A",
           "width": 1.0
         },
@@ -186,21 +186,21 @@
           "kind": "layout",
           "target": "numbers",
           "label": "☆123",
-          "style": "function",
+          "role": "function",
           "width": 1.0
         },
         {
           "id": "globe",
           "kind": "action",
           "action": "globe",
-          "style": "function",
+          "role": "function",
           "label": "🌐"
         },
         {
           "id": "space",
           "kind": "action",
           "action": "space",
-          "style": "normal",
+          "role": "normal",
           "label": "空白",
           "width": 2.4
         },
@@ -220,7 +220,7 @@
           "id": "left",
           "kind": "action",
           "action": "moveLeft",
-          "style": "function",
+          "role": "function",
           "label": "◀",
           "width": 0.8
         },
@@ -228,7 +228,7 @@
           "id": "right",
           "kind": "action",
           "action": "moveRight",
-          "style": "function",
+          "role": "function",
           "label": "▶",
           "width": 0.8
         },
@@ -236,7 +236,7 @@
           "id": "enter",
           "kind": "action",
           "action": "enter",
-          "style": "function",
+          "role": "function",
           "label": "改行",
           "width": 1.4
         }

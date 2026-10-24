@@ -27,10 +27,11 @@ import {
 import { KEY_KINDS, LIMITS } from './types'
 import type { Direction, MoveDest } from './ops'
 import type { Key, KeyKind, KeyboardLayout, Row } from './types'
-import { validateLayout } from './validate'
+import { errorsOf, validateLayout, warningsOf } from './validate'
 import type { ValidationError } from './validate'
 
-export const STORAGE_KEY = 'nagi.custom-keyboard.v1'
+// 保存形式を変えたら v を上げる。旧キー（v1: schema 1 のレイアウト）は読まない（docs/keyboard-style-spec.md §12.3）
+export const STORAGE_KEY = 'nagi.custom-keyboard.v2'
 
 export interface EditorState {
   layouts: KeyboardLayout[]
@@ -109,11 +110,19 @@ export class EditorStore {
   get selectedKey(): Key | undefined {
     return this.selectedKeyId !== null ? findKey(this.layout, this.selectedKeyId)?.key : undefined
   }
+  /** 書き出しをブロックする問題（構造の破損・資源の上限）。 */
   get errors(): ValidationError[] {
-    const errors = validateLayout(this.layout, { knownLayoutIds: this.state.layouts.map((l) => l.id) })
+    const errors = errorsOf(this.#issues())
     if (this.state.layouts.filter((l) => l.id === this.layout.id).length > 1)
-      errors.push({ path: 'id', message: `レイアウト id「${this.layout.id}」が他のレイアウトと重複しています` })
+      errors.push({ path: 'id', message: `レイアウト id「${this.layout.id}」が他のレイアウトと重複しています`, severity: 'error' })
     return errors
+  }
+  /** 無視される見た目の値（書き出しはブロックしない。iOS はそのプロパティだけ無視する）。 */
+  get warnings(): ValidationError[] {
+    return warningsOf(this.#issues())
+  }
+  #issues(): ValidationError[] {
+    return validateLayout(this.layout, { knownLayoutIds: this.state.layouts.map((l) => l.id) })
   }
 
   #apply(next: EditorState, coalesceKey?: string) {

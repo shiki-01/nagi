@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "id": "numbers",
   "name": "数字",
   "mode": "number",
@@ -29,21 +29,21 @@
       {"id": "k_22", "kind": "text", "text": "\""}
     ]},
     {"keys": [
-      {"id": "sym", "kind": "layout", "target": "symbols", "label": "#+=", "style": "function", "width": 1.5},
+      {"id": "sym", "kind": "layout", "target": "symbols", "label": "#+=", "role": "function", "width": 1.5},
       {"id": "k_2e", "kind": "text", "text": ".", "width": 1.2},
       {"id": "k_2c", "kind": "text", "text": ",", "width": 1.2},
       {"id": "k_3f", "kind": "text", "text": "?", "width": 1.2},
       {"id": "k_21", "kind": "text", "text": "!", "width": 1.2},
       {"id": "k_27", "kind": "text", "text": "'", "width": 1.2},
-      {"id": "bs", "kind": "action", "action": "backspace", "style": "function", "label": "⌫", "width": 1.5}
+      {"id": "bs", "kind": "action", "action": "backspace", "role": "function", "label": "⌫", "width": 1.5}
     ]},
     {"keys": [
-      {"id": "kana", "kind": "layout", "target": "kana", "label": "あいう", "style": "function", "width": 1.5},
-      {"id": "globe", "kind": "action", "action": "globe", "style": "function", "label": "🌐"},
-      {"id": "emoji", "kind": "layout", "target": "emoji", "label": "😀", "style": "function"},
-      {"id": "space", "kind": "action", "action": "space", "style": "normal", "label": "空白", "width": 3.2},
-      {"id": "enter", "kind": "action", "action": "enter", "style": "function", "label": "改行", "width": 1.5},
-      {"id": "alpha", "kind": "layout", "target": "alpha", "label": "ABC", "style": "function", "width": 1.2}
+      {"id": "kana", "kind": "layout", "target": "kana", "label": "あいう", "role": "function", "width": 1.5},
+      {"id": "globe", "kind": "action", "action": "globe", "role": "function", "label": "🌐"},
+      {"id": "emoji", "kind": "layout", "target": "emoji", "label": "😀", "role": "function"},
+      {"id": "space", "kind": "action", "action": "space", "role": "normal", "label": "空白", "width": 3.2},
+      {"id": "enter", "kind": "action", "action": "enter", "role": "function", "label": "改行", "width": 1.5},
+      {"id": "alpha", "kind": "layout", "target": "alpha", "label": "ABC", "role": "function", "width": 1.2}
     ]}
   ]
 }

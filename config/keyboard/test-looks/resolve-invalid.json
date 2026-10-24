@@ -1,0 +1,51 @@
+{
+  "description": "不正な値（範囲外・型違い・null・不正な色・未知の名前）はそのプロパティだけ無視して下位の値に落ちる。クランプはしない",
+  "layout": {
+    "schema": 2, "id": "vec-invalid", "name": "invalid", "mode": "alpha",
+    "look": { "fontSize": 20, "cornerRadius": 5, "fontWeight": "bold", "fill": "#112233", "opacity": 0.5, "scale": 1.2 },
+    "rows": [
+      { "keys": [
+        { "id": "a", "kind": "text", "text": "a", "look": {
+          "fontSize": 50, "cornerRadius": -1, "fontWeight": "extra", "fill": "red", "opacity": "half", "scale": null,
+          "inset": 12.5, "mystery": 3, "label": "NG", "icon": "sf:globe", "fillImage": "Bad Id!",
+          "borderWidth": 4, "shadowRadius": 16, "animationMs": 1000
+        } },
+        { "id": "b", "kind": "text", "text": "b", "look": 5, "states": [1] },
+        { "id": "c", "kind": "text", "text": "c", "look": { "fontSize": 8, "shadowX": -8, "offsetY": 20, "padding": 0 } },
+        { "id": "d", "kind": "text", "text": "d", "look": { "fontSize": 7.99, "scale": 1.51, "fillOpacity": 1.01 } },
+        { "id": "e", "kind": "text", "text": "e", "look": {
+          "color": { "light": "#GGG" }, "borderColor": { "light": "#fff", "extra": "#000" }, "shadowColor": {}, "fill": 123
+        } },
+        { "id": "s", "kind": "text", "text": "s", "states": {
+          "pressed": { "label": "P", "icon": "iconify:mdi", "opacity": 2 },
+          "bogus": { "opacity": 0 }
+        } },
+        { "id": "t", "kind": "text", "text": "t", "states": {
+          "pressed": { "label": "あいうえおかきくけこさしすせそたち", "icon": "sf:star" }
+        } }
+      ] }
+    ]
+  },
+  "cases": [
+    { "name": "無効な値は下位に落ち、範囲の端は有効", "key": "a",
+      "expect": { "fontSize": 20, "cornerRadius": 5, "fontWeight": "bold", "fill": "#112233FF", "opacity": 0.5, "scale": 1.2,
+                  "borderWidth": 4, "shadowRadius": 16, "animationMs": 1000 } },
+    { "name": "look が object でなければ無視", "key": "b",
+      "expect": { "fontSize": 20, "cornerRadius": 5, "fontWeight": "bold", "fill": "#112233FF", "opacity": 0.5, "scale": 1.2 } },
+    { "name": "範囲の端（下限・上限）は有効", "key": "c",
+      "expect": { "fontSize": 8, "cornerRadius": 5, "fontWeight": "bold", "fill": "#112233FF", "opacity": 0.5, "scale": 1.2,
+                  "shadowX": -8, "offsetY": 20, "padding": 0 } },
+    { "name": "端のすぐ外は無効（クランプしない）", "key": "d",
+      "expect": { "fontSize": 20, "cornerRadius": 5, "fontWeight": "bold", "fill": "#112233FF", "opacity": 0.5, "scale": 1.2 } },
+    { "name": "不正な色は無視", "key": "e",
+      "expect": { "fontSize": 20, "cornerRadius": 5, "fontWeight": "bold", "fill": "#112233FF", "opacity": 0.5, "scale": 1.2 } },
+    { "name": "状態の label は有効、書式違いの icon・範囲外の opacity は無視", "key": "s", "states": ["pressed"],
+      "expect": { "fontSize": 20, "cornerRadius": 5, "fontWeight": "bold", "fill": "#112233FF", "opacity": 0.5, "scale": 1.2,
+                  "fillOpacity": 0.6, "label": "P" },
+      "expectContent": { "label": "P", "icon": null, "hidesKeyIcon": true } },
+    { "name": "17 文字の label は無視、icon は有効", "key": "t", "states": ["pressed"],
+      "expect": { "fontSize": 20, "cornerRadius": 5, "fontWeight": "bold", "fill": "#112233FF", "opacity": 0.5, "scale": 1.2,
+                  "fillOpacity": 0.6, "icon": "sf:star" },
+      "expectContent": { "label": null, "icon": "sf:star", "hidesKeyIcon": false } }
+  ]
+}

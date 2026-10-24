@@ -5,7 +5,7 @@ import type { Key, KeyKind, KeyboardLayout, LayoutMode, Row } from './types'
 
 export function sampleLayout(): KeyboardLayout {
   return {
-    schema: 1,
+    schema: 2,
     id: 'sample',
     name: 'サンプル（QWERTY 1 行）',
     mode: 'alpha',
@@ -17,9 +17,9 @@ export function sampleLayout(): KeyboardLayout {
       },
       {
         keys: [
-          { id: 'shift', kind: 'action', action: 'shift', icon: 'shift', label: '⇧', style: 'function', width: 1.5 },
+          { id: 'shift', kind: 'action', action: 'shift', icon: 'shift', label: '⇧', role: 'function', width: 1.5 },
           { id: 'space', kind: 'action', action: 'space', label: 'space', width: 5 },
-          { id: 'enter', kind: 'action', action: 'enter', label: '改行', style: 'accent', width: 2 }
+          { id: 'enter', kind: 'action', action: 'enter', label: '改行', role: 'accent', width: 2 }
         ]
       }
     ]
@@ -46,7 +46,7 @@ export function allKeyIds(layout: KeyboardLayout): string[] {
 
 export function newLayout(existingIds: readonly string[], mode: LayoutMode = 'custom'): KeyboardLayout {
   return {
-    schema: 1,
+    schema: 2,
     id: uniqueId('my-layout', existingIds),
     name: '新しいレイアウト',
     mode,
@@ -93,11 +93,11 @@ export function defaultKey(kind: KeyKind, id: string): Key {
     case 'toggle':
       return { id, kind, label: 'ab', cycle: ['a', 'b'] }
     case 'action':
-      return { id, kind, label: '空白', action: 'space', style: 'function' }
+      return { id, kind, label: '空白', action: 'space', role: 'function' }
     case 'shortcut':
       return { id, kind, label: '定型', steps: [{ text: 'ありがとうございます' }] }
     case 'layout':
-      return { id, kind, label: '123', target: 'numbers', style: 'function' }
+      return { id, kind, label: '123', target: 'numbers', role: 'function' }
     case 'spacer':
       return { id, kind }
   }
@@ -109,7 +109,7 @@ export function changeKind(key: Key, kind: KeyKind): Key {
   const fresh = defaultKey(kind, key.id)
   const out: Record<string, unknown> = { ...fresh }
   if (key.width !== undefined) out.width = key.width
-  if (key.style !== undefined) out.style = key.style
+  if (key.role !== undefined) out.role = key.role
   if (key.icon !== undefined) out.icon = key.icon
   if (key.longPress !== undefined && kind !== 'spacer') out.longPress = key.longPress
   if (key.visible !== undefined) out.visible = key.visible

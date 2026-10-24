@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "id": "test-shortcut",
   "name": "テスト: ショートカット専用",
   "mode": "alpha",
@@ -8,20 +8,20 @@
       {"id": "paren", "kind": "shortcut", "label": "（）", "steps": [{"text": "（）"}, {"action": "moveLeft"}]},
       {"id": "kagi", "kind": "shortcut", "label": "「」", "steps": [{"text": "「」"}, {"action": "moveLeft"}]},
       {"id": "sumi", "kind": "shortcut", "label": "【】", "steps": [{"text": "【】"}, {"action": "moveLeft"}]},
-      {"id": "bs", "kind": "action", "action": "backspace", "label": "⌫", "style": "function", "width": 0.9}
+      {"id": "bs", "kind": "action", "action": "backspace", "label": "⌫", "role": "function", "width": 0.9}
     ]},
     {"keys": [
-      {"id": "left", "kind": "action", "action": "moveLeft", "label": "←", "style": "function"},
-      {"id": "right", "kind": "action", "action": "moveRight", "label": "→", "style": "function"},
+      {"id": "left", "kind": "action", "action": "moveLeft", "label": "←", "role": "function"},
+      {"id": "right", "kind": "action", "action": "moveRight", "label": "→", "role": "function"},
       {"id": "date", "kind": "shortcut", "label": "日付", "steps": [{"text": "2026-"}, {"text": "01-01"}],
         "longPress": [{"label": "ab", "kind": "shortcut", "steps": [{"text": "a"}, {"text": "b"}, {"action": "moveLeft"}]}]},
-      {"id": "space", "kind": "action", "action": "space", "label": "空白", "style": "function", "width": 0.9}
+      {"id": "space", "kind": "action", "action": "space", "label": "空白", "role": "function", "width": 0.9}
     ]},
     {"keys": [
-      {"id": "globe", "kind": "action", "action": "globe", "label": "🌐", "style": "function"},
-      {"id": "kana", "kind": "layout", "target": "kana", "label": "あ", "style": "function"},
-      {"id": "alpha", "kind": "layout", "target": "alpha", "label": "ABC", "style": "function"},
-      {"id": "enter", "kind": "action", "action": "enter", "label": "改行", "style": "function", "width": 0.9}
+      {"id": "globe", "kind": "action", "action": "globe", "label": "🌐", "role": "function"},
+      {"id": "kana", "kind": "layout", "target": "kana", "label": "あ", "role": "function"},
+      {"id": "alpha", "kind": "layout", "target": "alpha", "label": "ABC", "role": "function"},
+      {"id": "enter", "kind": "action", "action": "enter", "label": "改行", "role": "function", "width": 0.9}
     ]}
   ]
 }

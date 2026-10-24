@@ -1,4 +1,4 @@
-{"schema": 1, "id": "test-invalid-rows", "name": "無効: 9 行", "mode": "kana", "rows": [
+{"schema": 2, "id": "test-invalid-rows", "name": "無効: 9 行", "mode": "kana", "rows": [
   {"height": 0.4, "keys": [{"id": "k1", "kind": "text", "text": "a"}]},
   {"height": 0.4, "keys": [{"id": "k2", "kind": "text", "text": "a"}]},
   {"height": 0.4, "keys": [{"id": "k3", "kind": "text", "text": "a"}]},

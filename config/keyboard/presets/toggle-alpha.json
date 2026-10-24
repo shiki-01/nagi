@@ -1,45 +1,45 @@
 {
-  "schema": 1,
+  "schema": 2,
   "id": "toggle-alpha",
   "name": "ガラケー式（英字）",
   "mode": "alpha",
   "rows": [
     {"keys": [
-      {"id": "mode", "kind": "action", "action": "modeSwitch", "label": "あ", "style": "function", "width": 0.8},
+      {"id": "mode", "kind": "action", "action": "modeSwitch", "label": "あ", "role": "function", "width": 0.8},
       {"id": "t1", "kind": "toggle", "cycle": [".", ",", "?", "!", "-", "@"], "label": ".,?!",
         "longPress": [{"label": "1", "kind": "text", "text": "1"}]},
       {"id": "t2", "kind": "toggle", "cycle": ["a", "b", "c"], "label": "abc",
         "longPress": [{"label": "2", "kind": "text", "text": "2"}]},
       {"id": "t3", "kind": "toggle", "cycle": ["d", "e", "f"], "label": "def",
         "longPress": [{"label": "3", "kind": "text", "text": "3"}]},
-      {"id": "bs", "kind": "action", "action": "backspace", "label": "⌫", "style": "function", "width": 0.9}
+      {"id": "bs", "kind": "action", "action": "backspace", "label": "⌫", "role": "function", "width": 0.9}
     ]},
     {"keys": [
-      {"id": "left", "kind": "action", "action": "moveLeft", "label": "←", "style": "function", "width": 0.8},
+      {"id": "left", "kind": "action", "action": "moveLeft", "label": "←", "role": "function", "width": 0.8},
       {"id": "t4", "kind": "toggle", "cycle": ["g", "h", "i"], "label": "ghi",
         "longPress": [{"label": "4", "kind": "text", "text": "4"}]},
       {"id": "t5", "kind": "toggle", "cycle": ["j", "k", "l"], "label": "jkl",
         "longPress": [{"label": "5", "kind": "text", "text": "5"}]},
       {"id": "t6", "kind": "toggle", "cycle": ["m", "n", "o"], "label": "mno",
         "longPress": [{"label": "6", "kind": "text", "text": "6"}]},
-      {"id": "space", "kind": "action", "action": "space", "label": "空白", "style": "function", "width": 0.9}
+      {"id": "space", "kind": "action", "action": "space", "label": "空白", "role": "function", "width": 0.9}
     ]},
     {"keys": [
-      {"id": "right", "kind": "action", "action": "moveRight", "label": "→", "style": "function", "width": 0.8},
+      {"id": "right", "kind": "action", "action": "moveRight", "label": "→", "role": "function", "width": 0.8},
       {"id": "t7", "kind": "toggle", "cycle": ["p", "q", "r", "s"], "label": "pqrs",
         "longPress": [{"label": "7", "kind": "text", "text": "7"}]},
       {"id": "t8", "kind": "toggle", "cycle": ["t", "u", "v"], "label": "tuv",
         "longPress": [{"label": "8", "kind": "text", "text": "8"}]},
       {"id": "t9", "kind": "toggle", "cycle": ["w", "x", "y", "z"], "label": "wxyz",
         "longPress": [{"label": "9", "kind": "text", "text": "9"}]},
-      {"id": "enter", "kind": "action", "action": "enter", "label": "改行", "style": "function", "width": 0.9}
+      {"id": "enter", "kind": "action", "action": "enter", "label": "改行", "role": "function", "width": 0.9}
     ]},
     {"keys": [
-      {"id": "globe", "kind": "action", "action": "globe", "label": "🌐", "style": "function", "width": 0.8},
-      {"id": "shift", "kind": "action", "action": "shift", "icon": "shift", "style": "function"},
+      {"id": "globe", "kind": "action", "action": "globe", "label": "🌐", "role": "function", "width": 0.8},
+      {"id": "shift", "kind": "action", "action": "shift", "icon": "shift", "role": "function"},
       {"id": "t0", "kind": "toggle", "cycle": ["'", "\"", "(", ")"], "label": "'\"()",
         "longPress": [{"label": "0", "kind": "text", "text": "0"}]},
-      {"id": "num", "kind": "layout", "target": "numbers", "label": "123", "style": "function"},
+      {"id": "num", "kind": "layout", "target": "numbers", "label": "123", "role": "function"},
       {"id": "sp", "kind": "spacer", "width": 0.9}
     ]}
   ]

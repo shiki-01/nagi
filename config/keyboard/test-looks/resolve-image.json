@@ -1,0 +1,30 @@
+{
+  "description": "fillImage: \"none\" は下位で指定された画像を外す（結果には画像なしとして残さない）",
+  "layout": {
+    "schema": 2, "id": "vec-image", "name": "image", "mode": "alpha",
+    "look": { "fillImage": "wood", "fillImageFit": "tile", "fillImageOpacity": 0.5 },
+    "rows": [
+      { "keys": [
+        { "id": "a", "kind": "text", "text": "a" },
+        { "id": "n", "kind": "text", "text": "n", "look": { "fillImage": "none" } },
+        { "id": "p", "kind": "text", "text": "p", "states": { "pressed": { "fillImage": "none" } } },
+        { "id": "o", "kind": "text", "text": "o", "look": { "fillImage": "none" }, "states": { "pressed": { "fillImage": "glow" } } },
+        { "id": "x", "kind": "text", "text": "x", "look": { "fillImage": "Bad Id" } }
+      ] }
+    ]
+  },
+  "cases": [
+    { "name": "layout.look の画像を継承", "key": "a",
+      "expect": { "fillImage": "wood", "fillImageFit": "tile", "fillImageOpacity": 0.5 } },
+    { "name": "none で外す（fit・opacity は残る）", "key": "n",
+      "expect": { "fillImageFit": "tile", "fillImageOpacity": 0.5 } },
+    { "name": "押下中だけ外す", "key": "p", "states": ["pressed"],
+      "expect": { "fillImageFit": "tile", "fillImageOpacity": 0.5, "fillOpacity": 0.6 } },
+    { "name": "押していないときは外さない", "key": "p",
+      "expect": { "fillImage": "wood", "fillImageFit": "tile", "fillImageOpacity": 0.5 } },
+    { "name": "押下中だけ別の画像", "key": "o", "states": ["pressed"],
+      "expect": { "fillImage": "glow", "fillImageFit": "tile", "fillImageOpacity": 0.5, "fillOpacity": 0.6 } },
+    { "name": "不正な画像 id は無視して下位", "key": "x",
+      "expect": { "fillImage": "wood", "fillImageFit": "tile", "fillImageOpacity": 0.5 } }
+  ]
+}
