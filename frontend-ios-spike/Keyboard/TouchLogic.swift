@@ -113,6 +113,16 @@ enum FlickCancel {
     }
 }
 
+/// フリック中（`flicking` の状態）の判定。移動量が閾値を超え、かつ取り消しの範囲（`FlickCancel`）の外にいる間
+enum FlickState {
+    /// - threshold: フリックとみなす移動量（pt。設定 `flick.threshold_pt`）。縦横どちらかがこれ以上ならタップではない
+    static func isFlicking(dx: Double, dy: Double, threshold: Double, keyWidth: Double, keyHeight: Double) -> Bool {
+        guard dx.isFinite, dy.isFinite else { return false }
+        if abs(dx) < threshold && abs(dy) < threshold { return false }
+        return !FlickCancel.isCancelled(dx: dx, dy: dy, keyWidth: keyWidth, keyHeight: keyHeight)
+    }
+}
+
 /// 長押しポップアップの取り消し判定
 enum LongPressCancel {
     /// キーの下端より下へ、キーの高さのこの倍率以上離れたら取り消し

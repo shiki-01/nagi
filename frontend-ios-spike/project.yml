@@ -179,6 +179,7 @@ targets:
       - path: Shared/KeyLook.swift
       - path: Shared/KeyLookResolver.swift
       - path: Shared/KeyRenderParams.swift
+      - path: Shared/KeyLookState.swift
       - path: Shared/IOSSettings.swift
       - path: Shared/DiagLog.swift
       - path: Shared/SharedStore.swift
@@ -202,6 +203,8 @@ targets:
       - path: Keyboard/TouchLogic.swift
       - path: Keyboard/HostCompositionApplier.swift
       - path: Keyboard/KeyboardTheme.swift
+      # 見た目の共有状態（スペースのドラッグ移動の起点・released の保持）。Combine だけに依存する
+      - path: Keyboard/KeyboardVisualState.swift
       # 入力欄の種類 → レイアウト・改行キーの表示の対応表（LayoutMode に依存。KeyboardLayout.swift は上で含む）
       - path: Keyboard/InputTraits.swift
       # コアのプロトコルの型（typeshare で生成）

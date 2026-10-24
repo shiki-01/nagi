@@ -1770,3 +1770,16 @@ H-65 の続き。仕様は `docs/keyboard-style-spec.md`（§7、§9 ②〜④�
   2. `metrics` の `keySpacing` / `rowSpacing` が設定より大きいとキー領域がキーボード全体の高さ（設定の倍率で決まる固定値）を超え得る。行の高さは固定のまま（縮めない）なので、`metrics` を大きくするときは作者が行の高さの比を下げる前提にした。自動で縮める処理は入れていない
   3. `background` は候補バーの背面にも敷く（仕様 §6.4）が、候補バー自身が不透明な `systemGray5` を塗るので、候補バーの部分は見えない
   4. 片手モードでは `padding` がキー領域の外周にだけ掛かる（従来の `padding(6)` と同じ位置）
+- **フェーズ 3（状態トリガー）**:
+  - 状態の判定は `Shared/KeyLookState.swift`（`LookStateLogic`＝大域 / 局所の状態の組み立て、`LookUsage`＝そのキー・レイアウトに効く状態、`LookCache`＝解決結果のメモ化）と `FlickState.isFlicking`（`TouchLogic.swift`）の純粋関数。通知元は各キー View（`pressed`＝`@GestureState` / `isDown` / `drag != nil`、`released`＝`ReleaseHold`、`longPress`＝`popupShown` と ⌫ の連打開始、`flicking`＝`drag` から導出、`spaceDrag`＝`SpaceKeyView` が `KeyboardVisualState.spaceDragOrigin` へ書く）
+  - 全キーを再描画しない工夫: ① `LookCache`（キー × そのキーに効く状態 × 外観。効かない状態は無視するので未関係のキーは同じ `ResolvedLook`）② `StyledKeyFace` は `Equatable`（`.equatable()`）③ `released` / ⌫ の `longPress` / `spaceDrag` は、その状態を使うスタイルがキー / レイアウトに無ければ状態を更新しない（`KeyFaceInput.uses`、`LookCache.layoutUses`）④ `spaceDragOrigin` は開始と終了でだけ publish
+  - `released`: 正常な終了（`onEnded`）で `ReleaseHold.begin(holdMs)`、再押下・`onDisappear` で `cancel`。システムにジェスチャを奪われた取り消し（`onEnded` なし）では入らない。取り消し時の解除は `GestureState` の自動リセット、`LongPressKeyView` の `touching` 監視、`SpaceKeyView` の `isPressed` 監視（`spaceDrag` の起点も解除）、`KeyboardModel.focusOut` と `layoutDef` の入れ替えでの起点の解除
+  - アニメーション: 補間の長さは前後の解決結果の `animationMs` の大きいほう（`LookTransitionTracker` が直前の解決結果を持ち、`LookResolver.transitionMs`）。`label` / `icon` の切り替えは `.animation(nil, value: content)` で即時。「視差効果を減らす」では 0
+  - `states.*.label` / `icon` の表示: `KeyFaceContent.merged`（取得できる `icon` → `label`〔キー本来の `icon` は隠す〕→ 本来の表示）
+  - ホストの取り込み: `iconifyUses()` が `look.icon`（キー）/ `states.*.icon` / `rules[].look.icon` も走査（状態の `icon` は取得できなくても本来の表示に戻れるので `label` 無しでも取り込みを止めない）
+- **迷った判断（フェーズ 3）**:
+  1. 大域の状態は `KeyCell` が `KeyboardModel` の既存の `@Published`（`shiftState` / `preedit`）から作り、`spaceDrag` の起点だけ `LayoutPad` が `@ObservedObject KeyboardVisualState` で購読して `RowView` → `KeyCell` へ値で渡す（仕様 §7.3 の `EnvironmentObject` ではない）。理由: 購読する View が `LayoutPad` 1 つで済み、環境オブジェクトを参照しない `KeyFaceHost` を 2 種類に分ける必要がない。`spaceDrag` が変わるのは移動の開始と終了だけなので、全 `KeyCell` の再評価は 2 回で、`StyledKeyFace` の比較（`Equatable`）で未関係のキーの描画は省かれる
+  2. 仕様 §7.3 の「`KeyFaceHost` を 2 種類に分ける」は行わず、`LookCache` の「効く状態だけを見る」正規化で代替した
+  3. キーの `look.icon`（`states` / `rules` の外）は描画では無視されるが、`IconifyResolver` の走査には含めた（依頼どおり。無駄な取得になり得る）。行 / レイアウト / `roles` の `look.icon` は走査しない
+  4. ⌫ の `longPress` は、スワイプで単語削除に切り替えても連打を止めた時点では解除しない（離す・取り消しで解除）
+

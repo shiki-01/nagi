@@ -75,6 +75,8 @@ private struct KeyShadow: ViewModifier {
 struct StyledKeyFace: View, Equatable {
     let params: KeyRenderParams
     let content: KeyFaceContent
+    /// 状態が変わったときの補間の長さ（ms。0 なら即時。前後の指定の大きいほう。`LookResolver.transitionMs`）
+    let animationMs: Double
 
     var body: some View {
         Color.clear
@@ -97,11 +99,14 @@ struct StyledKeyFace: View, Equatable {
             }
             label
                 .padding(CGFloat(params.padding))
+                // 文字・アイコンの切り替えは補間せず即座に行う（色や大きさの変化は補間する）
+                .animation(nil, value: content)
         }
         .padding(CGFloat(params.inset))
         .opacity(params.opacity)
         .scaleEffect(CGFloat(params.scale))
         .offset(x: CGFloat(params.offsetX), y: CGFloat(params.offsetY))
+        .animation(animationMs > 0 ? Animation.easeInOut(duration: animationMs / 1000) : nil, value: params)
     }
 
     @ViewBuilder
@@ -126,25 +131,52 @@ struct StyledKeyFace: View, Equatable {
 /// キー 1 つの描画に必要な入力（解決の材料と表示内容）
 struct KeyFaceInput {
     let layout: KeyboardLayoutDef
+    let cache: LookCache
     let rowIndex: Int
     let key: LayoutKeyDef
     let content: KeyFaceContent
     /// Caps Lock 中の Shift キー（現行の見た目: accent の色）
     let active: Bool
+    /// 大域の状態（shift / capsLock / composing / spaceDrag。全キーに同時に入る）
+    let global: Set<LookStateName>
+    /// `spaceDrag` の起点キーの id
+    let origin: String?
+
+    /// そのキーに効く状態か（効かない状態は通知・再描画を省く）
+    func uses(_ state: LookStateName) -> Bool {
+        cache.relevantStates(layout: layout, key: key).contains(state)
+    }
+
+    /// `released` の保持時間（ms）
+    var releasedHoldMs: Double {
+        LookResolver.releasedHoldMs(layout: layout, key: key)
+    }
+
+    func resolve(local: Set<LookStateName>, scheme: LookScheme) -> ResolvedLook {
+        cache.resolve(
+            layout: layout, rowIndex: rowIndex, key: key,
+            context: LookContext(states: global.union(local), origin: origin, scheme: scheme)
+        )
+    }
+}
+
+/// 直前の解決結果の記録（補間の長さ = 前後の `animationMs` の大きいほう、を求めるため）。描画には使わない参照型
+final class LookTransitionTracker {
+    var previous = ResolvedLook()
 }
 
 /// 見た目を解決して `StyledKeyFace` に渡す薄いラッパ。指定が無ければ既定値（現行の見た目）で描く
 struct KeyFaceHost: View {
     let input: KeyFaceInput
+    /// このキー自身の局所の状態（pressed / released / longPress / flicking）
     let local: Set<LookStateName>
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var tracker = LookTransitionTracker()
 
     var body: some View {
         let scheme: LookScheme = colorScheme == .dark ? .dark : .light
-        let resolved = LookResolver.resolve(
-            layout: input.layout, rowIndex: input.rowIndex, key: input.key,
-            context: LookContext(states: local, origin: nil, scheme: scheme)
-        )
+        let resolved = input.resolve(local: local, scheme: scheme)
         let params = KeyRenderParams.make(
             look: resolved, key: input.key, active: input.active,
             cornerRadius: NagiKeyMetrics.current.keyCornerPt
@@ -153,8 +185,10 @@ struct KeyFaceHost: View {
             base: input.content, override: LookResolver.content(of: resolved),
             iconAvailable: { KeyIconView.isAvailable($0) }
         )
-        StyledKeyFace(params: params, content: content)
+        let ms = LookResolver.transitionMs(from: tracker.previous, to: resolved, reduceMotion: reduceMotion)
+        StyledKeyFace(params: params, content: content, animationMs: ms)
             .equatable()
+            .onChange(of: resolved) { tracker.previous = $0 }
     }
 }
 

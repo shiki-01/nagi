@@ -51,7 +51,7 @@ struct NagiKeyboardView: View {
             if model.isExpanded {
                 ExpandedCandidates(model: model)
             } else {
-                LayoutPad(model: model)
+                LayoutPad(model: model, visual: model.visual)
             }
         }
     }
@@ -132,6 +132,8 @@ private func rowsHeight(_ model: KeyboardModel) -> CGFloat {
 /// レイアウトの行とキーを描く
 private struct LayoutPad: View {
     @ObservedObject var model: KeyboardModel
+    /// スペースのドラッグ移動中の起点（`spaceDrag` の状態。値が変わるのは移動の開始と終了だけ）
+    @ObservedObject var visual: KeyboardVisualState
     /// 押下中のキー（"行:列"）。ポップアップが下の行に隠れないよう、その行を手前に出す
     @State private var pressedKey: String?
 
@@ -144,7 +146,10 @@ private struct LayoutPad: View {
                 )
             }
             ForEach(Array(model.layoutDef.rows.enumerated()), id: \.offset) { rowIndex, row in
-                RowView(row: row, rowIndex: rowIndex, model: model, pressedKey: $pressedKey)
+                RowView(
+                    row: row, rowIndex: rowIndex, model: model, spaceDragOrigin: visual.spaceDragOrigin,
+                    pressedKey: $pressedKey
+                )
                     .zIndex((pressedKey ?? "").hasPrefix("\(rowIndex):") ? 1 : 0)
             }
         }
@@ -166,6 +171,7 @@ private struct RowView: View {
     let row: LayoutRow
     let rowIndex: Int
     @ObservedObject var model: KeyboardModel
+    let spaceDragOrigin: String?
     @Binding var pressedKey: String?
 
     var body: some View {
@@ -173,7 +179,7 @@ private struct RowView: View {
             HStack(spacing: keySpacing) {
                 ForEach(Array(row.keys.enumerated()), id: \.offset) { index, key in
                     KeyCell(
-                        key: key, rowIndex: rowIndex, model: model, height: rowHeight,
+                        key: key, rowIndex: rowIndex, model: model, spaceDragOrigin: spaceDragOrigin, height: rowHeight,
                         originX: originX(index, total: geo.size.width), rowWidth: geo.size.width
                     ) { pressed in
                         pressedKey = pressed ? "\(rowIndex):\(index)" : nil
@@ -215,6 +221,7 @@ private struct KeyCell: View {
     let key: LayoutKeyDef
     let rowIndex: Int
     @ObservedObject var model: KeyboardModel
+    let spaceDragOrigin: String?
     let height: CGFloat
     let originX: CGFloat
     let rowWidth: CGFloat
@@ -243,7 +250,12 @@ private struct KeyCell: View {
                 face: face(faceContent(key, model)),
                 step: model.ios.spaceSwipeStepPt,
                 tap: { activate(key, model) },
-                move: { model.spaceSwipeMove($0) }
+                move: { model.spaceSwipeMove($0) },
+                onSpaceDrag: { entered in
+                    // スペースのドラッグ移動の開始 / 終了。この状態を使うスタイルがレイアウトに無ければ何も通知しない
+                    let uses = model.lookCache.layoutUses(.spaceDrag, layout: model.layoutDef)
+                    model.visual.setSpaceDragOrigin(entered && uses ? key.id : nil)
+                }
             )
         default:
             if let popup = key.longPress, !popup.isEmpty {
@@ -271,8 +283,13 @@ extension KeyCell {
     /// 描画の入力。Caps Lock 中の Shift キーは accent の色（現行の見た目）
     fileprivate func face(_ content: KeyFaceContent) -> KeyFaceInput {
         KeyFaceInput(
-            layout: model.layoutDef, rowIndex: rowIndex, key: key, content: content,
-            active: key.action == "shift" && model.shiftState == .caps
+            layout: model.layoutDef, cache: model.lookCache, rowIndex: rowIndex, key: key, content: content,
+            active: key.action == "shift" && model.shiftState == .caps,
+            global: LookStateLogic.globalStates(
+                shiftOnce: model.shiftState == .once, capsLock: model.shiftState == .caps,
+                composing: model.hasPreedit, spaceDrag: spaceDragOrigin != nil
+            ),
+            origin: spaceDragOrigin
         )
     }
 }
@@ -331,14 +348,19 @@ private struct TapKeyView: View {
     let action: (TouchPoint?) -> Void
 
     @GestureState private var isPressed = false
+    @StateObject private var hold = ReleaseHold()
 
     var body: some View {
         GeometryReader { geo in
-            KeyFaceHost(input: face, local: isPressed ? [.pressed] : [])
+            KeyFaceHost(
+                input: face,
+                local: LookStateLogic.localStates(pressed: isPressed, released: hold.active, longPress: false, flicking: false)
+            )
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .updating($isPressed) { _, state, _ in state = true }
                         .onEnded { value in
+                            if face.uses(.released) { hold.begin(ms: face.releasedHoldMs) }
                             // 指を大きく動かして離した場合は、押した扱いにしない
                             if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
                                 NagiKeyFeedback.keyDown()
@@ -347,6 +369,11 @@ private struct TapKeyView: View {
                         }
                 )
         }
+        // 再び押されたら `released` は即座に抜ける
+        .onChange(of: isPressed) { pressed in
+            if pressed { hold.cancel() }
+        }
+        .onDisappear { hold.cancel() }
     }
 }
 
@@ -381,10 +408,14 @@ private struct LongPressKeyView: View {
     @State private var selected: Int?
     @State private var lastLocation = CGPoint.zero
     @State private var timer: Task<Void, Never>?
+    @StateObject private var hold = ReleaseHold()
 
     var body: some View {
         GeometryReader { geo in
-            KeyFaceHost(input: face, local: isDown ? [.pressed] : [])
+            KeyFaceHost(
+                input: face,
+                local: LookStateLogic.localStates(pressed: isDown, released: hold.active, longPress: popupShown, flicking: false)
+            )
                 .overlay(alignment: .topLeading) {
                     if popupShown {
                         popupView(keyWidth: geo.size.width)
@@ -403,7 +434,10 @@ private struct LongPressKeyView: View {
             // それでもまだ押下中の状態が残っていれば、取り消されたとみなしてリセットする
             DispatchQueue.main.async { if isDown { reset() } }
         }
-        .onDisappear { reset() }
+        .onDisappear {
+            reset()
+            hold.cancel()
+        }
     }
 
     // MARK: ジェスチャ
@@ -412,6 +446,7 @@ private struct LongPressKeyView: View {
         lastLocation = value.location
         if !isDown {
             isDown = true
+            hold.cancel()
             onPress(true)
             startTimer(keyWidth: keyWidth)
         }
@@ -440,6 +475,8 @@ private struct LongPressKeyView: View {
         let wasPopup = popupShown
         let chosen = selected
         reset()
+        // 正常な終了（取り消しでない）。入力が実行されたかは問わない
+        if face.uses(.released) { hold.begin(ms: face.releasedHoldMs) }
         if wasPopup {
             if let chosen = chosen, popup.indices.contains(chosen) {
                 NagiKeyFeedback.keyDown()
@@ -546,6 +583,9 @@ private struct RepeatKeyView: View {
     /// 左スワイプの単語削除を済ませたか（離すまで連打・再実行をしない）
     @State private var swiped = false
     @State private var repeatTask: Task<Void, Never>?
+    /// 連打が始まった（`longPress` の状態。この状態を使うスタイルがあるときだけ立てる）
+    @State private var isLongPress = false
+    @StateObject private var hold = ReleaseHold()
 
     /// 連打を始めるまでの待ち（ナノ秒。設定 `touch.key_repeat_delay_ms`）
     private var initialDelay: UInt64 { UInt64(NagiKeyMetrics.current.keyRepeatDelayMs) * 1_000_000 }
@@ -558,12 +598,16 @@ private struct RepeatKeyView: View {
     private static let swipeDistance: CGFloat = 40
 
     var body: some View {
-        KeyFaceHost(input: face, local: isPressed ? [.pressed] : [])
+        KeyFaceHost(
+            input: face,
+            local: LookStateLogic.localStates(pressed: isPressed, released: hold.active, longPress: isLongPress, flicking: false)
+        )
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         if !isDown {
                             isDown = true
+                            hold.cancel()
                             NagiKeyFeedback.keyDown()
                             action()
                             startRepeat()
@@ -582,13 +626,19 @@ private struct RepeatKeyView: View {
                         }
                     }
                     .updating($isPressed) { _, state, _ in state = true }
-                    .onEnded { _ in stopRepeat() }
+                    .onEnded { _ in
+                        stopRepeat()
+                        if face.uses(.released) { hold.begin(ms: face.releasedHoldMs) }
+                    }
             )
             // ジェスチャが `onEnded` なしで取り消されても `isPressed` は false に戻るので、そこで連打を止める
             .onChange(of: isPressed) { pressed in
                 if !pressed { stopRepeat() }
             }
-            .onDisappear { stopRepeat() }
+            .onDisappear {
+                stopRepeat()
+                hold.cancel()
+            }
     }
 
     private func startRepeat() {
@@ -598,8 +648,11 @@ private struct RepeatKeyView: View {
         let first = startInterval
         let floor = minInterval
         let limit = maxRepeats
+        let tracksLongPress = face.uses(.longPress)
         repeatTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: delay)
+            // 連打が始まる瞬間に `longPress` に入る
+            if tracksLongPress && !Task.isCancelled { isLongPress = true }
             var interval = first
             var count = 0
             while !Task.isCancelled && count < limit {
@@ -618,6 +671,7 @@ private struct RepeatKeyView: View {
         repeatTask = nil
         isDown = false
         swiped = false
+        if isLongPress { isLongPress = false }
     }
 }
 
@@ -629,12 +683,18 @@ private struct SpaceKeyView: View {
     let tap: () -> Void
     /// カーソルを動かす文字数（右が正）
     let move: (Int) -> Void
+    /// カーソル移動モードの開始（true）/ 終了（false）。`spaceDrag` の状態
+    let onSpaceDrag: (Bool) -> Void
 
     @GestureState private var isPressed = false
     @State private var tracker: SpaceSwipeTracker?
+    @StateObject private var hold = ReleaseHold()
 
     var body: some View {
-        KeyFaceHost(input: face, local: isPressed ? [.pressed] : [])
+        KeyFaceHost(
+            input: face,
+            local: LookStateLogic.localStates(pressed: isPressed, released: hold.active, longPress: false, flicking: false)
+        )
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .updating($isPressed) { _, state, _ in state = true }
@@ -643,12 +703,17 @@ private struct SpaceKeyView: View {
                         let wasActive = current.isActive
                         let delta = current.update(translationWidth: Double(value.translation.width))
                         tracker = current
-                        if current.isActive && !wasActive { NagiKeyFeedback.keyDown() }
+                        if current.isActive && !wasActive {
+                            NagiKeyFeedback.keyDown()
+                            onSpaceDrag(true)
+                        }
                         if delta != 0 { move(delta) }
                     }
                     .onEnded { value in
                         let active = tracker?.isActive ?? false
                         tracker = nil
+                        onSpaceDrag(false)
+                        if face.uses(.released) { hold.begin(ms: face.releasedHoldMs) }
                         // カーソル移動モードに入っていたらスペースは入れない。動いていない（単純タップ）ときだけスペース
                         if !active && abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
                             NagiKeyFeedback.keyDown()
@@ -658,7 +723,19 @@ private struct SpaceKeyView: View {
             )
             // `onEnded` なしで取り消された場合は、カーソル移動の状態を捨てる
             .onChange(of: isPressed) { pressed in
-                if !pressed { DispatchQueue.main.async { tracker = nil } }
+                if pressed {
+                    hold.cancel()
+                } else {
+                    DispatchQueue.main.async {
+                        tracker = nil
+                        onSpaceDrag(false)
+                    }
+                }
+            }
+            .onDisappear {
+                tracker = nil
+                onSpaceDrag(false)
+                hold.cancel()
             }
     }
 }
@@ -708,6 +785,7 @@ private struct FlickKeyView: View {
     /// 押している間の移動量（押していなければ nil）
     @GestureState private var drag: CGSize? = nil
     @State private var reported = false
+    @StateObject private var hold = ReleaseHold()
     @Environment(\.nagiKeyboardSize) private var rootSize
 
     var body: some View {
@@ -727,7 +805,16 @@ private struct FlickKeyView: View {
     }
 
     private func keyBody(keySize: CGSize, keyFrame: CGRect) -> some View {
-        KeyFaceHost(input: face, local: drag != nil ? [.pressed] : [])
+        KeyFaceHost(
+            input: face,
+            local: LookStateLogic.localStates(
+                pressed: drag != nil, released: hold.active, longPress: false,
+                flicking: drag.map { FlickState.isFlicking(
+                    dx: Double($0.width), dy: Double($0.height), threshold: NagiKeyMetrics.current.flickThresholdPoints,
+                    keyWidth: Double(keySize.width), keyHeight: Double(keySize.height)
+                ) } ?? false
+            )
+        )
         .overlay(
             GeometryReader { geo in
                 if let drag = drag {
@@ -751,6 +838,7 @@ private struct FlickKeyView: View {
                 .onChanged { _ in
                     if !reported {
                         reported = true
+                        hold.cancel()
                         onPress(true)
                     }
                 }
@@ -758,6 +846,7 @@ private struct FlickKeyView: View {
                 .onEnded { value in
                     reported = false
                     onPress(false)
+                    if face.uses(.released) { hold.begin(ms: face.releasedHoldMs) }
                     // 取り消しの範囲で離したときは、入力もフィードバックもしない
                     if Self.isCancelled(value.translation, keySize: keySize) { return }
                     NagiKeyFeedback.keyDown()
@@ -785,6 +874,7 @@ private struct FlickKeyView: View {
             }
         }
         .onDisappear {
+            hold.cancel()
             if reported {
                 reported = false
                 onPress(false)

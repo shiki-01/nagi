@@ -47,7 +47,17 @@ final class KeyboardModel: ObservableObject {
     /// 選択中の候補（なければ -1）
     @Published private(set) var selectedCandidate = -1
     /// 表示中のレイアウト（JSON から読んだもの。`Shared/KeyboardLayout.swift`）
-    @Published private(set) var layoutDef: KeyboardLayoutDef
+    @Published private(set) var layoutDef: KeyboardLayoutDef {
+        didSet {
+            // 見た目の解決結果はレイアウトごと。入れ替わったら捨て、スペースのドラッグ移動の状態も解除する
+            lookCache.reset()
+            visual.setSpaceDragOrigin(nil)
+        }
+    }
+    /// 見た目の解決結果のメモ化（`Shared/KeyLookState.swift`）
+    let lookCache = LookCache()
+    /// キーボード全体で共有する見た目の状態（スペースのドラッグ移動の起点など）
+    let visual = KeyboardVisualState()
     /// キー間・行間・外周の余白。設定 `keyboard.key_spacing_pt` を、レイアウトの `metrics` が上書きする
     var metrics: ResolvedMetrics {
         ResolvedMetrics.make(layoutDef.metrics, settingSpacing: NagiKeyMetrics.keySpacing)
@@ -992,6 +1002,8 @@ final class KeyboardModel: ObservableObject {
     func focusOut() {
         toggleState = nil
         DiagLog.log("focusOut")
+        // 操作の途中で離れたとき、状態が残らないようにする
+        visual.setSpaceDragOrigin(nil)
         if let result = session?.focusOut() { apply(result, origin: "response(focus_out)") }
     }
 

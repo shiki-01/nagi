@@ -55,16 +55,33 @@ struct IconifyUse: Equatable {
 }
 
 extension KeyboardLayoutDef {
-    /// このレイアウトが使う Iconify アイコン（キーと長押しの項目。出現順、重複は使用箇所ごとに残す）
+    /// このレイアウトが使う Iconify アイコン（出現順、重複は使用箇所ごとに残す）。
+    /// キーの `icon` と長押しの項目に加え、見た目の指定の `icon`（キーの `look`、`states.*`、`rules[].look`）も含める。
+    /// 状態の `icon` は、取得できなくても本来の表示（または `label`）に戻れるので、`hasLabel` は真にする
     func iconifyUses() -> [IconifyUse] {
         var result: [IconifyUse] = []
-        func visit(_ key: LayoutKeyDef, owner: String) {
-            if let raw = key.icon, case .iconify(let prefix, let name)? = KeyboardIconRef.parse(raw) {
-                result.append(IconifyUse(prefix: prefix, name: name, keyId: owner, hasLabel: !(key.label ?? "").isEmpty))
+        func add(_ raw: String?, owner: String, hasLabel: Bool) {
+            if let raw = raw, case .iconify(let prefix, let name)? = KeyboardIconRef.parse(raw) {
+                result.append(IconifyUse(prefix: prefix, name: name, keyId: owner, hasLabel: hasLabel))
             }
+        }
+        func visit(_ key: LayoutKeyDef, owner: String) {
+            add(key.icon, owner: owner, hasLabel: !(key.label ?? "").isEmpty)
             for item in key.longPress ?? [] { visit(item, owner: owner) }
         }
-        for row in rows { for key in row.keys { visit(key, owner: key.id) } }
+        for row in rows {
+            for key in row.keys {
+                visit(key, owner: key.id)
+                add(key.look?.string("icon"), owner: key.id, hasLabel: true)
+                // 辞書の順序は不定なので、状態の宣言順に走査して出力を安定させる
+                for state in LookStateName.allCases {
+                    add(key.states?.byState[state]?.look.string("icon"), owner: key.id, hasLabel: true)
+                }
+            }
+        }
+        for (index, rule) in rules.enumerated() {
+            add(rule.look.string("icon"), owner: "rules[\(index)]", hasLabel: true)
+        }
         return result
     }
 }
