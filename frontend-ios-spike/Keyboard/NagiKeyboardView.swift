@@ -29,7 +29,8 @@ struct NagiKeyboardView: View {
         }
         // 背景は、レイアウトの `background` が無ければ塗らない。システムのキーボードの背景（フッターの地球儀・マイクの帯と
         // 同じ）がそのまま見えて、キーボード本体とフッターが一体に見える
-        .background(KeyboardBackgroundView(background: model.layoutDef.background))
+        // 背景は画面の端（角丸・下のフッター側の余白）まで広げ、色を変えたときも角丸の部分まで同じ色にする
+        .background(KeyboardBackgroundView(background: model.layoutDef.background).ignoresSafeArea())
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -150,7 +151,8 @@ private struct LayoutPad: View {
                     row: row, rowIndex: rowIndex, model: model, spaceDragOrigin: visual.spaceDragOrigin,
                     pressedKey: $pressedKey
                 )
-                    .zIndex((pressedKey ?? "").hasPrefix("\(rowIndex):") ? 1 : 0)
+                    // 押下中の行を最前面に。ほかは上の行を手前にする（下向きの影が下の行のキーに隠れないように）
+                    .zIndex((pressedKey ?? "").hasPrefix("\(rowIndex):") ? 100 : Double(model.layoutDef.rows.count - rowIndex))
             }
         }
         // キー領域の大きさをコアへ伝える（曖昧入力のキー近接。表示後・レイアウト切替・向き/高さの変更で送り直す。
@@ -1043,7 +1045,8 @@ private struct CandidateBar: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 44)
-        .background(Color(UIColor.systemGray5))
+        // 塗らない: システムのキーボードの背景（またはレイアウトの `background`）がそのまま見えて、
+        // 候補バー・キー・フッターが一体に見える
     }
 
     /// 文節ごとの Text を連結する（注目文節は太字・アクセント色、ほかは secondary）
