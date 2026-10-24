@@ -24,9 +24,28 @@ import {
   withUniqueLayoutId,
   clone
 } from './ops'
+import {
+  addAsset,
+  addRule,
+  clearLookProp,
+  mapLocs,
+  moveRule,
+  removeAsset,
+  removeRule,
+  removeRulesFor,
+  resetAllLooks,
+  resetKeyLooks,
+  resetLook,
+  setHoldMs,
+  setLookProp,
+  setMetric,
+  setRuleTarget
+} from './look-ops'
+import type { LookLoc } from './look-ops'
+import type { JumpTarget } from './look-jump'
 import { KEY_KINDS, LIMITS } from './types'
 import type { Direction, MoveDest } from './ops'
-import type { Key, KeyKind, KeyboardLayout, Row } from './types'
+import type { Key, KeyKind, KeyboardLayout, Metrics, Row, StateName, Target } from './types'
 import { errorsOf, validateLayout, warningsOf } from './validate'
 import type { ValidationError } from './validate'
 
@@ -75,6 +94,20 @@ export class EditorStore {
   saveError = $state<string | null>(null)
   /** 履歴の変化をリアクティブにするためのカウンタ。 */
   #rev = $state(0)
+
+  // --- 詳細設定（見た目）の UI 状態。保存しない ---
+  /** インスペクタのタブ（基本 / 詳細設定）。 */
+  inspectorTab = $state<'basic' | 'look'>('basic')
+  /** 詳細設定の編集対象（全体 / 行 / キー）。 */
+  lookScope = $state<'layout' | 'row' | 'key'>('layout')
+  /** scope が行のときの行番号。 */
+  lookRow = $state(0)
+  /** 状態タブ。normal は状態なし（look 本体）。 */
+  lookState = $state<'normal' | StateName>('normal')
+  /** プレビューで有効にしている状態。 */
+  previewStates = $state.raw<StateName[]>([])
+  /** プレビューの外観。auto は OS の設定に従う。 */
+  previewScheme = $state<'auto' | 'light' | 'dark'>('auto')
 
   constructor(initial: EditorState) {
     this.#history = new History(initial)
@@ -281,6 +314,99 @@ export class EditorStore {
     const found = findKey(this.layout, id)
     if (found) this.updateKey(id, changeKind(found.key, kind))
   }
+  // --- 見た目（詳細設定）。ops は look-ops.ts。coalesce を渡すと連続した入力（スライダーなど）を 1 回の undo にまとめる ---
+  #look(next: KeyboardLayout, coalesce?: string) {
+    if (next !== this.layout) this.edit(next, coalesce ? `look:${coalesce}` : undefined)
+  }
+  /** 複数の場所（複数選択したキーなど）の同じプロパティに値を書く。 */
+  setLookProp(locs: readonly LookLoc[], prop: string, value: unknown, coalesce = false) {
+    this.#look(
+      mapLocs(this.layout, locs, (l, loc) => setLookProp(l, loc, prop, value)),
+      coalesce ? `${prop}:${JSON.stringify(locs[0])}` : undefined
+    )
+  }
+  clearLookProp(locs: readonly LookLoc[], prop: string) {
+    this.#look(mapLocs(this.layout, locs, (l, loc) => clearLookProp(l, loc, prop)))
+  }
+  /** 場所の指定をすべて消す（プロパティ単位ではなく場所単位のリセット）。 */
+  resetLooks(locs: readonly LookLoc[]) {
+    this.#look(mapLocs(this.layout, locs, resetLook))
+  }
+  setHoldMs(locs: readonly LookLoc[], ms: number | undefined) {
+    this.#look(
+      mapLocs(this.layout, locs, (l, loc) => setHoldMs(l, loc, ms)),
+      `hold:${JSON.stringify(locs[0])}`
+    )
+  }
+  resetKeyLooks(keyIds: readonly string[]) {
+    this.#look(resetKeyLooks(this.layout, keyIds))
+  }
+  resetAllLooks() {
+    this.#look(resetAllLooks(this.layout))
+  }
+  setMetric(prop: keyof Metrics, value: number | undefined) {
+    this.#look(setMetric(this.layout, prop, value), value === undefined ? undefined : `metric:${prop}`)
+  }
+  /** rule を足して、その位置を返す（上限なら通知を出して -1）。 */
+  addRule(when: StateName, target?: Target): number {
+    const r = addRule(this.layout, when, target)
+    if (r.error) {
+      this.notice = r.error
+      return -1
+    }
+    this.notice = null
+    this.edit(r.layout)
+    return r.index
+  }
+  setRuleTarget(index: number, target: Target | undefined, coalesce = false) {
+    this.#look(setRuleTarget(this.layout, index, target), coalesce ? `target:${index}` : undefined)
+  }
+  removeRule(index: number) {
+    this.#look(removeRule(this.layout, index))
+  }
+  moveRule(from: number, to: number) {
+    this.#look(moveRule(this.layout, from, to))
+  }
+  removeRulesFor(when: StateName) {
+    this.#look(removeRulesFor(this.layout, when))
+  }
+  /** 画像を追加する。できなければ理由（日本語）を返す。 */
+  addAsset(id: string, dataUri: string): string | undefined {
+    const r = addAsset(this.layout, id, dataUri)
+    if (r.error) return r.error
+    this.edit(r.layout)
+    return undefined
+  }
+  /** 画像を削除し、参照している指定も外す。 */
+  removeAsset(id: string) {
+    this.#look(removeAsset(this.layout, id))
+  }
+  /** JSON を直接編集した結果でレイアウトを置き換える（連続した入力は 1 回の undo にまとめる）。 */
+  replaceFromJson(layout: KeyboardLayout) {
+    this.edit(layout, 'json-edit')
+  }
+
+  /** プレビューの状態を切り替える。 */
+  togglePreviewState(state: StateName, on: boolean) {
+    const set = new Set(this.previewStates)
+    if (on) set.add(state)
+    else set.delete(state)
+    this.previewStates = [...set]
+  }
+  /** 状態タブを選ぶ。プレビューも同じ状態だけをオンにする（normal は全部オフ）。 */
+  selectLookState(state: 'normal' | StateName) {
+    this.lookState = state
+    this.previewStates = state === 'normal' ? [] : [state]
+  }
+  /** 検証メッセージの場所（look-jump.ts）を開く。 */
+  applyJump(t: JumpTarget) {
+    this.inspectorTab = t.tab
+    this.selectedIds = t.keyId !== undefined ? [t.keyId] : []
+    this.lookScope = t.scope
+    if (t.row !== undefined) this.lookRow = t.row
+    if (t.tab === 'look') this.selectLookState(t.state)
+  }
+
   rows(): Row[] {
     return this.layout.rows
   }

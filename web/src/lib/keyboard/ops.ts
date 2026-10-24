@@ -113,6 +113,9 @@ export function changeKind(key: Key, kind: KeyKind): Key {
   if (key.icon !== undefined) out.icon = key.icon
   if (key.longPress !== undefined && kind !== 'spacer') out.longPress = key.longPress
   if (key.visible !== undefined) out.visible = key.visible
+  // 見た目の指定（look / states）は kind に依らないので残す
+  if (key.look !== undefined) out.look = key.look
+  if (key.states !== undefined) out.states = key.states
   if (key.label !== undefined && kind !== 'spacer') out.label = key.label
   return out as unknown as Key
 }
