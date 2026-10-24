@@ -151,8 +151,7 @@ private struct LayoutPad: View {
                     row: row, rowIndex: rowIndex, model: model, spaceDragOrigin: visual.spaceDragOrigin,
                     pressedKey: $pressedKey
                 )
-                    // 押下中の行を最前面に。ほかは上の行を手前にする（下向きの影が下の行のキーに隠れないように）
-                    .zIndex((pressedKey ?? "").hasPrefix("\(rowIndex):") ? 100 : Double(model.layoutDef.rows.count - rowIndex))
+                    .zIndex((pressedKey ?? "").hasPrefix("\(rowIndex):") ? 1 : 0)
             }
         }
         // キー領域の大きさをコアへ伝える（曖昧入力のキー近接。表示後・レイアウト切替・向き/高さの変更で送り直す。

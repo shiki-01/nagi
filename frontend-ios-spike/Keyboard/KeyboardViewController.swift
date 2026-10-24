@@ -130,9 +130,6 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         let root = KeyboardRoot(model: model, screen: screen, probeView: probeView)
         let hostView = UIHostingController(rootView: root)
         hostingController = hostView
-        // 背景を透明にする（システムのキーボードの背景を見せる）
-        hostView.view.backgroundColor = .clear
-        hostView.view.isOpaque = false
         addChild(hostView)
 
         self.view.addSubview(hostView.view)
