@@ -14,7 +14,7 @@ iOS キーボードのキーの見た目を、レイアウト JSON から細か�
 | ①スキーマ ＋ 解決関数 ＋ 単体テスト | **フェーズ 1 実装済み**（ローカルの web テスト・型検査は通過。iOS の `ios-test` / `ios-testflight` は未実行＝CI で確認する）。実装メモは `docs/decisions.md` H-65 |
 | ②iOS の描画（全体／個別の `look`） | **フェーズ 2 実装済み**（iOS の `ios-test` / `ios-testflight` は未実行＝CI で確認。実機の目視確認が残る）。実装メモは `docs/decisions.md` H-66 |
 | ③状態トリガー | **フェーズ 3 実装済み**（iOS の `ios-test` / `ios-testflight` は未実行＝CI で確認。実機確認が残る）。実装メモは `docs/decisions.md` H-66 |
-| ④背景画像 | 未着手 |
+| ④背景画像 | **フェーズ 4 実装済み**（iOS の `ios-test` / `ios-testflight` は未実行＝CI で確認。実機のメモリ・表示の確認が残る）。実装メモは `docs/decisions.md` H-66 |
 | ⑤Web エディタ | 未着手 |
 - 実装が完了したら `docs/ios-keyboard-layout.md`（構造・kind の節に `look` / `states` / `rules` / `assets` / `metrics` を追記）と `config/keyboard/layout.schema.json` を更新する
 

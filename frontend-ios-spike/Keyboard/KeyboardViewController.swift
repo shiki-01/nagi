@@ -62,6 +62,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
             defaults.set(Int(getpid()), forKey: Self.visiblePidKey)
         }
         lastDocumentIdentifier = textDocumentProxy.documentIdentifier
+        // 非表示の間に捨てた背景画像を、必要になったときに読み直せるようにする
+        KeyImageCache.shared.resume()
         // 再表示で別の VC から戻る場合に備え、常に自分をホストにしてから focusIn する
         model?.host = self
         model?.focusIn()
@@ -86,6 +88,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         if current {
             model?.focusOut()
             model?.suspendLLM()
+            // 背景画像のデコード結果を手放す（H-26 と同じ観点: 非表示の間はメモリを持たない）
+            KeyImageCache.shared.suspend()
             UserDefaults(suiteName: SharedStore.shared.appGroupId)?.removeObject(forKey: Self.visiblePidKey)
         }
         super.viewWillDisappear(animated)
@@ -224,6 +228,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     /// （強制終了される前に軽くする）
     override func didReceiveMemoryWarning() {
         super.didReceiveMemoryWarning()
+        // 背景画像は真っ先に手放す（色だけで描く）。プロセス共通のキャッシュなので現在のホストかは問わない
+        KeyImageCache.shared.suspend()
         // 共有のモデルは現在のホストの VC だけが扱う（同じプロセスの VC には同じ警告が届く）
         guard isCurrentHost else { return }
         model?.handleMemoryWarning()

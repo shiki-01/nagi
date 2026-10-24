@@ -32,6 +32,8 @@ enum NagiLayoutStore {
         let overridesPreset: Bool
         /// Iconify のアイコンを取得できず、label で代替するキーの説明（空なら全て解決済み）
         var iconFallbacks: [IconifyFallback] = []
+        /// 画像（`assets`）の警告（参照先が無い・使われない・読み込めない・大きすぎる。空なら問題なし）
+        var assetWarnings: [String] = []
     }
 
     /// JSON を検証する（保存はしない）。問題があれば日本語の理由つきで投げる。ファイルを読むので
@@ -77,7 +79,7 @@ enum NagiLayoutStore {
             throw NagiLayoutError(message: "保存できませんでした: \(error.localizedDescription)")
         }
         return Imported(def: preview.def, replaced: replaced, overridesPreset: preview.overridesPreset,
-                        iconFallbacks: icons.fallbacks)
+                        iconFallbacks: icons.fallbacks, assetWarnings: LayoutAssetCheck.warnings(preview.def))
     }
 
     /// JSON を検証して App Group に保存する。問題があれば日本語の理由つきで投げる。
@@ -139,6 +141,11 @@ enum NagiLayoutStore {
     /// Iconify のアイコンを取得できなかったキーの案内（無ければ空文字）
     static func iconFallbackNote(_ fallbacks: [IconifyFallback]) -> String {
         IconifyFallback.note(fallbacks)
+    }
+
+    /// 画像（`assets`）の警告の案内（無ければ空文字）
+    static func assetWarningNote(_ warnings: [String]) -> String {
+        LayoutAssetCheck.note(warnings)
     }
 
     /// `nagi://layout?data=<base64url の JSON>` から JSON を取り出す（実装は `Shared/LayoutURL.swift`）
@@ -216,6 +223,7 @@ final class NagiLayoutURLInbox: ObservableObject {
                 text = "レイアウト「\(imported.def.name)」を\(imported.replaced ? "更新しました" : "取り込みました")。"
                 text += "「レイアウト」タブで、かな / 英字への割り当てができます。"
                 text += NagiLayoutStore.iconFallbackNote(imported.iconFallbacks)
+                text += NagiLayoutStore.assetWarningNote(imported.assetWarnings)
             } catch {
                 text = "レイアウトを取り込めませんでした。\n\(error.localizedDescription)"
             }
@@ -690,6 +698,7 @@ struct LayoutManagerView: View {
         var text = "「\(imported.def.name)」を\(imported.replaced ? "更新しました" : "取り込みました")。一覧から開いて、かな / 英字に割り当てられます。"
         if imported.overridesPreset { text += "\n同梱の「\(imported.def.id)」と同じ id のため、このレイアウトが優先されます。" }
         text += NagiLayoutStore.iconFallbackNote(imported.iconFallbacks)
+        text += NagiLayoutStore.assetWarningNote(imported.assetWarnings)
         return text
     }
 }

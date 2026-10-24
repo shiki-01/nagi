@@ -1782,4 +1782,15 @@ H-65 の続き。仕様は `docs/keyboard-style-spec.md`（§7、§9 ②〜④�
   2. 仕様 §7.3 の「`KeyFaceHost` を 2 種類に分ける」は行わず、`LookCache` の「効く状態だけを見る」正規化で代替した
   3. キーの `look.icon`（`states` / `rules` の外）は描画では無視されるが、`IconifyResolver` の走査には含めた（依頼どおり。無駄な取得になり得る）。行 / レイアウト / `roles` の `look.icon` は走査しない
   4. ⌫ の `longPress` は、スワイプで単語削除に切り替えても連打を止めた時点では解除しない（離す・取り消しで解除）
+- **フェーズ 4（背景画像）**:
+  - 純粋関数（`Shared/KeyImageMath.swift`）: デコードする長辺（当て方ごとの拡大率 × 画面の倍率、`fill` / `fit` は 64px 単位に切り上げ、1024px と元画像で頭打ち、`tile` は元の大きさ ÷ 3 × 倍率）、縮小後の大きさ・cost、`fill` / `fit` の矩形、`tile` の倍率、data URI の取り出し、メモリ逼迫の判定。ヘッダの読み取りと縮小デコードは `Shared/KeyImageSource.swift`（ImageIO）
+  - `Keyboard/KeyImageCache.swift`: `NSCache`（キー `assetId@maxPixel`、`totalCostLimit` 12MB、cost＝幅×高さ×4）、同じ要求の合流（in-flight）、バックグラウンド（`DispatchQueue.global(qos: .userInitiated)`）のデコード。`KeyboardModel.layoutDef` の入れ替えで `setAssets`（中身が変わったときだけキャッシュを捨てる）。`suspend()`（メモリ警告・キーボードの非表示。キャッシュと元データを捨て、`resume()` まで画像を使わない）。`KeyboardViewController` の `viewWillDisappear`（現在のホストのとき）/ `didReceiveMemoryWarning` / `viewWillAppear` から呼ぶ
+  - 描画: `KeyImageLayer`（`.task(id:)` で要求。デコード前・失敗・停止中・メモリ逼迫は何も描かず背景色だけ。サイズが変わっても新しい画像が届くまで直前の画像を出し続けて、チラつかない）を `StyledKeyFace`（キーの形でクリップ、不透明度は `fillImageOpacity` × `fillOpacity`）と `KeyboardBackgroundView`（`background`）が使う
+  - 取り込み: 上限超過・形式違いは従来どおりエラー（`LayoutValidation.assetsError`）。警告（参照先が無い・使われない・読み込めない・長辺 1024px 超）は `LayoutAssetCheck`（`Shared/LayoutAssetCheck.swift`）が作り、取り込み完了のメッセージに添える
+- **迷った判断（フェーズ 4）**:
+  1. `KeyImageCache` は `@MainActor` クラスにせず、メインスレッドだけで使う約束の普通のクラスにした（`async` の `entry` は内部で `DispatchQueue.main.async` に移して処理）。理由: Swift をローカルでコンパイルできず、アクター隔離の診断（View の初期化子からの参照など）を確かめられないため
+  2. 画像の元データ（base64 の戻しとヘッダ読み取り）は、最初の要求時にメインスレッドで行う（最大 256KB のデコードとヘッダの読み取りだけ。縮小デコードはバックグラウンド）。キャッシュのキーに必要な元画像の大きさを同期で知るため
+  3. `os_proc_available_memory()` が 0 を返す環境（シミュレータなど）は「不明」として逼迫扱いにしない
+  4. 長辺 1024px 超・参照先なし・未使用は取り込みエラーにせず警告（見た目の値の不正は無視する流儀に合わせた。上限の 256KB・合計 768KB は従来どおりエラー）
+  5. ホストアプリの「レイアウト」画面の簡易プレビュー（`NagiLayoutPreview`）は `look` / 画像を描かない（従来のまま）
 

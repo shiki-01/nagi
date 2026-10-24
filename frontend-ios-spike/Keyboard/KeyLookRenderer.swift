@@ -94,6 +94,12 @@ struct StyledKeyFace: View, Equatable {
             shape
                 .fill(LookPalette.color(params.fill).opacity(params.fillOpacity))
                 .modifier(KeyShadow(params: params))
+            if let image = params.fillImage {
+                // 背景画像（キーの形でクリップ。不透明度は画像と背景の両方を掛ける）。切り替えは補間しない
+                KeyImageLayer(assetId: image, fit: params.fillImageFit, opacity: params.fillImageOpacity * params.fillOpacity)
+                    .clipShape(shape)
+                    .animation(nil, value: image)
+            }
             if params.hasBorder {
                 shape.strokeBorder(LookPalette.color(params.borderColor), lineWidth: CGFloat(params.borderWidth))
             }
@@ -192,15 +198,101 @@ struct KeyFaceHost: View {
     }
 }
 
+/// 背景画像 1 枚の描画。デコード前・デコードできないとき・停止中（メモリ逼迫）は何も描かない（背景色だけが見える）。
+/// 画像は `KeyImageCache` が縮小デコードする。サイズが変わっても、新しい画像が届くまで直前の画像を出し続ける（チラつかない）
+struct KeyImageLayer: View {
+    let assetId: String
+    let fit: String
+    /// 画像の不透明度（`fillImageOpacity` × `fillOpacity`）
+    let opacity: Double
+    @ObservedObject private var cache = KeyImageCache.shared
+    @Environment(\.displayScale) private var displayScale
+    @State private var loaded: KeyImageEntry?
+
+    private struct Request: Equatable {
+        let assetId: String
+        let fit: String
+        let width: Int
+        let height: Int
+        let suspended: Bool
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                picture(size: geo.size)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
+            .task(id: Request(
+                assetId: assetId, fit: fit, width: Int(geo.size.width.rounded()), height: Int(geo.size.height.rounded()),
+                suspended: cache.suspended
+            )) {
+                await load(size: geo.size)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func load(size: CGSize) async {
+        // 停止中・メモリ逼迫のときは画像を使わず、持っている分も手放す
+        if cache.suspended || KeyImageMath.isLowMemory(availableMB: MemoryProbe.getAvailableMemoryMB()) {
+            loaded = nil
+            return
+        }
+        guard size.width > 0, size.height > 0 else { return }
+        let entry = await cache.entry(assetId: assetId, fit: fit, display: size, screenScale: Double(displayScale))
+        if Task.isCancelled { return }
+        loaded = entry
+    }
+
+    @ViewBuilder
+    private func picture(size: CGSize) -> some View {
+        if !cache.suspended, let entry = loaded {
+            let kind = KeyImageMath.effectiveFit(fit, sourceWidth: entry.sourceWidth, sourceHeight: entry.sourceHeight)
+            if kind == "tile" {
+                // 元の大きさ（1pt = 3px）で敷き詰める
+                Image(
+                    decorative: entry.image,
+                    scale: CGFloat(KeyImageMath.tileScale(
+                        decodedLong: max(entry.image.width, entry.image.height),
+                        sourceLong: max(entry.sourceWidth, entry.sourceHeight)
+                    )),
+                    orientation: .up
+                )
+                .resizable(resizingMode: .tile)
+                .frame(width: size.width, height: size.height)
+                .opacity(opacity)
+            } else {
+                let imageSize = CGSize(width: entry.image.width, height: entry.image.height)
+                let rect = kind == "fit"
+                    ? KeyImageMath.fitRect(image: imageSize, in: size)
+                    : KeyImageMath.fillRect(image: imageSize, in: size)
+                Image(decorative: entry.image, scale: 1, orientation: .up)
+                    .resizable()
+                    .frame(width: rect.width, height: rect.height)
+                    .offset(x: rect.minX, y: rect.minY)
+                    .opacity(opacity)
+            }
+        }
+    }
+}
+
 /// キーボード全体の背景（`background`）。指定が無ければ何も塗らない（システムの背景が見える。H-61）
 struct KeyboardBackgroundView: View {
     let background: LayoutBackground?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        if let params = BackgroundParams.make(background, scheme: colorScheme == .dark ? .dark : .light),
-           let fill = params.fill {
-            Rectangle().fill(LookPalette.color(fill).opacity(params.fillOpacity))
+        if let params = BackgroundParams.make(background, scheme: colorScheme == .dark ? .dark : .light) {
+            ZStack {
+                if let fill = params.fill {
+                    Rectangle().fill(LookPalette.color(fill).opacity(params.fillOpacity))
+                }
+                if let image = params.fillImage {
+                    KeyImageLayer(assetId: image, fit: params.fillImageFit, opacity: params.fillImageOpacity * params.fillOpacity)
+                }
+            }
         }
     }
 }

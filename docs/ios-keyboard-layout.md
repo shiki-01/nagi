@@ -74,11 +74,15 @@ iOS のキーボードの配置とキーの動作を、データ（JSON）で定
 （決定は `docs/decisions.md` H-65・H-66）。**実装は段階的**: schema 2 の項目・検証・解決関数（Swift `Shared/KeyLookResolver.swift` と
 web `look-resolve.ts`。共有テストベクタ `config/keyboard/test-looks/`）に加え、iOS の描画への反映（フェーズ 2: 全体 / 行 / 役割 / キーの `look`、
 `metrics`、`background` の色）と状態トリガー（フェーズ 3: `states` / `rules` / `holdMs` / `animationMs`、`label` / `icon` の上書き）まで実装済み。
-背景画像（フェーズ 4）・サイトの編集 GUI（フェーズ 5）は未実装で、`fillImage` を指定しても現時点では見た目は変わらない。
+背景画像（フェーズ 4: `assets`・`fillImage` / `fillImageFit` / `fillImageOpacity`、キーごとと `background`）も実装済み。サイトの編集 GUI（フェーズ 5）は未実装。
 状態は `pressed` / `released` / `longPress` / `flicking`（キーごと）と `spaceDrag` / `shift` / `capsLock` / `composing`（全体）。
 `longPress` に入るのは、ポップアップが出る瞬間（`longPress` を持つキー）と ⌫ の連打が始まる瞬間だけ。`spaceDrag` に入るのは
 設定 `touch.space_swipe` が ON で、スペースに `longPress` が無いときだけ。`states` / `rules` の `icon`（`iconify:`）は取り込み時に解決して保存する。
 
+- 背景画像: `assets` の data URI（PNG / JPEG）は、描画に必要になるまでデコードしない。拡張で縮小デコード（長辺は表示に必要な分、最大 1024px）して
+  最大 12MB のキャッシュに置き、デコード中・失敗・メモリ逼迫（利用可能なメモリが 40MB 未満）・メモリ警告・キーボードの非表示の間は画像を使わず色だけで描く。
+  `fill` は覆う（はみ出しを切る）、`fit` は収める（余白は `fill` の色）、`tile` は元の大きさ（1pt = 3px）で敷き詰める（一辺が 8px 未満の画像は `fill`）
+- 取り込み時の画像の警告（取り込みは続行）: `fillImage` の参照先が `assets` に無い / どこからも使われていない / 読み込めない / 長辺が 1024px を超える
 - 見た目の値の不正（範囲外・型違い・不正な色・未知の名前）は、そのプロパティだけ無視して下位の値（最終的には現行の見た目）に落ちる。レイアウト全体は無効にしない（サイトのエディタは警告として出す）
 - 資源の上限はエラーにして取り込みを拒否する: `assets` は 4 枚・1 枚 256KB・合計 768KB・PNG/JPEG の data URI、`rules` は 32 個まで、`rules[].target.keys` は 24 個まで
 - 取り込む JSON 全体の上限は 1.5MB（`assets` を含められるように）。`assets` を含むレイアウトは URL スキーム（上限 1MB）では渡せない

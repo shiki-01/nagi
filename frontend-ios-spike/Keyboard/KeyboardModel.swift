@@ -52,6 +52,8 @@ final class KeyboardModel: ObservableObject {
             // 見た目の解決結果はレイアウトごと。入れ替わったら捨て、スペースのドラッグ移動の状態も解除する
             lookCache.reset()
             visual.setSpaceDragOrigin(nil)
+            // 背景画像の元データ（assets）。変わったときだけキャッシュを捨てる
+            KeyImageCache.shared.setAssets(layoutDef.assets)
         }
     }
     /// 見た目の解決結果のメモ化（`Shared/KeyLookState.swift`）
@@ -188,6 +190,7 @@ final class KeyboardModel: ObservableObject {
         self.lastLearningClearSignal = NagiLearningClearSignal.current()
         self.appliedAssignment = (kana: LayoutAssignment.id(for: .kana), alpha: LayoutAssignment.id(for: .alpha))
         self.layoutDef = LayoutLoader.loadAssigned(mode: .kana)
+        KeyImageCache.shared.setAssets(layoutDef.assets)
         attachSession()
         environment.onChange = { [weak self] in self?.reportEnvironment(reason: "os change") }
         environment.start()
