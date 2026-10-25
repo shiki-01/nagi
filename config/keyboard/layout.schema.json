@@ -30,6 +30,7 @@
       "items": { "$ref": "#/$defs/rule" },
       "description": "状態の見た目（全キー／指定キー対象）。最大 32 個。後の rule が先の rule を上書きする。"
     },
+    "toolbar": { "$ref": "#/$defs/toolbar" },
     "metrics": { "$ref": "#/$defs/metrics" },
     "background": { "$ref": "#/$defs/background" },
     "assets": { "$ref": "#/$defs/assets" }
@@ -61,6 +62,22 @@
           "description": "行内のキー。width の合計は 1〜20（スキーマ外で検証）。"
         }
       }
+    },
+    "toolbar": {
+      "type": "object",
+      "required": ["keys"],
+      "additionalProperties": false,
+      "properties": {
+        "look": { "$ref": "#/$defs/look", "description": "ツールバーの全キーの見た目（rows[].look と同じ継承。rules / roles の解決ではツールバーを行番号 -1 として扱う）。" },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/key" },
+          "description": "ツールバーのキー（1〜12）。入力中でなく候補もメッセージも無いときに、候補バーの場所（高さ 44pt 固定の 1 行）に出る。width の合計は 1〜20（スキーマ外で検証）、id は rows のキーと合わせて一意。長押し・フリックは使われない（タップのみ）。action の paste はクリップボードが空のとき出さない。アイコン・label が無い action / layout キーには既定のアイコンが付く。"
+        }
+      },
+      "description": "ツールバー。無ければ設定 toolbar.items の並びで出す。"
     },
     "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 20, "default": 1, "description": "行内の幅の比。" },
     "color": {
@@ -244,7 +261,7 @@
       "pattern": "^[a-zA-Z][a-zA-Z0-9]{0,31}$",
       "examples": [
         "space", "enter", "backspace", "shift", "capslock", "convert", "moveLeft", "moveRight",
-        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss"
+        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss", "paste", "deleteWord"
       ],
       "description": "コアの TouchAction 名。ここに挙げた以外（ほか）も許容し、未知の action の扱いは実装側で決める。"
     },

@@ -640,7 +640,7 @@ final class KeyboardModel: ObservableObject {
     /// `action` として実行できる名前（`perform(action:)` と同じ）
     private static let knownActions: Set<String> = [
         "space", "enter", "backspace", "shift", "capslock", "convert", "moveLeft", "moveRight",
-        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss",
+        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss", "paste", "deleteWord",
     ]
 
     /// `shortcut` キー: 入力中の文字列を確定してから、手順を順に実行する。
@@ -681,27 +681,38 @@ final class KeyboardModel: ObservableObject {
         case "modeSwitch": switchMode()
         case "globe": nextKeyboard()
         case "dismiss": host?.hostDismissKeyboard()
+        case "paste": pasteFromClipboard()
+        case "deleteWord": deleteWordBackward()
         default:
             DiagLog.log("unknown action \(action)")
         }
     }
 
-    /// ツールバーの操作（`ToolbarAction`）。ツールバーは入力中でないときだけ出るが、押す直前に入力が始まっていた場合に
-    /// 備えて、文字を入れる操作は入力中の文字列を確定してから行う。既存のキー操作・機能をそのまま呼ぶ
-    func perform(toolbar action: ToolbarAction) {
+    /// ツールバーのキーのタップ（タップだけ。長押し・フリックは使わない）。ツールバーは入力中でないときだけ出るが、
+    /// 押す直前に入力が始まっていた場合に備えて、文字を入れる操作は入力中の文字列を確定してから行う
+    /// （`paste` は `pasteFromClipboard` が確定する）。既存のキー操作・機能をそのまま呼ぶ。
+    /// `space` だけは rows のキーと違い、入力中の文字列を確定して半角スペースを入れる（コアを通さない）
+    func activateToolbarKey(_ key: LayoutKeyDef) {
         toggleState = nil
-        switch action {
-        case .dismiss: perform(action: "dismiss")
-        case .paste: pasteFromClipboard()
-        case .cursorLeft: arrow(.left)
-        case .cursorRight: arrow(.right)
-        case .newline: perform(action: "enter")
-        case .space:
-            commitPreedit()
-            hostInsert(" ")
-        case .deleteWord: deleteWordBackward()
-        case .emoji: switchLayout(target: "emoji")
-        case .nextKeyboard: nextKeyboard()
+        switch key.kind {
+        case .action:
+            guard let action = key.action else { return }
+            if action == "space" {
+                commitPreedit()
+                hostInsert(" ")
+            } else {
+                perform(action: action)
+            }
+        case .layout:
+            if let target = key.target { switchLayout(target: target) }
+        case .text:
+            inputText(key.text ?? key.label ?? "", shift: key.shift)
+        case .shortcut:
+            shortcut(key.steps ?? [])
+        case .toggle:
+            toggle(key)
+        case .flick, .spacer:
+            break
         }
     }
 

@@ -165,12 +165,37 @@ struct LayoutRow: Decodable {
     }
 }
 
+/// ツールバー（候補バーの場所に出す、高さ固定の 1 行）。キーは rows のキーと同じ型。見た目の解決では行番号 -1
+/// （`LookResolver.toolbarRow`）として扱う。タップだけ使い、長押し・フリックは使わない
+struct LayoutToolbar: Decodable {
+    var keys: [LayoutKeyDef]
+    /// ツールバーの全キーの見た目（`look`）。省略可
+    var look: KeyLook?
+
+    enum CodingKeys: String, CodingKey {
+        case keys, look
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        keys = try c.decode([LayoutKeyDef].self, forKey: .keys)
+        look = (try? c.decodeIfPresent(KeyLook.self, forKey: .look)) ?? nil
+    }
+
+    init(keys: [LayoutKeyDef], look: KeyLook? = nil) {
+        self.keys = keys
+        self.look = look
+    }
+}
+
 struct KeyboardLayoutDef: Decodable {
     var schema: Int
     var id: String
     var name: String
     var mode: LayoutMode
     var rows: [LayoutRow]
+    /// ツールバー。無ければ設定 `toolbar.items` の並びから同じ内容のキー列を作って出す（`ToolbarKeys`）
+    var toolbar: LayoutToolbar?
     /// 全キー共通の見た目
     var look: KeyLook?
     /// 役割（role）ごとの見た目
@@ -185,7 +210,7 @@ struct KeyboardLayoutDef: Decodable {
     var assets: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
-        case schema, id, name, mode, rows
+        case schema, id, name, mode, rows, toolbar
         case look, roles, rules, metrics, background, assets
     }
 
@@ -197,6 +222,7 @@ struct KeyboardLayoutDef: Decodable {
         name = try c.decode(String.self, forKey: .name)
         mode = try c.decode(LayoutMode.self, forKey: .mode)
         rows = try c.decode([LayoutRow].self, forKey: .rows)
+        toolbar = try c.decodeIfPresent(LayoutToolbar.self, forKey: .toolbar)
         // 見た目の指定は形が違っても無視する（レイアウト全体は無効にしない。仕様 §1.4）
         look = (try? c.decodeIfPresent(KeyLook.self, forKey: .look)) ?? nil
         roles = (try? c.decodeIfPresent(LookRoles.self, forKey: .roles)) ?? nil
@@ -248,6 +274,18 @@ struct KeyboardLayoutDef: Decodable {
             }
             if total < V.rowWidthMin || total > V.rowWidthMax { return "\(label) の幅の合計が範囲外（\(total)）" }
         }
+        if let toolbar = toolbar {
+            if toolbar.keys.isEmpty || toolbar.keys.count > V.toolbarKeysMax {
+                return "toolbar のキーは 1〜\(V.toolbarKeysMax) 個にしてください（\(toolbar.keys.count)）"
+            }
+            var total = 0.0
+            for key in toolbar.keys {
+                if let reason = V.keyError(key, validTargets: validTargets) { return reason }
+                if !ids.insert(key.id).inserted { return "キー id の重複: \(key.id)" }
+                total += key.width
+            }
+            if total < V.rowWidthMin || total > V.rowWidthMax { return "toolbar の幅の合計が範囲外（\(total)）" }
+        }
         if heightSum > V.rowHeightSumMax {
             return "行の高さの比の合計は \(V.rowHeightSumMax) 以下にしてください（現在 \(heightSum)）"
         }
@@ -261,6 +299,8 @@ enum LayoutValidation {
     static let schemaVersion = 2
     static let rowsMax = 8
     static let keysPerRowMax = 24
+    /// ツールバーのキー数の上限
+    static let toolbarKeysMax = 12
     static let rowWidthMin = 1.0
     static let rowWidthMax = 20.0
     static let rowHeightMax = 4.0

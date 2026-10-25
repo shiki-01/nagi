@@ -56,6 +56,9 @@ enum LookDefaults {
     static let pressedFillOpacity = 0.6
     /// 組み込みの `pressed` の指定（最下位に重ねる。§3.3）
     static let pressedLook = KeyLook(values: ["fillOpacity": .number(pressedFillOpacity)])
+    /// ツールバーのキーの既定の見た目（最下位に重ねる）。アイコン・文字 14pt、高さ 44pt の行の中で 32pt の高さになる
+    /// よう上下左右に 6pt の余白（現行のツールバーのボタンに近い値）
+    static let toolbarLook = KeyLook(values: ["fontSize": .number(14), "inset": .number(6)])
     /// 角丸の既定（設定 `keyboard.key_corner_pt` の既定値）
     static let cornerRadius = 6.0
     /// アイコンの大きさの既定（pt）。`fontSize` を指定したときは、アイコンも同じ大きさになる
@@ -112,11 +115,16 @@ enum LookDefaults {
 }
 
 enum LookResolver {
+    /// ツールバーを表す行番号（rows の番号は 0 以上のまま）
+    static let toolbarRow = -1
+
     /// キー 1 つの見た目を解決する。重ねる順（低 → 高。後が先を上書き）:
     /// layout.look → layout.roles[role] → 行の look → キーの look →
     /// 有効な状態を優先順位（`LookStateName.precedence`）の低い順に、それぞれ
     /// 〔組み込みの既定（pressed の fillOpacity 0.6）→ 一致する rules（配列順）→ キーの states[状態]〕
-    /// 指定が無いプロパティは結果に含まれない（既定のまま）。`spacer` は何も持たない
+    /// 指定が無いプロパティは結果に含まれない（既定のまま）。`spacer` は何も持たない。
+    /// `rowIndex` が `toolbarRow`（-1）のときはツールバーのキー: 最下位に `LookDefaults.toolbarLook` を重ね、
+    /// 行の look の代わりに `toolbar.look` を使う（順: toolbarLook → layout.look → roles → toolbar.look → キーの look → …）
     static func resolve(layout: KeyboardLayoutDef, rowIndex: Int, key: LayoutKeyDef, context: LookContext) -> ResolvedLook {
         if key.kind == .spacer { return ResolvedLook() }
         var result: [String: LookValue] = [:]
@@ -125,9 +133,13 @@ enum LookResolver {
             merge(look, allowsContent: allowsContent, scheme: context.scheme, into: &result)
         }
 
+        let isToolbar = rowIndex == toolbarRow
+        if isToolbar { apply(LookDefaults.toolbarLook, allowsContent: false) }
         apply(layout.look, allowsContent: false)
         apply(layout.roles?.byRole[key.role], allowsContent: false)
-        if rowIndex >= 0 && rowIndex < layout.rows.count {
+        if isToolbar {
+            apply(layout.toolbar?.look, allowsContent: false)
+        } else if rowIndex >= 0 && rowIndex < layout.rows.count {
             apply(layout.rows[rowIndex].look, allowsContent: false)
         }
         apply(key.look, allowsContent: false)

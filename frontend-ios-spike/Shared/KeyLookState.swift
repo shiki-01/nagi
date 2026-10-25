@@ -45,9 +45,8 @@ enum LookUsage {
     /// レイアウトのどこかの `rules` / `states` がその状態を使っているか
     static func layoutUses(_ state: LookStateName, in layout: KeyboardLayoutDef) -> Bool {
         if layout.rules.contains(where: { $0.when == state }) { return true }
-        return layout.rows.contains { row in
-            row.keys.contains { $0.states?.byState[state] != nil }
-        }
+        if layout.rows.contains(where: { row in row.keys.contains { $0.states?.byState[state] != nil } }) { return true }
+        return layout.toolbar?.keys.contains { $0.states?.byState[state] != nil } ?? false
     }
 }
 

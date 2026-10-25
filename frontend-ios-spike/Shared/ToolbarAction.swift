@@ -1,9 +1,10 @@
 import Foundation
 
 // 候補バーのツールバー（入力中でなく、候補が無いときに候補バーの場所に出す操作の列）。
-// UI に依存しない純粋な定義（Tests/ToolbarActionTests.swift でテストする）。実行は `KeyboardModel.perform(toolbar:)`。
-// 項目を足すときは、ここに case と表示（`title` / `systemImage`）を足し、`KeyboardModel.perform(toolbar:)` に処理を足す。
-// 表示する項目と並び順は設定 `toolbar.items`（`NagiIOSSettings`）で決まる。
+// UI に依存しない純粋な定義（Tests/ToolbarActionTests.swift でテストする）。
+// ツールバーはレイアウトの `toolbar`（キー列。rows のキーと同じ型）で定義でき、無いレイアウトでは設定 `toolbar.items`
+// （`NagiIOSSettings`）の並びを `ToolbarKeys` でキー列にして、同じ描画経路で出す。実行は `KeyboardModel.perform(action:)` など。
+// 項目を足すときは、ここに case と表示（`title`）を足し、`ToolbarKeys.spec(for:)` と既定アイコンの表（`ToolbarKeys.actionIcons`）に足す。
 
 /// ツールバーの操作。`rawValue` が設定ファイルに保存される名前（変えない）
 enum ToolbarAction: String, CaseIterable, Equatable {
@@ -41,23 +42,8 @@ enum ToolbarAction: String, CaseIterable, Equatable {
         }
     }
 
-    /// ボタンの SF Symbols 名
-    var systemImage: String {
-        switch self {
-        case .dismiss: return "keyboard.chevron.compact.down"
-        case .paste: return "doc.on.clipboard"
-        case .cursorLeft: return "chevron.left"
-        case .cursorRight: return "chevron.right"
-        case .newline: return "return"
-        case .space: return "space"
-        case .deleteWord: return "delete.left"
-        case .emoji: return "face.smiling"
-        case .nextKeyboard: return "globe"
-        }
-    }
-
-    /// ボタンにアイコンだけでなく名前も出すか（貼り付けは従来の「貼り付け」ボタンと同じ見た目にする）
-    var showsTitle: Bool { self == .paste }
+    /// ボタンの SF Symbols 名（既定アイコンの表 `ToolbarKeys` から引く）
+    var systemImage: String { ToolbarKeys.defaultIcon(for: ToolbarKeys.key(for: self)) ?? "questionmark" }
 
     /// 初期に出す項目と並び順
     static let defaultItems: [ToolbarAction] = [.dismiss, .paste, .cursorLeft, .cursorRight]
@@ -79,10 +65,93 @@ enum ToolbarLogic {
     static func shouldShow(hasPreedit: Bool, candidatesEmpty: Bool, hasMessage: Bool) -> Bool {
         !hasPreedit && candidatesEmpty && !hasMessage
     }
+}
 
-    /// いま実際に出す項目。貼り付けはクリップボードに文字があるときだけ（`clipboardHasText` は設定
-    /// `candbar.paste_button` がオフなら常に false。フルアクセスが無い・許可されなければ、押したあとにも隠れる）
-    static func visible(_ items: [ToolbarAction], clipboardHasText: Bool) -> [ToolbarAction] {
-        items.filter { $0 != .paste || clipboardHasText }
+/// `ToolbarAction` ↔ ツールバーのキー（レイアウトの `toolbar.keys` と同じ型）の対応と、既定のアイコン。純関数
+enum ToolbarKeys {
+    /// ToolbarAction に対応するキーの種類と action 名 / layout の target（対応表の唯一の場所）
+    static func spec(for action: ToolbarAction) -> (kind: LayoutKeyKind, action: String?, target: String?) {
+        switch action {
+        case .dismiss: return (.action, "dismiss", nil)
+        case .paste: return (.action, "paste", nil)
+        case .cursorLeft: return (.action, "moveLeft", nil)
+        case .cursorRight: return (.action, "moveRight", nil)
+        case .newline: return (.action, "enter", nil)
+        case .space: return (.action, "space", nil)
+        case .deleteWord: return (.action, "deleteWord", nil)
+        case .emoji: return (.layout, nil, "emoji")
+        case .nextKeyboard: return (.action, "globe", nil)
+        }
+    }
+
+    /// action 名ごとの既定アイコン（SF Symbols。ツールバーで icon / label が未指定のキーに使う）
+    static let actionIcons: [String: String] = [
+        "dismiss": "keyboard.chevron.compact.down",
+        "paste": "doc.on.clipboard",
+        "moveLeft": "chevron.left",
+        "moveRight": "chevron.right",
+        "enter": "return",
+        "space": "space",
+        "deleteWord": "delete.left",
+        "globe": "globe",
+    ]
+
+    /// `layout` キーの target ごとの既定アイコン
+    static let layoutIcons: [String: String] = ["emoji": "face.smiling"]
+
+    /// キーの既定アイコン。表に無ければ nil
+    static func defaultIcon(for key: LayoutKeyDef) -> String? {
+        switch key.kind {
+        case .action: return key.action.flatMap { actionIcons[$0] }
+        case .layout: return key.target.flatMap { layoutIcons[$0] }
+        default: return nil
+        }
+    }
+
+    /// 生成するキーの id（`tb-<名前>`。レイアウトのキー id と衝突しない前提の接頭辞）
+    static func keyId(for action: ToolbarAction) -> String { "tb-\(action.rawValue)" }
+
+    /// ToolbarAction 1 つ分のキー（icon / label は未指定。既定のアイコンで描く）
+    static func key(for action: ToolbarAction) -> LayoutKeyDef {
+        let entry = spec(for: action)
+        var result = LayoutKeyDef(id: keyId(for: action), kind: entry.kind, label: nil, action: entry.action)
+        result.target = entry.target
+        return result
+    }
+
+    /// 設定 `toolbar.items` の並びから作るキー列
+    static func keys(for actions: [ToolbarAction]) -> [LayoutKeyDef] {
+        actions.map { key(for: $0) }
+    }
+
+    /// 出すキー列。レイアウトの `toolbar` があればそれ、無ければ設定の項目から作る。
+    /// `paste` のキーは、クリップボードに文字があるときだけ出す（`clipboardHasText` は設定 `candbar.paste_button` が
+    /// オフなら常に false。フルアクセスが無い・許可されなければ、押したあとにも隠れる）
+    static func visibleKeys(layoutToolbar: LayoutToolbar?, items: [ToolbarAction], clipboardHasText: Bool) -> [LayoutKeyDef] {
+        let source = layoutToolbar?.keys ?? keys(for: items)
+        return source.filter { !isPaste($0) || clipboardHasText }
+    }
+
+    private static func isPaste(_ key: LayoutKeyDef) -> Bool {
+        key.kind == .action && key.action == "paste"
+    }
+
+    /// ツールバーのキーの表示内容。label も icon も無ければ既定のアイコン。`text` キーは text を文字にする
+    static func faceContent(for key: LayoutKeyDef) -> KeyFaceContent {
+        let text = key.label ?? (key.kind == .text ? key.text : nil)
+        if key.icon == nil && text == nil, let icon = defaultIcon(for: key) {
+            return KeyFaceContent(text: nil, icon: icon)
+        }
+        return KeyFaceContent(text: text ?? key.cycle?.first, icon: key.icon)
+    }
+
+    /// VoiceOver 用の名前（label があればそれ、無ければ action ごとの日本語名）
+    static func accessibilityLabel(for key: LayoutKeyDef) -> String? {
+        if let label = key.label { return label }
+        for action in ToolbarAction.allCases {
+            let entry = spec(for: action)
+            if entry.kind == key.kind && entry.action == key.action && entry.target == key.target { return action.title }
+        }
+        return key.text
     }
 }

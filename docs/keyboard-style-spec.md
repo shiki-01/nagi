@@ -148,6 +148,7 @@ iOS キーボードのキーの見た目を、レイアウト JSON から細か�
 ├─ look           全キー共通の見た目（役割を問わない）
 ├─ roles          役割（role）ごとの見た目 { "normal": look, "function": look, "accent": look }
 ├─ rules          状態の見た目（全キー／指定キー対象）[ { when, target?, look… } ]
+├─ toolbar        候補バーの場所に出すツールバー（§3.6）{ keys[], look? }
 └─ rows[]
    ├─ look        その行の全キーの見た目
    └─ keys[]
@@ -166,6 +167,16 @@ iOS キーボードのキーの見た目を、レイアウト JSON から細か�
    1. 組み込みの既定（押下中の `fillOpacity` 0.6 だけ。§3.3）
    2. `rules` のうち `when` が一致し、`target` がそのキーに当てはまるもの（**配列の先頭から順**。後の rule が勝つ）
    3. そのキーの `states[<状態>]`
+
+### 3.2.1 ツールバーのキー（行番号 -1）
+
+`toolbar.keys[]` のキーは、解決では行番号 `-1`（`LookResolver.toolbarRow`）の行にいるものとして扱う。上の順序のうち
+「行 `look`」が `toolbar.look` に変わり、さらに最下位（「既定」の直上）に**ツールバーの既定**（`fontSize: 14`, `inset: 6`。
+アイコン・文字 14pt、高さ 44pt の行の中で 32pt の高さになる）を重ねる。つまり
+既定 → ツールバーの既定 → レイアウト `look` → `roles` → `toolbar.look` → キー `look` → 状態。
+`rules` に行指定は無い（`target` は all / others / keys / roles / actions）ので、ツールバーのキーも他のキーと同じく
+`target` に当てはまれば効く（`keys` はツールバーのキー id でも指定できる）。rows の行の `look` はツールバーに効かず、
+`toolbar.look` は rows に効かない。共有ベクタは `config/keyboard/test-looks/resolve-toolbar.json`。
 
 ### 3.3 部分上書きのルール
 
@@ -191,6 +202,22 @@ iOS キーボードのキーの見た目を、レイアウト JSON から細か�
 | キー間・行間の隙間、外周の余白 | 新 `metrics`: `keySpacing`（0〜8pt）、`rowSpacing`（0〜8pt）、`padding`（0〜16pt、外周） | 省略時は設定 `keyboard.key_spacing_pt`（キー間・行間とも）と現行の外周 6pt。指定があれば**設定値より優先**。理由: レイアウトの作者が意図した詰め方を、設定の既定値で崩さないため。曖昧入力の矩形（`LayoutGeometry.rects`）と高さの計算（`padHeight`/`rowsHeight`）は `keySpacing`・`rowSpacing` を別々に受けるよう直す |
 | キー 1 つの見た目の位置ずれ・縮小 | 新 `look.offsetX/offsetY/inset/scale` | 当たり判定は動かさない |
 | キー 1 つの当たり判定の位置 | 変更しない | 位置の自由配置（絶対座標）は v1 では扱わない。理由: 曖昧入力のキー矩形・行の按分・片手モードと衝突するため |
+
+### 3.6 ツールバー（`toolbar`）
+
+入力中でなく候補もメッセージも無いときに、候補バーの場所へ出すキー列。`toolbar: { keys: Key[]（1〜12）, look?: Look }`。
+
+- **高さ 44pt 固定の 1 行**。行の `height` は無い。`keys[].width` は rows と同じ幅の比（既定 1、合計 1〜20）
+- キーは rows のキーと同じ型（`kind`: action / shortcut / layout / text / toggle / spacer / flick。ただし**タップだけ**使う。
+  `longPress`・フリックの方向・スペースのスワイプは無視）。キー id は rows と合わせて一意
+- `look` / `role` / `states` / `rules` の解決は §3.2.1。`role` の既定は rows と同じ `normal`（背景は systemBackground で、
+  従来のボタンと同じ）
+- `icon` / `label` が無い action / layout キーには既定のアイコンを付ける:
+  `dismiss` = `keyboard.chevron.compact.down`、`paste` = `doc.on.clipboard`、`moveLeft` = `chevron.left`、`moveRight` = `chevron.right`、
+  `enter` = `return`、`space` = `space`、`deleteWord` = `delete.left`、`globe` = `globe`、`layout` の target `emoji` = `face.smiling`
+- ツールバーの `space` は rows と違い、入力中の文字列を確定して半角スペースを入れる（コアを通さない）。`paste` は
+  クリップボードに文字があるときだけ出す（設定 `candbar.paste_button` がオフなら出さない）
+- `toolbar` が無いレイアウトは、設定 `toolbar.items` の並びから同じ内容のキー列（id は `tb-<項目名>`）を作って同じ描画経路で出す
 
 ## 4. 状態（トリガー）
 

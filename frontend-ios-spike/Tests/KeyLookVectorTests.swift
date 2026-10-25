@@ -52,7 +52,7 @@ final class KeyLookVectorTests: XCTestCase {
     func testVectorFilesArePresent() {
         let names = Set(TestSupport.testLookURLs().map { $0.lastPathComponent })
         for expected in ["resolve-defaults.json", "resolve-hierarchy.json", "resolve-invalid.json", "resolve-colors.json",
-                         "resolve-states.json", "resolve-rules.json", "resolve-image.json"] {
+                         "resolve-states.json", "resolve-rules.json", "resolve-image.json", "resolve-toolbar.json"] {
             XCTAssertTrue(names.contains(expected), "\(expected) がバンドルにない")
         }
     }
@@ -107,6 +107,8 @@ final class KeyLookVectorTests: XCTestCase {
         for (index, row) in layout.rows.enumerated() {
             if let key = row.keys.first(where: { $0.id == id }) { return (index, key) }
         }
+        // ツールバーのキーは行番号 -1
+        if let key = layout.toolbar?.keys.first(where: { $0.id == id }) { return (LookResolver.toolbarRow, key) }
         return nil
     }
 

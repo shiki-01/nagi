@@ -982,20 +982,20 @@ private struct CandidateBar: View {
                     .foregroundColor(.red)
                     .lineLimit(2)
                 Spacer(minLength: 0)
-            } else {
-                // 入力中でなく候補も無いときは、候補バーの場所にツールバー（設定 `toolbar.items`）を出す。
-                // 候補が来たら候補バーに切り替わる（バーの高さは変わらない）
-                if ToolbarLogic.shouldShow(
-                    hasPreedit: model.hasPreedit, candidatesEmpty: model.candidates.isEmpty, hasMessage: false
-                ) {
-                    ToolbarButtons(model: model)
-                }
-                if let warning = model.warning, !model.hasPreedit, model.candidates.isEmpty {
+            } else if ToolbarLogic.shouldShow(
+                hasPreedit: model.hasPreedit, candidatesEmpty: model.candidates.isEmpty, hasMessage: false
+            ) {
+                // 入力中でなく候補も無いときは、候補バーの場所にツールバー（レイアウトの `toolbar`、無ければ設定
+                // `toolbar.items`）を出す。候補が来たら候補バーに切り替わる（バーの高さは変わらない）。
+                // このとき候補は空なので、候補の一覧（ScrollView）は出さない
+                ToolbarRow(model: model)
+                if let warning = model.warning {
                     Text(warning)
                         .font(.system(size: 11))
                         .foregroundColor(.orange)
                         .lineLimit(2)
                 }
+            } else {
                 if model.isConverting && model.preeditParts.count > 1 {
                     // 変換中で文節が複数あれば、注目文節を太字・アクセント色で区別する
                     // （iOS の marked text には属性を付けられないため、ここが注目文節の主な表示）
@@ -1059,35 +1059,58 @@ private struct CandidateBar: View {
     }
 }
 
-/// ツールバーのボタン列。貼り付けは、クリップボードに文字があるときだけ出す
+/// ツールバー（高さ 44pt 固定の 1 行）。キーはレイアウトの `toolbar.keys`、無ければ設定 `toolbar.items` から作ったキー列。
+/// 描画は rows のキーと同じ `KeyFaceHost`（見た目の解決は行番号 -1）。幅は `width` の比で按分し、タップだけ使う。
+/// 貼り付けは、クリップボードに文字があるときだけ出す
 /// （表示の判定は `hasStrings` のみで、中身はタップしたときに初めて読む。フルアクセスが無い・許可されなければ隠れる）
-private struct ToolbarButtons: View {
+private struct ToolbarRow: View {
     @ObservedObject var model: KeyboardModel
 
     var body: some View {
-        ForEach(ToolbarLogic.visible(model.ios.toolbarItems, clipboardHasText: model.clipboardHasText), id: \.rawValue) { action in
-            Button(action: {
-                NagiKeyFeedback.keyDown()
-                model.perform(toolbar: action)
-            }) {
-                HStack(spacing: 3) {
-                    Image(systemName: action.systemImage).font(.system(size: 14))
-                    if action.showsTitle {
-                        Text(action.title).font(.system(size: 13)).lineLimit(1)
-                    }
+        let keys = ToolbarKeys.visibleKeys(
+            layoutToolbar: model.layoutDef.toolbar, items: model.ios.toolbarItems, clipboardHasText: model.clipboardHasText
+        )
+        let spacing = CGFloat(model.metrics.keySpacing)
+        GeometryReader { geo in
+            HStack(spacing: spacing) {
+                ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
+                    cell(key)
+                        .frame(width: cellWidth(key, in: keys, total: geo.size.width, spacing: spacing), height: geo.size.height)
                 }
-                .foregroundColor(Color(UIColor.label))
-                .padding(.horizontal, action.showsTitle ? 8 : 0)
-                .frame(minWidth: 36, minHeight: 32)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color(UIColor.systemBackground)))
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(action.title)
         }
+        .frame(height: 44)
+    }
+
+    @ViewBuilder
+    private func cell(_ key: LayoutKeyDef) -> some View {
+        if key.kind == .spacer {
+            Color.clear
+        } else {
+            TapKeyView(
+                face: KeyFaceInput(
+                    layout: model.layoutDef, cache: model.lookCache, rowIndex: LookResolver.toolbarRow, key: key,
+                    content: ToolbarKeys.faceContent(for: key), active: false,
+                    global: LookStateLogic.globalStates(
+                        shiftOnce: model.shiftState == .once, capsLock: model.shiftState == .caps,
+                        composing: model.hasPreedit, spaceDrag: false
+                    ),
+                    origin: nil
+                ),
+                action: { _ in model.activateToolbarKey(key) }
+            )
+            .accessibilityLabel(ToolbarKeys.accessibilityLabel(for: key) ?? "")
+        }
+    }
+
+    private func cellWidth(_ key: LayoutKeyDef, in keys: [LayoutKeyDef], total: CGFloat, spacing: CGFloat) -> CGFloat {
+        let weights = keys.reduce(0.0) { $0 + $1.width }
+        guard weights > 0 else { return 0 }
+        let available = total - spacing * CGFloat(max(keys.count - 1, 0))
+        return max(0, available * CGFloat(key.width / weights))
     }
 }
 
-/// 候補 1 つのボタン
 private struct CandidateButton: View {
     let item: CandidateItem
     let selected: Bool

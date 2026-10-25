@@ -1,0 +1,47 @@
+{
+  "description": "ツールバー（layout.toolbar）のキーは行番号 -1。重ね合わせは 既定（fontSize 14 / inset 6）→ layout.look → roles → toolbar.look → キーの look → 状態（組み込み → rules → キーの states）。rows[].look はツールバーに効かず、toolbar.look は rows に効かない",
+  "layout": {
+    "schema": 2, "id": "vec-toolbar", "name": "toolbar", "mode": "alpha",
+    "look": { "cornerRadius": 4, "opacity": 0.9 },
+    "roles": { "function": { "borderWidth": 2 } },
+    "rules": [
+      { "when": "pressed", "target": "all", "look": { "scale": 0.9 } },
+      { "when": "pressed", "target": { "keys": ["t-look"] }, "look": { "offsetX": 3 } },
+      { "when": "pressed", "target": { "actions": ["paste"] }, "look": { "offsetY": 2 } }
+    ],
+    "toolbar": {
+      "look": { "fontSize": 16, "cornerRadius": 9 },
+      "keys": [
+        { "id": "t-plain", "kind": "action", "action": "dismiss" },
+        { "id": "t-fn", "kind": "action", "action": "moveLeft", "role": "function" },
+        { "id": "t-look", "kind": "action", "action": "moveRight", "look": { "fontSize": 20, "inset": 2 } },
+        { "id": "t-paste", "kind": "action", "action": "paste",
+          "states": { "pressed": { "opacity": 0.5, "label": "貼" } } },
+        { "id": "t-gap", "kind": "spacer" }
+      ]
+    },
+    "rows": [
+      { "look": { "cornerRadius": 10, "inset": 1 }, "keys": [
+        { "id": "q", "kind": "text", "text": "q" }
+      ] }
+    ]
+  },
+  "cases": [
+    { "name": "toolbar.look が layout.look と既定を上書き（行の look は効かない）", "key": "t-plain",
+      "expect": { "fontSize": 16, "inset": 6, "cornerRadius": 9, "opacity": 0.9 } },
+    { "name": "roles の後に toolbar.look", "key": "t-fn",
+      "expect": { "fontSize": 16, "inset": 6, "cornerRadius": 9, "opacity": 0.9, "borderWidth": 2 } },
+    { "name": "キーの look が最後に勝つ", "key": "t-look",
+      "expect": { "fontSize": 20, "inset": 2, "cornerRadius": 9, "opacity": 0.9 } },
+    { "name": "rows のキーにはツールバーの既定も toolbar.look も効かない", "key": "q",
+      "expect": { "cornerRadius": 10, "inset": 1, "opacity": 0.9 } },
+    { "name": "pressed: 組み込み → rules（all）", "key": "t-plain", "states": ["pressed"],
+      "expect": { "fontSize": 16, "inset": 6, "cornerRadius": 9, "opacity": 0.9, "fillOpacity": 0.6, "scale": 0.9 } },
+    { "name": "pressed: rules の keys はツールバーのキー id に当てはまる", "key": "t-look", "states": ["pressed"],
+      "expect": { "fontSize": 20, "inset": 2, "cornerRadius": 9, "opacity": 0.9, "fillOpacity": 0.6, "scale": 0.9, "offsetX": 3 } },
+    { "name": "pressed: rules の actions と、キーの states（label はキーの states の中だけ）", "key": "t-paste", "states": ["pressed"],
+      "expect": { "fontSize": 16, "inset": 6, "cornerRadius": 9, "opacity": 0.5, "fillOpacity": 0.6, "scale": 0.9, "offsetY": 2, "label": "貼" },
+      "expectContent": { "label": "貼", "icon": null, "hidesKeyIcon": true } },
+    { "name": "spacer は何も持たない", "key": "t-gap", "expect": {} }
+  ]
+}

@@ -19,14 +19,19 @@ enum LayoutAssetCheck {
         }
         add(layout.background?.look)
         for rule in layout.rules { add(rule.look) }
+        func addKey(_ key: LayoutKeyDef) {
+            add(key.look)
+            if let states = key.states {
+                for state in states.byState.values { add(state.look) }
+            }
+        }
         for row in layout.rows {
             add(row.look)
-            for key in row.keys {
-                add(key.look)
-                if let states = key.states {
-                    for state in states.byState.values { add(state.look) }
-                }
-            }
+            for key in row.keys { addKey(key) }
+        }
+        if let toolbar = layout.toolbar {
+            add(toolbar.look)
+            for key in toolbar.keys { addKey(key) }
         }
         return result
     }

@@ -33,3 +33,6 @@ TypeScript（`web/src/lib/keyboard/look-resolve.ts`）が**同じ結果**で実�
   `fillImage` が `"none"` に解決された場合は、プロパティ自体が無い（画像なし）
 - `expectHoldMs` は `released` の保持時間（ms）。`expectContent` は `label` / `icon` の上書き（`null` は無し）。どちらも省略可
 - `transitions` の `from` / `to` は各解決結果の `animationMs`（`null` は未指定）、`expect` は補間の長さ（ms）
+- ツールバー（`layout.toolbar.keys`）のキーも `key` に書ける（キー id は rows と合わせて一意）。解決では行番号 -1 として扱い、
+  rows[].look の代わりに `toolbar.look` を使い、最下位に既定（`fontSize: 14`, `inset: 6`）を重ねる（`resolve-toolbar.json`）。
+  既定は `layout.look` / `roles` / `toolbar.look` / キーの look で上書きできる
