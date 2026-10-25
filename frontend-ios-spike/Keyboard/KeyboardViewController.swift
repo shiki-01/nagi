@@ -140,7 +140,6 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         hostingController = hostView
         // 背景を透明にする（既定のままだと不透明で黒く見える。システムのキーボードの背景（ブラー）を見せる）
         hostView.view.backgroundColor = .clear
-        hostView.view.isOpaque = false
         addChild(hostView)
 
         self.view.addSubview(hostView.view)

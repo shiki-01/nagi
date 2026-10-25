@@ -79,7 +79,9 @@ struct StyledKeyFace: View, Equatable {
     let animationMs: Double
 
     var body: some View {
-        Color.clear
+        // 当たり判定の層。完全な透明（Color.clear）だと、ホスティングビューの背景が透明のときにタッチが通らない
+        // ことがあるため、見えない程度の不透明度を持たせる
+        Color.black.opacity(0.01)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
             .overlay(visual.allowsHitTesting(false))
