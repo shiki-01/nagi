@@ -261,7 +261,7 @@
       "pattern": "^[a-zA-Z][a-zA-Z0-9]{0,31}$",
       "examples": [
         "space", "enter", "backspace", "shift", "capslock", "convert", "moveLeft", "moveRight",
-        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss", "paste", "deleteWord"
+        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss", "paste", "deleteWord", "history"
       ],
       "description": "コアの TouchAction 名。ここに挙げた以外（ほか）も許容し、未知の action の扱いは実装側で決める。"
     },

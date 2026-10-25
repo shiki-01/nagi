@@ -214,7 +214,7 @@ iOS キーボードのキーの見た目を、レイアウト JSON から細か�
   従来のボタンと同じ）
 - `icon` / `label` が無い action / layout キーには既定のアイコンを付ける:
   `dismiss` = `keyboard.chevron.compact.down`、`paste` = `doc.on.clipboard`、`moveLeft` = `chevron.left`、`moveRight` = `chevron.right`、
-  `enter` = `return`、`space` = `space`、`deleteWord` = `delete.left`、`globe` = `globe`、`layout` の target `emoji` = `face.smiling`
+  `enter` = `return`、`space` = `space`、`deleteWord` = `delete.left`、`history` = `clock.arrow.circlepath`、`globe` = `globe`、`layout` の target `emoji` = `face.smiling`
 - ツールバーの `space` は rows と違い、入力中の文字列を確定して半角スペースを入れる（コアを通さない）。`paste` は
   クリップボードに文字があるときだけ出す（設定 `candbar.paste_button` がオフなら出さない）
 - `toolbar` が無いレイアウトは、設定 `toolbar.items` の並びから同じ内容のキー列（id は `tb-<項目名>`）を作って同じ描画経路で出す

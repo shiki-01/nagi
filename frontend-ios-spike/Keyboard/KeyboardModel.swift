@@ -83,6 +83,15 @@ final class KeyboardModel: ObservableObject {
     @Published private(set) var returnKeyLabel: String?
     private var pasteboardObserver: NSObjectProtocol?
 
+    // クリップボード履歴（docs/decisions.md H-69）。ページの表示内容はキー領域を置き換えて出す
+    /// 履歴ページを開いているか
+    @Published private(set) var isClipboardHistoryOpen = false
+    /// 履歴ページの表示内容の種別（設定オフ・パスワード欄・空・項目あり）
+    @Published private(set) var clipboardPageState = ClipboardPageState.empty
+    /// 履歴ページに出す項目（`clipboardPageState == .items` のときだけ入る。パスワード欄・オフでは空）
+    @Published private(set) var clipboardItems: [ClipboardItem] = []
+    private let clipboardStore = ClipboardHistoryStore()
+
     weak var host: KeyboardHost? {
         didSet { applier.host = host }
     }
@@ -197,7 +206,10 @@ final class KeyboardModel: ObservableObject {
         reloadIOSSettings()
         pasteboardObserver = NotificationCenter.default.addObserver(
             forName: UIPasteboard.changedNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.refreshClipboardState() }
+        ) { [weak self] _ in
+            self?.refreshClipboardState()
+            self?.captureClipboardHistory()
+        }
     }
 
     deinit {
@@ -276,6 +288,7 @@ final class KeyboardModel: ObservableObject {
         // 入力中の候補はコアの状態と対応しているので消さない
         layoutCache.removeAll()
         isExpanded = false
+        closeClipboardHistory()
         guard let session = session else { return }
         // LLM を使っていないなら解放するものがない（状態が取れなければ使っているとみなす）
         let usedLLM = session.getStatus()?.llm ?? true
@@ -395,6 +408,7 @@ final class KeyboardModel: ObservableObject {
     func handOverToNewHost() {
         DiagLog.log("model handed over to new keyboard instance hadPreedit=\(hasPreedit)")
         toggleState = nil
+        closeClipboardHistory()
         keepPreeditInHost()
         if let session = session, let result = session.focusOut() {
             // 確定した文字列は旧ホストに入れない（上で残した）。revision だけ進める
@@ -463,11 +477,90 @@ final class KeyboardModel: ObservableObject {
         // 入力中は出さないボタンだが、押す直前に入力が始まっていた場合に備えて確定してから入れる
         commitPreedit()
         if let text = UIPasteboard.general.string, !text.isEmpty {
-            hostInsert(text)
+            // クリップボードの内容は診断ログに出さない
+            hostInsert(text, log: false)
+            // 読んだ文字列は履歴にも記録する（履歴がオンのときだけ）
+            ClipboardCapture.recordPasted(
+                text, config: ios.clipboardHistory, hasFullAccess: host?.hostHasFullAccess() ?? false,
+                isSecure: host?.hostIsSecure() ?? false, store: clipboardStore)
         } else {
             DiagLog.log("paste: clipboard empty or denied")
         }
         refreshClipboardState()
+    }
+
+    // MARK: - クリップボード履歴
+
+    /// 履歴の取り込み（キーボードの表示時・クリップボードの変化通知）。履歴がオフ・フルアクセスなし・パスワード欄では読まない。
+    /// 履歴ページを開いていれば表示も更新する
+    func captureClipboardHistory() {
+        let config = ios.clipboardHistory
+        guard config.enabled else { return }
+        let recorded = ClipboardCapture.captureIfChanged(
+            config: config, hasFullAccess: host?.hostHasFullAccess() ?? false,
+            isSecure: host?.hostIsSecure() ?? false, store: clipboardStore)
+        if recorded && isClipboardHistoryOpen { reloadClipboardPage() }
+    }
+
+    /// 履歴ページを開く（開いていれば閉じる）。入力中の文字列があれば先に確定する
+    func toggleClipboardHistory() {
+        if isClipboardHistoryOpen {
+            closeClipboardHistory()
+            return
+        }
+        commitPreedit()
+        isExpanded = false
+        isClipboardHistoryOpen = true
+        reloadClipboardPage()
+    }
+
+    func closeClipboardHistory() {
+        guard isClipboardHistoryOpen else { return }
+        isClipboardHistoryOpen = false
+        clipboardItems = []
+    }
+
+    /// 履歴ページの内容を読み直す。パスワード欄・設定オフのときは項目を持たない（内容を出さない）
+    func reloadClipboardPage() {
+        let config = ios.clipboardHistory
+        let secure = host?.hostIsSecure() ?? false
+        var items: [ClipboardItem] = []
+        if config.enabled && !secure {
+            let now = Date()
+            clipboardStore.prune(now: now, settings: config)
+            items = clipboardStore.items(now: now, settings: config)
+        }
+        let state = ClipboardPageState.state(enabled: config.enabled, secure: secure, itemCount: items.count)
+        if state != clipboardPageState { clipboardPageState = state }
+        if items != clipboardItems { clipboardItems = items }
+    }
+
+    /// 履歴のカードのタップ: 入力中の文字列を確定してから入れ、ページを閉じる
+    func insertClipboardItem(_ item: ClipboardItem) {
+        // パスワード欄では履歴を使わない（ページの状態が古くても入れない）
+        guard !(host?.hostIsSecure() ?? false) else {
+            reloadClipboardPage()
+            return
+        }
+        toggleState = nil
+        commitPreedit()
+        hostInsert(item.text, log: false)
+        closeClipboardHistory()
+    }
+
+    func toggleClipboardPin(_ item: ClipboardItem) {
+        clipboardStore.togglePin(id: item.id)
+        reloadClipboardPage()
+    }
+
+    func deleteClipboardItem(_ item: ClipboardItem) {
+        clipboardStore.delete(id: item.id)
+        reloadClipboardPage()
+    }
+
+    func clearClipboardHistory() {
+        clipboardStore.clear()
+        reloadClipboardPage()
     }
 
     var isAvailable: Bool { session != nil }
@@ -640,7 +733,7 @@ final class KeyboardModel: ObservableObject {
     /// `action` として実行できる名前（`perform(action:)` と同じ）
     private static let knownActions: Set<String> = [
         "space", "enter", "backspace", "shift", "capslock", "convert", "moveLeft", "moveRight",
-        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss", "paste", "deleteWord",
+        "dakuten", "smallKana", "modeSwitch", "globe", "dismiss", "paste", "deleteWord", "history",
     ]
 
     /// `shortcut` キー: 入力中の文字列を確定してから、手順を順に実行する。
@@ -683,6 +776,7 @@ final class KeyboardModel: ObservableObject {
         case "dismiss": host?.hostDismissKeyboard()
         case "paste": pasteFromClipboard()
         case "deleteWord": deleteWordBackward()
+        case "history": toggleClipboardHistory()
         default:
             DiagLog.log("unknown action \(action)")
         }
@@ -958,6 +1052,9 @@ final class KeyboardModel: ObservableObject {
             restartCore(noLLM: dictionaryOnly, reason: "focusIn: no session")
         }
         reloadIOSSettings()
+        // 表示のたびに履歴ページは閉じた状態から始め、クリップボードが変わっていれば履歴に取り込む
+        closeClipboardHistory()
+        captureClipboardHistory()
         applyCoreSettingsChanges()
         reportEnvironment(reason: "focusIn")
         // レイアウトのファイルが変わっていても追随する（ホストアプリでの割り当て・取り込み）
@@ -1064,6 +1161,8 @@ final class KeyboardModel: ObservableObject {
         }
         scheduleContextUpdate(delay: 0.05)
         refreshClipboardState()
+        // 履歴ページを開いたまま入力欄がパスワード欄に替わったら、内容を引っ込める
+        if isClipboardHistoryOpen { reloadClipboardPage() }
     }
 
     /// 入力欄そのものが切り替わった（`textDocumentProxy.documentIdentifier` が変わった）。
@@ -1084,6 +1183,7 @@ final class KeyboardModel: ObservableObject {
         isNextWordCandidates = false
         selectedCandidate = -1
         isExpanded = false
+        closeClipboardHistory()
         lastSentContext = nil
         scheduleContextUpdate(delay: 0)
         // 新しい欄の種類に合わせてレイアウトと改行キーの表示を選び直す
@@ -1242,12 +1342,13 @@ final class KeyboardModel: ObservableObject {
 
     // MARK: - ホストへの操作（ログ付き）
 
-    private func hostInsert(_ text: String) {
+    /// - log: false なら内容をログに出さない（クリップボードの内容など）
+    private func hostInsert(_ text: String, log: Bool = true) {
         applier.flushPending()
         // applier を通らない操作なので、古い照合を走らせないよう applier に知らせる
         applier.noteExternalOperation()
         lastOwnHostOperation = Date()
-        DiagLog.log("host insertText \(logText(text))")
+        DiagLog.log(log ? "host insertText \(logText(text))" : "host insertText (内容は記録しない)")
         host?.hostInsertText(text)
     }
 

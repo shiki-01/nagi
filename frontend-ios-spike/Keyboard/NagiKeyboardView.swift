@@ -49,7 +49,11 @@ struct NagiKeyboardView: View {
     /// キー（または展開した候補一覧）の領域
     private var padArea: some View {
         Group {
-            if model.isExpanded {
+            if model.isClipboardHistoryOpen {
+                ClipboardHistoryPage(
+                    model: model, height: padHeight(model),
+                    spacing: CGFloat(model.metrics.keySpacing), accent: themeAccent)
+            } else if model.isExpanded {
                 ExpandedCandidates(model: model)
             } else {
                 LayoutPad(model: model, visual: model.visual)

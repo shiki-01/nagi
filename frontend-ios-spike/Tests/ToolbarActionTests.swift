@@ -92,6 +92,7 @@ final class ToolbarActionTests: XCTestCase {
             .deleteWord: (.action, "deleteWord", nil, "delete.left"),
             .emoji: (.layout, nil, "emoji", "face.smiling"),
             .nextKeyboard: (.action, "globe", nil, "globe"),
+            .history: (.action, "history", nil, "clock.arrow.circlepath"),
         ]
         XCTAssertEqual(Set(expected.keys), Set(ToolbarAction.allCases), "対応表に無いケースがある")
         for action in ToolbarAction.allCases {
@@ -196,5 +197,6 @@ final class ToolbarActionTests: XCTestCase {
         let names = ToolbarAction.allCases.compactMap { ToolbarKeys.spec(for: $0).action }
         XCTAssertTrue(names.contains("paste"))
         XCTAssertTrue(names.contains("deleteWord"))
+        XCTAssertTrue(names.contains("history"))
     }
 }

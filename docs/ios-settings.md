@@ -175,7 +175,24 @@
 | `candbar.auto_hide` | 入力が無いときの候補バーの扱い | choice: `always` / `hide_when_empty` | `always` | D | kbd | 新規(iOS) | 非表示にすると高さが変わるため既定は常時表示 |
 | `candbar.tap_commit` | 候補のタップで即確定 | bool | true | D | kbd | 新規(iOS) | OFF なら 1 回目で選択、2 回目で確定 |
 | `candbar.paste_button` | ツールバーに「貼り付け」を出す | bool | true | D | kbd | 実装済み(iOS)・確認済み（2026-10-22） | H-62 でツールバーの項目（`toolbar.items`）の 1 つになった。これがオフなら項目に入れていても出さない。表示判定は `UIPasteboard.hasStrings` のみ（中身は読まない）、入力中は非表示。中身はタップ時だけ読む（iOS 16 の貼り付け許可が出うる）。旧 ID `candbar.clipboard_paste`（既定は旧 false → true）。`privacy.clipboard_access` とは独立 |
-| `toolbar.items` | ツールバーの項目と並び順 | list（`dismiss` / `paste` / `cursorLeft` / `cursorRight` / `newline` / `space` / `deleteWord` / `emoji` / `nextKeyboard` の部分集合を順序つきで） | `[dismiss, paste, cursorLeft, cursorRight]` | D | kbd | 実装済み(iOS)・実機未確認（H-62） | 入力中でなく候補が無いときに候補バーの場所に出す（候補が来たら候補バーに切り替わる。高さは同じ）。知らない名前・重複は捨て、空配列は「何も出さない」。貼り付けはクリップボードに文字があるときだけ。undo / やり直し・全選択・ホストアプリを開く、は拡張から安全に行える API が無く未対応（H-62）。型 `NagiIOSSettingDef.Kind.list`。**レイアウトに `toolbar`（キー列。`docs/keyboard-style-spec.md` §3.6）があればそれを優先し、この設定は使わない**（`toolbar` が無いレイアウトでだけ、この並びから同じ内容のキー列を作って出す） |
+| `toolbar.items` | ツールバーの項目と並び順 | list（`dismiss` / `paste` / `cursorLeft` / `cursorRight` / `newline` / `space` / `deleteWord` / `emoji` / `nextKeyboard` / `history` の部分集合を順序つきで） | `[dismiss, paste, cursorLeft, cursorRight]` | D | kbd | 実装済み(iOS)・実機未確認（H-62） | 入力中でなく候補が無いときに候補バーの場所に出す（候補が来たら候補バーに切り替わる。高さは同じ）。知らない名前・重複は捨て、空配列は「何も出さない」。貼り付けはクリップボードに文字があるときだけ。undo / やり直し・全選択・ホストアプリを開く、は拡張から安全に行える API が無く未対応（H-62）。型 `NagiIOSSettingDef.Kind.list`。**レイアウトに `toolbar`（キー列。`docs/keyboard-style-spec.md` §3.6）があればそれを優先し、この設定は使わない**（`toolbar` が無いレイアウトでだけ、この並びから同じ内容のキー列を作って出す） |
+
+### 2.5.1 クリップボード履歴（`clipboard.history`）
+
+ツールバーの項目 `history`（既定の `toolbar.items` には入れない）で、キー領域を履歴のギャラリー（2 列のカード）に置き換える。仕様の根拠は `decisions.md` H-69。
+
+| ID | 項目 | 型・範囲 | 既定 | モード | 反映先 | 状況 | 備考 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `clipboard.history.enabled` | クリップボード履歴を使う | bool | false | S | kbd+app | 実装済み(iOS)・要実機確認 | オフの間はクリップボードを一切読まず、保存もしない。フルアクセスが必要 |
+| `clipboard.history.retention` | 保存期間 | choice: `1h` / `24h` / `7d` / `30d` / `forever` | `24h` | S | kbd+app | 実装済み(iOS)・要実機確認 | ピン留めは期限で消さない |
+| `clipboard.history.max_items` | 保存する最大数 | choice: `10` / `30` / `50` / `100` / `200` | `50` | D | kbd+app | 実装済み(iOS)・要実機確認 | 超えたら古い順に消す。ピン留めは数に含めず消さない（ピン留めは 20 件まで） |
+| `clipboard.history.types` | 保存する種類 | multi: `text` / `url` / `number` / `email` | 全部 | D | kbd+app | 実装済み(iOS)・要実機確認 | `number` は数字・記号のみ（電話番号・コード等）。判定は `ClipboardKind.classify` |
+| `clipboard.history.preview_chars` | カードに表示する文字数 | choice: `20` / `40` / `80` / `120` | `40` | D | kbd | 実装済み(iOS)・要実機確認 | 超えた分は「…」で省略（入力は全文） |
+| `clipboard.history.clear` | 履歴を全て削除 | 操作（確認つき） | - | S | app | 実装済み(iOS)・要実機確認 | 設定画面のボタン。キーボードの履歴ページにも 2 度押しの全削除がある |
+
+- **取り込みのタイミング**: iOS の拡張はバックグラウンドで監視できないため、(1) キーボードの表示時と `UIPasteboard.changedNotification`、(2) ホストアプリが前面になったとき、(3) 「貼り付け」ボタンで読んだとき、にだけ取り込む。`changeCount` が前回記録した値（ホストと拡張で共有）と違うときだけ読み、`hasStrings` を先に確認する。キーボードもアプリも動いていない間にコピーしたものは取りこぼしうる（設定画面の説明に明記）。
+- **プライバシー**: 既定オフ。フルアクセスが無いときは何も記録しない。パスワード欄（`isSecureTextEntry`・パスワード/ワンタイムコードの `textContentType`）では取り込みも履歴ページの表示もしない。1 件 10000 文字を超えるものは記録しない。内容は診断ログに出さない。保存先は App Group の `clipboard-history.json`（バックアップ対象外）のみ。
+- **保存**: スキーマバージョン付き JSON。更新はファイルロックの下で「読み直す → 変更 → 原子的に書く」で、ホストと拡張が同時に書いても互いの更新を消さない。壊れたファイルは空として扱う。
 
 ### 2.6 プライバシー・フルアクセス（`privacy`）
 

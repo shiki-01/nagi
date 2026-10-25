@@ -97,6 +97,7 @@ describe('toolbar: validation', () => {
   it('paste / deleteWord are known actions and listed in the schema examples', () => {
     expect(KNOWN_ACTIONS).toContain('paste')
     expect(KNOWN_ACTIONS).toContain('deleteWord')
+    expect(KNOWN_ACTIONS).toContain('history')
     const examples: string[] = (schema as any).$defs.action.examples
     for (const a of KNOWN_ACTIONS) expect(examples, a).toContain(a)
   })

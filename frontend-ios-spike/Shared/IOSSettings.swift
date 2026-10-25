@@ -63,6 +63,8 @@ struct NagiIOSSettingDef {
         case choice([Choice])
         /// 選択肢の部分集合を順序つきで持つ（ツールバーの項目など）。値は文字列の配列
         case list([Choice])
+        /// 選択肢から複数を選ぶ（順序は選択肢の並び）。値は文字列の配列
+        case multi([Choice])
     }
 
     let key: String
@@ -117,6 +119,14 @@ struct NagiIOSSettingDef {
                 result.append(.string(text))
             }
             return .array(result)
+        case .multi(let choices):
+            guard case .array(let items)? = raw else { return defaultValue }
+            // 知らない名前は捨て、選択肢の並びで返す。空の配列は「何も選ばない」という明示の指定
+            let chosen = Set(items.compactMap { item -> String? in
+                if case .string(let text) = item { return text }
+                return nil
+            })
+            return .array(choices.filter { chosen.contains($0.value) }.map { .string($0.value) })
         }
     }
 }
@@ -283,6 +293,32 @@ struct NagiIOSSettings: Codable, Equatable {
             ]),
             isSimple: false, defaultValue: .string("insert"), isDeveloper: true),
         NagiIOSSettingDef(
+            key: Key.clipboardHistoryEnabled, group: "クリップボード履歴", label: "クリップボード履歴を使う",
+            description: "コピーした文字列をキーボードの履歴ページ（ツールバーの「履歴」）に残し、タップで入力できます。オフの間はクリップボードを一切読まず、何も保存しません。フルアクセスが必要です。",
+            kind: .bool, isSimple: true, defaultValue: .bool(false)),
+        NagiIOSSettingDef(
+            key: Key.clipboardHistoryRetention, group: "クリップボード履歴", label: "保存期間",
+            description: "この期間を過ぎた履歴は消えます。ピン留めした項目は消えません。",
+            kind: NagiIOSSettings.choice([
+                ("1h", "1 時間"), ("24h", "24 時間"), ("7d", "7 日"), ("30d", "30 日"), ("forever", "無期限"),
+            ]),
+            isSimple: true, defaultValue: .string("24h")),
+        NagiIOSSettingDef(
+            key: Key.clipboardHistoryMaxItems, group: "クリップボード履歴", label: "保存する最大数",
+            description: "超えたぶんは古い順に消えます。ピン留めは数に含めず、消えません（ピン留めは 20 件まで）。",
+            kind: NagiIOSSettings.choice([("10", "10 件"), ("30", "30 件"), ("50", "50 件"), ("100", "100 件"), ("200", "200 件")]),
+            isSimple: false, defaultValue: .string("50")),
+        NagiIOSSettingDef(
+            key: Key.clipboardHistoryTypes, group: "クリップボード履歴", label: "保存する種類",
+            description: "チェックを外した種類は保存しません。数字・記号は電話番号やコードなど、数字と記号だけの文字列です。",
+            kind: .multi(ClipboardKind.allCases.map { NagiIOSSettingDef.Choice(value: $0.rawValue, label: $0.title) }),
+            isSimple: false, defaultValue: .array(ClipboardKind.allCases.map { .string($0.rawValue) })),
+        NagiIOSSettingDef(
+            key: Key.clipboardHistoryPreviewChars, group: "クリップボード履歴", label: "カードに表示する文字数",
+            description: "履歴ページのカードに出す文字数の上限です。超えたぶんは「…」で省略します（入力するときは全文です）。",
+            kind: NagiIOSSettings.choice([("20", "20 文字"), ("40", "40 文字"), ("80", "80 文字"), ("120", "120 文字")]),
+            isSimple: false, defaultValue: .string("40")),
+        NagiIOSSettingDef(
             key: Key.developerMode, group: "開発者", label: "開発者モード",
             description: "診断ログ・実機計測・動作テスト用の画面など、開発者向けの機能を表示します。通常の使い方には要りません。オフでも診断ログの記録は、TestFlight・開発用ビルドでは従来どおり既定で有効です（記録するかどうかの切り替えは、オンにすると出る「開発者」の画面でできます）。",
             kind: .bool, isSimple: false, defaultValue: .bool(false)),
@@ -327,6 +363,11 @@ struct NagiIOSSettings: Codable, Equatable {
         static let keyboardHapticEngine = "keyboard.haptic_engine"
         static let keyboardSound = "keyboard.sound"
         static let keyboardCommitMethod = "keyboard.commit_method"
+        static let clipboardHistoryEnabled = "clipboard.history.enabled"
+        static let clipboardHistoryRetention = "clipboard.history.retention"
+        static let clipboardHistoryMaxItems = "clipboard.history.max_items"
+        static let clipboardHistoryTypes = "clipboard.history.types"
+        static let clipboardHistoryPreviewChars = "clipboard.history.preview_chars"
         static let developerMode = "developer.mode"
     }
 
@@ -352,7 +393,7 @@ struct NagiIOSSettings: Codable, Equatable {
         Int(double(key).rounded())
     }
 
-    /// 文字列の配列の項目（`.list`）。未指定・不正は既定
+    /// 文字列の配列の項目（`.list` / `.multi`）。未指定・不正は既定
     func stringList(_ key: String) -> [String] {
         guard case .array(let items) = value(key) else { return [] }
         return items.compactMap { item in

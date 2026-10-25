@@ -26,7 +26,9 @@ export const KNOWN_ACTIONS = [
   'dismiss',
   // ツールバー用（rows のキーに置いても動く）
   'paste',
-  'deleteWord'
+  'deleteWord',
+  // クリップボード履歴のページを開く（iOS。設定でオフのときはページ内に案内を出す）
+  'history'
 ] as const
 
 /** ツールバーを表す行番号（resolveLook などの rowIndex 引数。rows の番号は変わらない）。 */
@@ -36,6 +38,7 @@ export const TOOLBAR_DEFAULT_LOOK = { fontSize: 14, inset: 6 } as const/** ツ�
 export const TOOLBAR_ACTION_LABELS: Readonly<Record<string, string>> = {
   paste: '貼り付け',
   deleteWord: '単語削除',
+  history: '履歴',
   dismiss: '閉じる',
   space: '空白',
   enter: '改行',

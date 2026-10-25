@@ -26,6 +26,8 @@ protocol KeyboardHost: AnyObject {
     func hostKeyboardType() -> UIKeyboardType?
     /// 入力欄の改行キーの種類（`returnKeyType`。改行キーの表示に使う。取れなければ nil）
     func hostReturnKeyType() -> UIReturnKeyType?
+    /// フルアクセス（`hasFullAccess`）が有効か。クリップボードを読めるかの前提
+    func hostHasFullAccess() -> Bool
 }
 
 extension KeyboardHost {
@@ -33,6 +35,7 @@ extension KeyboardHost {
     func hostContextAfterInput() -> String? { nil }
     func hostKeyboardType() -> UIKeyboardType? { nil }
     func hostReturnKeyType() -> UIReturnKeyType? { nil }
+    func hostHasFullAccess() -> Bool { false }
 }
 
 /// 変換中の文字列（マーク）と確定の手順をホストへ適用する。

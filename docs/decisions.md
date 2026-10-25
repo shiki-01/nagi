@@ -1810,3 +1810,14 @@ H-65 の続き。仕様は `docs/keyboard-style-spec.md`（§7、§9 ②〜④�
 - **web**: キャンバスの候補バー位置にツールバー行（高さ 44）。追加・削除・並べ替え・rows との行き来・`toolbar.look` の編集に対応。プレビューは SF Symbols が無いので文字で近似。
 - **未確認（実機）**: 設定のみ（`toolbar` 無し）のときの見た目の変化（間延び・アイコンのみ）、`toolbar` を書いたときの `look` / pressed、12 個並べたときの窮屈さ、候補バーへの切り替わり時の高さ。Swift は CI で確認。
 
+
+### H-69. クリップボード履歴（iOS キーボード。2026-10-25、ユーザー要望、要実機確認・要 CI 確認）
+
+- **要望**: クリップボードの履歴を見られるようにする。保存期間・保存最大数・保存する種類を設定でき、履歴ページ（ギャラリー形式、一定文字数を超える分は省略）でタップするとその内容を入力できる。
+- **形**: ツールバーの新しい action `history`（`ToolbarAction.history`、アイコン `clock.arrow.circlepath`、表示名「履歴」。`knownActions`・web の `KNOWN_ACTIONS`・スキーマ examples に追加。既定の `toolbar.items` は変えない）で、キー領域（`ExpandedCandidates` と同じ位置・高さ）を `ClipboardHistoryPage`（`Keyboard/ClipboardHistoryView.swift`）に置き換える。上部に「戻る」「履歴」「全削除（2 度押し。1 度目で確認表示、3 秒で戻る）」、本文は 2 列のカード（最大 4 行・種類のアイコン・相対時刻・ピン留めのマーク）。タップで入力中の文字列を確定してから挿入してページを閉じる。長押し（contextMenu）でピン留め / 削除。見た目はシステムの配色で、レイアウトの `look` には接続しない。
+- **構造**: 純粋なロジックと保存は `Shared/ClipboardHistory.swift`（`ClipboardKind.classify`・`ClipboardHistoryLogic`・`ClipboardHistoryStore`・`ClipboardPageState`・`ClipboardCaptureLogic`）、クリップボードの読み取りは `Shared/ClipboardCapture.swift`（UIKit）。状態は `KeyboardModel`（`isClipboardHistoryOpen`・`clipboardPageState`・`clipboardItems`）。設定は `clipboard.history.*`（`docs/ios-settings.md` §2.5.1）。種類の複数選択のため設定定義に `Kind.multi` を追加した。
+- **取り込み**: 常駐監視はできない。キーボードの表示時（`focusIn`）と `UIPasteboard.changedNotification`、ホストアプリの前面化、「貼り付け」ボタンで読んだとき。`changeCount`（App Group の UserDefaults でホストと拡張が共有）が前回と違うときだけ読み、`hasStrings` を先に確認する。読む前に `changeCount` を記録する（許可の確認を拒否されても繰り返し読まない）。
+- **プライバシー**: 既定オフ。オフのときは読まない・保存しない。フルアクセスが無いときは記録しない。パスワード欄（`hostIsSecure`）では取り込みも表示もしない（ページを開いていて欄が替わったら内容を引っ込める）。1 件 10000 文字まで。内容は DiagLog に出さない（TestFlight 期間の例外にも含めない。挿入時は `hostInsert(_, log: false)`。既存の「貼り付け」ボタンのログも同様に内容を伏せるようにした）。保存は App Group の `clipboard-history.json` のみ（バックアップ対象外・`completeFileProtectionUntilFirstUserAuthentication`）。
+- **保存**: 更新はファイルロック（`NagiFileLock`、`<file>.lock`）の下で読み直して結合し、原子的に書く。ピン留めは期限・件数で消さず、上限 20。
+- **採らなかった案**: (1) 常駐監視（iOS の拡張では不可能。取りこぼしは設定画面の説明で明記）。(2) 画像・ファイルなど他種別の保存（容量・プライバシー・拡張のメモリ上限のため文字列のみ）。(3) iCloud 等での端末間同期（クリップボードは機密を含みやすく、端末内のみ）。(4) 種類の選択を順序つきリスト（`.list`）で表すこと（順序に意味が無いため、オン/オフの `.multi` を追加）。
+- **未確認（実機）**: キーボード拡張での `UIPasteboard.general.string` の読み取りで貼り付け許可の確認がどう出るか（表示のたびに出ないか）、ホストアプリ前面化時の確認、`contextMenu`（長押し）がキーボード拡張で動くか、カードのタップ・スクロールの反応、履歴ページから戻ったあとのキーの反応（透明なホスティングビューと当たり判定の層は変更していない）。Swift はローカルでコンパイルできないため CI で確認。

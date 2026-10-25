@@ -26,6 +26,8 @@ enum ToolbarAction: String, CaseIterable, Equatable {
     case emoji
     /// 次のキーボードへ（地球儀）
     case nextKeyboard
+    /// クリップボード履歴のページを開く
+    case history
 
     /// 設定画面での表示名
     var title: String {
@@ -39,6 +41,7 @@ enum ToolbarAction: String, CaseIterable, Equatable {
         case .deleteWord: return "単語を削除"
         case .emoji: return "絵文字"
         case .nextKeyboard: return "次のキーボード"
+        case .history: return "履歴"
         }
     }
 
@@ -81,6 +84,7 @@ enum ToolbarKeys {
         case .deleteWord: return (.action, "deleteWord", nil)
         case .emoji: return (.layout, nil, "emoji")
         case .nextKeyboard: return (.action, "globe", nil)
+        case .history: return (.action, "history", nil)
         }
     }
 
@@ -94,6 +98,7 @@ enum ToolbarKeys {
         "space": "space",
         "deleteWord": "delete.left",
         "globe": "globe",
+        "history": "clock.arrow.circlepath",
     ]
 
     /// `layout` キーの target ごとの既定アイコン

@@ -33,6 +33,8 @@ struct NagiSettingRow: Identifiable {
         case choice([Option])
         /// 選択肢の部分集合を順序つきで選ぶ（ツールバーの項目など）
         case list([Option])
+        /// 選択肢から複数を選ぶ（種類の選択など。それぞれオン/オフ）
+        case multi([Option])
         case text
     }
 
@@ -64,9 +66,10 @@ struct NagiSettingSection: Identifiable {
 final class NagiSettingsModel: ObservableObject {
     private static let uiModeKey = "ui.mode"
     private static let learningGroup = "学習"
+    static let clipboardGroup = "クリップボード履歴"
     static let developerGroup = "開発者"
     /// セクションの並び（無い名前は最後に、出てきた順で並ぶ）
-    private static let groupOrder = ["入力", "変換", "動作モード", "予測変換", "学習", "キーボード", "アップデート", "開発者"]
+    private static let groupOrder = ["入力", "変換", "動作モード", "予測変換", "学習", "キーボード", "クリップボード履歴", "アップデート", "開発者"]
     /// コアの項目のうち、iOS では出さないもの。`conversion.model` はモデルのファイルのパスで、
     /// キーボードが配置済みのモデルから自動で決める（手で書き換えると読み込めなくなる）
     private static let hiddenCoreKeys: Set<String> = ["conversion.model"]
@@ -90,6 +93,7 @@ final class NagiSettingsModel: ObservableObject {
     @Published private(set) var layoutRows: [NagiSettingRow] = []
     @Published private(set) var iosSaveError: String?
     @Published private(set) var learningNotice: String?
+    @Published private(set) var clipboardNotice: String?
 
     private let coreQueue = DispatchQueue(label: "com.shiki.nagi.settings.core")
     /// 以下 2 つは coreQueue の上でだけ触る
@@ -170,6 +174,8 @@ final class NagiSettingsModel: ObservableObject {
         }
         // 学習データの削除ボタンの置き場として、項目が無くても学習セクションは出す
         if !titles.contains(Self.learningGroup) { titles.append(Self.learningGroup) }
+        // 履歴の全削除ボタンと説明の置き場として、項目が無くても（シンプルモードでも）クリップボード履歴のセクションは出す
+        if !titles.contains(Self.clipboardGroup) { titles.append(Self.clipboardGroup) }
         // 開発者モードがオンなら、シンプルモードでも「開発者」画面への入口を出す
         if ios.developerMode && !titles.contains(Self.developerGroup) { titles.append(Self.developerGroup) }
         let ranked = titles.enumerated()
@@ -217,6 +223,8 @@ final class NagiSettingsModel: ObservableObject {
                 control = .choice(choices.map { NagiSettingRow.Option(value: $0.value, label: $0.label) })
             case .list(let choices):
                 control = .list(choices.map { NagiSettingRow.Option(value: $0.value, label: $0.label) })
+            case .multi(let choices):
+                control = .multi(choices.map { NagiSettingRow.Option(value: $0.value, label: $0.label) })
             }
             return NagiSettingRow(
                 key: def.key, origin: .ios, group: def.group, label: def.label,
@@ -303,6 +311,13 @@ final class NagiSettingsModel: ObservableObject {
     /// 順序つきの選択（`.list`）の現在の値
     func listValue(_ row: NagiSettingRow) -> [String] {
         row.origin == .ios ? ios.stringList(row.key) : []
+    }
+
+    /// 複数選択（`.multi`）の 1 つを入れる/外す。保存は選択肢の並びに正規化される
+    func setMulti(_ row: NagiSettingRow, option: String, on: Bool) {
+        var values = Set(listValue(row))
+        if on { values.insert(option) } else { values.remove(option) }
+        setList(row, Array(values))
     }
 
     func setList(_ row: NagiSettingRow, _ values: [String]) {
@@ -460,6 +475,19 @@ final class NagiSettingsModel: ObservableObject {
         }
     }
 
+    // MARK: - クリップボード履歴の削除
+
+    /// 履歴をすべて削除する（ピン留めも）。キーボードが開いていれば、次に履歴ページを開いたときに反映される
+    func clearClipboardHistory() {
+        let store = ClipboardHistoryStore()
+        guard store.isAvailable else {
+            clipboardNotice = "履歴の保存先（App Group）がないため、削除するものがありません"
+            return
+        }
+        store.clear()
+        clipboardNotice = "クリップボード履歴を削除しました"
+    }
+
     // MARK: - 学習データの削除
 
     /// 学習データをすべて削除する。キーボード拡張がメモリ上に持つ学習データも消えるよう、
@@ -502,6 +530,7 @@ final class NagiSettingsModel: ObservableObject {
 struct SettingsView<Developer: View>: View {
     @StateObject private var model = NagiSettingsModel()
     @State private var confirmingClear = false
+    @State private var confirmingClipboardClear = false
     /// 「開発者」画面の中の、端末情報・Probes・結果の画面（開発者モードがオンのときだけ開ける）
     private let developer: Developer
 
@@ -545,6 +574,18 @@ struct SettingsView<Developer: View>: View {
                                 NagiDeveloperView { developer }
                             }
                         }
+                        if section.title == NagiSettingsModel.clipboardGroup {
+                            Text("履歴はキーボードが動いている間と、このアプリが前面にある間にコピーしたものだけが残ります。iOS の制限で、キーボードもアプリも動いていない間にコピーしたものは記録できません。フルアクセスの許可が必要で、パスワード欄では取り込みも表示もしません。1 件が 1 万文字を超えるものは記録しません。履歴はこの端末内（App Group）にだけ保存し、iCloud には保存しません。内容は診断ログにも出しません。オフの間はクリップボードを読みません。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Button("履歴をすべて削除", role: .destructive) {
+                                confirmingClipboardClear = true
+                            }
+                            .buttonStyle(.borderless)
+                            if let notice = model.clipboardNotice {
+                                Text(notice).font(.caption).foregroundColor(.secondary)
+                            }
+                        }
                         if section.title == "学習" {
                             Button("学習データをすべて削除", role: .destructive) {
                                 confirmingClear = true
@@ -565,6 +606,16 @@ struct SettingsView<Developer: View>: View {
             }
             .navigationTitle("設定")
             .onAppear { model.start() }
+            .confirmationDialog(
+                "クリップボード履歴をすべて削除しますか？",
+                isPresented: $confirmingClipboardClear,
+                titleVisibility: .visible
+            ) {
+                Button("削除", role: .destructive) { model.clearClipboardHistory() }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("ピン留めした項目も含め、履歴がすべて消えます。元に戻せません。")
+            }
             .confirmationDialog(
                 "学習データをすべて削除しますか？",
                 isPresented: $confirmingClear,
@@ -663,6 +714,17 @@ private struct NagiSettingRowView: View {
                     Text(row.label)
                     Spacer()
                     Text("\(model.listValue(row).count) 項目").foregroundColor(.secondary)
+                }
+            }
+        case .multi(let options):
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.label)
+                ForEach(options, id: \.value) { option in
+                    Toggle(option.label, isOn: Binding(
+                        get: { model.listValue(row).contains(option.value) },
+                        set: { model.setMulti(row, option: option.value, on: $0) }
+                    ))
+                    .font(.subheadline)
                 }
             }
         case .text:

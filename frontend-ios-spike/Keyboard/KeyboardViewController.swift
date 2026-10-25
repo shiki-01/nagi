@@ -222,6 +222,10 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         textDocumentProxy.returnKeyType
     }
 
+    func hostHasFullAccess() -> Bool {
+        hasFullAccess
+    }
+
     func hostIsSecure() -> Bool {
         let proxy = textDocumentProxy
         if proxy.isSecureTextEntry ?? false { return true }

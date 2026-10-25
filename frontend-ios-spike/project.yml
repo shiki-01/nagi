@@ -202,6 +202,9 @@ targets:
       - path: Shared/TestAids.swift
       # 候補バーのツールバーの操作の定義（IOSSettings.swift が参照する）
       - path: Shared/ToolbarAction.swift
+      # クリップボード履歴（種類の判定・刈り込み・保存。NagiFileLock は保存時の排他ロック）
+      - path: Shared/ClipboardHistory.swift
+      - path: Shared/NagiFileLock.swift
       - path: Keyboard/KanaKeyTable.swift
       - path: Keyboard/CandidateKind.swift
       - path: Keyboard/TouchLogic.swift
