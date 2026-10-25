@@ -31,7 +31,7 @@
   const actionNames = $derived([
     ...new Set([
       ...KNOWN_ACTIONS,
-      ...store.layout.rows.flatMap((r) => r.keys.flatMap((k) => ('action' in k && typeof k.action === 'string' ? [k.action] : [])))
+      ...[...store.layout.rows, ...(store.layout.toolbar ? [store.layout.toolbar] : [])].flatMap((r) => r.keys.flatMap((k) => ('action' in k && typeof k.action === 'string' ? [k.action] : [])))
     ])
   ])
   const uid = $props.id()

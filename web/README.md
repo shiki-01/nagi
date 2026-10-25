@@ -18,6 +18,7 @@
   - リセット: プロパティ単位（行の「リセット」）・キー/行/状態単位・「すべての見た目をリセット」
   - JSON パネルのテキストは直接編集でき、フォームとプレビューに即反映される（構文エラーの間は反映されず、直前の内容が書き出し対象）。検証は error（書き出しをブロック）と warning（無視される値。書き出せる）に分けて表示し、「その場所を開く」で該当のタブへ移る
   - 実装: ops は `look-ops.ts`、プレビュー変換は `look-css.ts`、画像の計算は `look-assets.ts`（canvas は `look-image.ts`）、UI は `LookInspector` / `LookField` / `RulesEditor` / `ImageAssets` ほか
+- **ツールバー（`toolbar`、候補バーが空のときに出る高さ 44pt の 1 行）**: キャンバス上部の「ツールバー 追加／削除」ボタン（またはキー未選択時のインスペクタ）で作る。候補バーの位置にツールバーの行が出て、キーの追加（パレットのクリック・ドラッグ）・ドラッグでの並べ替え（rows との行き来も可）・削除・KeyForm での編集は rows と同じ操作。見た目は「詳細設定」→「行」→「ツールバー」（`toolbar.look`）。行番号 -1 として `resolveLook` が扱い、既定 `fontSize 14 / inset 6` を最下位に重ねる（共有ベクタ `resolve-toolbar.json`）。キーは 1〜12 個、全キーを消すと toolbar ごと消える。無ければアプリは設定 `toolbar.items` を使う。実装は `ops.ts`（`keysAt` / `addToolbar`）・`validate.ts`・`KeyboardPreview`・`toolbar.test.ts`
 - レイアウト JSON の schema 1 → 2 の移行: `node scripts/migrate-layout-v2.mjs <ファイル or ディレクトリ>...`（冪等）
 
 ## デザイン

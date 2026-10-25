@@ -23,8 +23,26 @@ export const KNOWN_ACTIONS = [
   'smallKana',
   'modeSwitch',
   'globe',
-  'dismiss'
+  'dismiss',
+  // ツールバー用（rows のキーに置いても動く）
+  'paste',
+  'deleteWord'
 ] as const
+
+/** ツールバーを表す行番号（resolveLook などの rowIndex 引数。rows の番号は変わらない）。 */
+export const TOOLBAR_ROW = -1
+/** ツールバーのキーの解決の最下位に重ねる既定（共有ベクタ resolve-toolbar.json と iOS の KeyLookResolver と同じ値）。 */
+export const TOOLBAR_DEFAULT_LOOK = { fontSize: 14, inset: 6 } as const/** ツールバーの action 別の既定の文字（アイコンは iOS 側の既定。web のプレビューは文字で近似する）。 */
+export const TOOLBAR_ACTION_LABELS: Readonly<Record<string, string>> = {
+  paste: '貼り付け',
+  deleteWord: '単語削除',
+  dismiss: '閉じる',
+  space: '空白',
+  enter: '改行',
+  moveLeft: '←',
+  moveRight: '→',
+  globe: '🌐'
+}
 
 /** 組み込みレイアウト名（layout.target に指定できる）。 */
 export const BUILTIN_LAYOUT_IDS = [
@@ -51,6 +69,9 @@ export const LIMITS = {
   rowHeightMax: 4,
   // 行の高さ比の合計の上限（キーボード全体の高さに収めるため。iOS 側の LayoutValidation.rowHeightSumMax と同期）
   rowHeightSumMax: 4.5,
+  // ツールバー（候補バーが空のときの 1 行）のキー数。高さは 44pt 固定
+  toolbarKeysMax: 12,
+  toolbarKeysMin: 1,
   widthMax: 20,
   textMax: 16,
   shortcutTextMax: 256,
@@ -143,6 +164,13 @@ export interface Row {
   keys: Key[]
 }
 
+/** 候補バーが空のときに出る 1 行（高さ 44pt 固定）。キーは rows と同じ型。 */
+export interface Toolbar {
+  keys: Key[]
+  /** ツールバーの全キーの見た目（rows[].look と同じ型・同じ継承）。 */
+  look?: Look
+}
+
 export interface KeyboardLayout {
   $schema?: string
   schema: 2
@@ -160,6 +188,7 @@ export interface KeyboardLayout {
   /** 画像 id → data URI（PNG / JPEG）。 */
   assets?: Record<string, string>
   rows: Row[]
+  toolbar?: Toolbar
 }
 
 // ---- 見た目（look）。docs/keyboard-style-spec.md §2〜§6 ----------------------------------------------------------

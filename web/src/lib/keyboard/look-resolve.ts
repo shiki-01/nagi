@@ -14,7 +14,9 @@ import {
   LOOK_STATES,
   SF_ICON_PATTERN,
   STATE_PRECEDENCE,
-  ASSET_ID_PATTERN
+  ASSET_ID_PATTERN,
+  TOOLBAR_DEFAULT_LOOK,
+  TOOLBAR_ROW
 } from './types'
 import type { Key, KeyRole, KeyboardLayout, StateName } from './types'
 
@@ -161,13 +163,13 @@ function stateLookOf(key: Key, state: StateName): unknown {
  * 有効な状態を優先順位（STATE_PRECEDENCE）の低い順に、それぞれ
  * 〔組み込みの既定（pressed の fillOpacity 0.6）→ 一致する rules（配列順）→ キーの states[状態]〕。
  * 指定が無いプロパティは結果に含まれない（既定のまま）。spacer は何も持たない。
+ * rowIndex が TOOLBAR_ROW（-1）のときは layout.toolbar を行として扱い（行の look = toolbar.look）、最下位に既定（TOOLBAR_DEFAULT_LOOK）を重ねる。
  */
 export function resolveLook(layout: KeyboardLayout, rowIndex: number, key: Key, ctx: LookContext = {}): ResolvedLook {
   if (key.kind === 'spacer') return {}
   const scheme = ctx.scheme ?? 'light'
   const states = new Set<StateName>(ctx.states ?? [])
   const out: ResolvedLook = {}
-
   const apply = (raw: unknown, allowsContent: boolean) => {
     for (const [name, value] of Object.entries(sanitizeLook(raw, allowsContent))) {
       if (LOOK_PROPS[name].type === 'color') {
@@ -178,11 +180,12 @@ export function resolveLook(layout: KeyboardLayout, rowIndex: number, key: Key, 
     }
   }
 
+  if (rowIndex === TOOLBAR_ROW) apply(TOOLBAR_DEFAULT_LOOK, false)
   apply(layout.look, false)
   const roles: unknown = layout.roles
   if (isObj(roles)) apply(roles[roleOf(key)], false)
-  const row = layout.rows?.[rowIndex]
-  if (row) apply(row.look, false)
+  const row: unknown = rowIndex === TOOLBAR_ROW ? layout.toolbar : layout.rows?.[rowIndex]
+  if (isObj(row)) apply(row.look, false)
   apply(key.look, false)
   const rules = rulesOf(layout)
   for (const state of STATE_PRECEDENCE) {

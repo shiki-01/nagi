@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { EditorStore } from '$lib/keyboard/store.svelte'
-  import { findKey } from '$lib/keyboard/ops'
-  import { BUILTIN_LAYOUT_IDS, ICONIFY_ICON_PATTERN, FLICK_DIRECTIONS, KEY_KINDS, KEY_ROLES, KNOWN_ACTIONS, LIMITS, POPUP_KINDS } from '$lib/keyboard/types'
+  import { findKey, keysAt } from '$lib/keyboard/ops'
+  import { BUILTIN_LAYOUT_IDS, ICONIFY_ICON_PATTERN, FLICK_DIRECTIONS, KEY_KINDS, KEY_ROLES, KNOWN_ACTIONS, LIMITS, POPUP_KINDS, TOOLBAR_ROW } from '$lib/keyboard/types'
   import type { FlickDirection, Key, KeyKind, PopupKey, PopupKind, Step } from '$lib/keyboard/types'
   import StepsEditor from './StepsEditor.svelte'
 
@@ -22,6 +22,15 @@
 
   const key = $derived(store.selectedKey)
   const pos = $derived(key ? findKey(store.layout, key.id) : undefined)
+  const inToolbar = $derived(pos?.row === TOOLBAR_ROW)
+  const rowName = (row: number) => (row === TOOLBAR_ROW ? 'ツールバー' : `${row + 1} 行目`)
+  /** 隣の行（上: -1 の向き）へ移す先。ツールバーは rows の上にある。無ければ undefined。 */
+  const neighbor = (delta: -1 | 1) => (pos && keysAt(store.layout, pos.row + delta) ? pos.row + delta : undefined)
+  function moveToRow(delta: -1 | 1) {
+    const to = neighbor(delta)
+    if (!key || to === undefined) return
+    store.moveKeys([key.id], { row: to, index: keysAt(store.layout, to)?.length ?? 0 })
+  }
   const layoutTargets = $derived([...new Set([...BUILTIN_LAYOUT_IDS, ...store.state.layouts.map((l) => l.id)])])
 
   // iconify: のアイコンはブラウザから Iconify API を直接読んでプレビューする（書き出す JSON には ID だけ）
@@ -131,22 +140,21 @@
 {#if key && pos}
   <section class="form" aria-labelledby="kf-title">
     <div class="head">
-      <h3 id="kf-title">キーの設定 <small>（{pos.row + 1} 行目 / {pos.index + 1} 番目）</small></h3>
+      <h3 id="kf-title">キーの設定 <small>（{rowName(pos.row)} / {pos.index + 1} 番目）</small></h3>
       <div class="ops">
         <button type="button" class="btn small" disabled={pos.index === 0} onclick={() => store.shiftKey(key.id, -1)}>← 左へ</button>
         <button
           type="button"
           class="btn small"
-          disabled={pos.index === store.layout.rows[pos.row].keys.length - 1}
+          disabled={pos.index === (keysAt(store.layout, pos.row)?.length ?? 0) - 1}
           onclick={() => store.shiftKey(key.id, 1)}>右へ →</button
         >
-        <button type="button" class="btn small" disabled={pos.row === 0} onclick={() => store.moveKey(key.id, pos.row - 1, store.layout.rows[pos.row - 1].keys.length)}>↑ 前の行へ</button>
-        <button
-          type="button"
-          class="btn small"
-          disabled={pos.row === store.layout.rows.length - 1}
-          onclick={() => store.moveKey(key.id, pos.row + 1, store.layout.rows[pos.row + 1].keys.length)}>↓ 次の行へ</button
-        >
+        <button type="button" class="btn small" disabled={neighbor(-1) === undefined} onclick={() => moveToRow(-1)}>
+          {pos.row === 0 && store.layout.toolbar ? '↑ ツールバーへ' : '↑ 前の行へ'}
+        </button>
+        <button type="button" class="btn small" disabled={neighbor(1) === undefined} onclick={() => moveToRow(1)}>
+          {inToolbar ? '↓ 1 行目へ' : '↓ 次の行へ'}
+        </button>
         <button type="button" class="btn small" onclick={() => store.duplicateKey(key.id)}>複製</button>
         <button type="button" class="btn small danger" onclick={() => store.removeKey(key.id)}>削除</button>
       </div>

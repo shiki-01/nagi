@@ -3,6 +3,8 @@
 import { History } from './history'
 import {
   addKey,
+  addToolbar,
+  removeToolbar,
   addKeyInNewRow,
   addRow,
   changeKind,
@@ -43,7 +45,7 @@ import {
 } from './look-ops'
 import type { LookLoc } from './look-ops'
 import type { JumpTarget } from './look-jump'
-import { KEY_KINDS, LIMITS } from './types'
+import { KEY_KINDS, LIMITS, TOOLBAR_ROW } from './types'
 import type { Direction, MoveDest } from './ops'
 import type { Key, KeyKind, KeyboardLayout, Metrics, Row, StateName, Target } from './types'
 import { errorsOf, validateLayout, warningsOf } from './validate'
@@ -247,6 +249,21 @@ export class EditorStore {
     this.edit(updateRow(this.layout, i, { height }), `row-height:${i}`)
   }
 
+  // --- ツールバー（候補バーが空のときに出る 1 行。行番号 -1） ---
+  /** ツールバーを作る（既定のキー付き）。 */
+  addToolbar() {
+    if (this.layout.toolbar) return
+    this.notice = null
+    this.edit(addToolbar(this.layout))
+    this.selectedIds = []
+  }
+  /** ツールバーを削除する（キーと見た目も消える。元に戻すで復元できる）。 */
+  removeToolbar() {
+    if (!this.layout.toolbar) return
+    this.notice = null
+    this.edit(removeToolbar(this.layout))
+  }
+
   // --- キー ---
   addKey(rowIndex: number, kind: KeyKind = 'text') {
     const r = addKey(this.layout, rowIndex, kind)
@@ -282,7 +299,12 @@ export class EditorStore {
   addKeyAt(kind: KeyKind, dest: MoveDest): boolean {
     const r = 'row' in dest ? insertKey(this.layout, dest.row, dest.index, kind) : addKeyInNewRow(this.layout, dest.newRow, kind)
     if (!r.keyId) {
-      this.notice = 'row' in dest ? `1 行に置けるキーは最大 ${LIMITS.keysPerRowMax} 個までです` : `行は最大 ${LIMITS.rowsMax} 行までです`
+      this.notice =
+        'row' in dest
+          ? dest.row === TOOLBAR_ROW
+            ? `ツールバーに置けるキーは最大 ${LIMITS.toolbarKeysMax} 個までです`
+            : `1 行に置けるキーは最大 ${LIMITS.keysPerRowMax} 個までです`
+          : `行は最大 ${LIMITS.rowsMax} 行までです`
       return false
     }
     this.notice = null

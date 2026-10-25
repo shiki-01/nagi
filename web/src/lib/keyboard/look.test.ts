@@ -16,7 +16,8 @@ import {
   LOOK_PROPS,
   LOOK_STATES,
   METRICS_PROPS,
-  STATE_PRECEDENCE
+  STATE_PRECEDENCE,
+  TOOLBAR_ROW
 } from './types'
 import type { Key, KeyboardLayout, StateName } from './types'
 import { describePath, errorsOf, isValidLayout, parseLayoutJSON, validateLayout, warningsOf } from './validate'
@@ -47,6 +48,8 @@ const vectorModules = import.meta.glob('../../../../config/keyboard/test-looks/*
 const vectors = Object.entries(vectorModules).sort(([a], [b]) => a.localeCompare(b))
 
 function findKey(layout: KeyboardLayout, id: string): { rowIndex: number; key: Key } {
+  const tb = layout.toolbar?.keys.find((k) => k.id === id)
+  if (tb) return { rowIndex: TOOLBAR_ROW, key: tb }
   for (const [rowIndex, row] of layout.rows.entries()) {
     const key = row.keys.find((k) => k.id === id)
     if (key) return { rowIndex, key }
@@ -57,7 +60,7 @@ function findKey(layout: KeyboardLayout, id: string): { rowIndex: number; key: K
 describe('shared test vectors (config/keyboard/test-looks)', () => {
   it('all vector files are present', () => {
     const names = vectors.map(([path]) => path.split('/').pop())
-    for (const f of ['defaults', 'hierarchy', 'invalid', 'colors', 'states', 'rules', 'image'])
+    for (const f of ['defaults', 'hierarchy', 'invalid', 'colors', 'states', 'rules', 'image', 'toolbar'])
       expect(names).toContain(`resolve-${f}.json`)
   })
   for (const [path, vf] of vectors) {

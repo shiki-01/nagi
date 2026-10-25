@@ -1,7 +1,7 @@
 // レイアウトの編集操作。すべて純粋関数（入力を変更せず新しい値を返す）。
 
-import { LIMITS } from './types'
-import type { Key, KeyKind, KeyboardLayout, LayoutMode, Row } from './types'
+import { LIMITS, TOOLBAR_ROW } from './types'
+import type { Key, KeyKind, KeyboardLayout, LayoutMode, Row, Toolbar } from './types'
 
 export function sampleLayout(): KeyboardLayout {
   return {
@@ -40,8 +40,51 @@ export function uniqueId(base: string, used: Iterable<string>): string {
   }
 }
 
+/** 行番号（-1 はツールバー）のキー列。無ければ undefined。 */
+export function keysAt(layout: KeyboardLayout, row: number): Key[] | undefined {
+  return row === TOOLBAR_ROW ? layout.toolbar?.keys : layout.rows[row]?.keys
+}
+
+/** キーを持たなくなったツールバーは取り除く（キーは 1 個以上必要）。 */
+function dropEmptyToolbar(l: KeyboardLayout) {
+  if (l.toolbar && l.toolbar.keys.length === 0) delete l.toolbar
+}
+
+/** 画面の上から下の順（ツールバー → rows）の、キーを持つ行（番号付き）。 */
+function visualRows(layout: KeyboardLayout): { row: number; keys: Key[] }[] {
+  const out = layout.rows.map((r, row) => ({ row, keys: r.keys }))
+  return layout.toolbar ? [{ row: TOOLBAR_ROW, keys: layout.toolbar.keys }, ...out] : out
+}
+
 export function allKeyIds(layout: KeyboardLayout): string[] {
-  return layout.rows.flatMap((r) => r.keys.map((k) => k.id))
+  return visualRows(layout).flatMap((r) => r.keys.map((k) => k.id))
+}
+
+/** 新しいツールバーの既定のキー（設定 toolbar.items の既定に近い並び）。 */
+export function defaultToolbar(used: Iterable<string>): Toolbar {
+  const ids = new Set(used)
+  const make = (base: string, action: string): Key => {
+    const id = uniqueId(base, ids)
+    ids.add(id)
+    return { id, kind: 'action', action }
+  }
+  return { keys: [make('tb-paste', 'paste'), make('tb-left', 'moveLeft'), make('tb-right', 'moveRight'), make('tb-dismiss', 'dismiss')] }
+}
+
+/** ツールバーを作る（既にあれば変更しない）。 */
+export function addToolbar(layout: KeyboardLayout): KeyboardLayout {
+  if (layout.toolbar) return layout
+  const next = clone(layout)
+  next.toolbar = defaultToolbar(allKeyIds(layout))
+  return next
+}
+
+/** ツールバーを取り除く（キーも look も消える）。 */
+export function removeToolbar(layout: KeyboardLayout): KeyboardLayout {
+  if (!layout.toolbar) return layout
+  const next = clone(layout)
+  delete next.toolbar
+  return next
 }
 
 export function newLayout(existingIds: readonly string[], mode: LayoutMode = 'custom'): KeyboardLayout {
@@ -68,14 +111,15 @@ export function withUniqueLayoutId(layout: KeyboardLayout, existingIds: readonly
   return copy
 }
 
-export function rowWidth(row: Row): number {
+export function rowWidth(row: Pick<Row, 'keys'>): number {
   return row.keys.reduce((s, k) => s + (k.width ?? 1), 0)
 }
 
+/** キーを探す。ツールバーのキーは row が -1（TOOLBAR_ROW）。 */
 export function findKey(layout: KeyboardLayout, keyId: string): { row: number; index: number; key: Key } | undefined {
-  for (let row = 0; row < layout.rows.length; row++) {
-    const index = layout.rows[row].keys.findIndex((k) => k.id === keyId)
-    if (index >= 0) return { row, index, key: layout.rows[row].keys[index] }
+  for (const { row, keys } of visualRows(layout)) {
+    const index = keys.findIndex((k) => k.id === keyId)
+    if (index >= 0) return { row, index, key: keys[index] }
   }
   return undefined
 }
@@ -155,10 +199,10 @@ export function updateRow(layout: KeyboardLayout, index: number, patch: Partial<
 
 export function addKey(layout: KeyboardLayout, rowIndex: number, kind: KeyKind = 'text', index?: number): { layout: KeyboardLayout; keyId: string } {
   const next = clone(layout)
-  const row = next.rows[rowIndex]
-  if (!row) return { layout, keyId: '' }
+  const keys = keysAt(next, rowIndex)
+  if (!keys) return { layout, keyId: '' }
   const id = uniqueId('key', allKeyIds(next))
-  row.keys.splice(clamp(index ?? row.keys.length, 0, row.keys.length), 0, defaultKey(kind, id))
+  keys.splice(clamp(index ?? keys.length, 0, keys.length), 0, defaultKey(kind, id))
   return { layout: next, keyId: id }
 }
 
@@ -168,7 +212,7 @@ export function duplicateKey(layout: KeyboardLayout, keyId: string): { layout: K
   const next = clone(layout)
   const copy = clone(found.key)
   copy.id = uniqueId(`${keyId}-copy`.slice(0, 32), allKeyIds(next))
-  next.rows[found.row].keys.splice(found.index + 1, 0, copy)
+  keysAt(next, found.row)?.splice(found.index + 1, 0, copy)
   return { layout: next, keyId: copy.id }
 }
 
@@ -176,17 +220,18 @@ export function removeKey(layout: KeyboardLayout, keyId: string): KeyboardLayout
   const found = findKey(layout, keyId)
   if (!found) return layout
   const next = clone(layout)
-  next.rows[found.row].keys.splice(found.index, 1)
+  keysAt(next, found.row)?.splice(found.index, 1)
+  dropEmptyToolbar(next)
   return next
 }
 
 /** キーを移動する。`toIndex` は取り除いた後の行での挿入位置。行をまたいでもよい。 */
 export function moveKey(layout: KeyboardLayout, keyId: string, toRow: number, toIndex: number): KeyboardLayout {
   const found = findKey(layout, keyId)
-  if (!found || toRow < 0 || toRow >= layout.rows.length) return layout
+  if (!found || !keysAt(layout, toRow)) return layout
   const next = clone(layout)
-  const [key] = next.rows[found.row].keys.splice(found.index, 1)
-  const target = next.rows[toRow].keys
+  const [key] = (keysAt(next, found.row) as Key[]).splice(found.index, 1)
+  const target = keysAt(next, toRow) as Key[]
   const at = clamp(toIndex, 0, target.length)
   if (toRow === found.row && at === found.index) return layout
   target.splice(at, 0, key)
@@ -198,7 +243,7 @@ export function shiftKey(layout: KeyboardLayout, keyId: string, delta: -1 | 1): 
   const found = findKey(layout, keyId)
   if (!found) return layout
   const to = found.index + delta
-  if (to < 0 || to >= layout.rows[found.row].keys.length) return layout
+  if (to < 0 || to >= (keysAt(layout, found.row)?.length ?? 0)) return layout
   return moveKey(layout, keyId, found.row, to)
 }
 
@@ -206,13 +251,13 @@ export function replaceKey(layout: KeyboardLayout, keyId: string, key: Key): Key
   const found = findKey(layout, keyId)
   if (!found) return layout
   const next = clone(layout)
-  next.rows[found.row].keys[found.index] = key
+  ;(keysAt(next, found.row) as Key[])[found.index] = key
   return next
 }
 
 // --- キャンバス編集用の操作（複数キーの移動・行間への挿入・矢印キーによる移動など） ---
 
-/** 移動先。`row`/`index` は既存の行への挿入（index は移動するキーを除いた行での位置）、`newRow` は行の挿入位置（0〜行数）。 */
+/** 移動先。`row`/`index` は既存の行（-1 はツールバー）への挿入（index は移動するキーを除いた行での位置）、`newRow` は行の挿入位置（0〜行数）。 */
 export type MoveDest = { row: number; index: number } | { newRow: number }
 
 export interface MoveResult {
@@ -224,7 +269,7 @@ export interface MoveResult {
 /** 指定した id のキーを、レイアウト上の並び順（行→列）で返す。存在しない id は無視。 */
 function inDocOrder(layout: KeyboardLayout, keyIds: readonly string[]): string[] {
   const want = new Set(keyIds)
-  return layout.rows.flatMap((r) => r.keys.filter((k) => want.has(k.id)).map((k) => k.id))
+  return visualRows(layout).flatMap((r) => r.keys.filter((k) => want.has(k.id)).map((k) => k.id))
 }
 
 /**
@@ -234,25 +279,27 @@ function inDocOrder(layout: KeyboardLayout, keyIds: readonly string[]): string[]
 export function moveKeysChecked(layout: KeyboardLayout, keyIds: readonly string[], dest: MoveDest): MoveResult {
   const order = inDocOrder(layout, keyIds)
   if (order.length === 0) return { layout }
-  if ('row' in dest && (dest.row < 0 || dest.row >= layout.rows.length)) return { layout }
+  if ('row' in dest && !keysAt(layout, dest.row)) return { layout }
   const next = clone(layout)
   const want = new Set(order)
   const moved: Key[] = []
-  for (const row of next.rows) {
+  for (const { keys } of visualRows(next)) {
     const keep: Key[] = []
-    for (const k of row.keys) (want.has(k.id) ? moved : keep).push(k)
-    row.keys = keep
+    for (const k of keys) (want.has(k.id) ? moved : keep).push(k)
+    keys.splice(0, keys.length, ...keep)
   }
-  // moved は行→列の順に集めているので、元の並び順になっている。
+  // moved は行→列の順（ツールバーが先頭）に集めているので、元の並び順になっている。
   if ('row' in dest) {
-    const target = next.rows[dest.row]
-    target.keys.splice(clamp(dest.index, 0, target.keys.length), 0, ...moved)
+    const target = keysAt(next, dest.row) as Key[]
+    target.splice(clamp(dest.index, 0, target.length), 0, ...moved)
   } else {
     next.rows.splice(clamp(dest.newRow, 0, next.rows.length), 0, { keys: moved })
   }
   next.rows = next.rows.filter((r) => r.keys.length > 0)
+  dropEmptyToolbar(next)
   if (next.rows.length > LIMITS.rowsMax) return { layout, error: `行は最大 ${LIMITS.rowsMax} 行までです` }
   if (next.rows.some((r) => r.keys.length > LIMITS.keysPerRowMax)) return { layout, error: `1 行に置けるキーは最大 ${LIMITS.keysPerRowMax} 個までです` }
+  if (next.toolbar && next.toolbar.keys.length > LIMITS.toolbarKeysMax) return { layout, error: `ツールバーに置けるキーは最大 ${LIMITS.toolbarKeysMax} 個までです` }
   if (JSON.stringify(next) === JSON.stringify(layout)) return { layout }
   return { layout: next }
 }
@@ -264,9 +311,11 @@ export function moveKeys(layout: KeyboardLayout, keyIds: readonly string[], dest
 /** 複数のキーを削除する。空になった行は（最後の 1 行を除いて）削除する。 */
 export function removeKeys(layout: KeyboardLayout, keyIds: readonly string[]): KeyboardLayout {
   const want = new Set(keyIds)
-  if (!layout.rows.some((r) => r.keys.some((k) => want.has(k.id)))) return layout
+  if (!visualRows(layout).some((r) => r.keys.some((k) => want.has(k.id)))) return layout
   const next = clone(layout)
   for (const row of next.rows) row.keys = row.keys.filter((k) => !want.has(k.id))
+  if (next.toolbar) next.toolbar.keys = next.toolbar.keys.filter((k) => !want.has(k.id))
+  dropEmptyToolbar(next)
   const kept = next.rows.filter((r) => r.keys.length > 0)
   next.rows = kept.length > 0 ? kept : [next.rows[0]]
   return next
@@ -281,17 +330,18 @@ export function addKeyInNewRow(layout: KeyboardLayout, rowIndex: number, kind: K
   return { layout: next, keyId: id }
 }
 
-/** 既存の行の `index` に挿入する。1 行のキー数の上限を超えるなら変更しない。 */
+/** 既存の行（-1 はツールバー）の `index` に挿入する。1 行（ツールバー）のキー数の上限を超えるなら変更しない。 */
 export function insertKey(layout: KeyboardLayout, rowIndex: number, index: number, kind: KeyKind): { layout: KeyboardLayout; keyId: string } {
-  const row = layout.rows[rowIndex]
-  if (!row || row.keys.length >= LIMITS.keysPerRowMax) return { layout, keyId: '' }
+  const keys = keysAt(layout, rowIndex)
+  const max = rowIndex === TOOLBAR_ROW ? LIMITS.toolbarKeysMax : LIMITS.keysPerRowMax
+  if (!keys || keys.length >= max) return { layout, keyId: '' }
   return addKey(layout, rowIndex, kind, index)
 }
 
 export type Direction = 'left' | 'right' | 'up' | 'down'
 
 /** 各キーの行内での [左端, 右端] を 0〜1 に正規化した値（行の幅の合計で割る）。 */
-function spans(row: Row): { id: string; lo: number; hi: number }[] {
+function spans(row: Pick<Row, 'keys'>): { id: string; lo: number; hi: number }[] {
   const total = rowWidth(row) || 1
   let acc = 0
   return row.keys.map((k) => {
@@ -305,18 +355,21 @@ function spans(row: Row): { id: string; lo: number; hi: number }[] {
 export function navigateKey(layout: KeyboardLayout, fromId: string, dir: Direction): string | undefined {
   const found = findKey(layout, fromId)
   if (!found) return undefined
-  const { row, index } = found
+  const { index } = found
+  // 画面の並び（ツールバー → rows）での行の位置
+  const vrows = visualRows(layout)
+  const row = vrows.findIndex((r) => r.row === found.row)
   if (dir === 'left' || dir === 'right') {
     const d = dir === 'left' ? -1 : 1
-    const inRow = layout.rows[row].keys[index + d]
+    const inRow = vrows[row].keys[index + d]
     if (inRow) return inRow.id
-    const nr = layout.rows[row + d]
+    const nr = vrows[row + d]
     if (!nr || nr.keys.length === 0) return undefined
     return (d < 0 ? nr.keys[nr.keys.length - 1] : nr.keys[0]).id
   }
-  const target = layout.rows[row + (dir === 'up' ? -1 : 1)]
+  const target = vrows[row + (dir === 'up' ? -1 : 1)]
   if (!target || target.keys.length === 0) return undefined
-  const me = spans(layout.rows[row])[index]
+  const me = spans(vrows[row])[index]
   const center = (me.lo + me.hi) / 2
   let best: { id: string; dist: number } | undefined
   for (const s of spans(target)) {
@@ -337,16 +390,16 @@ export function nudgeKeys(layout: KeyboardLayout, keyIds: readonly string[], dir
     const first = findKey(layout, order[0])
     if (!first) return layout
     const toRow = first.row + (dir === 'up' ? -1 : 1)
-    if (toRow < 0 || toRow >= layout.rows.length) return layout
+    const toKeys = keysAt(layout, toRow)
+    if (!toKeys) return layout
     const want = new Set(order)
-    const remaining = layout.rows[toRow].keys.filter((k) => !want.has(k.id)).length
+    const remaining = toKeys.filter((k) => !want.has(k.id)).length
     return moveKeys(layout, order, { row: toRow, index: Math.min(first.index, remaining) })
   }
   const want = new Set(order)
   const next = clone(layout)
   let changed = false
-  for (const row of next.rows) {
-    const ks = row.keys
+  for (const { keys: ks } of visualRows(next)) {
     if (dir === 'left') {
       for (let i = 1; i < ks.length; i++)
         if (want.has(ks[i].id) && !want.has(ks[i - 1].id)) {

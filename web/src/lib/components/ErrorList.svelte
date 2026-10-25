@@ -12,7 +12,7 @@
     /** onjump で開ける場所か。省略時はキーを指すパスだけ。 */
     canjump?: (path: string) => boolean
   }
-  let { errors, title = '検証エラー', warningTitle = '警告（無視される値）', onjump, canjump = (p) => /^rows\[\d+\]\.keys\[\d+\]/.test(p) }: Props = $props()
+  let { errors, title = '検証エラー', warningTitle = '警告（無視される値）', onjump, canjump = (p) => /^(rows\[\d+\]|toolbar)\.keys\[\d+\]/.test(p) }: Props = $props()
 
   const errs = $derived(errorsOf(errors))
   const warns = $derived(warningsOf(errors))

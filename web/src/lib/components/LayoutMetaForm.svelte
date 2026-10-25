@@ -71,6 +71,18 @@
   </ol>
   <button type="button" class="btn small" disabled={store.layout.rows.length >= LIMITS.rowsMax} onclick={() => store.addRow()}>＋ 行を追加</button>
   <p class="hint">キーはキャンバス上でドラッグして並べ替えます。行と行の間（行の上下の縁）にドロップすると新しい行ができます。</p>
+
+  <h3 id="toolbar-h">ツールバー</h3>
+  <p class="hint">
+    候補バーが空のときに出る、高さ 44pt の 1 行です（{LIMITS.toolbarKeysMin}〜{LIMITS.toolbarKeysMax} 個）。キーはキャンバス上部の行に並び、行と同じ操作（追加・ドラッグで並べ替え・削除・インスペクタでの編集）ができます。
+    無いときは、アプリの設定のツールバー項目が使われます。action に <code>paste</code>（貼り付け）・<code>deleteWord</code>（単語削除）も使えます。
+  </p>
+  {#if store.layout.toolbar}
+    <p class="hint">キー {store.layout.toolbar.keys.length} 個</p>
+    <button type="button" class="btn small danger" onclick={() => store.removeToolbar()}>ツールバーを削除</button>
+  {:else}
+    <button type="button" class="btn small" onclick={() => store.addToolbar()}>＋ ツールバーを追加</button>
+  {/if}
 </section>
 
 <style>

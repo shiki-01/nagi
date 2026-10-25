@@ -1,5 +1,6 @@
 // キーの表示用ラベルと読み上げ用の説明（KeyboardPreview / パレットで共有）。
 
+import { TOOLBAR_ACTION_LABELS } from './types'
 import type { Key, KeyKind } from './types'
 
 export const KIND_NAMES: Record<KeyKind, string> = {
@@ -30,6 +31,14 @@ export function mainLabel(k: Key): string {
     default:
       return ''
   }
+}
+
+/** ツールバーのキーの表示文字。label が無い action / layout は既定の文字（iOS の既定アイコンの代わり。web では文字で近似）。 */
+export function toolbarLabel(k: Key): string {
+  if (k.label) return k.label
+  if (k.kind === 'action' && TOOLBAR_ACTION_LABELS[k.action]) return TOOLBAR_ACTION_LABELS[k.action]
+  if (k.kind === 'layout' && k.target === 'emoji') return '😀'
+  return mainLabel(k)
 }
 
 export function describeKey(k: Key): string {

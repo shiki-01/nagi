@@ -1,12 +1,12 @@
 <script lang="ts">
   // インスペクタの「詳細設定」タブ。全体 / 行 / キー の見た目と、状態（押下・長押しなど）ごとの見た目を編集する。
   // 編集内容はすべて store.layout（JSON の実体）に書き、フォームは常にそこから導出する（JSON との双方向同期）。
-  import { findKey } from '$lib/keyboard/ops'
+  import { findKey, keysAt } from '$lib/keyboard/ops'
   import { spaceDragOrigin } from '$lib/keyboard/look-css'
   import { hasAnyLook, readHoldMs } from '$lib/keyboard/look-ops'
   import type { InheritContext, LookLoc } from '$lib/keyboard/look-ops'
   import type { EditorStore } from '$lib/keyboard/store.svelte'
-  import { BACKGROUND_PROPS, KEY_ROLES, LOOK_LIMITS, LOOK_STATES, LOOK_STATE_INFO, METRICS_PROPS } from '$lib/keyboard/types'
+  import { BACKGROUND_PROPS, KEY_ROLES, LOOK_LIMITS, LOOK_STATES, LOOK_STATE_INFO, METRICS_PROPS, TOOLBAR_ROW } from '$lib/keyboard/types'
   import type { Key, KeyRole, StateName } from '$lib/keyboard/types'
   import ImageAssets from './ImageAssets.svelte'
   import LookPropsEditor from './LookPropsEditor.svelte'
@@ -37,7 +37,11 @@
   const layout = $derived(store.layout)
   const ids = $derived(store.selectedIds)
   const scope = $derived(store.lookScope === 'key' && ids.length === 0 ? 'layout' : store.lookScope)
-  const rowIndex = $derived(Math.min(Math.max(store.lookRow, 0), Math.max(layout.rows.length - 1, 0)))
+  /** 編集する行の番号。-1 はツールバー（layout.toolbar がある間だけ）。 */
+  const rowIndex = $derived(
+    store.lookRow === TOOLBAR_ROW && layout.toolbar ? TOOLBAR_ROW : Math.min(Math.max(store.lookRow, 0), Math.max(layout.rows.length - 1, 0))
+  )
+  const rowName = $derived(rowIndex === TOOLBAR_ROW ? 'ツールバー' : `${rowIndex + 1} 行目`)
   /** 行には状態ごとの指定が無いので、行のときは常に「通常」。 */
   const tab = $derived<Tab>(scope === 'row' ? 'normal' : store.lookState)
   const stateTab = $derived(tab === 'normal' ? null : tab)
@@ -73,7 +77,7 @@
       return ctxFor(f ? { rowIndex: f.row, key: f.key } : undefined, states)
     }
     if (scope === 'row') {
-      const key = firstKeyOf(layout.rows[rowIndex]?.keys ?? [])
+      const key = firstKeyOf(keysAt(layout, rowIndex) ?? [])
       return ctxFor(key ? { rowIndex, key } : undefined, states)
     }
     return ctxFor(locate(() => true), states)
@@ -131,7 +135,7 @@
         ? `選択キーの「${LOOK_STATE_INFO[stateTab].label}」の指定を消す`
         : `選択キー（${ids.length} 個）の個別の見た目をすべてリセット（状態ごとの指定を含む）`
       : scope === 'row'
-        ? `${rowIndex + 1} 行目の見た目をリセット`
+        ? `${rowName}の見た目をリセット`
         : stateTab
           ? `全体の「${LOOK_STATE_INFO[stateTab].label}」の指定をすべて消す`
           : '全キー共通・役割ごとの見た目をリセット'
@@ -157,10 +161,13 @@
     <label class="field">
       <span>編集する行</span>
       <select value={rowIndex} onchange={(e) => (store.lookRow = Number(e.currentTarget.value))}>
+        {#if layout.toolbar}<option value={TOOLBAR_ROW}>ツールバー</option>{/if}
         {#each layout.rows as _, i (i)}<option value={i}>{i + 1} 行目</option>{/each}
       </select>
     </label>
-    <p class="hint">その行のすべてのキーに掛かる見た目です。行には状態ごとの指定はありません（全体の状態タブの「対象」を使います）。</p>
+    <p class="hint">
+      その行のすべてのキーに掛かる見た目です。行には状態ごとの指定はありません（全体の状態タブの「対象」を使います）。{#if rowIndex === TOOLBAR_ROW}ツールバーのキーは、既定で文字 14pt・内側の余白（inset）6 が重なります。{/if}
+    </p>
   {:else if scope === 'key'}
     <p class="hint">
       {ids.length === 1 ? `キー「${ids[0]}」` : `${ids.length} 個のキー（${ids.slice(0, 4).join('、')}${ids.length > 4 ? ' …' : ''}）`}の個別の見た目です。

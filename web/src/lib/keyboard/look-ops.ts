@@ -6,7 +6,7 @@ import { canAddAsset, dataUriBytes } from './look-assets'
 import { resolveLook } from './look-resolve'
 import type { LookContext } from './look-resolve'
 import { clone, findKey } from './ops'
-import { ASSET_ID_PATTERN, BACKGROUND_PROPS, KEY_ROLES, LOOK_CONTENT_PROPS, LOOK_LIMITS, LOOK_PROPS, METRICS_PROPS } from './types'
+import { ASSET_ID_PATTERN, BACKGROUND_PROPS, KEY_ROLES, LOOK_CONTENT_PROPS, LOOK_LIMITS, LOOK_PROPS, METRICS_PROPS, TOOLBAR_ROW } from './types'
 import type { Key, KeyRole, KeyboardLayout, Metrics, StateName, Target } from './types'
 
 type Obj = Record<string, unknown>
@@ -57,7 +57,7 @@ function slotOf(l: KeyboardLayout, loc: LookLoc, create: boolean): Obj | undefin
       return roles && ensure(roles, loc.role)
     }
     case 'row': {
-      const row = l.rows[loc.row]
+      const row = loc.row === TOOLBAR_ROW ? l.toolbar : l.rows[loc.row]
       return row ? ensure(row as unknown as Obj, 'look') : undefined
     }
     case 'key': {
@@ -94,7 +94,7 @@ function prune(l: KeyboardLayout, loc: LookLoc) {
       drop(root.roles, loc.role)
       return drop(root, 'roles')
     case 'row':
-      return drop(l.rows[loc.row], 'look')
+      return drop(loc.row === TOOLBAR_ROW ? l.toolbar : l.rows[loc.row], 'look')
     case 'key': {
       const f = findKey(l, loc.keyId)
       return drop(f?.key, 'look')
@@ -222,13 +222,22 @@ export function resetAllLooks(layout: KeyboardLayout): KeyboardLayout {
       delete key.states
     }
   }
+  const tb = next.toolbar
+  if (isObj(tb)) {
+    delete tb.look
+    for (const key of (tb.keys as Obj[]) ?? []) {
+      delete key.look
+      delete key.states
+    }
+  }
   return next as unknown as KeyboardLayout
 }
 
 export function hasAnyLook(layout: KeyboardLayout): boolean {
   const l = layout as unknown as Obj
   if (['look', 'roles', 'rules', 'metrics', 'background', 'assets'].some((k) => hasOwn(l, k))) return true
-  return layout.rows.some((r) => hasOwn(r, 'look') || r.keys.some((k) => hasOwn(k, 'look') || hasOwn(k, 'states')))
+  const rows: { look?: unknown; keys: Key[] }[] = layout.toolbar ? [...layout.rows, layout.toolbar] : layout.rows
+  return rows.some((r) => hasOwn(r, 'look') || r.keys.some((k) => hasOwn(k, 'look') || hasOwn(k, 'states')))
 }
 
 /** 状態のリセット: 全体なら rules の当該 when を全部、キーなら states[state]。 */
@@ -364,7 +373,7 @@ function forEachSlot(l: KeyboardLayout, fn: (slot: Obj) => void) {
   visit(root.background)
   if (isObj(root.roles)) for (const role of KEY_ROLES) visit(root.roles[role])
   if (Array.isArray(root.rules)) for (const r of root.rules) if (isObj(r)) visit(r.look)
-  for (const row of l.rows) {
+  for (const row of l.toolbar ? [...l.rows, l.toolbar] : l.rows) {
     visit((row as unknown as Obj).look)
     for (const key of row.keys) {
       const k = key as unknown as Obj
@@ -428,7 +437,7 @@ export function pruneEmpty(l: KeyboardLayout) {
     for (const role of KEY_ROLES) drop(root.roles, role)
     drop(root, 'roles')
   }
-  for (const row of l.rows) {
+  for (const row of l.toolbar ? [...l.rows, l.toolbar] : l.rows) {
     drop(row, 'look')
     for (const key of row.keys) {
       const k = key as unknown as Obj

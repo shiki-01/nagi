@@ -382,7 +382,7 @@ export function validateLayout(value: unknown, options: ValidateOptions = {}): V
     c.add('', 'レイアウトは JSON オブジェクトである必要があります')
     return c.errors
   }
-  c.extra(value, ['$schema', 'schema', 'id', 'name', 'mode', 'rows', ...LAYOUT_LOOK_FIELDS], '')
+  c.extra(value, ['$schema', 'schema', 'id', 'name', 'mode', 'rows', 'toolbar', ...LAYOUT_LOOK_FIELDS], '')
   if (value.schema !== SCHEMA_VERSION)
     c.add('schema', `schema は ${SCHEMA_VERSION} にしてください${value.schema === 1 ? '（schema 1 は未対応です。web/scripts/migrate-layout-v2.mjs で移行してください）' : ''}`)
   if (typeof value.id !== 'string' || !LAYOUT_ID_PATTERN.test(value.id))
@@ -415,23 +415,40 @@ export function validateLayout(value: unknown, options: ValidateOptions = {}): V
     if (!Array.isArray(row.keys)) return c.add(join(rp, 'keys'), 'keys は配列で指定してください')
     if (row.keys.length < 1) c.add(join(rp, 'keys'), '行には 1 つ以上のキーが必要です')
     if (row.keys.length > LIMITS.keysPerRowMax) c.add(join(rp, 'keys'), `1 行のキーは ${LIMITS.keysPerRowMax} 個以内にしてください`)
-    let sum = 0
-    row.keys.forEach((k, ki) => {
-      const kp = `${rp}.keys[${ki}]`
-      validateKey(c, k, kp, targets)
-      if (isObj(k)) {
-        sum += isNum(k.width) ? k.width : 1
-        if (typeof k.id === 'string') {
-          const prev = seen.get(k.id)
-          if (prev) c.add(join(kp, 'id'), `id「${k.id}」が ${prev} と重複しています`)
-          else seen.set(k.id, kp)
-        }
-      }
-    })
-    if (row.keys.length > 0 && (sum < LIMITS.rowWidthMin || sum > LIMITS.rowWidthMax))
-      c.add(join(rp, 'keys'), `行内の幅の合計は ${LIMITS.rowWidthMin}〜${LIMITS.rowWidthMax} にしてください（現在 ${round(sum)}）`)
+    validateKeyList(c, row.keys, rp, targets, seen)
   })
+  if (value.toolbar !== undefined) validateToolbar(c, value.toolbar, targets, seen)
   return c.errors
+}
+
+/** キー列の各キーの検証と、id の一意性・行内の幅の合計。 */
+function validateKeyList(c: Collector, keys: unknown[], rp: string, targets: readonly string[], seen: Map<string, string>) {
+  let sum = 0
+  keys.forEach((k, ki) => {
+    const kp = `${rp}.keys[${ki}]`
+    validateKey(c, k, kp, targets)
+    if (isObj(k)) {
+      sum += isNum(k.width) ? k.width : 1
+      if (typeof k.id === 'string') {
+        const prev = seen.get(k.id)
+        if (prev) c.add(join(kp, 'id'), `キー id の重複: 「${k.id}」が ${prev} と重複しています`)
+        else seen.set(k.id, kp)
+      }
+    }
+  })
+  if (keys.length > 0 && (sum < LIMITS.rowWidthMin || sum > LIMITS.rowWidthMax))
+    c.add(join(rp, 'keys'), rp === 'toolbar' ? `toolbar の幅の合計が範囲外です（${LIMITS.rowWidthMin}〜${LIMITS.rowWidthMax} にしてください。現在 ${round(sum)}）` : `行内の幅の合計は ${LIMITS.rowWidthMin}〜${LIMITS.rowWidthMax} にしてください（現在 ${round(sum)}）`)
+}
+
+/** toolbar（候補バーが空のときに出る 1 行）。キーは rows と同じ型で、行の height は持たない。 */
+function validateToolbar(c: Collector, tb: unknown, targets: readonly string[], seen: Map<string, string>) {
+  if (!isObj(tb)) return c.add('toolbar', 'toolbar はオブジェクトで指定してください')
+  c.extra(tb, ['keys', 'look'], 'toolbar')
+  if (tb.look !== undefined) validateLookObject(c, tb.look, 'toolbar.look', false)
+  if (!Array.isArray(tb.keys)) return c.add('toolbar.keys', 'keys は配列で指定してください')
+  if (tb.keys.length < LIMITS.toolbarKeysMin || tb.keys.length > LIMITS.toolbarKeysMax)
+    c.add('toolbar.keys', `toolbar のキーは ${LIMITS.toolbarKeysMin}〜${LIMITS.toolbarKeysMax} 個にしてください（現在 ${tb.keys.length}）。不要なら toolbar ごと削除`)
+  validateKeyList(c, tb.keys, 'toolbar', targets, seen)
 }
 
 const round = (n: number) => Math.round(n * 1000) / 1000
@@ -462,6 +479,7 @@ export function parseLayoutJSON(text: string, options?: ValidateOptions): ParseR
 export function describePath(path: string): string {
   if (!path) return 'レイアウト全体'
   return path
+    .replace(/^toolbar(?=\.|$)/, 'ツールバー')
     .replace(/rows\[(\d+)\]/g, (_, n) => `${Number(n) + 1} 行目`)
     .replace(/\.keys\[(\d+)\]/g, (_, n) => ` の ${Number(n) + 1} 番目のキー`)
     .replace(/\.longPress\[(\d+)\]/g, (_, n) => ` の長押し ${Number(n) + 1} 番目`)

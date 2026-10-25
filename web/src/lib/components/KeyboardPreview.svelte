@@ -3,11 +3,12 @@
   // （data-row / data-key-id）を手掛かりに処理する。キーはフォーカス可能なボタンで、Enter / Space で選択できる。
   // 見た目（look / states / rules / metrics / background / assets）は resolveLook の結果を CSS に近似して描く
   // （look-css.ts。実機の SwiftUI とは細部が異なる）。指定が無ければ従来の見た目。
-  import { describeKey, mainLabel } from '$lib/keyboard/key-display'
+  import { describeKey, mainLabel, toolbarLabel } from '$lib/keyboard/key-display'
   import { backgroundCss, faceCss, metricsCss, PALETTES, paletteVars, resolveBackground, spaceDragOrigin, statesForKey, toStyle } from '$lib/keyboard/look-css'
   import { measureImage } from '$lib/keyboard/look-image'
   import { lookContent, resolveLook } from '$lib/keyboard/look-resolve'
-  import { ICONIFY_ICON_PATTERN } from '$lib/keyboard/types'
+  import { allKeyIds } from '$lib/keyboard/ops'
+  import { ICONIFY_ICON_PATTERN, TOOLBAR_ROW } from '$lib/keyboard/types'
   import type { Key, KeyboardLayout, StateName } from '$lib/keyboard/types'
 
   const BOARD_WIDTH = 430
@@ -31,7 +32,7 @@
   const selected = $derived(new Set(selectedIds))
   const dragging = $derived(new Set(dragIds))
   const tabId = $derived.by(() => {
-    const ids = layout.rows.flatMap((r) => r.keys.map((k) => k.id))
+    const ids = allKeyIds(layout)
     return focusId && ids.includes(focusId) ? focusId : (ids[0] ?? null)
   })
 
@@ -79,25 +80,68 @@
     return css ? { face: toStyle(css.face), image: css.image ? toStyle(css.image) : null } : null
   })
 
+  /** ツールバーのキーの、resolveLook が与えない既定（iOS の既定: 角丸 6・systemBackground の背景）。fontSize 14 / inset 6 は resolveLook が重ねる。 */
+  const TOOLBAR_FACE_DEFAULT = { cornerRadius: 6, fill: '@key' } as const
+
   function keyFace(ri: number, key: Key) {
-    const look = resolveLook(layout, ri, key, { states: statesForKey(key, selectedIds, previewStates), origin, scheme: eff })
+    const toolbar = ri === TOOLBAR_ROW
+    const resolved = resolveLook(layout, ri, key, { states: statesForKey(key, selectedIds, previewStates), origin, scheme: eff })
+    const look = toolbar ? { ...TOOLBAR_FACE_DEFAULT, ...resolved } : resolved
     const uri = assetUri(look.fillImage)
     const css = faceCss(look, key.role ?? 'normal', { palette, reduceMotion, image: uri ? { uri, size: sizes[look.fillImage as string] } : undefined })
     const content = lookContent(look)
     const m = content.icon ? ICONIFY_ICON_PATTERN.exec(content.icon) : null
-    const label = content.label ?? mainLabel(key)
+    const label = content.label ?? (toolbar ? toolbarLabel(key) : mainLabel(key))
     return {
       face: toStyle(css.face),
       image: css.image ? toStyle(css.image) : null,
       label,
       iconUrl: m ? `https://api.iconify.design/${m[1]}/${m[2]}.svg` : null,
-      small: look.fontSize === undefined && [...label].length > 3
+      small: (toolbar ? false : resolved.fontSize === undefined) && [...label].length > 3
     }
   }
 
   // 状態の icon（iconify:）の取得に失敗した URL。失敗したら label を出す
   let iconFailed = $state<Record<string, true>>({})
 </script>
+
+{#snippet keyButton(key: Key, ri: number)}
+  {@const f = key.kind === 'spacer' ? null : keyFace(ri, key)}
+  <button
+    type="button"
+    data-key-id={key.id}
+    class="key {key.kind === 'spacer' ? 'spacer' : (key.role ?? 'normal')}"
+    class:selected={selected.has(key.id)}
+    class:dragging={dragging.has(key.id)}
+    style:flex-grow={key.width ?? 1}
+    tabindex={key.id === tabId ? 0 : -1}
+    aria-label={describeKey(key)}
+    aria-pressed={selected.has(key.id)}
+    onclick={(e) => {
+      // マウス / タッチはキャンバス側の pointer イベントで処理済み。キーボード操作（detail = 0）だけここで扱う。
+      if (e.detail === 0) onactivate?.(key.id)
+    }}
+  >
+    {#if f}
+      <!-- 顔は見た目だけ（拡縮・ずらし・inset をかけても、ボタン＝当たり判定は動かない） -->
+      <span class="face {key.role ?? 'normal'}" style={f.face} aria-hidden="true">
+        {#if f.image}<span class="img" style={f.image}></span>{/if}
+        {#if key.kind === 'flick'}
+          <span class="fl fl-u">{key.up?.text ?? ''}</span>
+          <span class="fl fl-d">{key.down?.text ?? ''}</span>
+          <span class="fl fl-l">{key.left?.text ?? ''}</span>
+          <span class="fl fl-r">{key.right?.text ?? ''}</span>
+        {/if}
+        {#if f.iconUrl && !iconFailed[f.iconUrl]}
+          <img class="ico" src={f.iconUrl} alt="" height="20" onerror={() => (iconFailed = { ...iconFailed, [f.iconUrl as string]: true })} />
+        {:else}
+          <span class="main" class:small={f.small}>{f.label}</span>
+        {/if}
+        {#if key.longPress?.length}<span class="lp"></span>{/if}
+      </span>
+    {/if}
+  </button>
+{/snippet}
 
 <div
   class="phone"
@@ -112,48 +156,23 @@
       {#if board.image}<span class="img" style={board.image}></span>{/if}
     </div>
   {/if}
-  <div class="candbar" aria-hidden="true">
-    <span>候補バー</span><span class="dim">きょう　今日　京</span>
-  </div>
+  {#if layout.toolbar}
+    <!-- 候補バーが空のときに出るツールバー（高さ 44pt 固定の 1 行）。行番号は -1 -->
+    <div class="tb" data-toolbar style:gap={metrics.keySpacing} style:padding-inline={metrics.padding}>
+      {#each layout.toolbar.keys as key, ki (ki)}
+        {@render keyButton(key, TOOLBAR_ROW)}
+      {/each}
+    </div>
+  {:else}
+    <div class="candbar" aria-hidden="true">
+      <span>候補バー</span><span class="dim">きょう　今日　京</span>
+    </div>
+  {/if}
   <div class="kb" style:gap={metrics.rowSpacing} style:padding={metrics.padding}>
     {#each layout.rows as row, ri (ri)}
       <div class="row" data-row={ri} style:height="{52 * (row.height ?? 1)}px" style:gap={metrics.keySpacing}>
         {#each row.keys as key, ki (ki)}
-          {@const f = key.kind === 'spacer' ? null : keyFace(ri, key)}
-          <button
-            type="button"
-            data-key-id={key.id}
-            class="key {key.kind === 'spacer' ? 'spacer' : (key.role ?? 'normal')}"
-            class:selected={selected.has(key.id)}
-            class:dragging={dragging.has(key.id)}
-            style:flex-grow={key.width ?? 1}
-            tabindex={key.id === tabId ? 0 : -1}
-            aria-label={describeKey(key)}
-            aria-pressed={selected.has(key.id)}
-            onclick={(e) => {
-              // マウス / タッチはキャンバス側の pointer イベントで処理済み。キーボード操作（detail = 0）だけここで扱う。
-              if (e.detail === 0) onactivate?.(key.id)
-            }}
-          >
-            {#if f}
-              <!-- 顔は見た目だけ（拡縮・ずらし・inset をかけても、ボタン＝当たり判定は動かない） -->
-              <span class="face {key.role ?? 'normal'}" style={f.face} aria-hidden="true">
-                {#if f.image}<span class="img" style={f.image}></span>{/if}
-                {#if key.kind === 'flick'}
-                  <span class="fl fl-u">{key.up?.text ?? ''}</span>
-                  <span class="fl fl-d">{key.down?.text ?? ''}</span>
-                  <span class="fl fl-l">{key.left?.text ?? ''}</span>
-                  <span class="fl fl-r">{key.right?.text ?? ''}</span>
-                {/if}
-                {#if f.iconUrl && !iconFailed[f.iconUrl]}
-                  <img class="ico" src={f.iconUrl} alt="" height="20" onerror={() => (iconFailed = { ...iconFailed, [f.iconUrl as string]: true })} />
-                {:else}
-                  <span class="main" class:small={f.small}>{f.label}</span>
-                {/if}
-                {#if key.longPress?.length}<span class="lp"></span>{/if}
-              </span>
-            {/if}
-          </button>
+          {@render keyButton(key, ri)}
         {/each}
         {#if row.keys.length === 0}<span class="empty" aria-hidden="true">空の行</span>{/if}
       </div>
@@ -195,6 +214,13 @@
     padding: 0 12px;
     font-size: 0.8125rem;
     color: var(--muted);
+    border-bottom: 1px solid var(--line);
+  }
+  /* ツールバー: 高さ 44pt 固定。キーは 44pt の高さいっぱいの当たり判定で、顔は inset で内側に描く。 */
+  .tb {
+    position: relative;
+    display: flex;
+    height: 44px;
     border-bottom: 1px solid var(--line);
   }
   .dim {

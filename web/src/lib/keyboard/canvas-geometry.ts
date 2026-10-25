@@ -82,6 +82,20 @@ export function computeDropTarget(rows: readonly RowGeom[], x: number, y: number
   return { kind: 'row', row: ri, index }
 }
 
+/**
+ * ツールバー（1 行）へのドロップ位置。ポインタが行の高さの範囲内（上下に vMargin px のゆとり）で、左右が `margin` px 以内なら
+ * `{ kind: 'row', row: -1, index }`（index は `exclude` を除いた並びでの挿入位置）。それ以外は null。
+ * 行の上下の 25% を「新しい行」とする computeDropTarget と違い、ツールバーは行を作らないので全域が挿入位置。
+ */
+export function computeToolbarDrop(toolbar: RowGeom, x: number, y: number, exclude: ReadonlySet<string> = new Set(), margin = 64, vMargin = 8): DropTarget | null {
+  const r = toolbar.rect
+  if (x < r.left - margin || x > r.right + margin || y < r.top - vMargin || y > r.bottom) return null
+  const remaining = toolbar.keys.filter((k) => !exclude.has(k.id))
+  let index = 0
+  while (index < remaining.length && center(remaining[index].rect) < x) index++
+  return { kind: 'row', row: -1, index }
+}
+
 /** ドロップ位置のインジケータ（細い長方形）。`thickness` は同じ座標系での太さ。 */
 export function dropIndicator(rows: readonly RowGeom[], target: DropTarget, exclude: ReadonlySet<string> = new Set(), thickness = 4): Rect | null {
   if (rows.length === 0) return null

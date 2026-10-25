@@ -1800,3 +1800,13 @@ H-65 の続き。仕様は `docs/keyboard-style-spec.md`（§7、§9 ②〜④�
 - **内容**: `/custom-keyboard` のインスペクタに「基本 / 詳細設定」タブ。全体・行・キー × 状態（`states` / `rules`）の見た目、metrics・background・画像（base64 data URI。縮小・上限検査）、プレビューの状態切替（`resolveLook` の結果を CSS に近似）、JSON 直接編集との双方向同期、error / warning を分けた検証表示（`ErrorList`）、プロパティ・キー・状態・全体のリセット。使い方は `web/README.md`
 - **迷った判断**: (1) 編集関数は仕様の `ops.ts` ではなく `look-ops.ts` に分けた（`ops.ts` が 360 行超のため。場所を `LookLoc` で表し 1 組の関数で全階層を扱う）。(2) 状態タブを選ぶとプレビューの状態を「そのタブだけ」に置き換える（仕様の「同じものをオン」。前の状態が残ると見た目の原因が分からなくなるため。手動で追加は可）。(3) 空になった rule（look が空）は残す（対象の指定を保つため）。`target: "all"` は省略して書く。(4) プレビューの状態は「詳細設定」タブを開いている間だけ反映。(5) 範囲外の値は書き込まずその場でエラー（既存の JSON にある範囲外値は警告と欄の赤表示）。(6) `changeKind` が `look` / `states` を落としていたのを修正。(7) 画像の長辺 1024px 超は警告（iOS 担当の共有事項。ヘッダーから大きさを読む `imageDimensions`）。metrics の間隔が高さを超え得る警告は実装せず注意書きのみ。(8) `look.icon` の入力欄は states / rules の中だけに出す（iOS が他の場所では無視するため）。
 - **未確認**: canvas での画像縮小は headless Chrome で PNG の追加まで確認（JPEG・各ブラウザは未）。書き出した JSON を iOS に取り込んだ見た目の一致は未確認。プレビューは CSS の近似で、フォントの太さ・影の見え方は実機と異なる。
+
+### H-68. ツールバーをレイアウトの `toolbar` で編集できるようにする（iOS・web。2026-10-25、ユーザー要望、要実機確認）
+
+- **要望**: ツールバーもレイアウト編集（サイトのエディタ）でいじれるようにする。
+- **形**: レイアウトのトップレベルに任意の `toolbar: { keys: [キー 1〜12 個], look? }`。キーは rows のキーと同じ型で、`look` / `role` / `states` / `rules` の解決に乗る（解決器では行番号 `-1`）。重ね順は 既定{fontSize 14, inset 6} → `layout.look` → `roles` → `toolbar.look` → キーの `look` → 状態。`rows[].look` はツールバーに効かない。`toolbar` が無いレイアウトは、設定 `toolbar.items` から同じ形のキー列を生成して同じ描画経路で出す（描画は 1 本）。
+- **action**: `paste`・`deleteWord` を追加（rows のキーにも置ける）。ツールバーのキーで `icon` / `label` が両方無いときだけ action ごとの既定アイコンを付ける。対応表は `ToolbarKeys.spec(for:)` の 1 か所。
+- **H-62 との差**: `perform(toolbar:)`・`ToolbarAction.showsTitle`・`ToolbarLogic.visible` は廃止し、`activateToolbarKey(_:)` / `ToolbarKeys.visibleKeys` に置き換えた。貼り付けは文字併記をやめアイコンのみ（`label` を指定すれば文字）。ツールバーのキー幅は固定幅から `width` の比の按分に変わった。
+- **web**: キャンバスの候補バー位置にツールバー行（高さ 44）。追加・削除・並べ替え・rows との行き来・`toolbar.look` の編集に対応。プレビューは SF Symbols が無いので文字で近似。
+- **未確認（実機）**: 設定のみ（`toolbar` 無し）のときの見た目の変化（間延び・アイコンのみ）、`toolbar` を書いたときの `look` / pressed、12 個並べたときの窮屈さ、候補バーへの切り替わり時の高さ。Swift は CI で確認。
+

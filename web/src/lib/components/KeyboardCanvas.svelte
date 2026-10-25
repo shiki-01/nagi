@@ -4,12 +4,12 @@
   // （keyboard/ops.ts, keyboard/canvas-geometry.ts）に置き、ここは入出力の配線だけにする。
   import { tick } from 'svelte'
   import KeyboardPreview from './KeyboardPreview.svelte'
-  import { clampScale, computeDropTarget, dropIndicator, fitView, normalizeRect, rectsIntersect, zoomAt } from '$lib/keyboard/canvas-geometry'
+  import { clampScale, computeDropTarget, computeToolbarDrop, dropIndicator, fitView, normalizeRect, rectsIntersect, zoomAt } from '$lib/keyboard/canvas-geometry'
   import type { DropTarget, Rect, RowGeom, View } from '$lib/keyboard/canvas-geometry'
   import { KIND_NAMES, mainLabel } from '$lib/keyboard/key-display'
   import { findKey, navigateKey } from '$lib/keyboard/ops'
   import type { EditorStore } from '$lib/keyboard/store.svelte'
-  import { KEY_KINDS } from '$lib/keyboard/types'
+  import { KEY_KINDS, TOOLBAR_ROW } from '$lib/keyboard/types'
   import type { KeyKind } from '$lib/keyboard/types'
 
   interface Props {
@@ -127,6 +127,12 @@
       keys: [...row.querySelectorAll<HTMLElement>('[data-key-id]')].map((k) => ({ id: k.dataset.keyId ?? '', rect: toRect(k.getBoundingClientRect()) }))
     }))
   }
+  /** ツールバー（あれば）の位置とキーの位置。 */
+  function collectToolbar(): RowGeom | null {
+    const tb = boardEl?.querySelector<HTMLElement>('[data-toolbar]')
+    if (!tb) return null
+    return { rect: toRect(tb.getBoundingClientRect()), keys: [...tb.querySelectorAll<HTMLElement>('[data-key-id]')].map((k) => ({ id: k.dataset.keyId ?? '', rect: toRect(k.getBoundingClientRect()) })) }
+  }
   function keyEl(id: string): HTMLElement | null {
     return boardEl ? ([...boardEl.querySelectorAll<HTMLElement>('[data-key-id]')].find((e) => e.dataset.keyId === id) ?? null) : null
   }
@@ -140,8 +146,11 @@
     if (!drag) return
     const rows = collectRows()
     const exclude = new Set(drag.ids)
-    const target = computeDropTarget(rows, x, y, exclude)
-    const ind = target ? dropIndicator(rows, target, exclude) : null
+    // ツールバーの上ではツールバーへの挿入。それ以外は rows への挿入（新しい行を含む）
+    const tb = collectToolbar()
+    const tbTarget = tb ? computeToolbarDrop(tb, x, y, exclude) : null
+    const target = tbTarget ?? computeDropTarget(rows, x, y, exclude)
+    const ind = target ? (tbTarget && tb ? dropIndicator([tb], { kind: 'row', row: 0, index: tbTarget.kind === 'row' ? tbTarget.index : 0 }, exclude) : dropIndicator(rows, target, exclude)) : null
     const vp = viewportEl?.getBoundingClientRect()
     const toLocal = (r: Rect): Rect => ({ left: r.left - (vp?.left ?? 0), right: r.right - (vp?.left ?? 0), top: r.top - (vp?.top ?? 0), bottom: r.bottom - (vp?.top ?? 0) })
     drag = { ...drag, ...local(x, y), target, indicator: ind ? toLocal(ind) : null }
@@ -381,7 +390,7 @@
   }
 
   const dropText = $derived(
-    !drag ? '' : !drag.target ? 'ここには置けません' : drag.target.kind === 'newRow' ? `${drag.target.row + 1} 行目として新しい行を作る` : `${drag.target.row + 1} 行目の ${drag.target.index + 1} 番目に置く`
+    !drag ? '' : !drag.target ? 'ここには置けません' : drag.target.kind === 'row' && drag.target.row === TOOLBAR_ROW ? `ツールバーの ${drag.target.index + 1} 番目に置く` : drag.target.kind === 'newRow' ? `${drag.target.row + 1} 行目として新しい行を作る` : `${drag.target.row + 1} 行目の ${drag.target.index + 1} 番目に置く`
   )
 </script>
 
@@ -452,6 +461,16 @@
         <span class="pk">{kind}</span><span class="pn">{KIND_NAMES[kind]}</span>
       </button>
     {/each}
+    <span class="psep" aria-hidden="true"></span>
+    {#if store.layout.toolbar}
+      <button type="button" class="pbtn" title="候補バーが空のときに出るツールバーを削除します（元に戻すで復元できます）" onclick={() => store.removeToolbar()}>
+        <span class="pk">ツールバー</span><span class="pn">削除</span>
+      </button>
+    {:else}
+      <button type="button" class="pbtn" title="候補バーが空のときに出るツールバー（高さ 44pt の 1 行）を追加します" onclick={() => store.addToolbar()}>
+        <span class="pk">ツールバー</span><span class="pn">追加</span>
+      </button>
+    {/if}
   </div>
 
   <div class="zoom" role="toolbar" aria-label="表示の操作">
@@ -590,6 +609,12 @@
   }
   .pbtn:hover {
     border-color: var(--line);
+  }
+  .psep {
+    align-self: stretch;
+    width: 1px;
+    margin: 4px 2px;
+    background: var(--line);
   }
   .pk {
     font-size: 0.8125rem;
