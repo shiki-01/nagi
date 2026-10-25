@@ -31,14 +31,6 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     /// 共有のモデルの現在のホストが自分か（旧 VC が遅れて呼ばれても、新しい VC の状態を壊さないための判定）
     private var isCurrentHost: Bool { model?.host === self }
 
-    /// ルートの view をシステムのキーボードの素材（`.keyboard` スタイルの UIInputView）にする。
-    /// フッター（地球儀・マイクの帯）と同じ背景になり、背景を塗らなくても黒く抜けない
-    override func loadView() {
-        let inputView = UIInputView(frame: .zero, inputViewStyle: .keyboard)
-        inputView.allowsSelfSizing = true
-        view = inputView
-    }
-
     override func viewDidLoad() {
         LaunchBaseline.capture()
         super.viewDidLoad()

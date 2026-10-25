@@ -1007,12 +1007,17 @@ private struct CandidateBar: View {
                         .font(.system(size: 14))
                         .underline()
                         .lineLimit(1)
-                } else if model.hasPreedit {
-                    Text(model.preedit)
-                        .font(.system(size: 14))
-                        .foregroundColor(.secondary)
-                        .underline()
-                        .lineLimit(1)
+                } else if model.hasPreedit && !model.isConverting && !model.isNextWordCandidates,
+                          let top = model.candidates.first {
+                    // 入力中の読みの文字列は出さない（ホストの下線つきの文字で見える）。代わりに最有力の候補を左に固定で出す。
+                    // 候補が変わるたびに左からポンと現れる（Simeji の曖昧入力と同様）。一覧にも従来どおり並ぶ
+                    TopCandidateChip(item: top) { model.selectCandidate(top.id) }
+                        .id(top.surface)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .leading).combined(with: .scale(scale: 0.6, anchor: .leading)).combined(with: .opacity),
+                            removal: .opacity
+                        ))
+                        .frame(maxWidth: 160)
                 }
                 // 入力中の候補は読みの接頭辞の分まで 100 件を超えることがある（H-58）ので、遅延して並べる。
                 // 候補が入れ替わったら先頭へ戻す（id を変えて作り直す）
@@ -1048,6 +1053,7 @@ private struct CandidateBar: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 44)
+        .animation(.spring(response: 0.28, dampingFraction: 0.7), value: model.candidates.first?.surface)
         // 塗らない: システムのキーボードの背景（またはレイアウトの `background`）がそのまま見えて、
         // 候補バー・キー・フッターが一体に見える
     }
@@ -1147,6 +1153,34 @@ private struct CandidateButton: View {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.orange.opacity(item.hint == nil ? 0 : 0.5), lineWidth: 1)
             )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// 候補バーの左に固定で出す最有力の候補。アクセント色の枠で一覧の候補と区別する
+private struct TopCandidateChip: View {
+    let item: CandidateItem
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 0) {
+                if let hint = item.hint {
+                    Text(hint)
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                        .lineLimit(1)
+                }
+                Text(item.surface)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(Color(UIColor.label))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, item.hint == nil ? 6 : 2)
+            .background(RoundedRectangle(cornerRadius: 6).fill(themeAccent.opacity(0.22)))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(themeAccent.opacity(0.6), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
