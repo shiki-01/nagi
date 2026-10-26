@@ -2,7 +2,7 @@
 
 `nagi.shiki-01.com` 用。Svelte 5 (runes) + SvelteKit 2 (adapter-static) + Master CSS 2.0.0-rc.88 + TypeScript。
 
-- `/` 紹介、`/support` サポート（App Store の「サポート URL」に使う）、`/privacy` プライバシーポリシー、`/custom-keyboard` キーボードレイアウト編集 GUI
+- `/` 紹介、`/support` サポート（App Store の「サポート URL」に使う）、`/privacy` プライバシーポリシー、`/custom-keyboard` キーボードレイアウト編集 GUI、`/reference` レイアウト JSON のリファレンス
 - `sitemap.xml` / `robots.txt` は `src/routes/*/+server.ts` で prerender。公開ページの一覧は `src/lib/site.ts` の `PAGES`（ページを足したらここにも追加）。メタ情報・OGP は `lib/components/Meta.svelte`
 - 404 は `+error.svelte` と adapter-static の `fallback: '404.html'`（ホスティング側で 404.html を未存在パスの応答に設定する）
 - レイアウト仕様: `../docs/ios-keyboard-layout.md`、スキーマ: `../config/keyboard/layout.schema.json`
@@ -19,6 +19,13 @@
   - JSON パネルのテキストは直接編集でき、フォームとプレビューに即反映される（構文エラーの間は反映されず、直前の内容が書き出し対象）。検証は error（書き出しをブロック）と warning（無視される値。書き出せる）に分けて表示し、「その場所を開く」で該当のタブへ移る
   - 実装: ops は `look-ops.ts`、プレビュー変換は `look-css.ts`、画像の計算は `look-assets.ts`（canvas は `look-image.ts`）、UI は `LookInspector` / `LookField` / `RulesEditor` / `ImageAssets` ほか
 - **ツールバー（`toolbar`、候補バーが空のときに出る高さ 44pt の 1 行）**: キャンバス上部の「ツールバー 追加／削除」ボタン（またはキー未選択時のインスペクタ）で作る。候補バーの位置にツールバーの行が出て、キーの追加（パレットのクリック・ドラッグ）・ドラッグでの並べ替え（rows との行き来も可）・削除・KeyForm での編集は rows と同じ操作。見た目は「詳細設定」→「行」→「ツールバー」（`toolbar.look`）。行番号 -1 として `resolveLook` が扱い、既定 `fontSize 14 / inset 6` を最下位に重ねる（共有ベクタ `resolve-toolbar.json`）。キーは 1〜12 個、全キーを消すと toolbar ごと消える。無ければアプリは設定 `toolbar.items` を使う。実装は `ops.ts`（`keysAt` / `addToolbar`）・`validate.ts`・`KeyboardPreview`・`toolbar.test.ts`
+- **リファレンス（`/reference`）**: `src/routes/reference/+page.svelte` が `src/lib/reference/data.ts` の内容を表にして出す。
+  `types.ts` の定数（`LIMITS`・`KNOWN_ACTIONS`・`KEY_KINDS`・`LOOK_PROPS`・`LOOK_STATES`・`ASSET_LIMITS`・`METRICS_PROPS` ほか）は import して表を生成する。
+  説明文・既定値・iOS の動作・iOS 設定キーは `../docs/keyboard-style-spec.md`・`../docs/ios-settings.md`・`../docs/decisions.md`（H-62/66/68/69）からの手書きなので、
+  元の文書を変えたら `data.ts` も直す。`src/lib/reference/reference.test.ts` が、(1) 表の例の JSON が `validate.ts` を error/warning なしで通ること、
+  (2) 検証メッセージ一覧の文言が `validate.ts` の出力と一致すること、(3) `KNOWN_ACTIONS`・`LOOK_PROPS`・`LOOK_STATES`・`KEY_KINDS` に過不足なく説明があること
+  （`ACTION_DOCS` などは型でも漏れを検出する）を検査する。action や look のプロパティを足したら、テストが落ちるので `data.ts` に説明を足す。
+  部品は `components/site/CodeExample.svelte`（コピーボタン付きのコード例）と `TableWrap.svelte`（横スクロールできる表）
 - レイアウト JSON の schema 1 → 2 の移行: `node scripts/migrate-layout-v2.mjs <ファイル or ディレクトリ>...`（冪等）
 
 ## デザイン

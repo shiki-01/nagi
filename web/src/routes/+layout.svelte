@@ -9,6 +9,7 @@
     { href: '/', label: 'Nagi について' },
     { href: '/support', label: 'サポート' },
     { href: '/custom-keyboard', label: 'カスタムキーボード' },
+    { href: '/reference', label: 'リファレンス' },
     { href: '/privacy', label: 'プライバシー' }
   ]
   const current = (href: string) => page.url.pathname.replace(/\/$/, '') === href.replace(/\/$/, '')
@@ -67,6 +68,7 @@
       <li><a href="/support">サポート</a></li>
       <li><a href="/privacy">プライバシーポリシー</a></li>
       <li><a href="/custom-keyboard">カスタムキーボード</a></li>
+      <li><a href="/reference">リファレンス</a></li>
       <li><a href={REPO_URL} rel="noopener">GitHub</a></li>
     </ul>
   </div>
