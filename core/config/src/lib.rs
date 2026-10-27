@@ -480,11 +480,16 @@ impl Default for InputSection {
 pub struct UserdictSection {
     /// ユーザー辞書の語を使うかどうか（無効でも登録内容は消えない）。既定: true。
     pub enabled: bool,
+    /// 登録件数の上限（読み込みメモリの保護）。超える分は読み込まず、新規登録も断る。既定: 10000。
+    pub max_entries: usize,
 }
 
 impl Default for UserdictSection {
     fn default() -> Self {
-        UserdictSection { enabled: true }
+        UserdictSection {
+            enabled: true,
+            max_entries: 10000,
+        }
     }
 }
 
@@ -635,12 +640,45 @@ impl fmt::Display for SymbolPosition {
     }
 }
 
+/// 数字・英字を確定するときの幅（`convert.half_width_alnum`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlnumWidth {
+    /// 半角にして確定する。
+    Half,
+    /// 全角にして確定する。
+    Full,
+    /// 打った通りに確定する（既定）。
+    FollowInput,
+}
+
+impl AlnumWidth {
+    /// 文字列表現を返す。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AlnumWidth::Half => "half",
+            AlnumWidth::Full => "full",
+            AlnumWidth::FollowInput => "follow_input",
+        }
+    }
+}
+
+impl fmt::Display for AlnumWidth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// 変換結果の表記に関するセクション（`docs/ios-settings.md` §2 の `convert.*`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConvertSection {
     /// 電卓候補（`1+2` → `3`）を出すかどうか。既定: true。
     pub calculator: bool,
+    /// 日付の候補（8 桁の数字 `20260927` → `2026/09/27` など）を出すかどうか。既定: true。
+    pub date_time: bool,
+    /// 数字・英字（英数字の入力）を確定するときの幅。記号は変えない。既定: `follow_input`（打った通り）。
+    pub half_width_alnum: AlnumWidth,
     /// カタカナ語の原語の候補（`[convert.loanword]`）。
     pub loanword: LoanwordSection,
     /// 入力中の候補（サジェスト）の最大件数。読みの接頭辞だけを置き換える候補
@@ -654,6 +692,8 @@ impl Default for ConvertSection {
     fn default() -> Self {
         ConvertSection {
             calculator: true,
+            date_time: true,
+            half_width_alnum: AlnumWidth::FollowInput,
             loanword: LoanwordSection::default(),
             suggest_max: 120,
             symbol_position: SymbolPosition::AfterBest,
@@ -1018,6 +1058,14 @@ impl Config {
             ));
         }
 
+        // userdict.max_entries: 100 <= max_entries <= 100000
+        if !(100..=100_000).contains(&self.userdict.max_entries) {
+            errors.push(format!(
+                "userdict.max_entries は 100 から 100000 の間である必要があります: {}",
+                self.userdict.max_entries
+            ));
+        }
+
         // learning.strength: 0.0 <= strength <= 2.0
         if !(self.learning.strength.is_finite() && (0.0..=2.0).contains(&self.learning.strength)) {
             errors.push(format!(
@@ -1202,8 +1250,16 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
         ],
         "predict" => &["enabled", "min_chars", "next_word", "next_word_count"],
         "rewriter" => &["emoji", "kaomoji"],
-        "convert" => &["calculator", "loanword", "suggest_max", "symbol_position"],
-        "userdict" | "snippet" => &["enabled"],
+        "convert" => &[
+            "calculator",
+            "date_time",
+            "half_width_alnum",
+            "loanword",
+            "suggest_max",
+            "symbol_position",
+        ],
+        "userdict" => &["enabled", "max_entries"],
+        "snippet" => &["enabled"],
         "keymap" => &["preset", "composing", "converting"],
         "update" => &["auto_check", "check_url"],
         "apps" => &[
@@ -1987,6 +2043,38 @@ min_chars = 3
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn test_validate_userdict_max_entries() {
+        let mut config = Config::default();
+        assert_eq!(config.userdict.max_entries, 10000);
+        assert!(config.validate().is_empty());
+        config.userdict.max_entries = 99;
+        let errors = config.validate();
+        assert!(errors.iter().any(|e| e.contains("userdict.max_entries")));
+        config.userdict.max_entries = 100_001;
+        let errors = config.validate();
+        assert!(errors.iter().any(|e| e.contains("userdict.max_entries")));
+    }
+
+    #[test]
+    fn test_convert_date_time_and_half_width_alnum() {
+        let d = Config::default();
+        assert!(d.convert.date_time);
+        assert_eq!(d.convert.half_width_alnum, AlnumWidth::FollowInput);
+        for (text, expected) in [
+            ("half", AlnumWidth::Half),
+            ("full", AlnumWidth::Full),
+            ("follow_input", AlnumWidth::FollowInput),
+        ] {
+            let (config, _) =
+                parse(&format!("[convert]\nhalf_width_alnum = \"{text}\"\n")).expect("parse");
+            assert_eq!(config.convert.half_width_alnum, expected);
+        }
+        assert!(parse("[convert]\nhalf_width_alnum = \"narrow\"\n").is_err());
+        let (config, _) = parse("[convert]\ndate_time = false\n").expect("parse");
+        assert!(!config.convert.date_time);
     }
 
     #[test]

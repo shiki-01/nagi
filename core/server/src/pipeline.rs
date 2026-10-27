@@ -125,6 +125,18 @@ pub fn backend_name(has_dict: bool, has_llm: bool) -> &'static str {
     }
 }
 
+/// 設定（`convert.calculator` / `convert.date_time`）で無効にした Rewriter の識別子
+fn excluded_rewriters(eff: &Effective) -> Vec<&'static str> {
+    let mut excluded = Vec::new();
+    if !eff.calculator {
+        excluded.push(nagi_rewriter::SIMPLE_CALCULATOR_ID);
+    }
+    if !eff.date_time {
+        excluded.push(nagi_rewriter::DIGITS_TO_DATE_ID);
+    }
+    excluded
+}
+
 /// LLM の出力として受け入れられるか（空・極端な長さ・私用領域文字・置換文字を弾く）
 fn plausible(reading: &str, surface: &str) -> bool {
     let n_reading = reading.chars().count();
@@ -910,12 +922,8 @@ impl Pipeline {
             groups.push((CandidateSource::SystemDict, system));
             groups.push((CandidateSource::Kana, kana));
         }
-        let excluded: &[&str] = if eff.calculator {
-            &[]
-        } else {
-            &[nagi_rewriter::SIMPLE_CALCULATOR_ID]
-        };
-        let mut rewriter_candidates = self.rewriter.candidates_excluding(reading, excluded);
+        let excluded = excluded_rewriters(&eff);
+        let mut rewriter_candidates = self.rewriter.candidates_excluding(reading, &excluded);
         // カタカナ語の原語: 記号などの Rewriter の候補の後ろ・絵文字の前（形式の変換は engine が末尾に足す）
         if eff.loanword
             && let Some(loanword) = &self.loanword
@@ -1058,14 +1066,10 @@ impl ConversionBackend for Pipeline {
 
     fn literal_candidates(&self, text: &str, limit: usize) -> Vec<BackendCandidate> {
         let eff = self.runtime.effective();
-        let excluded: &[&str] = if eff.calculator {
-            &[]
-        } else {
-            &[nagi_rewriter::SIMPLE_CALCULATOR_ID]
-        };
+        let excluded = excluded_rewriters(&eff);
         // 全角/半角の「形式の変換」は末尾。辞書・LLM・学習は通さない（Literal に漢字が混ざらないように）
         self.rewriter
-            .candidates_forms_last(text, excluded)
+            .candidates_forms_last(text, &excluded)
             .into_iter()
             .fold(Vec::<String>::new(), |mut acc, s| {
                 if !acc.contains(&s) {

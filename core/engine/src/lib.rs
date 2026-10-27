@@ -21,7 +21,8 @@ pub use backend::{
     MockBackend, TypingHint,
 };
 pub use engine::{
-    AutoEnglishMode, Engine, EngineConfig, InitialView, SessionSnapshot, StateKind, SymbolPosition,
+    AlnumWidth, AutoEnglishMode, Engine, EngineConfig, InitialView, SessionSnapshot, StateKind,
+    SymbolPosition,
 };
 pub use ir::{Candidate, CandidateSet, CursorPos, Preedit, Segment};
 pub use keymap::{KeyContext, KeyMap};

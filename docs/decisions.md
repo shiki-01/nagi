@@ -1831,3 +1831,10 @@ H-65 の続き。仕様は `docs/keyboard-style-spec.md`（§7、§9 ②〜④�
 - **実測**（実データ = SCOWL + Mozc 辞書、`bench/auto-english/typos.tsv` 自作 50 件、`server/tests/auto_english.rs` `spellings_with_real_data_if_available`）: 1 位 47/50（3 位以内も 47/50）、日本語・日英混在 281 件に出た件数 0、1 回の探索は最長約 6ms（release、Linux）。取りこぼしは `javasript`（`javascript` が語彙に無い）、`seperate`（有効なローマ字で置換 1 回 = 1.0 が上限超え）、`calender`（語彙にある語）
 - **採らなかった案**: (1) fst の `Levenshtein` オートマトン（重みつき・入れ替えを扱えず、距離 2 の構築が重い）。(2) 有効なローマ字にも同じ上限で出すこと（日本語の入力に英語の候補が混ざる。小さい誤りだけに絞った）。(3) 文節ごとに出すこと（文節に割れた一部の打鍵列では意味が無い）
 - **未確認**: 実機での体感（候補の位置・件数）、iOS（語彙は `--install-data`・アプリから導入）での探索時間とメモリ
+
+### H-71. コアの設定 3 件: `convert.date_time`・`userdict.max_entries`・`convert.half_width_alnum`（`docs/ios-settings.md` §2、`docs/progress.md` B-1。2026-10-27、仕様表に沿って実装、要レビュー）
+
+- **`convert.date_time`**（既定 true）: false で日付の Rewriter（`DigitsToDate`、ID `nagi_rewriter::DIGITS_TO_DATE_ID`）を候補から外す。`convert.calculator` と同じ経路（`Tunables` → `Effective` → `Pipeline::excluded_rewriters`）。**「きょう」「いま」の日付・時刻候補はコアに無い**（仕様表の説明はそれを含むが未実装。別作業）
+- **`userdict.max_entries`**（100〜100000、既定 10000）: 起動時・再読み込み時に、ファイル名順の先頭から上限までを読み、超過分は捨てて通知 `user_dict_limit`（件数のみ。内容は出さない）。`import_user_dict` は登録済み + 取り込み件数が上限を超えるなら INVALID_PARAMS で全件拒否（一部だけ黙って欠けるのを避けた）
+- **`convert.half_width_alnum`**（`half` / `full` / `follow_input`、既定 `follow_input` = 従来どおり）: Literal 文節の英数字だけを確定時に半角・全角へそろえる（記号・日本語の文節は変えない）。候補ウィンドウで明示的に選んだ候補（`selected != 0`）と、入力中の候補バーで選んだ候補はその表記のまま。適用は `commit_all`（Composing・Converting）と `commit_focused`
+- **未確認**: `half` の実際の半角化（ローマ字入力では全角英数の Literal を作れず、自動テストは「半角は変わらない」「明示選択が優先」まで。iOS の全角キーなどで実機確認が要る）

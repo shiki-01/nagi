@@ -3,7 +3,7 @@
 
 use crate::learning::LearningObserver;
 use crate::runtime::Runtime;
-use crate::setup::{Built, Reloadable, engine_config_from, issue_events, user_dict_events};
+use crate::setup::{Built, Reloadable, engine_config_from, issue_events, load_user_dict};
 use nagi_dict::{ImportFormat, UserDictionary, import_user_dict};
 use nagi_engine::{ConversionBackend, Engine, EngineConfig};
 use nagi_protocol::PROTOCOL_VERSION;
@@ -374,9 +374,10 @@ impl Server {
         if let (Some(dir), Some(dict)) =
             (self.reload.user_dict_dir.clone(), self.reload.dict.clone())
         {
-            let (user, issues) = UserDictionary::load_dir(&dir);
+            let max_entries = self.runtime.tunables().userdict_max_entries;
+            let (user, user_events) = load_user_dict(&dir, max_entries);
             self.runtime.set_overlay(dict.make_overlay(&user));
-            for e in user_dict_events(&issues) {
+            for e in user_events {
                 self.runtime.push_event(e);
             }
         }
@@ -411,6 +412,17 @@ impl Server {
         let (existing, _) = UserDictionary::load_dir(&dir);
         let outcome =
             import_user_dict(&bytes, hint, &existing).map_err(|e| invalid(&e.to_string()))?;
+        // 上限（userdict.max_entries）を超える登録は断る（一部だけ取り込むことはしない）
+        let max_entries = self.runtime.tunables().userdict_max_entries;
+        if !outcome.entries.is_empty()
+            && existing.entries.len() + outcome.entries.len() > max_entries
+        {
+            return Err(invalid(&format!(
+                "ユーザー辞書の登録が上限（{max_entries} 件）を超えるため取り込めません（登録済み {} 件、取り込み {} 件）",
+                existing.entries.len(),
+                outcome.entries.len()
+            )));
+        }
         if !outcome.entries.is_empty() {
             let io_error = |what: &str| {
                 ErrorObject::new(

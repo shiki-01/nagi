@@ -123,6 +123,27 @@ fn calculator_candidate_is_on_by_default_and_can_be_disabled() {
 }
 
 #[test]
+fn date_candidate_is_on_by_default_and_can_be_disabled() {
+    let b = pipeline_with(nagi_config::Config::default(), "");
+    let c = b.segment_candidates("20260927", "", 20);
+    let hit = c
+        .iter()
+        .find(|x| x.surface == "2026/09/27")
+        .expect("日付候補");
+    assert!(hit.sources.contains(&CandidateSource::Rewriter));
+    let mut config = nagi_config::Config::default();
+    config.convert.date_time = false;
+    let b = pipeline_with(config, "");
+    let c = b.segment_candidates("20260927", "", 20);
+    assert!(
+        !surfaces(&c).contains(&"2026/09/27"),
+        "無効にすると日付候補は出ない"
+    );
+    assert!(!surfaces(&c).contains(&"2026年9月27日"));
+    assert!(!surfaces(&b.literal_candidates("20260927", 20)).contains(&"2026/09/27"));
+}
+
+#[test]
 fn literal_candidates_are_rewriter_only_with_width_forms_last() {
     let b = pipeline_with(nagi_config::Config::default(), "");
     let c = b.literal_candidates("1+2", 20);

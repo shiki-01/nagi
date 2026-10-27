@@ -621,6 +621,41 @@ fn import_user_dict_appends_dedupes_and_reloads() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `userdict.max_entries`: 読み込み時に上限を超える分は先頭から数えて読まず、通知する。
+/// 取り込み（`import_user_dict`）は上限を超えるなら断り、辞書は変えない
+#[test]
+fn userdict_max_entries_limits_load_and_import() {
+    use base64::Engine as _;
+    let dir = temp_dir("userdict-max");
+    let ud = dir.join("user_dict");
+    std::fs::create_dir_all(&ud).unwrap();
+    std::fs::write(dir.join("config.toml"), "[userdict]\nmax_entries = 100\n").unwrap();
+    let mut text = String::new();
+    for i in 0..150 {
+        text.push_str(&format!("あ\t語{i}\t名詞\n"));
+    }
+    std::fs::write(ud.join("mine.txt"), text).unwrap();
+    let mut s = server_in(&dir);
+    initialize(&mut s);
+    let r = send(&mut s, "reload_config", json!({}));
+    assert_eq!(r.response["result"]["ok"], true);
+    assert_eq!(status(&mut s)["user_dict_entries"], 100);
+    let note = r
+        .notes
+        .iter()
+        .find(|n| n.to_string().contains("user_dict_limit"));
+    let note = note.expect("上限を超えた通知").to_string();
+    assert!(note.contains("50 件") && !note.contains("語149"), "{note}");
+
+    // 上限に達している: 新規の取り込みは断り、ファイルも作らない
+    let data = base64::engine::general_purpose::STANDARD.encode("ひなた\t日向\t地名\n");
+    let r = send(&mut s, "import_user_dict", json!({"data_base64": data}));
+    assert_eq!(r.response["error"]["code"], -32602, "{:?}", r.response);
+    assert!(!ud.join("imported.tsv").exists());
+    assert_eq!(status(&mut s)["user_dict_entries"], 100);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `userdict.enabled` / `snippet.enabled` を設定で切り替える（登録内容は消さない）
 #[test]
 fn userdict_and_snippet_can_be_disabled_by_config() {

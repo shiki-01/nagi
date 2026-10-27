@@ -27,6 +27,7 @@ use nagi_rewriter::Rewriter;
 use nagi_romaji::{
     Composer, Piece, PieceKind, PunctuationStyle, RomajiTable, ShiftLetterMode, Stroke,
 };
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -80,6 +81,18 @@ pub enum SymbolPosition {
     Off,
 }
 
+/// 数字・英字（Literal）を確定するときの幅（`convert.half_width_alnum`）。記号は変えない
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlnumWidth {
+    /// 半角にして確定する
+    Half,
+    /// 全角にして確定する
+    Full,
+    /// 打った通りに確定する（既定）
+    #[default]
+    FollowInput,
+}
+
 /// エンジンの設定（`config.toml` の `[input]` `[conversion]` に対応する部分）
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -105,6 +118,8 @@ pub struct EngineConfig {
     pub suggest_max: usize,
     /// 入力中の候補に出す記号の位置（`convert.symbol_position`。H-63）
     pub symbol_position: SymbolPosition,
+    /// 数字・英字（Literal）を確定するときの幅（`convert.half_width_alnum`）
+    pub alnum_width: AlnumWidth,
     /// ライブ変換のチャンク長（`conversion.composing_chunk_len`）。この文字数を超える
     /// Composing 中の1つの日本語入力は、この文字数ごとに分けて変換する
     pub composing_chunk_len: usize,
@@ -140,6 +155,7 @@ impl Default for EngineConfig {
             next_word_count: 5,
             suggest_max: 120,
             symbol_position: SymbolPosition::default(),
+            alnum_width: AlnumWidth::default(),
             composing_chunk_len: 30,
             initial_view: InitialView::Sentence,
             beam_width: 3,
@@ -2591,7 +2607,7 @@ impl Engine {
                         self.notify_commit(sess, &v.fixed);
                         notified = true;
                         for s in v.fixed.iter().chain(&v.tail) {
-                            commit.push_str(&s.surface);
+                            commit.push_str(&self.committed_surface(s));
                         }
                         let rest = &flushed_text[displayed_reading.len()..];
                         if !rest.is_empty() || !v.tail.is_empty() {
@@ -2600,7 +2616,7 @@ impl Engine {
                         }
                         commit.push_str(rest);
                     }
-                    _ => commit.push_str(&flushed_text),
+                    _ => commit.push_str(&self.committed_pieces_text(&pieces, &flushed_text)),
                 }
                 (!pieces.is_empty()).then_some(pieces)
             }
@@ -2619,7 +2635,7 @@ impl Engine {
                     })
                     .collect();
                 for s in &conv.segments {
-                    commit.push_str(&s.surface);
+                    commit.push_str(&self.committed_surface(s));
                 }
                 (!pieces.is_empty()).then_some(pieces)
             }
@@ -2633,6 +2649,72 @@ impl Engine {
             pieces,
             committed_len_utf16: utf16::utf16_len(&commit[before_len..]),
         });
+    }
+
+    /// 確定する文節の表記。Literal の数字・英字は `convert.half_width_alnum` の幅にそろえる。
+    /// 候補ウィンドウで明示的に選んだ候補（`selected != 0`）はその表記のまま確定する
+    fn committed_surface<'a>(&self, seg: &'a Segment) -> Cow<'a, str> {
+        let explicit = seg.candidates.as_ref().is_some_and(|c| c.selected != 0);
+        if seg.kind != SegmentKind::Literal || explicit {
+            return Cow::Borrowed(&seg.surface);
+        }
+        self.with_alnum_width(&seg.surface)
+    }
+
+    /// 入力中（Composing）の確定文字列。Literal の塊だけ `convert.half_width_alnum` の幅にそろえる。
+    /// 塊を連結した文字列が `text`（flush 後の全文）と一致しないときは `text` をそのまま使う
+    fn committed_pieces_text(&self, pieces: &[Piece], text: &str) -> String {
+        if self.config.alnum_width == AlnumWidth::FollowInput {
+            return text.to_string();
+        }
+        let joined: String = pieces.iter().map(|p| p.text.as_str()).collect();
+        if joined != text {
+            return text.to_string();
+        }
+        pieces
+            .iter()
+            .map(|p| match p.kind {
+                PieceKind::Literal => self.with_alnum_width(&p.text),
+                _ => Cow::Borrowed(p.text.as_str()),
+            })
+            .collect()
+    }
+
+    /// 数字・英字だけを `convert.half_width_alnum` の幅にそろえる（記号・その他は変えない）。
+    /// 変換は `nagi_rewriter` の `ZenkakuAlnum` / `HankakuAlnum` を 1 文字ずつ使う
+    fn with_alnum_width<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        let to_half = match self.config.alnum_width {
+            AlnumWidth::FollowInput => return Cow::Borrowed(text),
+            AlnumWidth::Half => true,
+            AlnumWidth::Full => false,
+        };
+        let convert = |c: char| -> char {
+            let is_target = if to_half {
+                matches!(c, '０'..='９' | 'Ａ'..='Ｚ' | 'ａ'..='ｚ')
+            } else {
+                c.is_ascii_alphanumeric()
+            };
+            if !is_target {
+                return c;
+            }
+            let one = c.to_string();
+            let converted = if to_half {
+                nagi_rewriter::HankakuAlnum.rewrite(&one)
+            } else {
+                nagi_rewriter::ZenkakuAlnum.rewrite(&one)
+            };
+            converted
+                .into_iter()
+                .next()
+                .and_then(|s| s.chars().next())
+                .unwrap_or(c)
+        };
+        let out: String = text.chars().map(convert).collect();
+        if out == text {
+            Cow::Borrowed(text)
+        } else {
+            Cow::Owned(out)
+        }
     }
 
     /// `Action::CommitFocused`: 先頭から注目文節（複数文節の選択中は選択範囲の末尾）までを確定し、
@@ -2657,7 +2739,10 @@ impl Engine {
         conv.visible = false;
         // 学習の左文脈は確定前の Surrounding Text（`commit_all` と同じ）
         self.notify_commit(sess, &committed);
-        let surface: String = committed.iter().map(|s| s.surface.as_str()).collect();
+        let surface: String = committed
+            .iter()
+            .map(|s| self.committed_surface(s))
+            .collect();
         commit.push_str(&surface);
         // secure input 中は文脈を持たない（`set_context` と同じ）
         if !sess.secure_input {

@@ -107,6 +107,8 @@ pub struct Tunables {
     pub live_conversion_min_key_length: usize,
     /// `userdict.enabled`
     pub userdict_enabled: bool,
+    /// `userdict.max_entries`
+    pub userdict_max_entries: usize,
     /// `snippet.enabled`
     pub snippet_enabled: bool,
     /// `rewriter.emoji`
@@ -115,6 +117,8 @@ pub struct Tunables {
     pub kaomoji_enabled: bool,
     /// `convert.calculator`
     pub calculator_enabled: bool,
+    /// `convert.date_time`
+    pub date_time_enabled: bool,
     /// `convert.loanword.enabled`
     pub loanword_enabled: bool,
     /// `input.fuzzy.*`（曖昧入力）
@@ -177,10 +181,12 @@ impl Tunables {
             live_conversion_delay_ms: config.conversion.live_conversion_delay_ms,
             live_conversion_min_key_length: config.conversion.live_conversion_min_key_length,
             userdict_enabled: config.userdict.enabled,
+            userdict_max_entries: config.userdict.max_entries,
             snippet_enabled: config.snippet.enabled,
             emoji_enabled: config.rewriter.emoji,
             kaomoji_enabled: config.rewriter.kaomoji,
             calculator_enabled: config.convert.calculator,
+            date_time_enabled: config.convert.date_time,
             loanword_enabled: config.convert.loanword.enabled,
             fuzzy: FuzzySettings::from_config(&config.input.fuzzy),
         }
@@ -213,6 +219,8 @@ pub struct Effective {
     pub kaomoji: bool,
     /// 電卓候補（`convert.calculator`）
     pub calculator: bool,
+    /// 日付の候補（`convert.date_time`）
+    pub date_time: bool,
     /// カタカナ語の原語の候補（`convert.loanword.enabled`）
     pub loanword: bool,
     /// 曖昧入力（`input.fuzzy.*`）
@@ -857,6 +865,7 @@ impl Runtime {
             emoji: t.emoji_enabled,
             kaomoji: t.kaomoji_enabled,
             calculator: t.calculator_enabled,
+            date_time: t.date_time_enabled,
             loanword: t.loanword_enabled,
             fuzzy: t.fuzzy,
         }

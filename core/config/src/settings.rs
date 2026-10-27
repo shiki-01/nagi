@@ -535,6 +535,24 @@ pub fn definitions() -> Vec<SettingDef> {
             SettingKind::Bool,
         ),
         def(
+            "convert.date_time",
+            "表記の候補",
+            "日付の候補",
+            "「20260927」のような 8 桁の数字に、「2026/09/27」「2026年9月27日」のような日付の表記を変換候補として加えます。",
+            SettingKind::Bool,
+        ),
+        def(
+            "convert.half_width_alnum",
+            "表記の候補",
+            "数字・英字の幅",
+            "数字・英字（英数字の入力）を確定するときの幅です。「打った通り」は入力のまま確定します。記号は変えません。候補から選んだ表記は、この設定に関わらずそのまま確定します。",
+            choice(&[
+                ("half", "半角"),
+                ("full", "全角"),
+                ("follow_input", "打った通り"),
+            ]),
+        ),
+        def(
             "convert.loanword.enabled",
             "表記の候補",
             "カタカナ語の原語候補",
@@ -559,6 +577,13 @@ pub fn definitions() -> Vec<SettingDef> {
             "ユーザー辞書を使う",
             "登録した単語を変換・予測の候補に使います。オフにしても登録内容は消えません。",
             SettingKind::Bool,
+        ),
+        def(
+            "userdict.max_entries",
+            "ユーザー辞書",
+            "登録の上限",
+            "ユーザー辞書の登録件数の上限です。これを超える分は読み込まず、新しい登録も受け付けません。",
+            int(100, 100_000, 100),
         ),
         def(
             "snippet.enabled",
@@ -664,11 +689,16 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         "rewriter.emoji" => Some(Bool(config.rewriter.emoji)),
         "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
         "convert.calculator" => Some(Bool(config.convert.calculator)),
+        "convert.date_time" => Some(Bool(config.convert.date_time)),
+        "convert.half_width_alnum" => {
+            Some(Text(config.convert.half_width_alnum.as_str().to_string()))
+        }
         "convert.loanword.enabled" => Some(Bool(config.convert.loanword.enabled)),
         "convert.symbol_position" => {
             Some(Text(config.convert.symbol_position.as_str().to_string()))
         }
         "userdict.enabled" => Some(Bool(config.userdict.enabled)),
+        "userdict.max_entries" => Some(n(config.userdict.max_entries)),
         "snippet.enabled" => Some(Bool(config.snippet.enabled)),
         "learning.enabled" => Some(Bool(config.learning.enabled)),
         "learning.max_entries" => Some(n(config.learning.max_entries)),
@@ -1293,6 +1323,83 @@ mod tests {
         let (c, issues) = crate::parse(&r.source).unwrap();
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.convert.calculator);
+    }
+
+    #[test]
+    fn convert_date_time_definition() {
+        let defs = definitions();
+        let d = defs.iter().find(|d| d.key == "convert.date_time").unwrap();
+        assert_eq!(d.level, SettingLevel::Detail);
+        assert_eq!(d.platforms, SettingPlatforms::Both);
+        assert!(crate::Config::default().convert.date_time);
+        let r =
+            apply_changes(None, &[set("convert.date_time", SettingValue::Bool(false))]).unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert!(!c.convert.date_time);
+    }
+
+    #[test]
+    fn half_width_alnum_definition_and_editing() {
+        let defs = definitions();
+        let d = defs
+            .iter()
+            .find(|d| d.key == "convert.half_width_alnum")
+            .unwrap();
+        assert!(matches!(&d.kind, SettingKind::Choice { options } if options.len() == 3));
+        assert_eq!(
+            from_config(&Config::default(), "convert.half_width_alnum"),
+            Some(SettingValue::Text("follow_input".into()))
+        );
+        let r = apply_changes(
+            None,
+            &[set(
+                "convert.half_width_alnum",
+                SettingValue::Text("half".into()),
+            )],
+        )
+        .unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.convert.half_width_alnum, crate::AlnumWidth::Half);
+        let bad = apply_changes(
+            None,
+            &[set(
+                "convert.half_width_alnum",
+                SettingValue::Text("narrow".into()),
+            )],
+        )
+        .unwrap();
+        assert_eq!(bad.errors.len(), 1);
+    }
+
+    #[test]
+    fn userdict_max_entries_definition_and_range() {
+        let defs = definitions();
+        let d = defs
+            .iter()
+            .find(|d| d.key == "userdict.max_entries")
+            .unwrap();
+        assert!(matches!(
+            &d.kind,
+            SettingKind::Int {
+                min: 100,
+                max: 100_000,
+                ..
+            }
+        ));
+        assert_eq!(
+            from_config(&Config::default(), "userdict.max_entries"),
+            Some(SettingValue::Int(10000))
+        );
+        let r =
+            apply_changes(None, &[set("userdict.max_entries", SettingValue::Int(500))]).unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.userdict.max_entries, 500);
+        let bad =
+            apply_changes(None, &[set("userdict.max_entries", SettingValue::Int(99))]).unwrap();
+        assert_eq!(bad.errors.len(), 1);
     }
 
     #[test]

@@ -177,9 +177,12 @@ fn to_positional_kanji(digits: &str) -> Option<String> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DigitsToDate;
 
+/// [`DigitsToDate`] の識別子
+pub const DIGITS_TO_DATE_ID: &str = "digits_to_date";
+
 impl Rewriter for DigitsToDate {
     fn id(&self) -> &str {
-        "digits_to_date"
+        DIGITS_TO_DATE_ID
     }
 
     fn rewrite(&self, reading: &str) -> Vec<String> {

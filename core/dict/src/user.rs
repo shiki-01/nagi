@@ -202,6 +202,13 @@ impl UserDictionary {
         out
     }
 
+    /// 登録件数を `max` 件までにする（超える分は後ろから捨てる）。捨てた件数を返す
+    pub fn truncate_entries(&mut self, max: usize) -> usize {
+        let dropped = self.entries.len().saturating_sub(max);
+        self.entries.truncate(max);
+        dropped
+    }
+
     /// 語（スニペット以外）の数
     pub fn word_count(&self) -> usize {
         self.entries.iter().filter(|e| !e.is_snippet()).count()

@@ -96,8 +96,8 @@
 | `predict.next_word` | 確定直後の次語予測（学習した直前の語から） | bool | false | D | core:predict.next_word | 既存(GUI) | LLM は回さず、学習した「直前の確定語 → 次の確定語」のバイグラム（`learning-next.tsv`）の上位を返す軽量版。学習が有効なときだけ記録・表示する。LLM 版は将来 `ConversionBackend::predict_next` の裏に追加 |
 | `predict.next_word_count` | 次語予測の候補数 | int 1–10 | 5 | D | core:predict.next_word_count | 既存(GUI) | 確定直後の候補バーに出す最大数 |
 | `ranking.source_order` | 候補の出所の優先順 | 配列（`learned` / `user_dict` / `llm` / `system_dict` / `kana` / `rewriter` の並べ替え） | デスクトップと同じ | D | core:ranking.source_order | 既存(toml) | 並べ替え UI が必要。記述子の型に「順序つき配列」が無いので追加が要る |
-| `convert.half_width_alnum` | 数字・英字を半角で確定 | choice: `half` / `full` / `follow_input` | `follow_input` | D | core:convert.half_width_alnum | 新規(core) | 全角/半角の相互変換（backlog 3 章）の基本設定 |
-| `convert.date_time` | 日付・時刻の候補（「きょう」「いま」） | bool | true | D | core:convert.date_time | 新規(core) | Rewriter の機能として実装 |
+| `convert.half_width_alnum` | 数字・英字を半角で確定 | choice: `half` / `full` / `follow_input` | `follow_input` | D | core:convert.half_width_alnum | 実装済み(core) | 全角/半角の相互変換（backlog 3 章）の基本設定 |
+| `convert.date_time` | 日付・時刻の候補（「きょう」「いま」） | bool | true | D | core:convert.date_time | 一部実装(core) | Rewriter の機能として実装。現状の対象は 8 桁数字 → 日付（`DigitsToDate`）の on/off のみ。「きょう」「いま」の候補は未実装（H-71） |
 | `convert.calculator` | 電卓候補（「1+2=」） | bool | true | D | core:convert.calculator | 新規(core) | |
 | `convert.symbol_position` | 入力中の候補に出す記号の位置 | choice: `first`（先頭）/ `after_best`（最良の変換の直後）/ `last`（末尾）/ `off`（出さない） | `after_best` | D | core:convert.symbol_position | 実装済み(core)・実機未確認（H-63） | 入力中の候補（候補バー）の記号（`かっこ` → `「」` など。H-60）の位置。`みぎ` `うえ` のように普通の語でもある読みで記号が 2 番目に出るのを避けるため。Space の候補窓の Rewriter には効かない。設定画面はコアの記述子から自動で出る |
 | `rewriter.emoji` | 読みからの絵文字候補（「わらう」→😄） | bool | true | D | core:rewriter.emoji | 実装済み(core) | Rewriter の機能。表は `config/emoji.tsv`（自作・バイナリ同梱）。候補の末尾側（出所 `rewriter`）。ユーザー辞書・変換結果が先。入力中の候補は先頭文節の読みが表に完全一致するときだけ |
@@ -128,7 +128,7 @@
 | `userdict.register_from_selection` | 選択テキストから登録（共有シート / ショートカット） | 操作 | - | D | app | 新規(iOS) | 共有拡張またはショートカットアプリ連携。段階 3 以降 |
 | `snippet.enabled` | スニペット（短い読みで定型文） | bool | true | D | core:snippet.enabled | 既存(GUI) | 候補の出所は `user_dict` の一種として扱う |
 | `snippet.entries` | スニペットの登録・編集 | 操作（読み・本文・改行可） | - | D | app→core | 新規(core) | 本文は 256 文字以内（レイアウト仕様の `shortcut` と同じ上限を暫定採用） |
-| `userdict.max_entries` | 登録の上限 | int 100–100000 | 10000 | - | core:userdict.max_entries | 新規(core) | 読み込みメモリの保護 |
+| `userdict.max_entries` | 登録の上限 | int 100–100000 | 10000 | - | core:userdict.max_entries | 実装済み(core) | 読み込みメモリの保護 |
 
 ### 2.5 キーボード（`keyboard` / `candbar` / `ios`）
 

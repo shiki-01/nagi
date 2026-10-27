@@ -13,7 +13,9 @@ use nagi_dict::{Dictionary, UserDictionary};
 use nagi_engine::InitialView;
 use nagi_engine::KeyContext;
 use nagi_engine::touch::DakutenOrder;
-use nagi_engine::{AppClass, AppsConfig, AutoEnglishMode, EngineConfig, SymbolPosition};
+use nagi_engine::{
+    AlnumWidth, AppClass, AppsConfig, AutoEnglishMode, EngineConfig, SymbolPosition,
+};
 use nagi_infer::ConversionModel;
 use nagi_learn::{LearnConfig, Learner};
 use nagi_protocol::methods::NotifyLevel;
@@ -156,6 +158,11 @@ pub fn engine_config_from(config: &Config) -> (EngineConfig, Vec<Event>) {
                 nagi_config::SymbolPosition::AfterBest => SymbolPosition::AfterBest,
                 nagi_config::SymbolPosition::Last => SymbolPosition::Last,
                 nagi_config::SymbolPosition::Off => SymbolPosition::Off,
+            },
+            alnum_width: match config.convert.half_width_alnum {
+                nagi_config::AlnumWidth::Half => AlnumWidth::Half,
+                nagi_config::AlnumWidth::Full => AlnumWidth::Full,
+                nagi_config::AlnumWidth::FollowInput => AlnumWidth::FollowInput,
             },
             composing_chunk_len: config.conversion.composing_chunk_len,
             initial_view: match config.conversion.initial_view {
@@ -578,9 +585,9 @@ pub fn build_with_loader(options: &ServerOptions, loader: Option<ModelLoader>) -
     // ユーザー辞書
     let user_dict_dir = user_dir.as_ref().map(|d| d.join("user_dict"));
     if let (Some(dir), Some(d)) = (&user_dict_dir, &dict) {
-        let (user, issues) = UserDictionary::load_dir(dir);
+        let (user, user_events) = load_user_dict(dir, config.userdict.max_entries);
         runtime.set_overlay(d.make_overlay(&user));
-        events.extend(user_dict_events(&issues));
+        events.extend(user_events);
     }
     for e in events {
         runtime.push_event(e);
@@ -700,6 +707,24 @@ fn spawn_model_loader(loader: ModelLoader, pipeline: Arc<Pipeline>) {
             "imserver: モデル読み込みスレッドを開始できませんでした: {e}（辞書のみで動作します）"
         );
     }
+}
+
+/// ユーザー辞書を読み込む。登録件数が `max_entries`（`userdict.max_entries`）を超える分は、
+/// ファイル順の先頭から数えて読み込まず、件数だけを通知に出す（登録内容は出さない）
+pub fn load_user_dict(dir: &Path, max_entries: usize) -> (UserDictionary, Vec<Event>) {
+    let (mut user, issues) = UserDictionary::load_dir(dir);
+    let mut events = user_dict_events(&issues);
+    let dropped = user.truncate_entries(max_entries);
+    if dropped > 0 {
+        events.push(Event {
+            level: NotifyLevel::Warning,
+            code: "user_dict_limit",
+            message: format!(
+                "ユーザー辞書の登録が上限（{max_entries} 件）を超えています。超えた {dropped} 件は読み込みません"
+            ),
+        });
+    }
+    (user, events)
 }
 
 /// ユーザー辞書の読み込みの問題を通知に直す

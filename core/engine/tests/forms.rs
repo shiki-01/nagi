@@ -1,6 +1,8 @@
 //! Literal（数字・英字・記号）の Space 変換の候補と、候補末尾の「形式の変換」のテスト
 
-use nagi_engine::{Engine, EngineConfig, KanaBackend, MockBackend, key_from_text, parse_key};
+use nagi_engine::{
+    AlnumWidth, Engine, EngineConfig, KanaBackend, MockBackend, key_from_text, parse_key,
+};
 use nagi_protocol::ProcessKeyResult;
 use nagi_protocol::view::CandidateSource;
 use std::sync::Arc;
@@ -246,4 +248,69 @@ fn paren_expression_commits_typed_text() {
     press(&mut e, "Space");
     let r = press(&mut e, "Enter");
     assert_eq!(r.commit.as_deref(), Some("（1+2）"));
+}
+
+fn engine_with_width(alnum_width: AlnumWidth) -> Engine {
+    Engine::new(
+        Arc::new(MockBackend::new().with_rewriter()),
+        EngineConfig {
+            alnum_width,
+            ..EngineConfig::default()
+        },
+    )
+}
+
+#[test]
+fn alnum_width_follow_input_commits_as_typed() {
+    // 既定（打った通り）: 半角英数も記号もそのまま
+    let mut e = engine_with_width(AlnumWidth::FollowInput);
+    type_str(&mut e, "Ab1(");
+    let r = press(&mut e, "Enter");
+    assert_eq!(r.commit.as_deref(), Some("Ab1("));
+}
+
+#[test]
+fn alnum_width_full_widens_alnum_but_not_symbols() {
+    // Composing の確定（Enter）。記号は変えない
+    let mut e = engine_with_width(AlnumWidth::Full);
+    type_str(&mut e, "Ab1(");
+    let r = press(&mut e, "Enter");
+    assert_eq!(r.commit.as_deref(), Some("Ａｂ１("));
+
+    // Converting（Space → Enter）でも同じ
+    let mut e = engine_with_width(AlnumWidth::Full);
+    type_str(&mut e, "Ab1");
+    press(&mut e, "Space");
+    let r = press(&mut e, "Enter");
+    assert_eq!(r.commit.as_deref(), Some("Ａｂ１"));
+}
+
+#[test]
+fn alnum_width_half_narrows_fullwidth_alnum() {
+    // 全角英数が Literal に入る経路: 変換候補の全角を選ぶのではなく、半角設定でも打った半角は変わらない
+    let mut e = engine_with_width(AlnumWidth::Half);
+    type_str(&mut e, "Ab1");
+    let r = press(&mut e, "Enter");
+    assert_eq!(r.commit.as_deref(), Some("Ab1"));
+}
+
+#[test]
+fn alnum_width_keeps_explicitly_selected_candidate() {
+    // 半角設定でも、候補ウィンドウで選んだ全角はそのまま確定する
+    let mut e = engine_with_width(AlnumWidth::Half);
+    type_str(&mut e, "Ab");
+    let r = press(&mut e, "Space");
+    assert_eq!(surfaces(&r), ["Ab", "Ａｂ"]);
+    let r = press(&mut e, "Space");
+    assert_eq!(r.preedit.as_ref().unwrap().text, "Ａｂ");
+    let r = press(&mut e, "Enter");
+    assert_eq!(r.commit.as_deref(), Some("Ａｂ"));
+}
+
+#[test]
+fn alnum_width_does_not_touch_japanese_segments() {
+    let mut e = engine_with_width(AlnumWidth::Full);
+    type_str(&mut e, "a");
+    let r = press(&mut e, "Enter");
+    assert_eq!(r.commit.as_deref(), Some("あ"));
 }
