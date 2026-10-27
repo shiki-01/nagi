@@ -47,12 +47,12 @@
 | `input.fuzzy.kinds` | 補正する打ち間違いの種類 | text（カンマ区切り） | `substitute,delete,insert,transpose,voicing` | D | core:input.fuzzy.kinds | 実装済み(core)（platforms=both） | 隣接キー置換 / 打ち忘れ / 余計な打鍵 / 打ち順の入れ替え / 濁点・小書き。汎用フォームでは自由入力のテキスト |
 | `input.fuzzy.use_touch_coords` | タッチ位置を補正に使う | bool | true | D | core:input.fuzzy.use_touch_coords | 実装済み(core)（platforms=ios）。Swift 側の座標送信も実装済み（`insert_reading` の touch / flick、`set_layout_geometry`。H-25） | QWERTY のキー内のタッチ位置・12 キーのフリック角度を補正コストに使う（H-25）。Swift は `insert_reading` に `touch` / `flick`（`InsertReadingTouchParams`）を足し、`set_layout_geometry` でキー矩形を送る |
 | `input.punctuation` | 句読点の種類 | choice: `、。` / `，．` / `，。` | `、。` | S | core:input.punctuation | 既存(GUI) | 12 キーの「、。?!」キーの先頭にも反映 |
-| `input.auto_commit_ms` | 一定時間入力が無ければ自動確定 | int 0–10000（0 = 無効）, step 500 | 0 | D | kbd+core | 新規(core) | 入力を失わない原則との兼ね合いで既定は無効 |
+| `input.auto_commit_ms` | 一定時間入力が無ければ自動確定 | int 0–10000（0 = 無効）, step 500 | 0 | D | kbd+core | 見送り(H-74) | 入力を失わない原則との兼ね合いで既定は無効 |
 | `input.auto_space_alpha` | 英単語の後に自動でスペース | bool | false | D | core:input.auto_space_alpha | 新規(core) | 英字入力の予測（backlog 3 章）と同時に検討 |
 | `input.auto_capitalize` | 文頭を自動で大文字（英字） | bool | true | D | kbd | 新規(iOS) | ホストの `autocapitalizationType` に従う。ホストが無効を指定した場合はそちらを優先 |
 | `input.double_space_period` | スペース 2 回で句点 | bool | false | D | kbd | 新規(iOS) | OS 標準の挙動と揃える項目 |
 | `input.auto_close_bracket` | 括弧の自動閉じ | bool | false | D | kbd | 新規(iOS) | 閉じ括弧の間にカーソルを置く |
-| `input.long_vowel_assist` | 「ー」「っ」の補助（連続入力） | bool | false | D | core:input.long_vowel_assist | 新規(core) | backlog 3 章。精度検証後に昇格 |
+| `input.long_vowel_assist` | 「ー」「っ」の補助（連続入力） | bool | false | D | core:input.long_vowel_assist | 見送り(H-74) | backlog 3 章。精度検証後に昇格 |
 | `flick.sensitivity` | フリック感度（判定距離の倍率） | float 0.5–2.0, step 0.1 | 1.0 | S | kbd | 既存(iOS) | 値が大きいほど短い移動で反応。`flick.threshold_pt` を倍率で調整 |
 | `flick.threshold_pt` | フリック判定距離 | float 4–40 pt, step 1 | 14 | D | kbd | 既存(iOS) | キー幅に対する比ではなく絶対距離。小さい端末は自動で縮める |
 | `flick.popup` | フリック方向のポップアップ表示 | bool | true | S | kbd | 既存(iOS) | OFF は視認性が下がる代わりに描画が軽い |
