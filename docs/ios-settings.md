@@ -97,7 +97,8 @@
 | `predict.next_word_count` | 次語予測の候補数 | int 1–10 | 5 | D | core:predict.next_word_count | 既存(GUI) | 確定直後の候補バーに出す最大数 |
 | `ranking.source_order` | 候補の出所の優先順 | 配列（`learned` / `user_dict` / `llm` / `system_dict` / `kana` / `rewriter` の並べ替え） | デスクトップと同じ | D | core:ranking.source_order | 既存(toml) | 並べ替え UI が必要。記述子の型に「順序つき配列」が無いので追加が要る |
 | `convert.half_width_alnum` | 数字・英字を半角で確定 | choice: `half` / `full` / `follow_input` | `follow_input` | D | core:convert.half_width_alnum | 実装済み(core) | 全角/半角の相互変換（backlog 3 章）の基本設定 |
-| `convert.date_time` | 日付・時刻の候補（「きょう」「いま」） | bool | true | D | core:convert.date_time | 一部実装(core) | Rewriter の機能として実装。現状の対象は 8 桁数字 → 日付（`DigitsToDate`）の on/off のみ。「きょう」「いま」の候補は未実装（H-71） |
+| `convert.date_time` | 日付・時刻の候補（「きょう」「いま」） | bool | true | D | core:convert.date_time | 実装済み(core)・実機未確認（H-72） | Rewriter の機能（`DateTimeRewriter`）。「きょう」「あした」「いま」「ことし」「こんげつ」「ようび」などの読みに日付・時刻・年・月・曜日の表記を出し、8 桁数字 → 日付（`DigitsToDate`）も同じ設定で外れる。辞書の候補の後ろ。選んで確定しても学習しない |
+| `convert.time_zone` | 日付・時刻の候補のタイムゾーン | text: `auto` / `UTC` / `+09:00` 形式（-14:00〜+14:00） | `auto` | D | core:convert.time_zone | 実装済み(core)・実機未確認（H-72） | `auto` は端末の値（`set_environment` の `utc_offset_minutes`。未受信なら +09:00）。固定すると端末の設定より優先。不正値は行番号付きのエラー |
 | `convert.calculator` | 電卓候補（「1+2=」） | bool | true | D | core:convert.calculator | 新規(core) | |
 | `convert.symbol_position` | 入力中の候補に出す記号の位置 | choice: `first`（先頭）/ `after_best`（最良の変換の直後）/ `last`（末尾）/ `off`（出さない） | `after_best` | D | core:convert.symbol_position | 実装済み(core)・実機未確認（H-63） | 入力中の候補（候補バー）の記号（`かっこ` → `「」` など。H-60）の位置。`みぎ` `うえ` のように普通の語でもある読みで記号が 2 番目に出るのを避けるため。Space の候補窓の Rewriter には効かない。設定画面はコアの記述子から自動で出る |
 | `rewriter.emoji` | 読みからの絵文字候補（「わらう」→😄） | bool | true | D | core:rewriter.emoji | 実装済み(core) | Rewriter の機能。表は `config/emoji.tsv`（自作・バイナリ同梱）。候補の末尾側（出所 `rewriter`）。ユーザー辞書・変換結果が先。入力中の候補は先頭文節の読みが表に完全一致するときだけ |

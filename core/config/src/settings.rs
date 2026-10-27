@@ -537,9 +537,16 @@ pub fn definitions() -> Vec<SettingDef> {
         def(
             "convert.date_time",
             "表記の候補",
-            "日付の候補",
-            "「20260927」のような 8 桁の数字に、「2026/09/27」「2026年9月27日」のような日付の表記を変換候補として加えます。",
+            "日付・時刻の候補",
+            "「きょう」「いま」「ことし」のような読みに今日の日付・現在の時刻の表記を、「20260927」のような 8 桁の数字に日付の表記を、変換候補として加えます。",
             SettingKind::Bool,
+        ),
+        def(
+            "convert.time_zone",
+            "表記の候補",
+            "日付・時刻のタイムゾーン",
+            "日付・時刻の候補に使うタイムゾーンです。「auto」は端末の設定に従います。固定するときは「UTC」または「+09:00」「-05:30」の形式（-14:00 から +14:00）で指定します。",
+            SettingKind::Text,
         ),
         def(
             "convert.half_width_alnum",
@@ -690,6 +697,7 @@ fn from_config(config: &Config, key: &str) -> Option<SettingValue> {
         "rewriter.kaomoji" => Some(Bool(config.rewriter.kaomoji)),
         "convert.calculator" => Some(Bool(config.convert.calculator)),
         "convert.date_time" => Some(Bool(config.convert.date_time)),
+        "convert.time_zone" => Some(Text(config.convert.time_zone.clone())),
         "convert.half_width_alnum" => {
             Some(Text(config.convert.half_width_alnum.as_str().to_string()))
         }
@@ -758,6 +766,8 @@ pub fn validate_value(def: &SettingDef, value: &SettingValue) -> Result<(), Stri
                 Err("200 文字以内で指定してください".to_string())
             } else if v.chars().any(char::is_control) {
                 Err("改行などの制御文字は使えません".to_string())
+            } else if def.key == "convert.time_zone" {
+                crate::parse_time_zone(v).map(|_| ())
             } else {
                 Ok(())
             }
@@ -1337,6 +1347,37 @@ mod tests {
         let (c, issues) = crate::parse(&r.source).unwrap();
         assert!(issues.is_empty(), "{issues:?}");
         assert!(!c.convert.date_time);
+    }
+
+    #[test]
+    fn time_zone_definition_and_editing() {
+        let defs = definitions();
+        let d = defs.iter().find(|d| d.key == "convert.time_zone").unwrap();
+        assert_eq!(d.kind, SettingKind::Text);
+        assert_eq!(
+            from_config(&Config::default(), "convert.time_zone"),
+            Some(SettingValue::Text("auto".into()))
+        );
+        let r = apply_changes(
+            None,
+            &[set(
+                "convert.time_zone",
+                SettingValue::Text("-05:30".into()),
+            )],
+        )
+        .unwrap();
+        let (c, issues) = crate::parse(&r.source).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(c.convert.time_zone, "-05:30");
+        let bad = apply_changes(
+            None,
+            &[set(
+                "convert.time_zone",
+                SettingValue::Text("+15:00".into()),
+            )],
+        )
+        .unwrap();
+        assert_eq!(bad.errors.len(), 1);
     }
 
     #[test]

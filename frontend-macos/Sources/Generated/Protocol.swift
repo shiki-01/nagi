@@ -139,13 +139,17 @@ public struct SetEnvironmentParams: Codable {
 	/// このプロセスが OS から課されているメモリ上限（MB。iOS 拡張の `phys_footprint + 残り` など）。
 	/// 上限が小さいと軽いプロファイルに制限し、LLM に必要な量（150MB）未満なら LLM を解放する
 	public let memory_budget_mb: UInt32?
+	/// 現在のローカル時刻の UTC からのずれ（分。夏時間を含む今の値。例: 日本 540）。
+	/// 日付・時刻の候補（「きょう」「いま」）に使う。`convert.time_zone` が固定されていればそちらが優先
+	public let utc_offset_minutes: Int32?
 
-	public init(on_battery: Bool?, low_power_mode: Bool?, thermal: ThermalState?, memory_pressure: MemoryPressureState?, memory_budget_mb: UInt32?) {
+	public init(on_battery: Bool?, low_power_mode: Bool?, thermal: ThermalState?, memory_pressure: MemoryPressureState?, memory_budget_mb: UInt32?, utc_offset_minutes: Int32?) {
 		self.on_battery = on_battery
 		self.low_power_mode = low_power_mode
 		self.thermal = thermal
 		self.memory_pressure = memory_pressure
 		self.memory_budget_mb = memory_budget_mb
+		self.utc_offset_minutes = utc_offset_minutes
 	}
 }
 

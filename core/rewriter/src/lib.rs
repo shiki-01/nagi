@@ -1,12 +1,17 @@
 //! Rewriter: 決定的変換の最終段（設計書 §4.13）。
 //!
 //! LLM を使わない決定的な表記変換（全角/半角、カタカナ/半角カナ 等）を候補として提供する。
-//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）・日付（YYYYMMDD）・電卓（四則・括弧・優先順位つき）・記号の装飾（読み / 1 文字の ASCII 記号から、[`symbols`]）・絵文字/顔文字（読みの表 `config/emoji.tsv`、[`emoji`]）。曖昧な日付は対象外。
+//! trait でプラグイン追加可能。v1 は全角/半角英数記号・半角カナ・漢数字（digit-for-digit・位取り）・日付（YYYYMMDD）・日付と時刻（きょう・いま・ことし 等、[`datetime`]）・電卓（四則・括弧・優先順位つき）・記号の装飾（読み / 1 文字の ASCII 記号から、[`symbols`]）・絵文字/顔文字（読みの表 `config/emoji.tsv`、[`emoji`]）。曖昧な日付は対象外。
 
 mod calc;
+pub mod datetime;
 pub mod emoji;
 pub mod symbols;
 
+pub use datetime::{
+    DATE_TIME_ID, DEFAULT_UTC_OFFSET_MINUTES, DateTimeRewriter, OffsetSource, UnixClock,
+    is_date_time_candidate,
+};
 pub use emoji::{EmojiRewriter, EmojiTable};
 pub use symbols::{SYMBOL_REWRITER_ID, SymbolRewriter};
 
@@ -396,8 +401,16 @@ pub struct RewriterChain {
 }
 
 impl RewriterChain {
-    /// 既定の Rewriter（全角/半角英数記号、半角カナ）を登録したチェーンを作る
+    /// 既定の Rewriter（全角/半角英数記号、半角カナ）を登録したチェーンを作る。
+    /// 日付・時刻はシステム時計と固定の +09:00 を使う
     pub fn default_chain() -> Self {
+        Self::default_chain_with(DateTimeRewriter::system(std::sync::Arc::new(|| {
+            DEFAULT_UTC_OFFSET_MINUTES
+        })))
+    }
+
+    /// 既定の Rewriter を登録したチェーンを、時刻源を指定した日付・時刻の Rewriter で作る
+    pub fn default_chain_with(date_time: DateTimeRewriter) -> Self {
         RewriterChain {
             rewriters: vec![
                 Box::new(ZenkakuAlnum),
@@ -406,6 +419,7 @@ impl RewriterChain {
                 Box::new(KanjiDigits),
                 Box::new(KanjiPositionalNumeral),
                 Box::new(DigitsToDate),
+                Box::new(date_time),
                 Box::new(SimpleCalculator),
                 Box::new(SymbolRewriter),
             ],

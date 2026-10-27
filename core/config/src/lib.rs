@@ -669,6 +669,66 @@ impl fmt::Display for AlnumWidth {
     }
 }
 
+/// `convert.time_zone` の解釈結果（日付・時刻の候補に使うタイムゾーン。H-72）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeZoneSetting {
+    /// フロントが `set_environment` で渡した値を使う（未受信なら +09:00）。
+    Auto,
+    /// UTC からのずれ（分）に固定する。`"UTC"` は 0。
+    Fixed(i32),
+}
+
+/// UTC からのずれが未報告のときに使うずれ（分）。+09:00
+pub const DEFAULT_UTC_OFFSET_MINUTES: i32 = 540;
+
+/// ずれ（分）として受け付ける範囲（-14:00〜+14:00）
+pub const UTC_OFFSET_RANGE_MINUTES: std::ops::RangeInclusive<i32> = -14 * 60..=14 * 60;
+
+impl TimeZoneSetting {
+    /// 有効な UTC からのずれ（分）を決める。設定の固定値 > フロントの報告（`set_environment`。
+    /// 範囲外は無視）> 既定の +09:00
+    pub fn resolve(self, reported_minutes: Option<i32>) -> i32 {
+        match self {
+            TimeZoneSetting::Fixed(minutes) => minutes,
+            TimeZoneSetting::Auto => reported_minutes
+                .filter(|m| UTC_OFFSET_RANGE_MINUTES.contains(m))
+                .unwrap_or(DEFAULT_UTC_OFFSET_MINUTES),
+        }
+    }
+}
+
+/// `convert.time_zone` の文字列を解釈する。`"auto"` / `"UTC"` / `"+09:00"`・`"-05:30"`
+/// （範囲 -14:00〜+14:00）。不正値は理由（日本語）を返す。
+pub fn parse_time_zone(s: &str) -> Result<TimeZoneSetting, String> {
+    if s == "auto" {
+        return Ok(TimeZoneSetting::Auto);
+    }
+    if s == "UTC" {
+        return Ok(TimeZoneSetting::Fixed(0));
+    }
+    let bad = || {
+        format!(
+            "\"auto\"・\"UTC\"・\"+09:00\" 形式（-14:00 から +14:00）のいずれかである必要があります: {s}"
+        )
+    };
+    let sign = match s.as_bytes().first() {
+        Some(b'+') => 1,
+        Some(b'-') => -1,
+        _ => return Err(bad()),
+    };
+    let (h, m) = s[1..].split_once(':').ok_or_else(bad)?;
+    let digits = |t: &str| t.len() == 2 && t.bytes().all(|b| b.is_ascii_digit());
+    if !digits(h) || !digits(m) {
+        return Err(bad());
+    }
+    let (h, m): (i32, i32) = (h.parse().map_err(|_| bad())?, m.parse().map_err(|_| bad())?);
+    let minutes = h * 60 + m;
+    if m >= 60 || minutes > 14 * 60 {
+        return Err(bad());
+    }
+    Ok(TimeZoneSetting::Fixed(sign * minutes))
+}
+
 /// 変換結果の表記に関するセクション（`docs/ios-settings.md` §2 の `convert.*`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -686,6 +746,9 @@ pub struct ConvertSection {
     pub suggest_max: usize,
     /// 入力中の候補に出す記号（`かっこ` → `「」` など）の位置。既定: `after_best`（最良の変換の直後）。
     pub symbol_position: SymbolPosition,
+    /// 日付・時刻の候補に使うタイムゾーン。`"auto"`（既定。フロントの報告を使う）/ `"UTC"` /
+    /// `"+09:00"` 形式の固定オフセット（-14:00〜+14:00）。[`parse_time_zone`] で解釈する。
+    pub time_zone: String,
 }
 
 impl Default for ConvertSection {
@@ -697,6 +760,7 @@ impl Default for ConvertSection {
             loanword: LoanwordSection::default(),
             suggest_max: 120,
             symbol_position: SymbolPosition::AfterBest,
+            time_zone: "auto".to_string(),
         }
     }
 }
@@ -1050,6 +1114,11 @@ impl Config {
             ));
         }
 
+        // convert.time_zone: "auto" / "UTC" / "+09:00" 形式
+        if let Err(reason) = parse_time_zone(&self.convert.time_zone) {
+            errors.push(format!("convert.time_zone は {reason}"));
+        }
+
         // learning.max_entries: 100 <= max_entries <= 1000000
         if !(100..=1_000_000).contains(&self.learning.max_entries) {
             errors.push(format!(
@@ -1257,6 +1326,7 @@ fn get_known_section_keys(section: &str) -> &'static [&'static str] {
             "loanword",
             "suggest_max",
             "symbol_position",
+            "time_zone",
         ],
         "userdict" => &["enabled", "max_entries"],
         "snippet" => &["enabled"],
@@ -2056,6 +2126,42 @@ min_chars = 3
         config.userdict.max_entries = 100_001;
         let errors = config.validate();
         assert!(errors.iter().any(|e| e.contains("userdict.max_entries")));
+    }
+
+    #[test]
+    fn test_convert_time_zone() {
+        assert_eq!(Config::default().convert.time_zone, "auto");
+        for (text, expected) in [
+            ("auto", TimeZoneSetting::Auto),
+            ("UTC", TimeZoneSetting::Fixed(0)),
+            ("+09:00", TimeZoneSetting::Fixed(540)),
+            ("-05:30", TimeZoneSetting::Fixed(-330)),
+            ("+14:00", TimeZoneSetting::Fixed(840)),
+            ("-14:00", TimeZoneSetting::Fixed(-840)),
+        ] {
+            assert_eq!(parse_time_zone(text), Ok(expected), "{text}");
+            let (config, _) =
+                parse(&format!("[convert]\ntime_zone = \"{text}\"\n")).expect("parse");
+            assert_eq!(config.convert.time_zone, text);
+        }
+        for bad in [
+            "", "JST", "09:00", "+9:00", "+09:60", "+14:01", "-15:00", "+0900", "utc",
+        ] {
+            assert!(parse_time_zone(bad).is_err(), "{bad}");
+        }
+        // 行番号付きのエラーになる
+        let issues = parse("[convert]\n\ntime_zone = \"+15:00\"\n").unwrap_err();
+        assert_eq!(issues[0].line, 3);
+        assert_eq!(issues[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn test_time_zone_resolve() {
+        assert_eq!(TimeZoneSetting::Auto.resolve(None), 540);
+        assert_eq!(TimeZoneSetting::Auto.resolve(Some(-300)), -300);
+        assert_eq!(TimeZoneSetting::Auto.resolve(Some(100_000)), 540);
+        assert_eq!(TimeZoneSetting::Fixed(0).resolve(Some(540)), 0);
+        assert_eq!(TimeZoneSetting::Fixed(-330).resolve(None), -330);
     }
 
     #[test]

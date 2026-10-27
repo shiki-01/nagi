@@ -1,6 +1,6 @@
 import Foundation
 
-/// OS の実行環境（低電力モード・サーマル状態・メモリ逼迫）を集めて、コアの `set_environment` の形にする。
+/// OS の実行環境（低電力モード・サーマル状態・メモリ逼迫・タイムゾーン）を集めて、コアの `set_environment` の形にする。
 /// 電源・熱は OS の通知（`NSProcessInfoPowerStateDidChange` / `thermalStateDidChangeNotification`）で変化を
 /// 検出する。メモリ逼迫は OS の警告（`didReceiveMemoryWarning`）を `noteMemoryWarning` で受ける
 /// （メモリ上限そのものは、コアの生成時に `nagi_server_new_with_budget` で渡す。docs/mobile-roadmap.md D-4）。
@@ -25,6 +25,9 @@ final class NagiEnvironmentReporter {
             forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main, using: handler))
         observers.append(center.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main, using: handler))
+        // タイムゾーン（夏時間の切替を含む）の変更。日付・時刻の候補に使う UTC からのずれを再送する
+        observers.append(center.addObserver(
+            forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main, using: handler))
     }
 
     func stop() {
@@ -75,7 +78,8 @@ final class NagiEnvironmentReporter {
             low_power_mode: info.isLowPowerModeEnabled,
             thermal: thermal,
             memory_pressure: memoryPressure,
-            memory_budget_mb: UInt32(clamping: MemoryProbe.processBudgetMB())
+            memory_budget_mb: UInt32(clamping: MemoryProbe.processBudgetMB()),
+            utc_offset_minutes: Int32(TimeZone.autoupdatingCurrent.secondsFromGMT() / 60)
         )
     }
 

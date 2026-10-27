@@ -125,7 +125,7 @@ pub fn backend_name(has_dict: bool, has_llm: bool) -> &'static str {
     }
 }
 
-/// 設定（`convert.calculator` / `convert.date_time`）で無効にした Rewriter の識別子
+/// 設定（`convert.calculator` / `convert.date_time`。後者は日付と日付・時刻の両方）で無効にした Rewriter の識別子
 fn excluded_rewriters(eff: &Effective) -> Vec<&'static str> {
     let mut excluded = Vec::new();
     if !eff.calculator {
@@ -133,6 +133,7 @@ fn excluded_rewriters(eff: &Effective) -> Vec<&'static str> {
     }
     if !eff.date_time {
         excluded.push(nagi_rewriter::DIGITS_TO_DATE_ID);
+        excluded.push(nagi_rewriter::DATE_TIME_ID);
     }
     excluded
 }
@@ -175,12 +176,17 @@ impl Pipeline {
         }
         let name = backend_name(dict.is_some(), llm.get().is_some());
         runtime.set_backend_name(name);
+        // 日付・時刻の Rewriter はシステム時計（UTC）と、Runtime が決める UTC からのずれを使う
+        let offset_runtime = runtime.clone();
+        let date_time = nagi_rewriter::DateTimeRewriter::system(Arc::new(move || {
+            offset_runtime.utc_offset_minutes()
+        }));
         Pipeline {
             dict,
             llm,
             runtime,
             completions: Arc::new(Completions::new()),
-            rewriter: RewriterChain::default_chain(),
+            rewriter: RewriterChain::default_chain_with(date_time),
             fuzzy: OnceLock::new(),
             english: nagi_english::Judge::standard(None),
             loanword: None,

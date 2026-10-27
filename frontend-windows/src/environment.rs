@@ -66,6 +66,8 @@ pub trait EnvironmentProbe {
     fn memory(&self) -> Option<MemorySample>;
     /// プロセッサの周波数
     fn processor(&self) -> Option<ProcessorSample>;
+    /// 現在のローカル時刻の UTC からのずれ（分。夏時間を含む今の値。例: 日本 540）
+    fn utc_offset_minutes(&self) -> Option<i32>;
 }
 
 /// 電池駆動か。不明なら `None`
@@ -116,7 +118,8 @@ pub fn thermal(cpu: &ProcessorSample, battery_saver: Option<bool>) -> Option<The
 }
 
 /// 現在の環境を `set_environment` の params にする。`memory_budget_mb` は Windows では報告しない
-/// （macOS と同じ。上限を課されるのは iOS 拡張のようなプロセス）
+/// （macOS と同じ。上限を課されるのは iOS 拡張のようなプロセス）。UTC からのずれ（日付・時刻の候補用）は
+/// 夏時間の切り替えやタイムゾーンの変更で変わるので、他の項目と同じく変化したときに再送される
 pub fn snapshot(probe: &dyn EnvironmentProbe) -> SetEnvironmentParams {
     let power = probe.power();
     let battery_saver = power.and_then(|p| p.battery_saver);
@@ -128,6 +131,7 @@ pub fn snapshot(probe: &dyn EnvironmentProbe) -> SetEnvironmentParams {
             .and_then(|cpu| thermal(&cpu, battery_saver)),
         memory_pressure: probe.memory().as_ref().map(memory_pressure),
         memory_budget_mb: None,
+        utc_offset_minutes: probe.utc_offset_minutes(),
     }
 }
 
@@ -321,6 +325,7 @@ mod tests {
         power: Cell<Option<PowerSample>>,
         memory: Cell<Option<MemorySample>>,
         cpu: Cell<Option<ProcessorSample>>,
+        offset: Cell<Option<i32>>,
     }
 
     impl EnvironmentProbe for FakeProbe {
@@ -332,6 +337,9 @@ mod tests {
         }
         fn processor(&self) -> Option<ProcessorSample> {
             self.cpu.get()
+        }
+        fn utc_offset_minutes(&self) -> Option<i32> {
+            self.offset.get()
         }
     }
 
@@ -351,6 +359,7 @@ mod tests {
             current_mhz: 1000,
             max_mhz: 3000,
         }));
+        probe.offset.set(Some(540));
         assert_eq!(
             snapshot(&probe),
             SetEnvironmentParams {
@@ -359,6 +368,7 @@ mod tests {
                 thermal: Some(ThermalState::Critical),
                 memory_pressure: Some(MemoryPressureState::Critical),
                 memory_budget_mb: None,
+                utc_offset_minutes: Some(540),
             }
         );
     }

@@ -31,6 +31,10 @@ impl CommitObserver for LearningObserver {
             if seg.kind != SegmentKind::Japanese {
                 continue;
             }
+            // 日付・時刻の候補（きょう → 2026/10/27 など）は日が変われば古くなるので学習しない
+            if nagi_rewriter::is_date_time_candidate(&seg.reading, &seg.surface) {
+                continue;
+            }
             // reading が空なのは確定直後の次語候補をそのまま選んだ場合（単語の学習はしない）
             if !seg.reading.is_empty() {
                 self.runtime.learn_record(

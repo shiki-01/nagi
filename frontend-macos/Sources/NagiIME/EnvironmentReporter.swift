@@ -50,6 +50,9 @@ final class EnvironmentReporter {
         observers.append(center.addObserver(
             forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main,
             using: handler))
+        // タイムゾーン（夏時間の切替を含む）の変更。日付・時刻の候補に使う UTC からのずれを再送する
+        observers.append(center.addObserver(
+            forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main, using: handler))
 
         // 電源（AC / 電池）の切替。コールバックはメインのランループで呼ばれる
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -93,7 +96,8 @@ final class EnvironmentReporter {
             low_power_mode: info.isLowPowerModeEnabled,
             thermal: EnvironmentMapping.thermal(info.thermalState),
             memory_pressure: memoryPressure,
-            memory_budget_mb: nil)
+            memory_budget_mb: nil,
+            utc_offset_minutes: Int32(TimeZone.autoupdatingCurrent.secondsFromGMT() / 60))
     }
 
     private static func providingPowerSourceType() -> String? {

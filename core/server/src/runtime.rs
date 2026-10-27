@@ -5,7 +5,7 @@
 //! 設定の再読み込み・`set_environment`・レイテンシ計測は、すべてここを通して反映される。
 
 use crate::fuzzy::FuzzySettings;
-use nagi_config::{Config, ProfileMode};
+use nagi_config::{Config, ProfileMode, TimeZoneSetting, parse_time_zone};
 use nagi_dict::Overlay;
 use nagi_learn::{LearnConfig, Learner, NextWordLearner};
 use nagi_profile::{
@@ -18,8 +18,8 @@ use nagi_protocol::methods::{
 };
 use nagi_protocol::view::CandidateSource;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -35,6 +35,9 @@ const NEXT_WORD_FILE: &str = "learning-next.tsv";
 /// メモリ逼迫が解消（`normal`）してから、解放していた変換モデルを再読み込みするまでの待ち時間。
 /// 逼迫が短い間隔で繰り返されても、読み込みと解放を繰り返さないための猶予
 pub const MODEL_RELOAD_DELAY: Duration = Duration::from_secs(30);
+
+/// `reported_utc_offset` が未報告であることを表す値
+const UTC_OFFSET_UNREPORTED: i32 = i32::MIN;
 
 /// 変換モデルの解放・再読み込みを実際に行うもの（[`crate::pipeline::Pipeline`] が実装する）。
 /// どちらも呼び出し側を待たせない（読み込みは別スレッド）。実行中の推論があっても安全
@@ -119,6 +122,8 @@ pub struct Tunables {
     pub calculator_enabled: bool,
     /// `convert.date_time`
     pub date_time_enabled: bool,
+    /// `convert.time_zone`
+    pub time_zone: TimeZoneSetting,
     /// `convert.loanword.enabled`
     pub loanword_enabled: bool,
     /// `input.fuzzy.*`（曖昧入力）
@@ -187,6 +192,7 @@ impl Tunables {
             kaomoji_enabled: config.rewriter.kaomoji,
             calculator_enabled: config.convert.calculator,
             date_time_enabled: config.convert.date_time,
+            time_zone: parse_time_zone(&config.convert.time_zone).unwrap_or(TimeZoneSetting::Auto),
             loanword_enabled: config.convert.loanword.enabled,
             fuzzy: FuzzySettings::from_config(&config.input.fuzzy),
         }
@@ -258,6 +264,8 @@ pub struct Runtime {
     calibration_path: Mutex<Option<PathBuf>>,
     /// プロセスのメモリ上限（MB）。0 は上限なし
     memory_budget_mb: AtomicU64,
+    /// フロントエンドが報告した UTC からのずれ（分）。`UTC_OFFSET_UNREPORTED` は未報告
+    reported_utc_offset: AtomicI32,
     /// フロントエンドの入力方式（`initialize` の capabilities）
     input_method: Mutex<InputMethod>,
     model: Mutex<ModelState>,
@@ -331,6 +339,7 @@ impl Runtime {
             backend_name: Mutex::new(String::new()),
             calibration_path: Mutex::new(None),
             memory_budget_mb: AtomicU64::new(memory_budget_mb.unwrap_or(0)),
+            reported_utc_offset: AtomicI32::new(UTC_OFFSET_UNREPORTED),
             input_method: Mutex::new(InputMethod::Physical),
             model: Mutex::new(ModelState::default()),
             model_control: Mutex::new(None),
@@ -577,6 +586,9 @@ impl Runtime {
         if let Some(mb) = p.memory_budget_mb {
             self.set_memory_budget_mb(Some(u64::from(mb)));
         }
+        if let Some(minutes) = p.utc_offset_minutes {
+            self.reported_utc_offset.store(minutes, Ordering::Relaxed);
+        }
         let change = self.controller.lock().ok().and_then(|mut c| {
             let mut env = c.environment();
             if let Some(v) = p.on_battery {
@@ -604,6 +616,20 @@ impl Runtime {
         });
         self.announce(change);
         self.evaluate_model(false);
+    }
+
+    /// 日付・時刻の候補に使う UTC からのずれ（分）。設定（`convert.time_zone`）の固定値 >
+    /// フロントエンドの報告（`set_environment`）> 既定の +09:00
+    pub fn utc_offset_minutes(&self) -> i32 {
+        let reported = match self.reported_utc_offset.load(Ordering::Relaxed) {
+            UTC_OFFSET_UNREPORTED => None,
+            minutes => Some(minutes),
+        };
+        let setting = self
+            .tunables
+            .read()
+            .map_or(TimeZoneSetting::Auto, |t| t.time_zone);
+        setting.resolve(reported)
     }
 
     /// プロセスのメモリ上限（MB）。未報告なら `None`

@@ -14,6 +14,10 @@ use windows::Win32::System::Power::{
 use windows::Win32::System::SystemInformation::{
     GetSystemInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX, SYSTEM_INFO,
 };
+use windows::Win32::System::SystemServices::{TIME_ZONE_ID_DAYLIGHT, TIME_ZONE_ID_STANDARD};
+use windows::Win32::System::Time::{
+    DYNAMIC_TIME_ZONE_INFORMATION, GetDynamicTimeZoneInformation, TIME_ZONE_ID_INVALID,
+};
 
 /// `SYSTEM_POWER_STATUS.BatteryFlag` の「電池なし」
 const BATTERY_FLAG_NO_BATTERY: u8 = 128;
@@ -83,5 +87,18 @@ impl EnvironmentProbe for Win32Probe {
             current_mhz: u32::try_from(limit).ok()?,
             max_mhz: u32::try_from(max).ok()?,
         })
+    }
+
+    fn utc_offset_minutes(&self) -> Option<i32> {
+        let mut info = DYNAMIC_TIME_ZONE_INFORMATION::default();
+        let id = unsafe { GetDynamicTimeZoneInformation(&mut info) };
+        // Bias は「UTC = ローカル + Bias」の分。今が夏時間かどうかで追加の差（DaylightBias）を足す
+        let extra = match id {
+            TIME_ZONE_ID_INVALID => return None,
+            TIME_ZONE_ID_DAYLIGHT => info.DaylightBias,
+            TIME_ZONE_ID_STANDARD => info.StandardBias,
+            _ => 0,
+        };
+        Some(-(info.Bias + extra))
     }
 }

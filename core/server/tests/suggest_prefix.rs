@@ -286,3 +286,24 @@ fn full_width_open_bracket_keeps_its_existing_candidates() {
     let all = surfaces(&typed(&mut s, "（"));
     assert!(all.iter().any(|x| x == "「"), "{all:?}");
 }
+
+// ---- 日付・時刻の読み（H-72） ----
+
+#[test]
+fn date_and_time_readings_appear_in_the_composing_candidates_after_dictionary() {
+    for partial in [None, Some(true)] {
+        let mut s = server(partial, false);
+        let all = surfaces(&typed(&mut s, "きょう"));
+        let today = all.iter().position(|x| x == "今日").expect("辞書の候補");
+        let date = all
+            .iter()
+            .position(|x| x.len() == 10 && x.as_bytes()[4] == b'/')
+            .unwrap_or_else(|| panic!("{all:?}"));
+        assert!(today < date, "{all:?}");
+        let all = surfaces(&typed(&mut server(partial, false), "いま"));
+        assert!(
+            all.iter().any(|x| x.contains('時') && x.contains('分')),
+            "{all:?}"
+        );
+    }
+}

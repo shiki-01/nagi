@@ -148,3 +148,11 @@
 
 - Windows の IS_PASSWORD（値 31）: windows-verification.md の段階 A・D・E では未チェックだが、real-hardware-checklist.md §8.5b は「定数 31 はコンパイル時に一致を確認済み」としている（実機でパスワード欄の挙動を確かめるのは残る）
 - keyboard-style-spec.md §11 の決定記録の草案の見出しが「H-??」のまま（decisions.md の H-65〜H-67 に記録済みかの照合が要る）
+
+## 追加分（2026-10-27）
+
+| No. | 何を確かめるか | 参照先 | 決定 |
+|---|---|---|---|
+| 1 | 「きょう」「いま」などの日付・時刻の候補が、端末の時刻・タイムゾーンどおりに出るか（iOS・macOS・Windows） | decisions.md H-72 | H-72 |
+| 2 | タイムゾーンを変えたとき（設定アプリで変更・旅行先）に、候補の日時が追従するか（`NSSystemTimeZoneDidChange`・Windows の再送） | decisions.md H-72 | H-72 |
+| 3 | Windows の `GetDynamicTimeZoneInformation` で求めたずれが正しいか（夏時間のある地域を含む。型検査のみ） | decisions.md H-72 | H-72 |

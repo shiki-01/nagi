@@ -429,6 +429,10 @@ pub struct SetEnvironmentParams {
     /// 上限が小さいと軽いプロファイルに制限し、LLM に必要な量（150MB）未満なら LLM を解放する
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_budget_mb: Option<u32>,
+    /// 現在のローカル時刻の UTC からのずれ（分。夏時間を含む今の値。例: 日本 540）。
+    /// 日付・時刻の候補（「きょう」「いま」）に使う。`convert.time_zone` が固定されていればそちらが優先
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub utc_offset_minutes: Option<i32>,
 }
 
 /// `get_status` の結果: メニューなどで「今どういう状態か・なぜか」を表示するための情報

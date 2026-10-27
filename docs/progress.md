@@ -224,7 +224,7 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 - コアにすでにある（`core/config/src/settings.rs`、`config/default.toml`。iOS 画面に出ているかは確認が要る）: `input.dakuten_cycle`、`learning.strength` / `learning.forget_days` / `learning.max_entries`、`predict.next_word` / `predict.next_word_count`（LLM 版は未実装）、`convert.calculator`、`userdict.enabled` / `snippet.enabled`
 - コアにまだ無い（9 件）:
   1. `convert.half_width_alnum`（数字・英字を半角で確定。`half` / `full` / `follow_input`）→ **実装済み(core)**（Literal 文節の確定時のみ。候補で明示選択した表記は優先。記号は変えない）
-  2. `convert.date_time`（「きょう」「いま」などの日付・時刻候補）→ **実装済み(core)**（ただし対象は既存の日付 Rewriter `DigitsToDate`（8 桁数字 → 日付）の on/off のみ。「きょう」「いま」の候補自体はコアに未実装。H-71）
+  2. `convert.date_time`（「きょう」「いま」などの日付・時刻候補）→ **実装済み(core)**（`DigitsToDate` と、新しい `DateTimeRewriter`（「きょう」「いま」「ことし」「こんげつ」「ようび」など）の両方の on/off。タイムゾーンは `convert.time_zone` と `set_environment` の `utc_offset_minutes`。選んで確定しても学習しない。H-71・H-72。iOS 実機は未確認）
   3. `input.auto_commit_ms`（一定時間で自動確定。既定は無効。入力を失わない原則との兼ね合い）
   4. `input.auto_space_alpha`（英単語の後の自動スペース）
   5. `input.long_vowel_assist`（「ー」「っ」の補助）
