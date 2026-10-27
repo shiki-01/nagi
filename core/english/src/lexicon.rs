@@ -20,7 +20,7 @@ pub enum LexiconError {
 }
 
 /// 語彙ファイル全体のバイト列の持ち主（メモリ上の `Vec` か、mmap）
-enum Backing {
+pub(crate) enum Backing {
     Owned(Vec<u8>),
     #[cfg(not(windows))]
     Mapped(memmap2::Mmap),
@@ -71,6 +71,11 @@ impl Lexicon {
     /// 単語の頻度の段階（小さいほど一般的）。語彙に無ければ `None`。小文字の ASCII で引く
     pub fn tier(&self, word: &str) -> Option<u8> {
         self.map.get(word).map(|v| v as u8)
+    }
+
+    /// fst 本体（綴りの候補の探索でたどる）
+    pub(crate) fn fst(&self) -> &fst::raw::Fst<Backing> {
+        self.map.as_fst()
     }
 
     /// 単語数

@@ -124,6 +124,14 @@ pub trait ConversionBackend: Send + Sync {
         default_english_judge().judge(raw, false).level
     }
 
+    /// 英語の綴りの「もしかして」（`docs/plan-next-features.md` C）: 打鍵列 `raw`（小文字のローマ字）に
+    /// 近い英単語（良い順、最大 `limit` 件。`typscript` → `typescript`）。`reading` は同じ打鍵列を日本語
+    /// として読んだかな（辞書で引けるなら出さない）。語彙を持たない・非対応なら空（既定実装は非対応）
+    fn english_spellings(&self, raw: &str, reading: &str, limit: usize) -> Vec<String> {
+        let _ = (raw, reading, limit);
+        Vec::new()
+    }
+
     /// 曖昧入力（タイプミス補正）の「もしかして」候補（良い順、最大 `limit` 件。出所は
     /// [`CandidateSource::Fuzzy`]）。`reading` は入力中の読み全体で、辞書でそのまま意味を持つなら
     /// 出さない。`typing` は実際の打鍵列とキー配置（任意）。無効・非対応なら空（既定実装は非対応）。`segment_candidates` も文節の読みに対して

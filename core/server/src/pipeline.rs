@@ -1089,6 +1089,22 @@ impl ConversionBackend for Pipeline {
         self.english.judge(raw, known).level
     }
 
+    fn english_spellings(&self, raw: &str, reading: &str, limit: usize) -> Vec<String> {
+        if !self.english.has_lexicon() || !raw.bytes().all(|b| b.is_ascii_lowercase()) {
+            return Vec::new();
+        }
+        let known = self.reading_is_known(reading);
+        let costs = nagi_english::SpellCosts {
+            substitute: &qwerty_substitute,
+            ..nagi_english::SpellCosts::default()
+        };
+        self.english
+            .spellings(raw, known, &costs, limit)
+            .into_iter()
+            .map(|s| s.word)
+            .collect()
+    }
+
     fn fuzzy_candidates(
         &self,
         reading: &str,
@@ -1291,4 +1307,15 @@ impl ConversionBackend for Pipeline {
 /// 使い方の確認用に、設定なしの既定の待ち時間を返す
 pub fn default_sync_budget() -> Duration {
     Duration::from_millis(150)
+}
+
+/// 綴りの「もしかして」の置換の重み: QWERTY で隣り合うキーは打ち間違えやすいので安くする
+fn qwerty_substitute(typed: u8, intended: u8) -> f32 {
+    static ADJACENCY: std::sync::OnceLock<nagi_fuzzy::Adjacency> = std::sync::OnceLock::new();
+    let adjacency = ADJACENCY.get_or_init(nagi_fuzzy::Adjacency::qwerty);
+    if adjacency.is_adjacent(char::from(typed), char::from(intended)) {
+        0.6
+    } else {
+        1.0
+    }
 }

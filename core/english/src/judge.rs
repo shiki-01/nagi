@@ -20,6 +20,11 @@ pub const HIGH_THRESHOLD: f32 = 0.8;
 /// 「中程度」とみなす最小のスコア（候補の少し後ろに置く）
 pub const MID_THRESHOLD: f32 = 0.5;
 
+/// 有効なローマ字の打鍵列に出す綴りの候補の、編集距離の上限（入れ替え・重ね・隣のキーの置換 1 回まで）
+pub const VALID_ROMAJI_SPELL_COST: f32 = 0.7;
+/// 有効なローマ字の打鍵列に綴りの候補を出す最小の文字数
+pub const VALID_ROMAJI_SPELL_MIN_LEN: usize = 6;
+
 /// 判定の確からしさの段階
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
@@ -95,6 +100,34 @@ impl Judge {
     /// 語彙を持つか
     pub fn has_lexicon(&self) -> bool {
         self.lexicon.is_some()
+    }
+
+    /// 綴りの「もしかして」: `raw`（打鍵列）に近い語彙の語（良い順、最大 `limit` 件）。語彙が無い・
+    /// 日本語として引ける（`japanese_known`）ときは空。有効なローマ字だけでできている（かなにならない
+    /// ASCII が残らない）ときは、日本語の入力を優先して [`VALID_ROMAJI_SPELL_COST`] 以下の誤りだけ
+    pub fn spellings(
+        &self,
+        raw: &str,
+        japanese_known: bool,
+        costs: &crate::spell::SpellCosts<'_>,
+        limit: usize,
+    ) -> Vec<crate::spell::Suggestion> {
+        let Some(lex) = self.lexicon.as_ref() else {
+            return Vec::new();
+        };
+        if japanese_known || !raw.bytes().all(|b| b.is_ascii_lowercase()) {
+            return Vec::new();
+        }
+        let mut found = crate::spell::suggest(lex, raw, costs, limit);
+        if analyze(&self.table, raw).raw_count == 0 {
+            // 有効なローマ字（`recieve` → れしえヴぇ、`mesage` → めさげ）は日本語の打ち間違いとも
+            // 読めるので、6 文字以上で、入れ替え・重ね・隣のキーのような小さい誤りだけにする
+            if raw.len() < VALID_ROMAJI_SPELL_MIN_LEN {
+                return Vec::new();
+            }
+            found.retain(|s| s.cost <= VALID_ROMAJI_SPELL_COST + 1e-4);
+        }
+        found
     }
 
     /// `raw`（打鍵列）が英語である確からしさ。`japanese_known` は、同じ打鍵列を日本語として読んだ
@@ -210,6 +243,32 @@ mod tests {
         assert_eq!(j.judge("ab1xyz", false).level, Level::None);
         assert_eq!(j.judge("Typescript", false).level, Level::None);
         assert_eq!(j.judge("", false).level, Level::None);
+    }
+
+    #[test]
+    fn spellings_need_lexicon_and_leftover_ascii() {
+        let costs = crate::spell::SpellCosts::default();
+        let j = Judge::standard(Some(lexicon(&[("typescript", 70), ("kabuki", 50)])));
+        let words = |raw: &str, known: bool| -> Vec<String> {
+            j.spellings(raw, known, &costs, 3)
+                .into_iter()
+                .map(|s| s.word)
+                .collect()
+        };
+        assert_eq!(words("typscript", false), ["typescript"]);
+        // 日本語として引ける語には出さない
+        assert!(words("typscript", true).is_empty());
+        // 有効なローマ字（kabika → かびか）は、入れ替え・重ねの小さい誤りだけ
+        assert!(words("kabika", false).is_empty());
+        assert_eq!(words("kaubki", false), ["kabuki"]);
+        // 有効なローマ字の短い語（5 文字以下）には出さない（`onna` → `nona` のような誤り）
+        let short = Judge::standard(Some(lexicon(&[("nona", 50)])));
+        assert!(short.spellings("onna", false, &costs, 3).is_empty());
+        assert!(
+            Judge::standard(None)
+                .spellings("typscript", false, &costs, 3)
+                .is_empty()
+        );
     }
 
     #[test]

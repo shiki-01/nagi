@@ -11,6 +11,7 @@ use std::sync::Arc;
 struct Fixed {
     inner: MockBackend,
     level: Option<nagi_english::Level>,
+    spellings: Vec<String>,
 }
 
 impl ConversionBackend for Fixed {
@@ -29,6 +30,9 @@ impl ConversionBackend for Fixed {
             None => KanaBackend.english_level(raw, reading),
         }
     }
+    fn english_spellings(&self, _raw: &str, _reading: &str, limit: usize) -> Vec<String> {
+        self.spellings.iter().take(limit).cloned().collect()
+    }
 }
 
 fn engine(
@@ -36,6 +40,16 @@ fn engine(
     mode: AutoEnglishMode,
     view: InitialView,
     reading: &str,
+) -> Engine {
+    engine_with_spellings(level, mode, view, reading, &[])
+}
+
+fn engine_with_spellings(
+    level: Option<nagi_english::Level>,
+    mode: AutoEnglishMode,
+    view: InitialView,
+    reading: &str,
+    spellings: &[&str],
 ) -> Engine {
     let inner = MockBackend::new()
         .with_segments(
@@ -47,7 +61,11 @@ fn engine(
             vec![(reading, vec!["漢字甲", "漢字乙", "漢字丙", "漢字丁"])],
         );
     Engine::new(
-        Arc::new(Fixed { inner, level }),
+        Arc::new(Fixed {
+            inner,
+            level,
+            spellings: spellings.iter().map(|s| s.to_string()).collect(),
+        }),
         EngineConfig {
             auto_english: mode,
             initial_view: view,
@@ -263,4 +281,59 @@ fn passthrough_literal_is_not_touched() {
     let r = e.process_key("s", &parse_key("Space").unwrap());
     assert_eq!(r.commit.as_deref(), Some("/help"));
     assert!(r.candidates.is_none());
+}
+
+#[test]
+fn spelling_suggestions_follow_main_candidates_as_fuzzy() {
+    // 綴りの「もしかして」: 英語らしさが中程度なら、主要な候補の後ろ・形式の変換の前に出る
+    let reading = reading_of("typscript");
+    let mut e = engine_with_spellings(
+        Some(nagi_english::Level::Mid),
+        AutoEnglishMode::Conservative,
+        InitialView::Segment,
+        &reading,
+        &["typescript"],
+    );
+    let items = candidates_after_space(&mut e, "typscript");
+    let fix = position(&items, "typescript");
+    assert!(fix >= 1, "{items:?}");
+    // 形式の変換（カタカナ・全角英数）より前
+    assert!(fix < position(&items, "ｔｙｐｓｃｒｉｐｔ"), "{items:?}");
+    assert_ne!(items[0], "typescript");
+    // 選ぶと綴りを直した語で確定する
+    for _ in 0..fix {
+        e.process_key("s", &parse_key("Space").unwrap());
+    }
+    let r = e.process_key("s", &parse_key("Enter").unwrap());
+    assert_eq!(r.commit.as_deref(), Some("typescript"));
+}
+
+#[test]
+fn spelling_suggestions_open_the_window_even_when_english_is_unlikely() {
+    // 英語らしさが弱くても、綴りの候補があれば 1 文節にして出す。先頭は変えない
+    let reading = reading_of("wprld");
+    let mut e = engine_with_spellings(
+        Some(nagi_english::Level::None),
+        AutoEnglishMode::Conservative,
+        InitialView::Segment,
+        &reading,
+        &["world", "would"],
+    );
+    let items = candidates_after_space(&mut e, "wprld");
+    assert_ne!(items[0], "world", "{items:?}");
+    assert!(position(&items, "world") < position(&items, "would"));
+}
+
+#[test]
+fn spelling_suggestions_are_off_with_auto_english_off() {
+    let reading = reading_of("typscript");
+    let mut e = engine_with_spellings(
+        Some(nagi_english::Level::Mid),
+        AutoEnglishMode::Off,
+        InitialView::Segment,
+        &reading,
+        &["typescript"],
+    );
+    let items = try_candidates_after_space(&mut e, "typscript").unwrap_or_default();
+    assert!(!items.iter().any(|i| i == "typescript"), "{items:?}");
 }

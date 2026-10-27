@@ -107,6 +107,30 @@ fn user_dictionary_and_learning_make_a_reading_known() {
     assert_eq!(level(&p, "data"), Level::None);
 }
 
+#[test]
+fn spellings_use_the_lexicon_and_keep_japanese_first() {
+    use nagi_engine::ConversionBackend;
+    let p = pipeline(Some(lexicon(&[
+        ("typescript", 70),
+        ("world", 30),
+        ("banana", 20),
+    ])));
+    let spell = |raw: &str| p.english_spellings(raw, &reading_of(raw), 3);
+    assert_eq!(spell("typscript"), ["typescript"]);
+    // QWERTY で隣のキー（o → p）の打ち間違い
+    assert_eq!(spell("wprld"), ["world"]);
+    // 語彙にある語には出さない
+    assert!(spell("typescript").is_empty());
+    // 有効なローマ字（ばなか）は日本語を優先し、小さい誤り（隣のキー・入れ替え）だけ
+    assert!(spell("banaka").is_empty());
+    assert_eq!(spell("banama"), ["banana"]);
+    assert!(
+        pipeline(None)
+            .english_spellings("typscript", "", 3)
+            .is_empty()
+    );
+}
+
 /// 実データ（`data/dict/nagi-dict.bin` と `data/english/words.fst`）で評価コーパスを測る。無ければ省略
 #[test]
 fn corpus_with_real_data_if_available() {
@@ -184,4 +208,70 @@ fn corpus_with_real_data_if_available() {
         Some(1),
         "{items:?}"
     );
+}
+
+/// 綴りの「もしかして」を実データ（`data/english/words.fst`。辞書 `data/dict/nagi-dict.bin` もあれば使う）で
+/// 測る: 打ち間違いのコーパスの上位 3 件の再現率、日本語・日英混在の入力に出てしまう件数、1 回の時間。
+/// 語彙が無ければ省略
+#[test]
+fn spellings_with_real_data_if_available() {
+    use nagi_engine::ConversionBackend;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let lex_path = root.join("data/english/words.fst");
+    if !lex_path.exists() {
+        eprintln!("実データが無いので省略（cargo xtask fetch-english）");
+        return;
+    }
+    let dict_path = root.join("data/dict/nagi-dict.bin");
+    let dict = dict_path
+        .exists()
+        .then(|| Arc::new(nagi_dict::Dictionary::load(&dict_path).unwrap()));
+    let mut p = Pipeline::new(dict, None, runtime());
+    p.set_english_lexicon(Some(Arc::new(Lexicon::load(&lex_path).unwrap())));
+
+    let typos = std::fs::read_to_string(root.join("bench/auto-english/typos.tsv")).unwrap();
+    let (mut total, mut top1, mut top3, mut missed) = (0, 0, 0, Vec::new());
+    let mut slowest = std::time::Duration::ZERO;
+    for l in typos
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let (typo, want) = l.split_once('\t').unwrap();
+        total += 1;
+        let start = std::time::Instant::now();
+        let got = p.english_spellings(typo, &reading_of(typo), 3);
+        slowest = slowest.max(start.elapsed());
+        match got.iter().position(|w| w == want) {
+            Some(0) => {
+                top1 += 1;
+                top3 += 1;
+            }
+            Some(_) => top3 += 1,
+            None => missed.push(format!("{typo}→{want} {got:?}")),
+        }
+    }
+    let corpus = std::fs::read_to_string(root.join("bench/auto-english/corpus.tsv")).unwrap();
+    let (mut neg, mut noisy) = (0, Vec::new());
+    for l in corpus
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let c: Vec<&str> = l.split('\t').collect();
+        if c[0] == "ja" || c[0] == "mixed" {
+            neg += 1;
+            let got = p.english_spellings(c[1], &reading_of(c[1]), 3);
+            if !got.is_empty() {
+                noisy.push(format!("{} {got:?}", c[1]));
+            }
+        }
+    }
+    println!(
+        "[SCOWL{}] 綴り: 1 位 {top1}/{total}・3 位以内 {top3}/{total} / 日本語・混在に出た {}/{neg} / 最長 {slowest:?}",
+        if dict_path.exists() { "+辞書" } else { "" },
+        noisy.len()
+    );
+    println!("  取りこぼし: {missed:?}\n  日本語・混在に出た: {noisy:?}");
+    // 実測（docs/decisions.md H-70）から余裕を持たせた下限
+    assert!(top3 * 100 >= total * 60, "{missed:?}");
+    assert!(noisy.len() * 100 <= neg * 10, "{noisy:?}");
 }

@@ -38,6 +38,8 @@ const CANDIDATE_LIMIT: usize = 50;
 /// 候補の末尾に並べる「形式の変換」（ひらがな・カタカナ・全角英数・半角英数）の最大数。
 /// 上限 `CANDIDATE_LIMIT` で切るときも、この枠は末尾に残す
 const FORM_CANDIDATES_MAX: usize = 4;
+/// 英語の綴りの「もしかして」の最大件数
+const ENGLISH_SPELLINGS_MAX: usize = 3;
 
 /// 候補ウィンドウの初期表示（`conversion.initial_view`。設計書 §4.4）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2900,7 +2902,7 @@ impl Engine {
         // Space 変換は常に新しく変換する（古いライブ変換結果を持ち越さない。G-44）
         sess.live_conversion = None;
         if how == Start::Convert
-            && let Some(conv) = self.start_converting_english(sess)
+            && let Some(conv) = self.start_converting_english(sess, false)
         {
             sess.state = State::Converting(conv);
             return;
@@ -2908,6 +2910,13 @@ impl Engine {
         if how == Start::Convert
             && self.config.fuzzy_input
             && let Some(conv) = self.start_converting_fuzzy(sess)
+        {
+            sess.state = State::Converting(conv);
+            return;
+        }
+        // 英語らしさは弱いが綴りの「もしかして」がある（`helo` → `hello`）。かなの補正を優先し、その後に試す
+        if how == Start::Convert
+            && let Some(conv) = self.start_converting_english(sess, true)
         {
             sess.state = State::Converting(conv);
             return;
@@ -3006,15 +3015,19 @@ impl Engine {
     /// のように、日本語の文字と素通しの英字が交互に並ぶ）の全体が英語らしい（中程度以上）ときだけ、
     /// 入力全体を 1 つの文節（表記は打った通りの読み）にして候補ウィンドウを開く。文節に割れると
     /// 全体の ASCII を候補にできないため。ASCII の候補は上位（自信が高いとき）か主要な候補の後ろに
-    /// 置く。先頭は打った通りのままで、自動では置き換えない。判定が弱ければ `None`（通常の変換）
-    fn start_converting_english(&self, sess: &Session) -> Option<Conv> {
+    /// 置く。先頭は打った通りのままで、自動では置き換えない。判定が弱ければ `None`（通常の変換）。
+    /// `spelling_only` なら逆に、判定が弱く綴りの「もしかして」があるときだけ開く
+    fn start_converting_english(&self, sess: &Session, spelling_only: bool) -> Option<Conv> {
         if self.config.auto_english == AutoEnglishMode::Off {
             return None;
         }
         let reading = sess.composer.leftover_reading()?;
         let raw = sess.raw_map.raw_for(0, &reading)?;
         let level = self.backend.english_level(&raw, &reading);
-        if level < nagi_english::Level::Mid {
+        let strong = level >= nagi_english::Level::Mid;
+        if strong == spelling_only
+            || (spelling_only && self.english_spellings(&raw, &reading).is_empty())
+        {
             return None;
         }
         let mut conv = Conv {
@@ -3032,6 +3045,16 @@ impl Engine {
         };
         self.ensure_candidates(&sess.left_context, &sess.raw_map, &mut conv, 0);
         Some(conv)
+    }
+
+    /// 英語の綴りの「もしかして」（`typscript` → `typescript`）: 入力全体が 1 文節のときだけ出す（文節に
+    /// 割れた一部の打鍵列では意味が無い）。自動判定が切られていれば出さない
+    fn english_spellings(&self, raw: &str, reading: &str) -> Vec<String> {
+        if self.config.auto_english == AutoEnglishMode::Off {
+            return Vec::new();
+        }
+        self.backend
+            .english_spellings(raw, reading, ENGLISH_SPELLINGS_MAX)
     }
 
     /// 曖昧入力: ローマ字の取りこぼしが混ざる入力（`kamji` の m など）で、補正の候補があれば、
@@ -3286,7 +3309,8 @@ impl Engine {
 
     /// 文節の候補一覧を（未生成なら）作る。先頭は現在の表記。
     ///
-    /// - 日本語: 辞書・LLM などの候補のあと、末尾に「形式の変換」（ひらがな・カタカナ・全角英数・
+    /// - 日本語: 辞書・LLM などの候補（入力全体が 1 文節なら、英語の綴りの「もしかして」をその後ろに）
+    ///   のあと、末尾に「形式の変換」（ひらがな・カタカナ・全角英数・
     ///   半角英数）。全角英数・半角英数は、文節に対応するローマ字（`raws`）が分かるときだけ
     /// - Literal: Rewriter だけの候補（電卓・記号の装飾・日付など、全角/半角は末尾）
     ///
@@ -3318,7 +3342,6 @@ impl Engine {
             for c in &from_backend {
                 push_candidate_with(&mut items, &c.surface, &c.sources, c.reading.as_deref());
             }
-            items.truncate(CANDIDATE_LIMIT - FORM_CANDIDATES_MAX);
             let offset: usize = conv.segments[..idx]
                 .iter()
                 .map(|s| s.reading.chars().count())
@@ -3327,6 +3350,14 @@ impl Engine {
             let raw = (whole == raws.reading)
                 .then(|| raws.raw_for(offset, &seg.reading))
                 .flatten();
+            let spellings = match raw.as_deref() {
+                Some(raw) if conv.segments.len() == 1 => self.english_spellings(raw, &seg.reading),
+                _ => Vec::new(),
+            };
+            items.truncate(CANDIDATE_LIMIT - FORM_CANDIDATES_MAX - spellings.len());
+            for surface in &spellings {
+                push_candidate(&mut items, surface, &[CandidateSource::Fuzzy]);
+            }
             let main_len = items.len();
             for (surface, source) in form_candidates(&seg.reading, raw.as_deref()) {
                 push_candidate(&mut items, &surface, &[source]);

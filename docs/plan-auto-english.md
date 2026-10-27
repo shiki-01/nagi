@@ -84,4 +84,5 @@ raw のキー列に対して、日本語（ローマ字として読める区間�
 - 実装: `core/english`（特徴量・fst 語彙・判定）、`ConversionBackend::english_level`、Space の候補への ASCII の追加（High = 2 番目 / Mid = 4 番目 / それ以外は従来の末尾）、`cargo xtask fetch-english`（SCOWL 2020.12.07、SHA-256 検証、`data/english/words.fst`）、設定 `[input.auto_english] mode`（`standard`/`aggressive` は段階 2・3 の予約で、現状は `conservative` と同じ）。**自動では変えない**。語彙が無くても特徴量だけで動く（劣化動作）
 - 評価コーパス（自作 475 行、`bench/auto-english/corpus.tsv`）での実測（実機構成 = SCOWL + Mozc 辞書）: **誤判定（日本語・日英混在 281 件を英語と判定）0 件（Mid 以上も High も 0.00%）、取りこぼし（英語 169 件）Mid 以上 9.5%（16 件）・High 24.9%（42 件）**。語彙なしの劣化動作は取りこぼし 59.2%（誤判定は同じく 0）。取りこぼしの内訳は、日本語優先の曖昧語（`the` `button` `token`）と、語彙に無い技術用語（`kubernetes` `redis` `json` など。ユーザー辞書・学習で補う前提）
 - 追加した設計判断: 日英が混ざる入力（`typescript` → `tyぺscりpt`）は、全体が英語らしいときに限り入力全体を 1 文節にして ASCII を候補に出す（文節ごとの変換では全体の ASCII を出せないため。曖昧入力と同じ作り）。詳細と迷った判断は H-51
+- 綴りの「もしかして」（`typscript` → `typescript`）は 2026-10-27 に実装（H-70）
 - 未実装: 日英の切り分け（§2 の格子。段階 2 以降）、アプリごとの上書き・例外語リスト、学習による補正、段階 2・3、語彙の `--install-data` への組み込み、実機での確認
