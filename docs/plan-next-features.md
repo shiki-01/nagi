@@ -1,6 +1,6 @@
 # 計画: 次に実装する機能（Meltype 調査の取り入れを含む）
 
-状態: **計画**（2026-10-23）。決定ログは `docs/decisions.md` H-47。
+状態: **実施中**（2026-10-23 計画。各項目の状態は下の表を正とする）。決定ログは `docs/decisions.md` H-47。
 
 類似の IME（Meltype。https://github.com/yksr-melt/Meltype。GPL-3.0）を調べ、取り入れてよい点を、Nagi の実装計画に組み込む。
 

@@ -969,7 +969,7 @@ H-3 の決定（案A: タッチ入力は `insert_reading` / `perform_action` の
 - **Apple Developer Program に加入済み**で、iOS は **TestFlight（内部テスト → 外部テスト）→ App Store** で配布する。H-5 の「SideStore によるサイドロード」と、`docs/decisions.md` の「Apple Developer Program には加入しない」（iOS について）は、この決定で置き換える。SideStore 向けの検証項目（再署名後の App Group、無料 Apple ID の制限、7 日失効、AltStore 互換ソース JSON）は不要になった
 - bundle id は `com.shiki01.nagi`（ホスト）、`com.shiki01.nagi.keyboard`（キーボード拡張）、App Group は `group.com.shiki01.nagi`。macOS の IME（`com.shiki.inputmethod.Nagi`）とは別
 - ビルド・署名・アップロードは GitHub Actions `ios-testflight`（手動実行。App Store Connect API キーのクラウド署名。表示バージョンは `ios-vX.Y.Z` タグ、ビルド番号は run_number。CI の開発証明書は前後で失効させて上限を避ける）
-- macOS の配布方針は、加入済みの前提で Developer ID 署名 + 公証へ見直せる（未着手。現状の実装は ad-hoc 署名）。Android の配布（APK 直接配布）は変更なし。**SideStore は使わない**（ユーザー決定。関連ワークフロー `ios-spike.yml`・`ios-signing-diag.sh` は削除）
+- macOS の配布方針は、加入済みの前提で Developer ID 署名 + 公証へ見直せる（未着手。現状の実装は ad-hoc 署名）→ 2026-10-22 に Developer ID 署名 + 公証へ変更（H-37 (5)。実装済み・Secrets 未登録のため未実行）。Android の配布（APK 直接配布）は変更なし。**SideStore は使わない**（ユーザー決定。関連ワークフロー `ios-spike.yml`・`ios-signing-diag.sh` は削除）
 
 ### H-16. モバイル向けコア API: LLM の解放/再読み込み・12 キーの文字表・D-4（2026-10-14、要レビュー）
 

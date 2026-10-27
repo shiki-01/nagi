@@ -13,7 +13,7 @@
 
 - Phase 0（技術検証）は、iOS の実機検証（拡張のメモリ上限・LLM の可否・応答時間）はほぼ完了（`docs/mobile-roadmap.md` M0、`docs/decisions.md` H 節。Android は未着手）。モデル（zenz-v3.1 small / xsmall）の精度比較は一次比較済み（`docs/decisions.md` H-17。固定プロファイルで比較。文脈あり・量子化違い・辞書の組み合わせは未比較）。Phase 1 のコア部分（romaji / protocol / engine / server / dict / infer）は実装済み（進捗・未完了は `docs/progress.md`、要レビューの暫定判断は `docs/decisions.md` G 節）
 - **iOS（`frontend-ios-spike/`）**: キーボード拡張（かな 12 キー・フリック・変換・候補バー・部分変換・英字）とホストアプリ（辞書・モデルの取り込み、入力テスト、実機計測）が TestFlight で動く。コアとは C ABI（`core/ffi/`）で接続し、型は `cargo xtask gen-types` の Swift 型を共有する。実機の確認結果は `docs/decisions.md` H-6〜H-33。ビルド・署名・アップロードは GitHub Actions `ios-testflight`（手動実行: `gh workflow run ios-testflight.yml --ref main -f llama=true`。表示バージョンは `ios-vX.Y.Z` タグ、ビルド番号は run_number）。Swift はローカルでコンパイルできないため、CI の結果で確認する
-- **Windows（`frontend-windows/` + `frontend-windows-tsf/`）**: TSF 層は Rust（`windows` クレート）。キー・候補ウィンドウ・表示属性・再変換・モード・環境/文脈・非同期反映・通知・アイコンまで実装済みだが、**Windows 実機では未検証**（`docs/real-hardware-checklist.md` §8）。コアの変更はゼロ。決定は `docs/decisions.md` H-39〜H-42
+- **Windows（`frontend-windows/` + `frontend-windows-tsf/`）**: TSF 層は Rust（`windows` クレート）。キー・候補ウィンドウ・表示属性・再変換・モード・環境/文脈・非同期反映・通知・アイコンまで実装済みだが、**TSF フロントは Windows 実機では未検証**（コア単体の計測は Windows 実機で一部実施済み。例: reconvert のメモリ増加量 約270MB）（`docs/real-hardware-checklist.md` §8）。コアの変更はゼロ。決定は `docs/decisions.md` H-39〜H-42
 - Windows の配布: `cargo xtask bundle-windows`（zip 化のみ。ビルドは CI）、`frontend-windows/dist/{install,uninstall}.ps1`、`.github/workflows/windows-release.yml`（手動実行。既定は prerelease）。Authenticode 署名なし配布が前提（SmartScreen 方針は H-42、手順書は `docs/windows-install.md`）
 - Rust ワークスペースは `core/` 以下（edition 2024、`core/rust-toolchain.toml` で 1.89.0 固定）。コマンドはすべて `core/` で実行する
 - 未決定: 変換モデル・システム辞書（Phase 0 の比較で確定。基準は「無料・再配布制約が小さい → 品質 → 速度/サイズ」）。暫定は Mozc OSS 辞書 + zenz-v3.1-small（`docs/decisions.md` G 節）。iOS の既定モデルは small（2026-10-16 ユーザー決定。未選択時は端末のメモリ予算で自動選択し、ホームの Picker での明示選択を優先。`docs/decisions.md` H-22(c)）
@@ -122,7 +122,7 @@ nagi/
 - ログに入力内容を残さない（デバッグビルドのみopt-inで許可）。**例外**: iOS の TestFlight 配布期間中に限り、診断ログは既定 ON で入力内容を含める（パスワード欄は伏せる）。App Store 配布版は既定 OFF・内容を含めない（`docs/decisions.md` H-22）
 - 学習データはワンコマンドで全削除可能にする
 - クリップボード履歴（iOS）は既定オフ・内容はログに出さない・端末内の App Group のみ・ワンタップで全削除可（`docs/decisions.md` H-69）
-- Apple Developer Program は加入済み（H-15。SideStore は使わない）。macOS 配布は現状 ad-hoc 署名（Developer ID 署名 + 公証への変更は検討可） + インストールスクリプト（`shiki-01.com`）+ ed25519 署名検証付きアップデート
+- Apple Developer Program は加入済み（H-15。SideStore は使わない）。macOS 配布は Developer ID 署名 + 公証（`macos-release.yml`。実装済みだが Secrets 未登録のため未実行。`docs/decisions.md` H-37(5)） + インストールスクリプト（`shiki-01.com`）+ ed25519 署名検証付きアップデート
 - モバイル: **iOS は TestFlight / App Store（Apple Developer Program 加入済み。H-15）**、Android は APK 直接配布（将来）。どちらも本体アプリでデータ資産を再インストールなしで更新する方針（`docs/mobile-design.md` §6）
 
 ## テスト戦略

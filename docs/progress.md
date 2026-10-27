@@ -197,7 +197,7 @@ bundle id は `com.shiki.inputmethod.Nagi`（G-37）。CI の artifact `Nagi.app
 
 ## CI
 
-（最終確認の結果を下に追記する）
+（最終確認の結果は未記録。Phase 5 の CI ジョブは「Windows フロント」節の表のとおり Actions 上では未実行。確認したらここに追記する）
 
 ## iOS 向けコアの追加対応（2026-10-14）
 
