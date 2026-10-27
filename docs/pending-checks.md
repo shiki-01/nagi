@@ -156,3 +156,4 @@
 | 1 | 「きょう」「いま」などの日付・時刻の候補が、端末の時刻・タイムゾーンどおりに出るか（iOS・macOS・Windows） | decisions.md H-72 | H-72 |
 | 2 | タイムゾーンを変えたとき（設定アプリで変更・旅行先）に、候補の日時が追従するか（`NSSystemTimeZoneDidChange`・Windows の再送） | decisions.md H-72 | H-72 |
 | 3 | Windows の `GetDynamicTimeZoneInformation` で求めたずれが正しいか（夏時間のある地域を含む。型検査のみ） | decisions.md H-72 | H-72 |
+| 4 | 候補バーの右端に固定した「💡: 補正候補」の見え方（ライト/ダーク・背景画像・長い表記）と、展開ボタンが高さいっぱいで押せるか | decisions.md H-73 | H-73 |

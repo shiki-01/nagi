@@ -82,4 +82,13 @@ final class CandidateKindTests: XCTestCase {
         XCTAssertEqual(classifyCandidates(v, hasPreedit: true), .conversion)
         XCTAssertEqual(v.items.map { $0.covers }, [nil, 3, 1])
     }
+
+    func testPinnedFuzzyIsTheFirstCorrection() {
+        // 補正候補のうち最初（コアの並びで最有力）を固定する
+        XCTAssertEqual(pinnedFuzzyIndex(hints: [nil, "もしかして: あおぶた", "もしかして"], nextWord: false), 1)
+        // 補正候補が無い・次語予測なら固定しない
+        XCTAssertNil(pinnedFuzzyIndex(hints: [nil, nil], nextWord: false))
+        XCTAssertNil(pinnedFuzzyIndex(hints: ["もしかして"], nextWord: true))
+        XCTAssertNil(pinnedFuzzyIndex(hints: [], nextWord: false))
+    }
 }

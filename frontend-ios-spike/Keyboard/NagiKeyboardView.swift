@@ -1010,10 +1010,13 @@ private struct CandidateBar: View {
                 }
                 // 入力中の読みの文字列は出さない（ホストの下線つきの文字で見える）。候補だけを一列に並べる
                 // 入力中の候補は読みの接頭辞の分まで 100 件を超えることがある（H-58）ので、遅延して並べる。
-                // 候補が入れ替わったら先頭へ戻す（id を変えて作り直す）
+                // 候補が入れ替わったら先頭へ戻す（id を変えて作り直す）。
+                // 曖昧入力の補正候補のうち最有力（コアの並びで最初のもの）は、一覧から外して右端に固定する
+                let pinned = pinnedFuzzyIndex(hints: model.candidates.map { $0.hint },
+                                              nextWord: model.isNextWordCandidates).map { model.candidates[$0] }
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 6) {
-                        ForEach(model.candidates) { item in
+                        ForEach(model.candidates.filter { $0.id != pinned?.id }) { item in
                             CandidateButton(item: item,
                                             selected: item.id == model.selectedCandidate && !model.isNextWordCandidates,
                                             nextWord: model.isNextWordCandidates) {
@@ -1023,14 +1026,36 @@ private struct CandidateBar: View {
                     }
                 }
                 .id(candidateBarIdentity(model.candidates.map { $0.surface }))
-                // 次語予測は展開パネルを使わない（候補数が少なく、選ぶとそのまま挿入される）
+                // 固定した候補の手前で一覧を背景へ溶かす（背景はシステムの色・レイアウトの画像のどちらもありうるので、
+                // 色を塗らずに一覧の右端を透明にする）
+                .mask {
+                    HStack(spacing: 0) {
+                        Rectangle()
+                        if pinned != nil {
+                            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: 24)
+                        }
+                    }
+                }
+                if let pinned = pinned {
+                    PinnedFuzzyButton(item: pinned,
+                                      selected: pinned.id == model.selectedCandidate) {
+                        model.selectCandidate(pinned.id)
+                    }
+                }
+                // 次語予測は展開パネルを使わない（候補数が少なく、選ぶとそのまま挿入される）。
+                // 押せる範囲は矢印だけでなく、候補バーの高さいっぱい
                 if !model.candidates.isEmpty && !model.isNextWordCandidates {
                     Button(action: { model.isExpanded.toggle() }) {
-                        Text(model.isExpanded ? "︿" : "﹀")
-                            .font(.system(size: 16))
+                        Image(systemName: model.isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 15))
                             .foregroundColor(Color(UIColor.label))
-                            .frame(width: 32, height: 32)
+                            .frame(width: 36)
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(model.isExpanded ? "候補を閉じる" : "候補を広げる")
                 }
             }
             // 検証用の画面は DEBUG / TestFlight のビルドで、開発者モード（設定 `developer.mode`）がオンのときだけ
@@ -1107,6 +1132,35 @@ private struct ToolbarRow: View {
         guard weights > 0 else { return 0 }
         let available = total - spacing * CGFloat(max(keys.count - 1, 0))
         return max(0, available * CGFloat(key.width / weights))
+    }
+}
+
+/// 候補バーの右端に固定する曖昧入力の補正候補（最有力の 1 件）。「💡: 青豚」の形で出す
+private struct PinnedFuzzyButton: View {
+    let item: CandidateItem
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: "lightbulb")
+                    .font(.system(size: 14))
+                    .foregroundColor(Color(UIColor.label))
+                Text(verbatim: ": \(item.surface)")
+                    .font(.system(size: 17))
+                    .foregroundColor(Color(UIColor.label))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(selected ? themeAccent.opacity(0.25) : Color(UIColor.systemBackground))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.hint.map { "\($0)、\(item.surface)" } ?? item.surface)
     }
 }
 

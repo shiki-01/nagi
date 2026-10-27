@@ -37,3 +37,11 @@ func fuzzyHint(sources: [CandidateSource], reading: String?) -> String? {
 func candidateBarIdentity(_ surfaces: [String]) -> String {
     "\(surfaces.count)|\(surfaces.first ?? "")|\(surfaces.last ?? "")"
 }
+
+/// 候補バーの右端に固定する曖昧入力の補正候補の位置（純粋関数。単体テストの対象）。`hints` は候補ごとの
+/// 「もしかして」の表示（`fuzzyHint`。補正候補でなければ nil）。補正候補のうちコアの並びで最初のもの（最有力）。
+/// 次語予測のときは固定しない
+func pinnedFuzzyIndex(hints: [String?], nextWord: Bool) -> Int? {
+    guard !nextWord else { return nil }
+    return hints.firstIndex { $0 != nil }
+}
