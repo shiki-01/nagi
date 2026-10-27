@@ -1046,16 +1046,7 @@ private struct CandidateBar: View {
                 // 次語予測は展開パネルを使わない（候補数が少なく、選ぶとそのまま挿入される）。
                 // 押せる範囲は矢印だけでなく、候補バーの高さいっぱい
                 if !model.candidates.isEmpty && !model.isNextWordCandidates {
-                    Button(action: { model.isExpanded.toggle() }) {
-                        Image(systemName: model.isExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 15))
-                            .foregroundColor(Color(UIColor.label))
-                            .frame(width: 36)
-                            .frame(maxHeight: .infinity)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(model.isExpanded ? "候補を閉じる" : "候補を広げる")
+                    ExpandToggle(expanded: model.isExpanded) { model.isExpanded.toggle() }
                 }
             }
             // 検証用の画面は DEBUG / TestFlight のビルドで、開発者モード（設定 `developer.mode`）がオンのときだけ
@@ -1132,6 +1123,42 @@ private struct ToolbarRow: View {
         guard weights > 0 else { return 0 }
         let available = total - spacing * CGFloat(max(keys.count - 1, 0))
         return max(0, available * CGFloat(key.width / weights))
+    }
+}
+
+/// 候補の展開ボタン（幅 44pt × 候補バーの高さいっぱい）。SwiftUI の `Button` は離したときの判定が厳しく
+/// （少し指がずれると取り消される）、キーと同じく押した瞬間に受ける `DragGesture(minimumDistance: 0)` で受ける。
+/// 押している間は薄い背景を出し、離した位置がボタンの外に大きく外れていなければ切り替える
+private struct ExpandToggle: View {
+    let expanded: Bool
+    let action: () -> Void
+    @GestureState private var pressed = false
+
+    var body: some View {
+        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+            .font(.system(size: 15))
+            .foregroundColor(Color(UIColor.label))
+            .frame(width: 44)
+            .frame(maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(UIColor.label).opacity(pressed ? 0.12 : 0))
+            )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .updating($pressed) { _, state, _ in state = true }
+                    .onEnded { value in
+                        // 大きく指を動かした（スクロールなどのつもりの）ときは切り替えない
+                        guard abs(value.translation.width) < 44, abs(value.translation.height) < 44 else { return }
+                        NagiKeyFeedback.keyDown()
+                        action()
+                    }
+            )
+            .accessibilityElement()
+            .accessibilityLabel(expanded ? "候補を閉じる" : "候補を広げる")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { action() }
     }
 }
 

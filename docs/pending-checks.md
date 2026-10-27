@@ -158,3 +158,4 @@
 | 3 | Windows の `GetDynamicTimeZoneInformation` で求めたずれが正しいか（夏時間のある地域を含む。型検査のみ） | decisions.md H-72 | H-72 |
 | 4 | 候補バーの右端に固定した「💡: 補正候補」の見え方（ライト/ダーク・背景画像・長い表記）と、展開ボタンが高さいっぱいで押せるか | decisions.md H-73 | H-73 |
 | 5 | 基準機（M1）で `nagi-live-bench` を回し、ライブ変換の p95 を測る（サンドボックスの CPU では末尾への打ち足しで p95 140〜200ms） | decisions.md H-75 | H-75 |
+| 6 | 展開ボタンの反応（`ExpandToggle`）と、`delaysTouchesBegan = false` による端のキー（q・p・⌫ など）の反応の変化 | decisions.md H-73 | H-73 |

@@ -75,6 +75,14 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
         applyTheme()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // 画面の端（候補バーの展開ボタン・端のキー）の押下が遅れる・取りこぼされるのを防ぐ。
+        // システムの端のジェスチャ（ホームインジケーター・端からのスワイプ）の認識器が、キーボードの window で
+        // touchesBegan を遅らせるため、遅らせないようにする（カスタムキーボードで一般的な対処）
+        view.window?.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+    }
+
     /// 設定 `keyboard.theme` の外観を反映する（system は端末に従う）
     private func applyTheme() {
         hostingController?.overrideUserInterfaceStyle = NagiTheme.interfaceStyle(NagiKeyMetrics.current.theme)
