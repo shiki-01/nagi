@@ -20,6 +20,10 @@ path = "src/bin/nagi_fuzzy_eval.rs"
 name = "nagi-eval"
 path = "src/bin/nagi_eval.rs"
 
+[[bin]]
+name = "nagi-live-bench"
+path = "src/bin/nagi_live_bench.rs"
+
 [dependencies]
 nagi-engine.workspace = true
 nagi-english.workspace = true

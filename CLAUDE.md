@@ -33,6 +33,7 @@
 - サーバー: `cargo run -p nagi-server --bin imserver -- --data-dir ../data [--user-dir <dir>] [--config <file>] [--no-llm]`（JSON-RPC は stdin/stdout。辞書が無ければ読みそのまま返す。`--user-dir` は `config.toml`・`learning.tsv`・`user_dict/` の置き場で、未指定なら OS の設定ディレクトリ（`NAGI_CONFIG_DIR` で上書き）。**開発中は実ユーザーの学習データを汚さないよう `--user-dir` を指定する**）
 - LLM 推論（zenz）は feature `llama`（infer・server とも既定 OFF）: `LIBCLANG_PATH` と cmake が必要。`cargo test -p nagi-infer -p nagi-server --features llama`（モデル未取得なら skip）。LLM を使うサーバーは `cargo run --release -p nagi-server --features llama --bin imserver -- --data-dir ../data`（`--no-llm` で辞書のみ、`--sync-budget-ms` で推論の待ち時間）
 - 精度・レイテンシ計測: `cargo run --release -p nagi-server --features llama --bin nagi-eval -- --data-dir ../data [--no-llm] [--verbose]`（Mozc の `evaluation.tsv`。`cargo xtask fetch-dict` で取得）
+- ライブ変換の 1 打鍵あたりの計測: `cargo run --release -p nagi-server --features llama --bin nagi-live-bench -- --data-dir ../data [--no-llm] [--profile balanced]`（`docs/decisions.md` H-75）
 
 ## 基本方針
 
