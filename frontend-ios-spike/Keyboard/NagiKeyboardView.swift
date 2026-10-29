@@ -388,6 +388,10 @@ private func activate(_ key: LayoutKeyDef, _ model: KeyboardModel, touch: TouchP
 }
 
 /// タップだけのキー
+/// タップとみなす指の移動量の上限（pt）。速く打つと離すときに指が転がって 20pt 前後動くことがあり、
+/// 小さい値だと入力が落ちるため広めに取る（長押しのポップアップを出さない判定は従来どおり 20pt）
+private let tapSlopPoints: CGFloat = 40
+
 private struct TapKeyView: View {
     let face: KeyFaceInput
     /// 引数は、指が触れた位置のキー内の相対位置（曖昧入力の手がかり）
@@ -408,7 +412,7 @@ private struct TapKeyView: View {
                         .onEnded { value in
                             if face.uses(.released) { hold.begin(ms: face.releasedHoldMs) }
                             // 指を大きく動かして離した場合は、押した扱いにしない
-                            if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
+                            if abs(value.translation.width) < tapSlopPoints && abs(value.translation.height) < tapSlopPoints {
                                 NagiKeyFeedback.keyDown()
                                 action(touchPoint(value.startLocation, in: geo.size))
                             }
@@ -528,7 +532,7 @@ private struct LongPressKeyView: View {
                 NagiKeyFeedback.keyDown()
                 activateItem(popup[chosen])
             }
-        } else if abs(value.translation.width) < 20 && abs(value.translation.height) < 20 {
+        } else if abs(value.translation.width) < tapSlopPoints && abs(value.translation.height) < tapSlopPoints {
             NagiKeyFeedback.keyDown()
             activateKey(touchPoint(value.startLocation, in: keySize))
         }
