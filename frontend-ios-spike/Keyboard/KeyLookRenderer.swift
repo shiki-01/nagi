@@ -79,6 +79,11 @@ struct StyledKeyFace: View, Equatable {
     /// 状態が変わったときの補間の長さ（ms。0 なら即時。前後の指定の大きいほう。`LookResolver.transitionMs`）
     let animationMs: Double
 
+    // `@Environment` は Equatable でないため、自動生成に頼らず入力の 3 つだけで比べる
+    static func == (lhs: StyledKeyFace, rhs: StyledKeyFace) -> Bool {
+        lhs.params == rhs.params && lhs.content == rhs.content && lhs.animationMs == rhs.animationMs
+    }
+
     var body: some View {
         // 当たり判定の層。完全な透明（Color.clear）だと、ホスティングビューの背景が透明のときにタッチが通らない
         // ことがあるため、見えない程度の不透明度を持たせる
