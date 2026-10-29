@@ -73,6 +73,7 @@ private struct KeyShadow: ViewModifier {
 /// 描画順: 影つきの背景色 → 枠線 → 文字 / アイコン。`inset` で縮めた領域に描き、全体に `opacity` / `scale` / `offset` を掛ける。
 /// 当たり判定は元のセル全体のまま: 見た目の層は当たり判定の対象にせず、透明な層がセル全体の当たり判定を持つ
 struct StyledKeyFace: View, Equatable {
+    @Environment(\.nagiHitOutset) private var hitOutset
     let params: KeyRenderParams
     let content: KeyFaceContent
     /// 状態が変わったときの補間の長さ（ms。0 なら即時。前後の指定の大きいほう。`LookResolver.transitionMs`）
@@ -84,7 +85,8 @@ struct StyledKeyFace: View, Equatable {
         Color.black.opacity(0.01)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
-            .overlay(visual.allowsHitTesting(false))
+            // キー間・行間・外周の余白まで当たり判定を広げた分（`KeyCell` が負の padding で広げる）は、見た目から差し引く
+            .overlay(visual.padding(hitOutset).allowsHitTesting(false))
     }
 
     private var shape: RoundedRectangle {

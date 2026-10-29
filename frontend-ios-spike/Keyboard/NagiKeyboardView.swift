@@ -62,6 +62,19 @@ struct NagiKeyboardView: View {
     }
 }
 
+/// キーの当たり判定を、見た目の外側（キー間・行間・外周の余白）へ広げた量。
+/// どのキーにも属さない隙間（死に領域）を無くし、隣のキーとの境目で取りこぼさないようにする
+private struct NagiHitOutsetKey: EnvironmentKey {
+    static let defaultValue = EdgeInsets()
+}
+
+extension EnvironmentValues {
+    var nagiHitOutset: EdgeInsets {
+        get { self[NagiHitOutsetKey.self] }
+        set { self[NagiHitOutsetKey.self] = newValue }
+    }
+}
+
 /// キーボード全体の座標空間の名前と大きさ（環境値）。フリックの案内の位置を view の枠内に収めるために使う
 enum NagiKeyboardSpace {
     static let name = "nagiKeyboard"
@@ -153,7 +166,9 @@ private struct LayoutPad: View {
             ForEach(Array(model.layoutDef.rows.enumerated()), id: \.offset) { rowIndex, row in
                 RowView(
                     row: row, rowIndex: rowIndex, model: model, spaceDragOrigin: visual.spaceDragOrigin,
-                    pressedKey: $pressedKey
+                    pressedKey: $pressedKey,
+                    isTopRow: rowIndex == 0 && model.layoutDef.mode != .emoji,
+                    isBottomRow: rowIndex == model.layoutDef.rows.count - 1
                 )
                     .zIndex((pressedKey ?? "").hasPrefix("\(rowIndex):") ? 1 : 0)
             }
@@ -178,6 +193,9 @@ private struct RowView: View {
     @ObservedObject var model: KeyboardModel
     let spaceDragOrigin: String?
     @Binding var pressedKey: String?
+    /// 最上段 / 最下段（外周の余白まで当たり判定を広げる）
+    let isTopRow: Bool
+    let isBottomRow: Bool
 
     var body: some View {
         GeometryReader { geo in
@@ -185,7 +203,8 @@ private struct RowView: View {
                 ForEach(Array(row.keys.enumerated()), id: \.offset) { index, key in
                     KeyCell(
                         key: key, rowIndex: rowIndex, model: model, spaceDragOrigin: spaceDragOrigin, height: rowHeight,
-                        originX: originX(index, total: geo.size.width), rowWidth: geo.size.width
+                        originX: originX(index, total: geo.size.width), rowWidth: geo.size.width,
+                        outset: outset(index)
                     ) { pressed in
                         pressedKey = pressed ? "\(rowIndex):\(index)" : nil
                     }
@@ -203,6 +222,19 @@ private struct RowView: View {
     }
 
     private var keySpacing: CGFloat { CGFloat(model.metrics.keySpacing) }
+
+    /// キーの当たり判定を広げる量: 隣のキー・行との隙間の半分。行・列の端は外周の余白の分まで
+    private func outset(_ index: Int) -> EdgeInsets {
+        let padding = CGFloat(model.metrics.padding)
+        let halfKey = keySpacing / 2
+        let halfRow = CGFloat(model.metrics.rowSpacing) / 2
+        return EdgeInsets(
+            top: halfRow + (isTopRow ? padding : 0),
+            leading: halfKey + (index == 0 ? padding : 0),
+            bottom: halfRow + (isBottomRow ? padding : 0),
+            trailing: halfKey + (index == row.keys.count - 1 ? padding : 0)
+        )
+    }
 
     /// 行内で index 番目のキーの左端の位置（長押しのポップアップを行からはみ出さないようにするため）
     private func originX(_ index: Int, total: CGFloat) -> CGFloat {
@@ -230,9 +262,18 @@ private struct KeyCell: View {
     let height: CGFloat
     let originX: CGFloat
     let rowWidth: CGFloat
+    /// 当たり判定を見た目の外側へ広げる量（`nagiHitOutset`）
+    let outset: EdgeInsets
     let onPress: (Bool) -> Void
 
     var body: some View {
+        content
+            .environment(\.nagiHitOutset, outset)
+            .padding(EdgeInsets(top: -outset.top, leading: -outset.leading, bottom: -outset.bottom, trailing: -outset.trailing))
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch key.kind {
         case .spacer:
             Color.clear
@@ -1144,6 +1185,8 @@ private struct ExpandToggle: View {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color(UIColor.label).opacity(pressed ? 0.12 : 0))
             )
+            // 押せる範囲は見た目（44pt）より左右に広げる（候補との隙間・画面の端寄りの取りこぼしを減らす）
+            .padding(.horizontal, 6)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
